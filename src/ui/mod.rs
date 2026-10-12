@@ -609,11 +609,12 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     if let Some((rid, name)) = &mut st.renaming
         && *rid == id
     {
-        let r = ui.put(
+        let r = theme::rename_field(
+            ui,
             name_rect.shrink2(egui::vec2(0.0, 2.0)),
-            egui::TextEdit::singleline(name).margin(crate::theme::INPUT_MARGIN),
+            name,
+            ("layer", format!("{id:?}")),
         );
-        r.request_focus();
         if r.lost_focus() {
             let new = name.trim().to_string();
             st.renaming = None;

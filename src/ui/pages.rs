@@ -106,11 +106,12 @@ fn page_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, i: usize, top: f32) 
     let renaming = st.pages.renaming.as_ref().is_some_and(|(r, _)| *r == i);
     if renaming {
         let (_, name) = st.pages.renaming.as_mut().unwrap();
-        let r = ui.put(
+        let r = theme::rename_field(
+            ui,
             name_rect.shrink2(egui::vec2(0.0, 2.0)),
-            egui::TextEdit::singleline(name).margin(crate::theme::INPUT_MARGIN),
+            name,
+            ("page", i),
         );
-        r.request_focus();
         if r.lost_focus() {
             let (idx, name) = st.pages.renaming.take().unwrap();
             if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {

@@ -123,7 +123,33 @@ pub fn palette(dark: bool) -> Palette {
 }
 
 pub fn pal(ui: &egui::Ui) -> Palette {
-    palette(ui.visuals().dark_mode)
+    match choice() {
+        Choice::Catppuccin(f) => catppuccin_palette(f),
+        _ => palette(ui.visuals().dark_mode),
+    }
+}
+
+/// An inline rename field in `rect`. Takes keyboard focus once, when it first appears; asking
+/// every frame would steal focus back from any other input (and from the canvas shortcuts)
+/// until Enter, so clicking elsewhere ends the rename like Enter does.
+pub fn rename_field(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    text: &mut String,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+) -> egui::Response {
+    let id = egui::Id::new(("rename-field", salt));
+    let r = ui.put(
+        rect,
+        egui::TextEdit::singleline(text).id(id).margin(INPUT_MARGIN),
+    );
+    if ui.data(|d| d.get_temp::<bool>(id).is_none()) {
+        r.request_focus();
+        ui.data_mut(|d| d.insert_temp(id, true));
+    } else if r.lost_focus() {
+        ui.data_mut(|d| d.remove::<bool>(id));
+    }
+    r
 }
 
 /// Inter (Regular/Medium/SemiBold) as the proportional family, egui's fonts as fallbacks.
