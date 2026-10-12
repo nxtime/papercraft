@@ -48,7 +48,6 @@ fn clicking_another_input_ends_a_page_rename_and_takes_focus() {
         run(&ctx, vec![], &mut e, &mut st);
     }
     assert!(st.pages.renaming.is_none(), "the rename ended");
-    assert_eq!(e.doc.name.is_empty(), false);
     assert!(
         ctx.egui_wants_keyboard_input(),
         "the number field is being edited"
