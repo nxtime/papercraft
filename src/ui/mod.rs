@@ -295,6 +295,18 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor) {
             menu_entries(ui, ed, &entries);
         });
     }
+    ui.menu_button("Theme", |ui| {
+        for c in theme::Choice::ALL {
+            if ui
+                .selectable_label(theme::choice() == c, c.label())
+                .clicked()
+            {
+                theme::apply_choice(ui.ctx(), c);
+                c.save();
+                ui.close();
+            }
+        }
+    });
 }
 
 fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
