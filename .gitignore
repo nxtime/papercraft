@@ -1,4 +1,5 @@
 analysis/raw/
 target/
+dist/
 *.asar
 app.asar.unpacked/

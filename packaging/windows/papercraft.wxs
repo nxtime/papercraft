@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PaperCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+
+    wix build papercraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files, a Start Menu shortcut, and PaperCraft offered under
+  App Paths.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="PaperCraft"
+      Manufacturer="PaperCraft Authors"
+      Version="$(var.Version)"
+      UpgradeCode="8A4C5E6D-4B2A-4F8C-9E1D-7C3B2A1E0F5A"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="PaperCraft infinite canvas design tool" Manufacturer="PaperCraft Authors" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of PaperCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="PapercraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="PapercraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://git.marcospaulo.dev.br/masi/papercraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://git.marcospaulo.dev.br/masi/papercraft" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="PaperCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="PaperCraft" Level="1">
+      <ComponentGroupRef Id="PapercraftFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="PapercraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="PapercraftApp" Guid="6E7D8C9B-0A1B-4C3D-8E5F-1A2B3C4D5E6F">
+        <File Id="PapercraftExe" Source="$(var.BinDir)\papercraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="PaperCraft"
+              Description="PaperCraft infinite canvas design tool" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="PapercraftIcon.ico" IconIndex="0" />
+        </File>
+
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\papercraft.exe" Value="[#PapercraftExe]" Type="string" />
+      </Component>
+
+      <Component Id="PapercraftCli" Guid="9F8E7D6C-5B4A-3C2D-1E0F-A1B2C3D4E5F6">
+        <File Id="PapercraftCliExe" Source="$(var.BinDir)\papercraft-cli.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="PapercraftMcp" Guid="A1B2C3D4-E5F6-7A8B-9C0D-1E2F3A4B5C6D">
+        <File Id="PapercraftMcpExe" Source="$(var.BinDir)\papercraft-mcp.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

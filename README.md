@@ -343,8 +343,10 @@ docs/              guides and headless screenshots produced by `cargo test`
 
 | Build | File | Notes |
 |---|---|---|
+| Windows installer | `papercraft-<ver>-windows-<arch>.msi` | Per-machine installer (WiX) |
+| Windows portable | `papercraft-<ver>-windows-<arch>-portable.zip` | `papercraft.exe` + CLI and MCP bridge |
 | macOS app | `papercraft-<ver>-macos-<arch>.dmg` | PaperCraft.app, drag to Applications. Ad-hoc signed, not notarized |
-| Command-line tools | `papercraft-cli-<ver>-macos-<arch>.zip` | `papercraft-cli` and `papercraft-mcp` |
+| Command-line tools | `papercraft-cli-<ver>-<platform>-<arch>.zip` | `papercraft-cli` and `papercraft-mcp` |
 
 Releases: https://git.marcospaulo.dev.br/masi/papercraft/releases. Other platforms: build from source.
 
