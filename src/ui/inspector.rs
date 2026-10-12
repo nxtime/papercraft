@@ -152,6 +152,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             let first = ed.doc.get(ids[0]).cloned().unwrap();
             header(ui, ed, &ids, &first);
             separator(ui);
+            feedback_section(ui, ed, st, &ids, &first);
             align_row(ui, ed, &ids);
             separator(ui);
             geometry(ui, ed, &ids, &first);
@@ -199,6 +200,90 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             separator(ui);
             export_section(ui, ed, st);
         });
+}
+
+/// Notes on the selected layer: type one for an agent (it reads them with `get_feedback`), or
+/// resolve the ones already there.
+fn feedback_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, ids: &[NodeId], first: &Node) {
+    if ids.len() != 1 {
+        return;
+    }
+    let id = ids[0];
+    let p = theme::pal(ui);
+    let open = first.open_comments();
+    ui.label(
+        RichText::new(if open > 0 {
+            format!("Feedback · {open} open")
+        } else {
+            "Feedback".to_string()
+        })
+        .font(theme::semibold(theme::BODY)),
+    );
+    for c in first.comments.clone() {
+        ui.horizontal(|ui| {
+            let color = if c.resolved { p.tertiary } else { p.text };
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("{}: {}", c.author, c.text))
+                        .size(theme::SECONDARY + 1.0)
+                        .color(color),
+                )
+                .wrap(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("✕").on_hover_text("Delete").clicked() {
+                    ed.edit("Delete feedback", |tx| {
+                        if let Some(n) = tx.node_mut(id) {
+                            n.comments.retain(|x| x.id != c.id);
+                        }
+                    });
+                }
+                if !c.resolved && ui.small_button("✓").on_hover_text("Resolve").clicked() {
+                    ed.edit("Resolve feedback", |tx| {
+                        if let Some(x) = tx
+                            .node_mut(id)
+                            .and_then(|n| n.comments.iter_mut().find(|x| x.id == c.id))
+                        {
+                            x.resolved = true;
+                        }
+                    });
+                }
+            });
+        });
+        if let Some(r) = &c.reply {
+            ui.label(
+                RichText::new(format!("  ↳ {r}"))
+                    .size(theme::SECONDARY)
+                    .color(p.secondary),
+            );
+        }
+    }
+    ui.horizontal(|ui| {
+        let w = (ui.available_width() - 44.0).max(60.0);
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut st.feedback_draft)
+                .hint_text("Note for the agent…")
+                .desired_width(w)
+                .margin(crate::theme::INPUT_MARGIN),
+        );
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.small_button("Add").clicked() || enter) && !st.feedback_draft.trim().is_empty() {
+            let text = std::mem::take(&mut st.feedback_draft).trim().to_string();
+            ed.edit("Add feedback", |tx| {
+                if let Some(n) = tx.node_mut(id) {
+                    let next = n.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+                    n.comments.push(crate::model::Comment {
+                        id: next,
+                        text,
+                        author: "user".into(),
+                        resolved: false,
+                        reply: None,
+                    });
+                }
+            });
+        }
+    });
+    separator(ui);
 }
 
 /// FigJam/Excalidraw-style sticky colours.

@@ -10,8 +10,9 @@ pub const INSTRUCTIONS: &str = "\
 papercraft is a local design and whiteboard app with an infinite canvas. These tools read and \
 edit the project open in the running app; every change is one undo step and shows up live.
 
-- Start with get_basic_info (pages, artboards, sizes) and get_selection (what the user is \
-looking at). Use list_resources / open_file / create_file to pick a project.
+- Start with get_basic_info (pages, artboards, sizes; `openFeedback` counts the user's notes) \
+and get_selection (what the user is looking at); when openFeedback > 0 call get_feedback and \
+fix each note, then resolve_feedback with a reply. Use list_resources / open_file / create_file to pick a project.
 - For details read get_guide({ topic: \"papercraft-mcp-instructions\" }) once per session.
 - pageId defaults to the page the user is viewing; pass it to work on another page without \
 switching the user's view. Node ids are opaque strings; never show them to the user.
@@ -402,6 +403,38 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "get_feedback",
+            "Notes the user left on layers (the Feedback box in the inspector, shown as amber dots \
+             on the canvas): which layer, where it sits, what to change. Call it at the start of a \
+             session and after each round of edits; fix every open note, then resolve_feedback. \
+             get_basic_info reports `openFeedback`, and get_selection includes the selected \
+             layers' notes.",
+            json!({"nodeId": {"type": "string", "description": "Only this layer."},
+                   "pageId": page_id(),
+                   "includeResolved": {"type": "boolean"}}),
+            &[],
+            true,
+        ),
+        tool(
+            "add_feedback",
+            "Leave a note on a layer (author `agent` by default), e.g. a question or a problem you \
+             could not fix. The user sees it in the inspector and as a dot on the canvas.",
+            json!({"nodeId": {"type": "string"}, "text": {"type": "string"},
+                   "author": {"type": "string"}, "pageId": page_id()}),
+            &["nodeId", "text"],
+            false,
+        ),
+        tool(
+            "resolve_feedback",
+            "Mark notes on a layer resolved, with a short reply saying what you changed. Without \
+             commentId every open note on the layer is resolved. `delete` removes instead.",
+            json!({"nodeId": {"type": "string"}, "commentId": {"type": "number"},
+                   "reply": {"type": "string"}, "delete": {"type": "boolean"},
+                   "pageId": page_id()}),
+            &["nodeId"],
+            false,
+        ),
+        tool(
             "lint_design",
             "Check a page or subtree for common design mistakes and get a fix for each: text \
              contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type \
@@ -437,6 +470,19 @@ pub fn definitions() -> Vec<Value> {
                 "description": "{\"accent\": \"#cba6f7\", \"surface\": \"#313244\"}"},
                    "mode": {"type": "string", "description": "Store the values for this mode (e.g. \"Light\", \"Dark\"); they apply when it is the active mode. The first mode you define becomes active."}}),
             &["variables"],
+            false,
+        ),
+        tool(
+            "set_tokens",
+            "Define non-color design tokens (spacing, radius, font size, shadows, widths), on every \
+             page: {\"spacing-md\": \"16px\", \"radius-md\": \"8px\", \"shadow-md\": \"0 4px 12px \
+             rgba(0,0,0,0.08)\"}. Use `var(--spacing-md)` in any style value (padding: \
+             var(--spacing-sm) var(--spacing-md), boxShadow: var(--shadow-md)); it is replaced by the \
+             value when written, so tokens are a shared vocabulary, not live links. Listed by \
+             get_variables.",
+            json!({"tokens": {"type": "object", "propertyNames": {"type": "string"},
+                "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "number"}]}}}),
+            &["tokens"],
             false,
         ),
         tool(

@@ -21,6 +21,10 @@ pub struct Document {
     /// The active mode, if modes are in use.
     #[serde(default)]
     pub mode: Option<String>,
+    /// Non-color design tokens (`spacing-md` = `16px`, `shadow-sm` = `0 1px 2px rgba(0,0,0,.06)`),
+    /// substituted for `var(--name)` when styles are written.
+    #[serde(default)]
+    pub tokens: BTreeMap<String, String>,
 }
 
 impl Default for Document {
@@ -33,6 +37,7 @@ impl Default for Document {
             variables: BTreeMap::new(),
             modes: BTreeMap::new(),
             mode: None,
+            tokens: BTreeMap::new(),
         }
     }
 }
@@ -43,6 +48,7 @@ pub struct VarState {
     pub values: BTreeMap<String, Color>,
     pub modes: BTreeMap<String, BTreeMap<String, Color>>,
     pub mode: Option<String>,
+    pub tokens: BTreeMap<String, String>,
 }
 
 impl Document {
@@ -51,6 +57,7 @@ impl Document {
             values: self.variables.clone(),
             modes: self.modes.clone(),
             mode: self.mode.clone(),
+            tokens: self.tokens.clone(),
         }
     }
 
@@ -58,6 +65,7 @@ impl Document {
         self.variables = s.values.clone();
         self.modes = s.modes.clone();
         self.mode = s.mode.clone();
+        self.tokens = s.tokens.clone();
     }
 
     pub fn get(&self, id: NodeId) -> Option<&Node> {

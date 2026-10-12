@@ -47,6 +47,12 @@ pub struct UiState {
     pub layer_drag: Option<(NodeId, Option<LayerDrop>)>,
     /// Row rects of the last layers-panel frame (for drop targeting).
     pub layer_rows: Vec<(NodeId, egui::Rect, usize)>,
+    /// Selection seen by the last layers-panel frame, to notice changes made on the canvas.
+    pub last_selection: Vec<NodeId>,
+    /// A layer the layers panel should scroll into view (and unfold its parents for).
+    pub reveal: Option<NodeId>,
+    /// Text typed into the inspector's feedback box.
+    pub feedback_draft: String,
 }
 
 /// Where a dragged layer lands relative to a row.
@@ -341,6 +347,16 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         design::panel(ui, ed, st);
         return;
     }
+    // Selecting on the canvas brings the layer into view and unfolds what hides it.
+    if st.last_selection != ed.selection {
+        st.last_selection = ed.selection.clone();
+        if let Some(&id) = ed.selection.last() {
+            for a in ed.doc.ancestors(id) {
+                st.collapsed.remove(&a);
+            }
+            st.reveal = Some(id);
+        }
+    }
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
@@ -504,6 +520,10 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     let (row, resp) =
         ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click_and_drag());
     st.layer_rows.push((id, row, depth));
+    if st.reveal == Some(id) {
+        ui.scroll_to_rect(row, None);
+        st.reveal = None;
+    }
     if resp.drag_started() && !n.locked {
         st.layer_drag = Some((id, None));
     }
@@ -569,6 +589,12 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
             theme::accent()
         },
     );
+    if n.open_comments() > 0 {
+        let at = egui::pos2(x + 14.0, cy - 6.0);
+        ui.painter().circle_filled(at, 4.5, Color32::WHITE);
+        ui.painter()
+            .circle_filled(at, 3.0, Color32::from_rgb(250, 189, 47));
+    }
     x += 20.0;
 
     // Trailing eye / lock buttons: always shown when hidden or locked, otherwise on hover.

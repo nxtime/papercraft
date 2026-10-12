@@ -135,6 +135,12 @@ impl<'a> Tx<'a> {
         self.apply_variable(name, color)
     }
 
+    /// Define or change a non-color design token.
+    pub fn set_token(&mut self, name: &str, value: &str) {
+        self.snapshot_variables();
+        self.doc.tokens.insert(name.to_string(), value.to_string());
+    }
+
     fn snapshot_variables(&mut self) {
         if self.rec.variables_before.is_none() {
             self.rec.variables_before = Some(self.doc.var_state());

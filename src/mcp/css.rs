@@ -625,6 +625,7 @@ pub fn apply(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applie
                     }
                     (k.clone(), color_css(c))
                 }
+                None if TOKENS.with(|m| m.borrow().contains_key(name)) => (k.clone(), v.clone()),
                 None => match fallback {
                     Some(f) => (k.clone(), f.to_string()),
                     None => {
@@ -636,6 +637,22 @@ pub fn apply(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applie
             None => (k.clone(), v.clone()),
         })
         .filter(|(_, v)| !v.is_empty())
+        .collect();
+    // Whatever var(--token) is left inside a value (spacing, radii, shadows) is replaced by text.
+    let resolved: Vec<(String, String)> = resolved
+        .into_iter()
+        .filter_map(|(k, v)| {
+            if !v.contains("var(--") {
+                return Some((k, v));
+            }
+            let (text, missing) = substitute_vars(&v);
+            unknown.extend(
+                missing
+                    .iter()
+                    .map(|m| format!("{k}: {v} (no variable or token --{m})")),
+            );
+            missing.is_empty().then_some((k, text))
+        })
         .collect();
     let mut a = apply_resolved(n, &resolved, ctx);
     a.ignored.extend(unknown);
@@ -651,11 +668,141 @@ const COLOR_PROPS: [&str; 4] = ["backgroundColor", "background", "color", "fill"
 
 thread_local! {
     static VARS: std::cell::RefCell<std::collections::BTreeMap<String, Color>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    static TOKENS: std::cell::RefCell<std::collections::BTreeMap<String, String>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
 }
 
-/// Make `vars` the variables `var(--name)` resolves against on this thread.
-pub fn set_variables_in_scope(vars: &std::collections::BTreeMap<String, Color>) {
+/// Make `vars` and `tokens` what `var(--name)` resolves against on this thread.
+pub fn set_variables_in_scope(
+    vars: &std::collections::BTreeMap<String, Color>,
+    tokens: &std::collections::BTreeMap<String, String>,
+) {
     VARS.with(|m| *m.borrow_mut() = vars.clone());
+    TOKENS.with(|m| *m.borrow_mut() = tokens.clone());
+}
+
+/// Replace every `var(--name)` inside `v` with its token (or color) value, or its fallback.
+/// Returns the text and the names that could not be resolved.
+fn substitute_vars(v: &str) -> (String, Vec<String>) {
+    let mut out = String::new();
+    let mut missing = Vec::new();
+    let mut rest = v;
+    while let Some(i) = rest.find("var(--") {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        // The matching close paren (fallbacks may contain nested parens).
+        let mut depth = 0;
+        let mut end = None;
+        for (j, ch) in tail.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(j);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else {
+            out.push_str(tail);
+            rest = "";
+            break;
+        };
+        let whole = &tail[..=end];
+        match var_name(whole) {
+            Some((name, fallback)) => {
+                let value = TOKENS
+                    .with(|m| m.borrow().get(name).cloned())
+                    .or_else(|| VARS.with(|m| m.borrow().get(name).map(|c| color_css(*c))))
+                    .or_else(|| fallback.map(String::from));
+                match value {
+                    Some(t) => out.push_str(&t),
+                    None => {
+                        missing.push(name.to_string());
+                        out.push_str(whole);
+                    }
+                }
+            }
+            None => out.push_str(whole),
+        }
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    (out, missing)
+}
+
+/// `box-shadow`: `none`, or `x y [blur [spread]] color` (first layer; `inset` is not supported).
+/// Outer None means unsupported.
+fn parse_shadow(v: &str) -> Option<Option<crate::model::Shadow>> {
+    let v = v.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    if v.contains("inset") {
+        return None;
+    }
+    // First layer: split at the first comma outside parentheses.
+    let mut depth = 0;
+    let mut end = v.len();
+    for (i, ch) in v.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    let first = &v[..end];
+    // Split on whitespace outside parentheses.
+    let mut parts: Vec<&str> = Vec::new();
+    let (mut depth, mut start) = (0, None);
+    for (i, ch) in first.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        match (ch.is_whitespace() && depth == 0, start) {
+            (false, None) => start = Some(i),
+            (true, Some(s)) => {
+                parts.push(&first[s..i]);
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        parts.push(&first[s..]);
+    }
+    let mut nums: Vec<f64> = Vec::new();
+    let mut col = None;
+    for p in parts {
+        match length(p, 16.0) {
+            Some(n)
+                if p.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit() || c == '-' || c == '.') =>
+            {
+                nums.push(n)
+            }
+            _ => col = color(p).or(col),
+        }
+    }
+    if nums.len() < 2 {
+        return None;
+    }
+    Some(Some(crate::model::Shadow {
+        x: nums[0],
+        y: nums[1],
+        blur: nums.get(2).copied().unwrap_or(0.0).max(0.0),
+        spread: nums.get(3).copied().unwrap_or(0.0),
+        color: col.unwrap_or(Color::rgba(0, 0, 0, 64)),
+    }))
 }
 
 /// A color value that may be `var(--name)`: the color and the variable it came from.
@@ -929,6 +1076,13 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                     true
                 }
                 _ => false,
+            },
+            "boxShadow" => match parse_shadow(v) {
+                Some(s) => {
+                    n.style.shadow = s;
+                    true
+                }
+                None => false,
             },
             "flexShrink" | "flexBasis" | "boxSizing" | "minWidth" | "minHeight" | "maxWidth"
             | "maxHeight" | "zIndex" | "cursor" | "whiteSpace" | "fontFamily" | "wordBreak"
@@ -1457,6 +1611,19 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
     } else if n.style.corner_radius > 0.0 {
         put("borderRadius", px(n.style.corner_radius));
     }
+    if let Some(s) = n.style.shadow {
+        put(
+            "boxShadow",
+            format!(
+                "{} {} {} {} {}",
+                px(s.x),
+                px(s.y),
+                px(s.blur),
+                px(s.spread),
+                color_css(s.color)
+            ),
+        );
+    }
     if n.style.opacity < 1.0 {
         put(
             "opacity",
@@ -1547,7 +1714,7 @@ mod tests {
         assert_eq!(n.style.stroke_width, 2.0);
         assert!(!n.style.dash.is_empty());
         assert_eq!(n.style.corner_radius, 12.0);
-        assert_eq!(a.ignored, vec!["boxShadow".to_string()]);
+        assert!(a.ignored.is_empty(), "{:?}", a.ignored);
         let back = computed(&n, None, true);
         assert_eq!(back["flexDirection"], "column");
         assert_eq!(back["borderRadius"], "12px");

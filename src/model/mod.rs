@@ -5,7 +5,7 @@ pub mod rough;
 
 pub use document::{Document, VarState};
 pub use node::{
-    Binding, Color, FillRule, Head, Node, NodeId, NodeKind, PathPoint, Route, StrokePoint, Style,
-    SubPath, TextAlign,
+    Binding, Color, Comment, FillRule, Head, Node, NodeId, NodeKind, PathPoint, Route, Shadow,
+    StrokePoint, Style, SubPath, TextAlign,
 };
 pub use paint::*;

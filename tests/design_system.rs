@@ -378,3 +378,195 @@ fn modes_turn_a_design_from_light_to_dark_and_back_with_undo() {
     .unwrap();
     assert_eq!(back.doc, h.ed.doc);
 }
+
+#[test]
+fn feedback_flows_from_the_user_to_the_agent_and_back() {
+    let mut h = host();
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Screen", "styles": {"width": "200px", "height": "100px"}}),
+    );
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children",
+        "html": "<div layer-name=\"Title\" style=\"font-size:20px\">Hello</div>"}),
+    );
+    let title = r["createdNodeIds"][0].clone();
+    assert_eq!(call(&mut h, "get_basic_info", json!({}))["openFeedback"], 0);
+    // The user types a note in the inspector (same data the UI writes).
+    let id = node(&title);
+    h.ed.edit("Add feedback", |tx| {
+        tx.node_mut(id)
+            .unwrap()
+            .comments
+            .push(papercraft::model::Comment {
+                id: 1,
+                text: "make this bigger and bolder".into(),
+                author: "user".into(),
+                resolved: false,
+                reply: None,
+            });
+    });
+    assert_eq!(call(&mut h, "get_basic_info", json!({}))["openFeedback"], 1);
+    let fb = call(&mut h, "get_feedback", json!({}));
+    assert_eq!(fb["count"], 1);
+    assert_eq!(fb["items"][0]["path"], "Screen > Title");
+    assert_eq!(
+        fb["items"][0]["feedback"][0]["text"],
+        "make this bigger and bolder"
+    );
+    assert_eq!(fb["items"][0]["text"], "Hello");
+    h.ed.selection = vec![id];
+    assert_eq!(
+        call(&mut h, "get_selection", json!({}))["selection"][0]["feedback"][0]["author"],
+        "user"
+    );
+    // The agent answers and resolves; undo brings the note back.
+    call(
+        &mut h,
+        "add_feedback",
+        json!({"nodeId": title, "text": "should the subtitle change too?"}),
+    );
+    assert_eq!(
+        call(&mut h, "get_feedback", json!({}))["items"][0]["feedback"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let r = call(
+        &mut h,
+        "resolve_feedback",
+        json!({"nodeId": title, "commentId": 1, "reply": "now 32px bold"}),
+    );
+    assert_eq!(r["resolved"], 1);
+    let fb = call(&mut h, "get_feedback", json!({"includeResolved": true}));
+    let notes = fb["items"][0]["feedback"].as_array().unwrap();
+    assert!(
+        notes
+            .iter()
+            .any(|c| c["resolved"] == true && c["reply"] == "now 32px bold")
+    );
+    assert_eq!(call(&mut h, "get_basic_info", json!({}))["openFeedback"], 1);
+    call(&mut h, "undo", json!({}));
+    assert_eq!(call(&mut h, "get_basic_info", json!({}))["openFeedback"], 2);
+}
+
+#[test]
+fn tokens_shadows_tables_and_named_instances_with_inline_overrides() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_tokens",
+        json!({"tokens": {"spacing-md": "16px", "spacing-sm": 8, "radius-md": "8px", "shadow-md": "0 4px 12px rgba(0,0,0,0.5)"}}),
+    );
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"surface": "#313244"}}),
+    );
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Screen", "styles": {"width": "400px", "height": "300px", "display": "flex", "flexDirection": "column", "padding": "var(--spacing-md)", "gap": "var(--spacing-sm)"}}),
+    );
+    let ab_id = node(&ab["id"]);
+    let l = h.ed.doc.get(ab_id).unwrap().layout.unwrap();
+    assert_eq!(
+        (l.padding, l.gap),
+        ([16.0; 4], 8.0),
+        "tokens substitute into padding and gap"
+    );
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": concat!(
+        "<div layer-name=\"Card\" style=\"padding:var(--spacing-sm) var(--spacing-md);border-radius:var(--radius-md);box-shadow:var(--shadow-md);background:var(--surface)\">",
+        "<table layer-name=\"Table\"><tr layer-name=\"Head\"><th style=\"width:100px\">Name</th><th>Role</th></tr>",
+        "<tr layer-name=\"Row\"><td style=\"width:100px\">Ada</td><td>Admin</td></tr></table></div>")}),
+    );
+    let card = h.ed.doc.get(node(&r["createdNodeIds"][0])).unwrap();
+    assert_eq!(card.style.corner_radius, 8.0);
+    let s = card.style.shadow.expect("box-shadow parsed");
+    assert_eq!((s.x, s.y, s.blur), (0.0, 4.0, 12.0));
+    assert!(
+        papercraft::render::draw::node_draw(card, h.ed.doc.world_rect(card.id).unwrap(), 1.0)
+            .ops
+            .len()
+            > 5,
+        "shadow layers are drawn"
+    );
+    let css = call(
+        &mut h,
+        "get_computed_styles",
+        json!({"nodeIds": [r["createdNodeIds"][0]]}),
+    );
+    let shadow = css[r["createdNodeIds"][0].as_str().unwrap()]["boxShadow"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        shadow.starts_with("0px 4px 12px 0px rgba(0, 0, 0, 0.50"),
+        "{shadow}"
+    );
+    let rows: Vec<_> =
+        h.ed.doc
+            .nodes
+            .values()
+            .filter(|n| n.name == "Row" || n.name == "Head")
+            .collect();
+    for row in &rows {
+        assert_eq!(
+            row.layout.unwrap().direction,
+            papercraft::model::Direction::Horizontal,
+            "{} is a row",
+            row.name
+        );
+        assert_eq!(row.children.len(), 2);
+    }
+    let bad = call(
+        &mut h,
+        "update_styles",
+        json!({"updates": [{"nodeIds": [ab["id"]], "styles": {"padding": "var(--nope)"}}]}),
+    );
+    assert!(bad["ignoredStyles"].to_string().contains("--nope"), "{bad}");
+
+    // A component placed by name with its text set inline.
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children",
+        "html": "<div layer-name=\"Pill\" style=\"display:flex;padding:4px 8px;background:var(--surface)\"><div layer-name=\"Label\" style=\"font-size:12px\">Tag</div></div>"}),
+    );
+    call(
+        &mut h,
+        "create_component",
+        json!({"nodeId": r["createdNodeIds"][0], "name": "Pill"}),
+    );
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children",
+        "html": "<x-paper-instance component=\"pill\" layer-name=\"Pill / Admin\" overrides='{\"Label\":\"Admin\"}'/><x-paper-instance component=\"Nope\"/>"}),
+    );
+    assert!(r.to_string().contains("not a component"), "{r}");
+    let inst = r["createdNodeIds"][0].clone();
+    let label =
+        h.ed.doc
+            .subtree(node(&inst))
+            .into_iter()
+            .filter_map(|i| h.ed.doc.get(i))
+            .find(|n| n.name == "Label")
+            .unwrap();
+    assert_eq!(label.kind.text().map(String::as_str), Some("Admin"));
+    assert!(
+        label
+            .instance
+            .as_ref()
+            .unwrap()
+            .overrides
+            .contains(&"text".to_string())
+    );
+}

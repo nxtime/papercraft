@@ -108,6 +108,19 @@ pub struct Style {
     /// Hand-drawn (rough.js style) rendering.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rough: Option<super::rough::Rough>,
+    /// Drop shadow (CSS `box-shadow`, first layer only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
+}
+
+/// A soft drop shadow behind a box.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Shadow {
+    pub x: f64,
+    pub y: f64,
+    pub blur: f64,
+    pub spread: f64,
+    pub color: Color,
 }
 
 fn is_default<T: Default + PartialEq>(t: &T) -> bool {
@@ -129,6 +142,7 @@ impl Default for Style {
             opacity: 1.0,
             blend: BlendMode::Normal,
             rough: None,
+            shadow: None,
         }
     }
 }
@@ -396,6 +410,30 @@ pub struct Node {
     /// Instance link (instance roots and every node inside an instance).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance: Option<InstanceLink>,
+    /// Feedback left on this layer by the user or an agent (see `get_feedback`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<Comment>,
+}
+
+/// A note attached to a layer: what to change, from the user to an agent or back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    /// Unique within the layer.
+    pub id: u32,
+    pub text: String,
+    /// "user" or "agent".
+    pub author: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resolved: bool,
+    /// What was done about it, set when resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
+impl Node {
+    pub fn open_comments(&self) -> usize {
+        self.comments.iter().filter(|c| !c.resolved).count()
+    }
 }
 
 /// One anchor of a vector path, with optional bezier handles (node-local, absolute).
@@ -472,6 +510,7 @@ impl Node {
             layout_child: LayoutChild::default(),
             component: false,
             instance: None,
+            comments: Vec::new(),
         }
     }
 

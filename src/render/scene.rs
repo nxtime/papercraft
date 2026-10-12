@@ -343,6 +343,24 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
         }
     }
 
+    // Feedback badges: an amber dot on the corner of every layer with open comments.
+    for n in ed
+        .doc
+        .nodes
+        .values()
+        .filter(|n| n.visible && n.open_comments() > 0)
+    {
+        if let Some(wr) = ed.doc.world_rect(n.id) {
+            let r = v.rect_to_screen(&wr);
+            let c = V2 {
+                x: r.right(),
+                y: r.y,
+            };
+            mb.circle(c, 9.0, [1.0, 1.0, 1.0, 0.95]);
+            mb.circle(c, 7.0, [0.98, 0.74, 0.18, 1.0]);
+        }
+    }
+
     if let Some(te) = &ed.text_edit {
         if let (Some(n), Some(wr)) = (ed.doc.get(te.id), ed.doc.world_rect(te.id))
             && let Some(l) = text::layout_node(n)

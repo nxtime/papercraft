@@ -256,7 +256,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
             let ed = host.editor();
             ed.commit_pending();
             let scope = page_arg(ed, &a).unwrap_or(ed.active_page);
-            css::set_variables_in_scope(&ed.page_doc(scope).variables);
+            css::set_variables_in_scope(&ed.page_doc(scope).variables, &ed.page_doc(scope).tokens);
             // The first content on the page the user is looking at is brought into view.
             let was_empty = ed.doc.root.is_empty();
             let r = match name {
@@ -281,8 +281,12 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "set_text_content" => set_text_content(ed, &a),
                 "get_variables" => get_variables(ed, &a),
                 "lint_design" => lint_design(ed, &a),
+                "get_feedback" => get_feedback(ed, &a),
+                "add_feedback" => add_feedback(ed, &a),
+                "resolve_feedback" => resolve_feedback(ed, &a),
                 "set_variables" => set_variables(ed, &a),
                 "set_variable_mode" => set_variable_mode(ed, &a),
+                "set_tokens" => set_tokens(ed, &a),
                 "get_components" => get_components(ed, &a),
                 "create_component" => create_component(ed, &a),
                 "create_instance" => create_instance(ed, &a),
@@ -510,8 +514,150 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
         "otherTopLevelLayers": others,
         "fontFamilies": ["Inter"],
         "selectionCount": if page == ed.active_page { ed.selection.len() } else { 0 },
+        "openFeedback": (0..ed.pages.len())
+            .map(|p| ed.page_doc(p).nodes.values().map(|n| n.open_comments()).sum::<usize>())
+            .sum::<usize>(),
         "nodeIdFormat": "\"<page>:<n>\", e.g. \"".to_string() + &node_key(ed, page, NodeId(1)) + "\"",
     }))
+}
+
+fn comments_json(n: &Node, with_resolved: bool) -> Vec<Value> {
+    n.comments
+        .iter()
+        .filter(|c| with_resolved || !c.resolved)
+        .map(|c| {
+            let mut v = json!({"id": c.id, "author": c.author, "text": c.text});
+            if c.resolved {
+                v["resolved"] = json!(true);
+            }
+            if let Some(r) = &c.reply {
+                v["reply"] = json!(r);
+            }
+            v
+        })
+        .collect()
+}
+
+/// "Artboard > Frame > Text" for a node.
+fn node_path(doc: &Document, id: NodeId) -> String {
+    let mut names: Vec<String> = doc
+        .ancestors(id)
+        .into_iter()
+        .filter_map(|a| doc.get(a).map(|n| n.name.clone()))
+        .collect();
+    names.reverse();
+    names.push(doc.get(id).map(|n| n.name.clone()).unwrap_or_default());
+    names.join(" > ")
+}
+
+/// Open feedback from the user, across the project (or one page / layer): what to change, where.
+fn get_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
+    let with_resolved = a.get("includeResolved").and_then(Value::as_bool) == Some(true);
+    let only = match a.str("nodeId").filter(|n| !n.is_empty()) {
+        Some(n) => Some(resolve(ed, n, page_arg(ed, a)?)?),
+        None => None,
+    };
+    let pages: Vec<usize> = match (&only, a.str("pageId").filter(|p| !p.is_empty())) {
+        (Some((p, _)), _) => vec![*p],
+        (None, Some(p)) => vec![find_page(ed, p)?],
+        (None, None) => (0..ed.pages.len()).collect(),
+    };
+    let mut items = Vec::new();
+    for page in pages {
+        let doc = ed.page_doc(page);
+        let mut nodes: Vec<&Node> = doc
+            .nodes
+            .values()
+            .filter(|n| only.is_none_or(|(_, id)| n.id == id))
+            .filter(|n| {
+                if with_resolved {
+                    !n.comments.is_empty()
+                } else {
+                    n.open_comments() > 0
+                }
+            })
+            .collect();
+        nodes.sort_by_key(|n| n.id);
+        for n in nodes {
+            let mut v = json!({
+                "nodeId": node_key(ed, page, n.id), "page": ed.pages[page].name,
+                "name": n.name, "type": n.kind.type_name(), "path": node_path(doc, n.id),
+                "width": r2(n.rect.w), "height": r2(n.rect.h),
+                "feedback": comments_json(n, with_resolved),
+            });
+            if let Some(t) = n.kind.text() {
+                v["text"] = json!(t);
+            }
+            items.push(v);
+        }
+    }
+    text(json!({
+        "count": items.len(),
+        "items": items,
+        "next": "fix what each note asks, then resolve_feedback with a short reply",
+    }))
+}
+
+fn add_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
+    let (page, id) = resolve(ed, a.req_str("nodeId")?, page_arg(ed, a)?)?;
+    let body = a.req_str("text")?.chars().take(500).collect::<String>();
+    let author = a
+        .str("author")
+        .filter(|s| !s.is_empty())
+        .unwrap_or("agent")
+        .to_string();
+    let cid = ed.with_page(page, |ed| {
+        ed.edit("Add feedback", |tx| {
+            let n = tx.node_mut(id)?;
+            let next = n.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+            n.comments.push(crate::model::Comment {
+                id: next,
+                text: body,
+                author,
+                resolved: false,
+                reply: None,
+            });
+            Some(next)
+        })
+    });
+    text(json!({"nodeId": node_key(ed, page, id), "commentId": cid}))
+}
+
+fn resolve_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
+    let (page, id) = resolve(ed, a.req_str("nodeId")?, page_arg(ed, a)?)?;
+    let which = a.num("commentId").map(|n| n as u32);
+    let reply = a
+        .str("reply")
+        .filter(|r| !r.is_empty())
+        .map(|r| r.chars().take(500).collect::<String>());
+    let delete = a.get("delete").and_then(Value::as_bool) == Some(true);
+    let n = ed.with_page(page, |ed| {
+        ed.edit("Resolve feedback", |tx| {
+            let Some(node) = tx.node_mut(id) else {
+                return 0;
+            };
+            let mut n = 0;
+            if delete {
+                let before = node.comments.len();
+                node.comments.retain(|c| which.is_some_and(|w| w != c.id));
+                if which.is_none() {
+                    node.comments.clear();
+                }
+                return before - node.comments.len();
+            }
+            for c in node
+                .comments
+                .iter_mut()
+                .filter(|c| !c.resolved && which.is_none_or(|w| w == c.id))
+            {
+                c.resolved = true;
+                c.reply = reply.clone();
+                n += 1;
+            }
+            n
+        })
+    });
+    text(json!({"nodeId": node_key(ed, page, id), "resolved": n}))
 }
 
 fn selection(ed: &mut Editor) -> ToolResult {
@@ -528,6 +674,10 @@ fn selection(ed: &mut Editor) -> ToolResult {
             }
             if let Some(t) = ed.doc.get(*id).unwrap().kind.text() {
                 v["text"] = json!(t);
+            }
+            let n = ed.doc.get(*id).unwrap();
+            if !n.comments.is_empty() {
+                v["feedback"] = json!(comments_json(n, false));
             }
             v
         })
@@ -1343,7 +1493,26 @@ fn ua_styles(tag: &str) -> Styles {
         "h1" => s(&[("fontSize", "32px"), ("fontWeight", "700")]),
         "h2" => s(&[("fontSize", "24px"), ("fontWeight", "700")]),
         "h3" => s(&[("fontSize", "20px"), ("fontWeight", "700")]),
-        "h4" | "h5" | "h6" | "th" => s(&[("fontWeight", "700")]),
+        "h4" | "h5" | "h6" => s(&[("fontWeight", "700")]),
+        "table" | "thead" | "tbody" | "tfoot" => {
+            s(&[("display", "flex"), ("flexDirection", "column")])
+        }
+        "tr" => s(&[
+            ("display", "flex"),
+            ("flexDirection", "row"),
+            ("alignItems", "center"),
+        ]),
+        "td" => s(&[
+            ("display", "flex"),
+            ("alignItems", "center"),
+            ("flexGrow", "1"),
+        ]),
+        "th" => s(&[
+            ("display", "flex"),
+            ("alignItems", "center"),
+            ("flexGrow", "1"),
+            ("fontWeight", "700"),
+        ]),
         "b" | "strong" => s(&[("fontWeight", "700")]),
         "i" | "em" | "cite" => s(&[("fontStyle", "italic")]),
         "u" | "ins" => s(&[("textDecoration", "underline")]),
@@ -1954,14 +2123,30 @@ impl Builder<'_, '_> {
         parent: &Parent,
         index: &mut Option<usize>,
     ) -> Option<NodeId> {
-        let key = el.attr("component-id").unwrap_or("");
+        let key = el
+            .attr("component-id")
+            .or_else(|| el.attr("component"))
+            .unwrap_or("");
         let num = key.rsplit(':').next().and_then(|n| n.parse::<u64>().ok());
-        let Some(main) = num
+        // By id, or by component name (`component="Button / Primary"`).
+        let main = num
             .map(NodeId)
             .filter(|id| self.tx.doc().get(*id).is_some_and(|n| n.component))
-        else {
+            .or_else(|| {
+                let mut named: Vec<&Node> = self
+                    .tx
+                    .doc()
+                    .nodes
+                    .values()
+                    .filter(|n| n.component && n.name.eq_ignore_ascii_case(key))
+                    .collect();
+                named.sort_by_key(|n| n.id);
+                named.first().map(|n| n.id)
+            });
+        let Some(main) = main else {
             self.warnings.push(format!(
-                "x-paper-instance: `{key}` is not a component on this page (create_component first)"
+                "x-paper-instance: `{key}` is not a component on this page (create_component first, \
+                 or use its exact name)"
             ));
             return None;
         };
@@ -1980,7 +2165,68 @@ impl Builder<'_, '_> {
         if let Some(name) = Self::layer_name(el) {
             self.tx.node_mut(id).unwrap().name = name;
         }
+        self.apply_overrides(el, id);
         Some(id)
+    }
+
+    /// `overrides='{"Label": "Save", "Icon": {"color": "var(--accent)"}}'`: set text (string) or
+    /// styles (object) on the instance's layers, found by name.
+    fn apply_overrides(&mut self, el: &Element, instance: NodeId) {
+        let Some(raw) = el.attr("overrides") else {
+            return;
+        };
+        let Ok(Value::Object(map)) = serde_json::from_str::<Value>(raw) else {
+            self.warnings
+                .push("x-paper-instance: `overrides` must be a JSON object".into());
+            return;
+        };
+        for (layer, v) in map {
+            let found = self
+                .tx
+                .doc()
+                .subtree(instance)
+                .into_iter()
+                .find(|i| self.tx.doc().get(*i).is_some_and(|n| n.name == layer));
+            let Some(target) = found else {
+                self.warnings.push(format!(
+                    "x-paper-instance: no layer named `{layer}` in the instance"
+                ));
+                continue;
+            };
+            match v {
+                Value::String(t) => {
+                    let Some(n) = self.tx.node_mut(target) else {
+                        continue;
+                    };
+                    let Some(slot) = n.kind.text_mut() else {
+                        self.warnings
+                            .push(format!("x-paper-instance: `{layer}` is not a text layer"));
+                        continue;
+                    };
+                    *slot = t;
+                    crate::editor::structure::mark_overrides(self.tx, target, &["text"]);
+                    fit_text(self.tx, target, false);
+                }
+                Value::Object(_) => {
+                    let Ok(styles) = css::from_json(&v) else {
+                        continue;
+                    };
+                    let parent = Parent::of(
+                        self.tx.doc(),
+                        &self.page_id,
+                        self.tx.doc().get(target).and_then(|n| n.parent),
+                    );
+                    let mut n = self.tx.doc().get(target).unwrap().clone();
+                    let a = css::apply(&mut n, &styles, &parent.ctx());
+                    self.note(&a);
+                    *self.tx.node_mut(target).unwrap() = n;
+                    let keys = css::override_keys(&styles);
+                    crate::editor::structure::mark_overrides(self.tx, target, &keys);
+                    fit_text(self.tx, target, false);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// `<x-paper-icon name="lucide:check" size="20" color="var(--text)" stroke-width="2"/>`.
@@ -2683,6 +2929,7 @@ fn get_variables(ed: &mut Editor, a: &Args) -> ToolResult {
                 .variables
                 .iter()
                 .map(|(k, c)| format!("  --{k}: {};\n", c.to_hex()))
+                .chain(doc.tokens.iter().map(|(k, v)| format!("  --{k}: {v};\n")))
                 .collect();
             return Ok(vec![Out::Text(format!(":root {{\n{body}}}\n"))]);
         }
@@ -2703,6 +2950,9 @@ fn get_variables(ed: &mut Editor, a: &Args) -> ToolResult {
         .map(|(k, c)| (k.clone(), json!(c.to_hex())))
         .collect();
     let mut v = json!({"variables": vars, "use": "var(--name) in color styles"});
+    if !doc.tokens.is_empty() {
+        v["tokens"] = json!(doc.tokens);
+    }
     if !doc.modes.is_empty() {
         v["mode"] = json!(doc.mode);
         v["modes"] = json!(doc.modes.keys().collect::<Vec<_>>());
@@ -2793,6 +3043,48 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
 }
 
 // ------------------------------------------------------------------------------ components
+
+fn set_tokens(ed: &mut Editor, a: &Args) -> ToolResult {
+    let toks = a
+        .get("tokens")
+        .and_then(Value::as_object)
+        .filter(|m| !m.is_empty())
+        .ok_or("`tokens` must be an object like {\"spacing-md\": \"16px\"}")?;
+    let mut parsed: Vec<(String, String)> = Vec::new();
+    for (name, v) in toks {
+        let name = name.trim().trim_start_matches("--").to_string();
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(format!(
+                "token name `{name}` may only use letters, digits, - and _"
+            ));
+        }
+        let value = match v {
+            Value::String(s) => s.trim().to_string(),
+            Value::Number(n) => format!("{n}px"),
+            _ => return Err(format!("token `{name}` must be a string like \"16px\"")),
+        };
+        if value.is_empty() {
+            return Err(format!("token `{name}` is empty"));
+        }
+        parsed.push((name, value));
+    }
+    for page in 0..ed.pages.len() {
+        ed.with_page(page, |ed| {
+            ed.edit("Set tokens", |tx| {
+                for (n, v) in &parsed {
+                    tx.set_token(n, v);
+                }
+            })
+        });
+    }
+    text(
+        json!({"tokens": parsed.len(), "use": "var(--name) in any style value, e.g. padding: var(--spacing-md); substituted when written"}),
+    )
+}
 
 fn set_variable_mode(ed: &mut Editor, a: &Args) -> ToolResult {
     let mode = a.req_str("mode")?.to_string();

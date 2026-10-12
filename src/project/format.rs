@@ -132,6 +132,8 @@ struct PageFile {
     modes: BTreeMap<String, BTreeMap<String, Color>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    tokens: BTreeMap<String, String>,
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
@@ -183,6 +185,7 @@ pub fn page_to_json(p: &PageData) -> String {
         variables: p.doc.variables.clone(),
         modes: p.doc.modes.clone(),
         mode: p.doc.mode.clone(),
+        tokens: p.doc.tokens.clone(),
     };
     serde_json::to_string_pretty(&f).expect("page serializes")
 }
@@ -202,6 +205,7 @@ pub fn page_from_json(s: &str) -> Result<PageData, FormatError> {
         variables: f.variables,
         modes: f.modes,
         mode: f.mode,
+        tokens: f.tokens,
     };
     doc.validate().map_err(FormatError::Invalid)?;
     Ok(PageData {

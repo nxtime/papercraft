@@ -223,6 +223,36 @@ fn sorted(stops: &[Stop]) -> Vec<Stop> {
     s
 }
 
+/// A soft shadow as stacked translucent shapes: each layer is a little larger and the layers add up to
+/// the shadow color's alpha under the box, fading to nothing across the blur radius.
+fn shadow_ops(n: &Node, wr: Rect, opacity: f64, ops: &mut Vec<DrawOp>) {
+    const LAYERS: usize = 10;
+    let Some(s) = n.style.shadow else { return };
+    if s.color.a == 0 || !is_area(n) || wr.w <= 0.0 || wr.h <= 0.0 {
+        return;
+    }
+    let base = wr.translate(v2(s.x, s.y));
+    let radii = if matches!(n.kind, NodeKind::Ellipse) {
+        [wr.w.min(wr.h) * 0.5; 4]
+    } else {
+        n.style.corner_radii()
+    };
+    let solid = Color::rgb(s.color.r, s.color.g, s.color.b);
+    let each = opacity * (s.color.a as f64 / 255.0) / LAYERS as f64;
+    for i in 0..LAYERS {
+        let e = s.spread + s.blur * ((i as f64 + 0.5) / LAYERS as f64 - 0.5);
+        let r = base.inflate(e);
+        if r.w <= 0.0 || r.h <= 0.0 {
+            continue;
+        }
+        ops.push(DrawOp::Fill {
+            path: vector::rounded_rect(r, radii.map(|x| (x + e).max(0.0))),
+            paint: PaintSpec::Solid(rgba(solid, each)),
+            even_odd: false,
+        });
+    }
+}
+
 /// Draw ops for one node (not its children), in world space.
 pub fn node_draw(n: &Node, wr: Rect, opacity: f64) -> NodeDraw {
     let mut ops = Vec::new();
@@ -233,6 +263,7 @@ pub fn node_draw(n: &Node, wr: Rect, opacity: f64) -> NodeDraw {
             blend: n.style.blend,
         };
     }
+    shadow_ops(n, wr, opacity, &mut ops);
     match &n.kind {
         NodeKind::Group => {}
         NodeKind::Text { .. } => text_ops(n, wr, opacity, &mut ops),
