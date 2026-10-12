@@ -95,11 +95,7 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, native_chrome: bool, translucent: bo
         .exact_size(200.0)
         .frame(
             egui::Frame::NONE
-                .fill(if translucent {
-                    Color32::TRANSPARENT
-                } else {
-                    p.sidebar
-                })
+                .fill(theme::sidebar_fill(translucent, p))
                 .inner_margin(egui::Margin::symmetric(10, 8)),
         )
         .show(ui, |ui| {
@@ -352,7 +348,11 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
         let renaming = hv.renaming.as_ref().is_some_and(|(d, _)| *d == e.dir);
         if renaming {
             let (_, name) = hv.renaming.as_mut().unwrap();
-            let r = ui.add(egui::TextEdit::singleline(name).desired_width(CARD_W));
+            let r = ui.add(
+                egui::TextEdit::singleline(name)
+                    .margin(crate::theme::INPUT_MARGIN)
+                    .desired_width(CARD_W),
+            );
             r.request_focus();
             if r.lost_focus() {
                 let (dir, name) = hv.renaming.take().unwrap();

@@ -993,6 +993,7 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         let mut t = text.clone();
         let r = ui.add(
             egui::TextEdit::multiline(&mut t)
+                .margin(crate::theme::INPUT_MARGIN)
                 .desired_rows(2)
                 .desired_width(f32::INFINITY),
         );

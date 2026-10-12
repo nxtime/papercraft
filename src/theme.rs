@@ -19,6 +19,8 @@ pub const MAC_BLUE: Color32 = Color32::from_rgb(0x00, 0x7a, 0xff);
 /// Body text (13pt) and secondary text (11pt), as in AppKit.
 pub const BODY: f32 = 13.0;
 pub const SECONDARY: f32 = 11.0;
+/// Inner margin of text inputs (egui's default is a cramped 4x2).
+pub const INPUT_MARGIN: egui::Margin = egui::Margin::symmetric(8, 5);
 /// Height of the unified toolbar.
 pub const TOOLBAR_H: f32 = 40.0;
 /// Traffic lights: left inset and the height of the bar they are centred in (points).
@@ -185,8 +187,8 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     ]
     .into();
     s.spacing.item_spacing = vec2(6.0, 4.0);
-    s.spacing.button_padding = vec2(8.0, 3.0);
-    s.spacing.interact_size = vec2(24.0, 22.0);
+    s.spacing.button_padding = vec2(9.0, 4.0);
+    s.spacing.interact_size = vec2(24.0, 26.0);
     s.spacing.menu_margin = egui::Margin::same(5);
     s.spacing.window_margin = egui::Margin::same(12);
     s.spacing.scroll = egui::style::ScrollStyle {
@@ -371,6 +373,26 @@ pub fn catppuccin_palette(f: Flavor) -> Palette {
         hover: veil(p.overlay0, 50),
         pressed: veil(p.overlay0, 90),
         popover: p.surface0,
+    }
+}
+
+/// Left panels are see-through (vibrancy) except under a Catppuccin theme, which paints its own colours.
+pub fn sidebar_fill(translucent: bool, p: Palette) -> Color32 {
+    if translucent && !matches!(choice(), Choice::Catppuccin(_)) {
+        Color32::TRANSPARENT
+    } else {
+        p.sidebar
+    }
+}
+
+/// Canvas background and grid-dot colours: Catppuccin base/surface0-1, else the light defaults.
+pub fn canvas_colors() -> Option<(Color32, Color32)> {
+    match choice() {
+        Choice::Catppuccin(f) => {
+            let p = f.palette();
+            Some((p.base, if f.is_dark() { p.surface1 } else { p.surface2 }))
+        }
+        _ => None,
     }
 }
 

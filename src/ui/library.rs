@@ -137,8 +137,11 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                                 lib.renaming.as_ref().is_some_and(|(id, _)| *id == it.id);
                             if renaming {
                                 let (_, name) = lib.renaming.as_mut().unwrap();
-                                let r =
-                                    ui.add(egui::TextEdit::singleline(name).desired_width(TILE));
+                                let r = ui.add(
+                                    egui::TextEdit::singleline(name)
+                                        .margin(crate::theme::INPUT_MARGIN)
+                                        .desired_width(TILE),
+                                );
                                 r.request_focus();
                                 if r.lost_focus() {
                                     let (id, name) = lib.renaming.take().unwrap();

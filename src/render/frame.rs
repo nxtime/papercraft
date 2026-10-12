@@ -74,7 +74,7 @@ impl Painter {
         let bg = if self.transparent {
             [0.0; 4]
         } else {
-            scene::CANVAS_BG.to_f32(1.0)
+            scene::canvas_colors().0.to_f32(1.0)
         };
         self.canvas.render(
             device,

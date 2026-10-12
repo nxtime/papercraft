@@ -248,6 +248,7 @@ pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui
                     ui.set_width(width);
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut st.palette.query)
+                            .margin(crate::theme::INPUT_MARGIN)
                             .hint_text("Search actions, tools, pages, layers…")
                             .font(egui::FontId::proportional(15.0))
                             .frame(egui::Frame::NONE)

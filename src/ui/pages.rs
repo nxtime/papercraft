@@ -108,7 +108,7 @@ fn page_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, i: usize, top: f32) 
         let (_, name) = st.pages.renaming.as_mut().unwrap();
         let r = ui.put(
             name_rect.shrink2(egui::vec2(0.0, 2.0)),
-            egui::TextEdit::singleline(name),
+            egui::TextEdit::singleline(name).margin(crate::theme::INPUT_MARGIN),
         );
         r.request_focus();
         if r.lost_focus() {

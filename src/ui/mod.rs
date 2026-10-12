@@ -109,11 +109,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         return canvas;
     }
     let p = theme::pal(ui);
-    let sidebar_fill = if st.translucent_sidebar {
-        Color32::TRANSPARENT
-    } else {
-        p.sidebar
-    };
+    let sidebar_fill = theme::sidebar_fill(st.translucent_sidebar, p);
     egui::Panel::left("layers")
         .resizable(true)
         .default_size(240.0)
@@ -615,7 +611,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     {
         let r = ui.put(
             name_rect.shrink2(egui::vec2(0.0, 2.0)),
-            egui::TextEdit::singleline(name),
+            egui::TextEdit::singleline(name).margin(crate::theme::INPUT_MARGIN),
         );
         r.request_focus();
         if r.lost_focus() {

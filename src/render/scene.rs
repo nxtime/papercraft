@@ -14,6 +14,14 @@ use std::sync::Arc;
 
 pub const CANVAS_BG: Color = Color::rgb(0xee, 0xee, 0xf0);
 pub const GRID_DOT: Color = Color::rgb(0xcf, 0xcf, 0xd6);
+
+/// Canvas background and grid dots for the current theme (Catppuccin flavours recolour them).
+pub fn canvas_colors() -> (Color, Color) {
+    match crate::theme::canvas_colors() {
+        Some((bg, dot)) => (crate::ui::from32(bg), crate::ui::from32(dot)),
+        None => (CANVAS_BG, GRID_DOT),
+    }
+}
 pub const ACCENT: Color = Color::rgb(0x2f, 0x6f, 0xf3);
 pub const GUIDE: Color = Color::rgb(0xf2, 0x2f, 0x7a);
 
@@ -63,7 +71,7 @@ pub fn grid(mb: &mut MeshBuilder, v: &View) {
     let y0 = (vis.y / spacing).floor() as i64;
     let x1 = (vis.right() / spacing).ceil() as i64;
     let y1 = (vis.bottom() / spacing).ceil() as i64;
-    let color = rgba(GRID_DOT);
+    let color = rgba(canvas_colors().1);
     let r = 0.9;
     for yi in y0..=y1 {
         for xi in x0..=x1 {
@@ -595,7 +603,7 @@ pub fn canvas(ed: &Editor, cache: &mut SceneCache, offset: V2, show_grid: bool) 
     };
     let mut under = MeshBuilder::default();
     under.set_clip(Some(v.canvas_rect()));
-    under.rect(v.canvas_rect(), rgba(CANVAS_BG));
+    under.rect(v.canvas_rect(), rgba(canvas_colors().0));
     if show_grid {
         grid(&mut under, &v);
     }
