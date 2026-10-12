@@ -682,7 +682,7 @@ pub fn set_variables_in_scope(
 
 /// Replace every `var(--name)` inside `v` with its token (or color) value, or its fallback.
 /// Returns the text and the names that could not be resolved.
-fn substitute_vars(v: &str) -> (String, Vec<String>) {
+pub fn substitute_vars(v: &str) -> (String, Vec<String>) {
     let mut out = String::new();
     let mut missing = Vec::new();
     let mut rest = v;
@@ -841,7 +841,22 @@ pub fn override_keys(styles: &[(String, String)]) -> Vec<&'static str> {
 
 /// `var(--name)` or `var(--name, fallback)` as (name, fallback).
 pub fn var_name(v: &str) -> Option<(&str, Option<&str>)> {
-    let inner = v.trim().strip_prefix("var(")?.strip_suffix(')')?;
+    let v = v.trim();
+    let inner = v.strip_prefix("var(")?.strip_suffix(')')?;
+    // One call only: `var(--a) var(--b)` is two.
+    let mut depth = 1;
+    for ch in inner.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
     let (name, fallback) = match inner.split_once(',') {
         Some((n, f)) => (n, Some(f.trim())),
         None => (inner, None),
@@ -1077,6 +1092,28 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 }
                 _ => false,
             },
+            "textTransform" if is_text => {
+                if let Some(t) = n.kind.text_mut() {
+                    match lower.as_str() {
+                        "uppercase" => *t = t.to_uppercase(),
+                        "lowercase" => *t = t.to_lowercase(),
+                        "capitalize" => {
+                            *t = t
+                                .split(' ')
+                                .map(|w| {
+                                    let mut c = w.chars();
+                                    c.next().map_or(String::new(), |f| {
+                                        f.to_uppercase().collect::<String>() + c.as_str()
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        }
+                        _ => {}
+                    }
+                }
+                true
+            }
             "boxShadow" => match parse_shadow(v) {
                 Some(s) => {
                     n.style.shadow = s;

@@ -629,3 +629,57 @@ fn components_import_to_other_pages_and_instances_work_there() {
     let comps = call(&mut h, "get_components", json!({"pageId": p2}));
     assert_eq!(comps["components"][0]["instances"], 1);
 }
+
+#[test]
+fn shorthand_vars_text_transform_svg_vars_and_icon_recolor() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_tokens",
+        json!({"tokens": {"a": "8px", "b": "24px"}}),
+    );
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"accent": "#cba6f7", "danger": "#f38ba8"}}),
+    );
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "S", "styles": {"width": "200px", "height": "100px", "display": "flex", "padding": "var(--a) var(--b)"}}),
+    );
+    let l = h.ed.doc.get(node(&ab["id"])).unwrap().layout.unwrap();
+    assert_eq!(l.padding, [8.0, 24.0, 8.0, 24.0]);
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": concat!(
+        "<div layer-name=\"Label\" style=\"text-transform:uppercase;font-size:14px\">hello there</div>",
+        "<svg layer-name=\"Icon\" width=\"16\" height=\"16\" viewBox=\"0 0 16 16\"><path d=\"M0 0h16v16z\" fill=\"var(--accent)\"/></svg>")}),
+    );
+    let label = h.ed.doc.get(node(&r["createdNodeIds"][0])).unwrap();
+    assert_eq!(label.kind.text().map(String::as_str), Some("HELLO THERE"));
+    let icon = r["createdNodeIds"][1].clone();
+    let shape =
+        h.ed.doc
+            .subtree(node(&icon))
+            .into_iter()
+            .filter_map(|i| h.ed.doc.get(i))
+            .find(|n| matches!(n.kind, papercraft::model::NodeKind::Path { .. }))
+            .unwrap()
+            .id;
+    assert_eq!(
+        h.ed.doc.get(shape).unwrap().style.fills[0].preview_color(),
+        Color::rgb(0xcb, 0xa6, 0xf7)
+    );
+    call(
+        &mut h,
+        "update_styles",
+        json!({"updates": [{"nodeIds": [icon], "styles": {"color": "var(--danger)"}}]}),
+    );
+    let p = &h.ed.doc.get(shape).unwrap().style.fills[0];
+    assert_eq!(
+        (p.preview_color(), p.var()),
+        (Color::rgb(0xf3, 0x8b, 0xa8), Some("danger"))
+    );
+}

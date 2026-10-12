@@ -2081,6 +2081,12 @@ impl Builder<'_, '_> {
         }
         let src = format!("{open}>{}", if self_closing { "</svg>" } else { body })
             .replace("currentColor", &color.to_hex());
+        // var(--name) inside the markup (fill="var(--accent)", stroke=...) resolves to its value.
+        let src = if src.contains("var(--") {
+            css::substitute_vars(&src).0
+        } else {
+            src
+        };
         let shapes = match crate::io::svg_import::parse(&src) {
             Ok(s) => s,
             Err(e) => {
@@ -2223,6 +2229,7 @@ impl Builder<'_, '_> {
                     *self.tx.node_mut(target).unwrap() = n;
                     let keys = css::override_keys(&styles);
                     crate::editor::structure::mark_overrides(self.tx, target, &keys);
+                    recolor_vectors(self.tx, target, &styles);
                     fit_text(self.tx, target, false);
                 }
                 _ => {}
@@ -2814,6 +2821,7 @@ fn update_styles(ed: &mut Editor, a: &Args) -> ToolResult {
                         get(&styles, "height").is_some_and(|v| css::length(v, 16.0).is_some());
                     *tx.node_mut(*id).unwrap() = n;
                     crate::editor::structure::mark_overrides(tx, *id, &override_keys);
+                    recolor_vectors(tx, *id, &styles);
                     remember_stretch(&page_id, *id, &styles);
                     if (old.w - new.w).abs() > 1e-9 || (old.h - new.h).abs() > 1e-9 {
                         crate::layout::resize_children(tx, *id, old, new);
@@ -3123,6 +3131,49 @@ fn get_components(ed: &mut Editor, a: &Args) -> ToolResult {
         })
         .collect();
     text(json!({"components": items}))
+}
+
+/// `color` on an icon (vector shapes with no text, e.g. an <x-paper-icon>) recolors the shapes'
+/// fills and strokes, keeping a `var(--name)` link for fills. Returns whether it applied.
+fn recolor_vectors(tx: &mut Tx, id: NodeId, styles: &Styles) -> bool {
+    let Some((color, var)) = get(styles, "color").and_then(css::resolve_color_value) else {
+        return false;
+    };
+    let shapes: Vec<NodeId> = tx
+        .doc()
+        .subtree(id)
+        .into_iter()
+        .filter(|i| {
+            tx.doc()
+                .get(*i)
+                .is_some_and(|n| matches!(n.kind, NodeKind::Path { .. }))
+        })
+        .collect();
+    let has_text = tx
+        .doc()
+        .subtree(id)
+        .into_iter()
+        .any(|i| tx.doc().get(i).is_some_and(|n| n.kind.text().is_some()));
+    if shapes.is_empty() || has_text {
+        return false;
+    }
+    for s in shapes {
+        if let Some(n) = tx.node_mut(s) {
+            for p in &mut n.style.fills {
+                if matches!(p, Paint::Solid { .. }) {
+                    *p = match &var {
+                        Some(v) => Paint::solid_var(color, v),
+                        None => Paint::solid(color),
+                    };
+                }
+            }
+            if n.style.stroke.is_some() {
+                n.style.stroke = Some(color);
+            }
+        }
+    }
+    crate::editor::structure::mark_overrides(tx, id, &["fills", "stroke"]);
+    true
 }
 
 /// Copy main components from another page (a design-system page) onto this one, so instances can
