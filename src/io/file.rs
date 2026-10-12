@@ -8,7 +8,9 @@ use std::path::Path;
 
 pub const FORMAT: &str = "paper-rs";
 pub const VERSION: u32 = 1;
-pub const EXTENSION: &str = "paper-rs";
+pub const EXTENSION: &str = "papercraft";
+/// The extension before the rename; still opened.
+pub const LEGACY_EXTENSION: &str = "paper-rs";
 
 #[derive(Serialize, Deserialize)]
 struct FileV1 {
@@ -82,7 +84,7 @@ pub fn from_str(s: &str) -> Result<(Document, Option<Camera>), FileError> {
 
 /// Write atomically (temp file + rename) so a crash never leaves a truncated document.
 pub fn save(path: &Path, doc: &Document, camera: Option<&Camera>) -> Result<(), FileError> {
-    let tmp = path.with_extension("paper-rs.tmp");
+    let tmp = path.with_extension("papercraft.tmp");
     std::fs::write(&tmp, to_string(doc, camera)).map_err(FileError::Io)?;
     std::fs::rename(&tmp, path).map_err(FileError::Io)
 }
@@ -133,7 +135,7 @@ mod tests {
 
     #[test]
     fn save_and_load_file() {
-        let dir = std::env::temp_dir().join(format!("paper-rs-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("papercraft-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("doc.paper-rs");
         let ed = demo::showcase();

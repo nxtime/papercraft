@@ -5,9 +5,8 @@
 //! and pushes a [`Change`] that can be applied in either direction.
 
 use crate::geom::V2;
-use crate::model::Color;
-use crate::model::{Document, Node, NodeId};
-use std::collections::{BTreeMap, HashMap};
+use crate::model::{Color, Document, Node, NodeId, VarState};
+use std::collections::HashMap;
 
 const MAX_DEPTH: usize = 500;
 
@@ -18,14 +17,12 @@ struct Entry {
     after: Option<Node>,
 }
 
-type Variables = BTreeMap<String, Color>;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Change {
     pub label: String,
     entries: Vec<Entry>,
     root: Option<(Vec<NodeId>, Vec<NodeId>)>,
-    variables: Option<(Variables, Variables)>,
+    variables: Option<(VarState, VarState)>,
     next_id: (u64, u64),
     coalesce_key: Option<String>,
 }
@@ -51,11 +48,7 @@ impl Change {
             };
         }
         if let Some((before, after)) = &self.variables {
-            doc.variables = if forward {
-                after.clone()
-            } else {
-                before.clone()
-            };
+            doc.restore_vars(if forward { after } else { before });
         }
         doc.next_id = if forward {
             self.next_id.1
@@ -72,7 +65,7 @@ pub struct Recording {
     before: HashMap<NodeId, Option<Node>>,
     order: Vec<NodeId>,
     root_before: Option<Vec<NodeId>>,
-    variables_before: Option<Variables>,
+    variables_before: Option<VarState>,
     next_id_before: u64,
 }
 
@@ -130,10 +123,66 @@ impl<'a> Tx<'a> {
     /// Define or change a document variable and move every fill that follows it. Returns the
     /// number of fills updated.
     pub fn set_variable(&mut self, name: &str, color: Color) -> usize {
-        if self.rec.variables_before.is_none() {
-            self.rec.variables_before = Some(self.doc.variables.clone());
-        }
+        self.snapshot_variables();
         self.doc.variables.insert(name.to_string(), color);
+        if let Some(mode) = self.doc.mode.clone() {
+            self.doc
+                .modes
+                .entry(mode)
+                .or_default()
+                .insert(name.to_string(), color);
+        }
+        self.apply_variable(name, color)
+    }
+
+    fn snapshot_variables(&mut self) {
+        if self.rec.variables_before.is_none() {
+            self.rec.variables_before = Some(self.doc.var_state());
+        }
+    }
+
+    /// Store `name = color` for `mode`; when that mode is the active one (or none is active
+    /// yet) the live value and every fill following it change too. Returns the fills updated.
+    pub fn set_variable_in_mode(&mut self, mode: &str, name: &str, color: Color) -> usize {
+        self.snapshot_variables();
+        if self.doc.mode.is_none() {
+            self.doc.mode = Some(mode.to_string());
+        }
+        self.doc
+            .modes
+            .entry(mode.to_string())
+            .or_default()
+            .insert(name.to_string(), color);
+        if self.doc.mode.as_deref() == Some(mode) {
+            self.doc.variables.insert(name.to_string(), color);
+            self.apply_variable(name, color)
+        } else {
+            0
+        }
+    }
+
+    /// Switch the active mode: every variable takes its value for `mode` (variables a mode does
+    /// not define keep their current value) and the fills following them move. Returns the
+    /// fills updated.
+    pub fn set_mode(&mut self, mode: &str) -> usize {
+        self.snapshot_variables();
+        let values: Vec<(String, Color)> = self
+            .doc
+            .modes
+            .get(mode)
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), *v)).collect())
+            .unwrap_or_default();
+        self.doc.mode = Some(mode.to_string());
+        let mut fills = 0;
+        for (name, c) in values {
+            self.doc.variables.insert(name.clone(), c);
+            fills += self.apply_variable(&name, c);
+        }
+        fills
+    }
+
+    /// Move every fill following `name` to `color`.
+    fn apply_variable(&mut self, name: &str, color: Color) -> usize {
         let users: Vec<NodeId> = self
             .doc
             .nodes
@@ -270,8 +319,8 @@ impl History {
             .map(|b| (b, doc.root.clone()));
         let variables = rec
             .variables_before
-            .filter(|b| *b != doc.variables)
-            .map(|b| (b, doc.variables.clone()));
+            .filter(|b| *b != doc.var_state())
+            .map(|b| (b, doc.var_state()));
         if entries.is_empty() && root.is_none() && variables.is_none() {
             return false;
         }

@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn save_load_roundtrip_and_starter() {
-        let dir = std::env::temp_dir().join(format!("paper-rs-lib-{:016x}", fastrand::u64(..)));
+        let dir = std::env::temp_dir().join(format!("papercraft-lib-{:016x}", fastrand::u64(..)));
         let path = dir.join(FILE);
         let lib = Library::load(&path);
         assert!(lib.items.len() >= 5, "starter shapes on first use");

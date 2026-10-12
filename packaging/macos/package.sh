@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and sign (ad-hoc by default) the macOS artifacts into dist/release:
-#   paper-rs-<version>-macos-<arch>.dmg          paper-rs.app on a drag-to-Applications DMG
-#   paper-rs-cli-<version>-macos-<arch>.zip      paper-rs-cli (shell access for agents) and paper-rs-mcp (stdio bridge)
+#   papercraft-<version>-macos-<arch>.dmg          PaperCraft.app on a drag-to-Applications DMG
+#   papercraft-cli-<version>-macos-<arch>.zip      papercraft-cli (shell access for agents) and papercraft-mcp (stdio bridge)
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 # Env: MACOS_SIGN_IDENTITY (default "-" = ad-hoc, not notarized; Gatekeeper rejects it on other Macs).
 set -euo pipefail
@@ -29,9 +29,9 @@ export MACOSX_DEPLOYMENT_TARGET=11.0   # keep in sync with LSMinimumSystemVersio
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
-APP="$WORK/paper-rs.app"
-DMG="$DIST/paper-rs-$VERSION-macos-$ARCH.dmg"
-MCP_ZIP="$DIST/paper-rs-cli-$VERSION-macos-$ARCH.zip"
+APP="$WORK/PaperCraft.app"
+DMG="$DIST/papercraft-$VERSION-macos-$ARCH.dmg"
+MCP_ZIP="$DIST/papercraft-cli-$VERSION-macos-$ARCH.zip"
 [ "$IDENTITY" = "-" ] && echo "warning: ad-hoc signing; artifacts are not notarized" >&2
 
 if [ "$SKIP_BUILD" = 0 ]; then
@@ -39,7 +39,7 @@ if [ "$SKIP_BUILD" = 0 ]; then
   (cd "$ROOT" && cargo build --release --locked --bins "${args[@]}")
 fi
 rm -rf "$WORK"; mkdir -p "$WORK/bin" "$DIST"
-for bin in paper-rs paper-rs-mcp paper-rs-cli; do
+for bin in papercraft papercraft-mcp papercraft-cli; do
   inputs=(); for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
 done
@@ -51,30 +51,30 @@ sign() {
 
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$WORK/bin/paper-rs" "$APP/Contents/MacOS/paper-rs"
-cp "$ROOT/assets/app-icon/paper-rs.icns" "$APP/Contents/Resources/paper-rs.icns"
+cp "$WORK/bin/papercraft" "$APP/Contents/MacOS/PaperCraft"
+cp "$ROOT/assets/app-icon/papercraft.icns" "$APP/Contents/Resources/papercraft.icns"
 cp "$ROOT"/LICENSE-* "$APP/Contents/Resources/"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
-sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/paper-rs"
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/PaperCraft"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
 
 echo "==> building $DMG"
 STAGE="$WORK/dmg"; mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/paper-rs.app"
+ditto "$APP" "$STAGE/PaperCraft.app"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG" "$WORK/raw.dmg"
 # makehybrid + convert needs no mounted device (create -srcfolder is flaky on CI and in sandboxes).
-hdiutil makehybrid -hfs -hfs-volume-name "paper-rs" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
+hdiutil makehybrid -hfs -hfs-volume-name "PaperCraft" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
 hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
 rm -f "$WORK/raw.dmg"
 sign "$DMG"; codesign --verify --strict --verbose=2 "$DMG"
 
 echo "==> building $MCP_ZIP"
-MCP_DIR="$WORK/paper-rs-cli-$VERSION-macos-$ARCH"; mkdir -p "$MCP_DIR"
-cp "$WORK/bin/paper-rs-mcp" "$WORK/bin/paper-rs-cli" "$ROOT/README.md" "$ROOT"/LICENSE-* "$MCP_DIR/"
-sign --options runtime "$MCP_DIR/paper-rs-mcp" "$MCP_DIR/paper-rs-cli"
+MCP_DIR="$WORK/papercraft-cli-$VERSION-macos-$ARCH"; mkdir -p "$MCP_DIR"
+cp "$WORK/bin/papercraft-mcp" "$WORK/bin/papercraft-cli" "$ROOT/README.md" "$ROOT"/LICENSE-* "$MCP_DIR/"
+sign --options runtime "$MCP_DIR/papercraft-mcp" "$MCP_DIR/papercraft-cli"
 rm -f "$MCP_ZIP"; ditto -c -k --keepParent "$MCP_DIR" "$MCP_ZIP"
 echo "==> done"; ls -lh "$DMG" "$MCP_ZIP"

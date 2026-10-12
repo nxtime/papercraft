@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 
 pub const PROJECT_FORMAT: &str = "paper-rs-project";
 pub const PAGE_FORMAT: &str = "paper-rs-page";
-/// The single-file format of paper-rs 0.1 (`.paper-rs`), version 1. It migrates to a page.
+/// The single-file format of papercraft 0.1 (`.paper-rs`), version 1. It migrates to a page.
 pub const LEGACY_FORMAT: &str = "paper-rs";
 
 pub const PROJECT_VERSION: u32 = 1;
@@ -34,7 +34,7 @@ impl std::fmt::Display for FormatError {
         match self {
             FormatError::Io(e) => write!(f, "I/O error: {e}"),
             FormatError::Json(e) => write!(f, "malformed file: {e}"),
-            FormatError::WrongFormat(s) => write!(f, "not a paper-rs file (format {s:?})"),
+            FormatError::WrongFormat(s) => write!(f, "not a papercraft file (format {s:?})"),
             FormatError::TooNew { version, supported } => write!(
                 f,
                 "file version {version} is newer than this app supports ({supported})"
@@ -128,6 +128,10 @@ struct PageFile {
     nodes: Vec<Node>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     variables: BTreeMap<String, Color>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    modes: BTreeMap<String, BTreeMap<String, Color>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
@@ -177,6 +181,8 @@ pub fn page_to_json(p: &PageData) -> String {
         root: p.doc.root.clone(),
         nodes,
         variables: p.doc.variables.clone(),
+        modes: p.doc.modes.clone(),
+        mode: p.doc.mode.clone(),
     };
     serde_json::to_string_pretty(&f).expect("page serializes")
 }
@@ -194,6 +200,8 @@ pub fn page_from_json(s: &str) -> Result<PageData, FormatError> {
         root: f.root,
         next_id: f.next_id.max(max_id + 1),
         variables: f.variables,
+        modes: f.modes,
+        mode: f.mode,
     };
     doc.validate().map_err(FormatError::Invalid)?;
     Ok(PageData {

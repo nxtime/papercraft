@@ -1,9 +1,9 @@
 //! `<x-paper-icon>` and `search_icons` against a throwaway icon library. Its own test binary
-//! with a single test: it sets `PAPER_RS_ICONS` once, before anything reads the environment.
+//! with a single test: it sets `PAPERCRAFT_ICONS` once, before anything reads the environment.
 
-use paper_rs::mcp::{Out, exec};
-use paper_rs::model::{NodeId, NodeKind, Paint};
-use paper_rs::project::Store;
+use papercraft::mcp::{Out, exec};
+use papercraft::model::{NodeId, NodeKind, Paint};
+use papercraft::project::Store;
 use serde_json::{Value, json};
 
 const STROKE_ICON: &str = r#"<!-- @license test -->
@@ -20,15 +20,15 @@ fn call(h: &mut exec::SessionHost, name: &str, args: Value) -> Result<Value, Str
 
 #[test]
 fn icons_place_as_vector_layers_that_follow_a_variable() {
-    let root = std::env::temp_dir().join(format!("paper-rs-icon-lib-{:016x}", fastrand::u64(..)));
+    let root = std::env::temp_dir().join(format!("papercraft-icon-lib-{:016x}", fastrand::u64(..)));
     std::fs::create_dir_all(root.join("test")).unwrap();
     std::fs::write(root.join("test/check.svg"), STROKE_ICON).unwrap();
     std::fs::write(root.join("test/square.svg"), FILL_ICON).unwrap();
     // SAFETY: the only test in this binary, so nothing else is reading the environment.
-    unsafe { std::env::set_var("PAPER_RS_ICONS", &root) };
+    unsafe { std::env::set_var("PAPERCRAFT_ICONS", &root) };
 
     let store =
-        Store::open(std::env::temp_dir().join(format!("paper-rs-ic-{:016x}", fastrand::u64(..))))
+        Store::open(std::env::temp_dir().join(format!("papercraft-ic-{:016x}", fastrand::u64(..))))
             .unwrap();
     let mut h = exec::SessionHost::new(store);
     h.session.create(&mut h.ed, "Icons").unwrap();
@@ -64,7 +64,7 @@ fn icons_place_as_vector_layers_that_follow_a_variable() {
         r.to_string().contains("not found"),
         "the missing icon is reported: {r}"
     );
-    fn node<'a>(h: &'a exec::SessionHost, v: &Value) -> &'a paper_rs::model::Node {
+    fn node<'a>(h: &'a exec::SessionHost, v: &Value) -> &'a papercraft::model::Node {
         h.ed.doc
             .get(NodeId(
                 v.as_str()

@@ -15,6 +15,12 @@ pub struct Document {
     /// Named colors that fills can follow (`var(--name)` in CSS). Empty for most documents.
     #[serde(default)]
     pub variables: BTreeMap<String, Color>,
+    /// Values of the variables per mode (e.g. "Light", "Dark"); `variables` holds the active one.
+    #[serde(default)]
+    pub modes: BTreeMap<String, BTreeMap<String, Color>>,
+    /// The active mode, if modes are in use.
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 impl Default for Document {
@@ -25,11 +31,35 @@ impl Default for Document {
             root: Vec::new(),
             next_id: 1,
             variables: BTreeMap::new(),
+            modes: BTreeMap::new(),
+            mode: None,
         }
     }
 }
 
+/// Everything about variables that undo has to restore together.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VarState {
+    pub values: BTreeMap<String, Color>,
+    pub modes: BTreeMap<String, BTreeMap<String, Color>>,
+    pub mode: Option<String>,
+}
+
 impl Document {
+    pub fn var_state(&self) -> VarState {
+        VarState {
+            values: self.variables.clone(),
+            modes: self.modes.clone(),
+            mode: self.mode.clone(),
+        }
+    }
+
+    pub fn restore_vars(&mut self, s: &VarState) {
+        self.variables = s.values.clone();
+        self.modes = s.modes.clone();
+        self.mode = s.mode.clone();
+    }
+
     pub fn get(&self, id: NodeId) -> Option<&Node> {
         self.nodes.get(&id)
     }

@@ -1,18 +1,30 @@
 """TaskFlow v2: variables (no hex in the file), components with instances, phosphor icons.
-Run against the running app (needs `paper-rs-cli icons add phosphor`): python3 examples/taskflow.py"""
+Run against the running app (needs `papercraft-cli icons add phosphor`): python3 examples/taskflow.py"""
 import json, os, subprocess, sys
 
-CLI = os.environ.get("PAPER_RS_CLI", "paper-rs-cli")
-ENV = {**os.environ, "PAPER_RS_MCP_PORT": os.environ.get("PAPER_RS_MCP_PORT", "29980")}
+CLI = os.environ.get("PAPERCRAFT_CLI", "papercraft-cli")
+ENV = {**os.environ, "PAPERCRAFT_MCP_PORT": os.environ.get("PAPERCRAFT_MCP_PORT", "29980")}
 
-# The only place colors are written as hex: the theme (Catppuccin Mocha). Everything else is var(--x).
-THEME = {
-    "base": "#1e1e2e", "mantle": "#181825", "crust": "#11111b",
-    "surface": "#313244", "surface-2": "#45475a", "surface-3": "#585b70",
-    "text": "#cdd6f4", "subtext": "#a6adc8", "muted": "#6c7086",
-    "accent": "#cba6f7", "on-accent": "#11111b",
-    "success": "#a6e3a1", "danger": "#f38ba8", "warning": "#fab387", "info": "#89b4fa",
+# The only place colors are written as hex: the theme, one value set per Catppuccin flavour ("mode").
+# Everything else in the file is var(--x), so `papercraft-cli call set_variable_mode '{"mode":"Latte"}'`
+# turns the whole design light.
+def flavour(base, mantle, crust, s0, s1, s2, text, sub, muted, mauve, on_accent, green, red, peach, blue):
+    return {"base": base, "mantle": mantle, "crust": crust, "surface": s0, "surface-2": s1, "surface-3": s2,
+            "text": text, "subtext": sub, "muted": muted, "accent": mauve, "on-accent": on_accent,
+            "success": green, "danger": red, "warning": peach, "info": blue}
+
+
+MODES = {  # the first mode is the active one
+    "Mocha": flavour("#1e1e2e", "#181825", "#11111b", "#313244", "#45475a", "#585b70", "#cdd6f4", "#a6adc8", "#6c7086",
+                     "#cba6f7", "#11111b", "#a6e3a1", "#f38ba8", "#fab387", "#89b4fa"),
+    "Macchiato": flavour("#24273a", "#1e2030", "#181926", "#363a4f", "#494d64", "#5b6078", "#cad3f5", "#a5adcb", "#6e738d",
+                         "#c6a0f6", "#181926", "#a6da95", "#ed8796", "#f5a97f", "#8aadf4"),
+    "Frappé": flavour("#303446", "#292c3c", "#232634", "#414559", "#51576d", "#626880", "#c6d0f5", "#a5adce", "#737994",
+                      "#ca9ee6", "#232634", "#a6d189", "#e78284", "#ef9f76", "#8caaee"),
+    "Latte": flavour("#eff1f5", "#e6e9ef", "#dce0e8", "#ccd0da", "#bcc0cc", "#acb0be", "#4c4f69", "#6c6f85", "#9ca0b0",
+                     "#8839ef", "#eff1f5", "#40a02b", "#d20f39", "#fe640b", "#1e66f5"),
 }
+THEME = MODES["Mocha"]
 V = {k: f"var(--{k})" for k in THEME}
 
 
@@ -116,7 +128,8 @@ class Project:
         info = call("open_file", {"fileId": self.file})
         self.first_page = info["pages"][0]["id"]
         self.used_first = False
-        call("set_variables", {"fileId": self.file, "variables": THEME})
+        for mode, values in MODES.items():
+            call("set_variables", {"fileId": self.file, "mode": mode, "variables": values})
 
     def page(self, name):
         if not self.used_first:
@@ -230,7 +243,7 @@ def build():
     pg.inst("Chip / Default", filters, {"Label": "Done"}, name="Chip / Done")
     lst = pg.add(content, col("Task List", "", gap="10px"))[0]
     for title, meta, done, color in [("Write the spec", "Work · 9:00", True, "success"), ("Review pull requests", "Work · 10:30", True, "success"),
-                                     ("Ship paper-rs-cli", "Side project · 14:00", False, "danger"),
+                                     ("Ship papercraft-cli", "Side project · 14:00", False, "danger"),
                                      ("Reply to emails", "Inbox · 16:00", False, "warning"), ("Plan next sprint", "Work · 17:30", False, "info")]:
         pg.inst("Task / Done" if done else "Task / Open", lst, {"Title": title, "Meta": meta},
                 {"Priority": {"backgroundColor": V[color]}}, name=f"Task / {title}")
@@ -258,7 +271,7 @@ def build():
     det = pg.add(ab, col("Detail",
         row("Nav", row("Back", icon("caret-left", 18, V["accent"]) + text("Label", "Back", 15, V["accent"], 600), gap="2px") +
             text("Edit", "Edit", 15, V["accent"], 600), justify_content="space-between", width="342px") +
-        text("Title", "Ship paper-rs-cli", 28, V["text"], 800) +
+        text("Title", "Ship papercraft-cli", 28, V["text"], 800) +
         col("Meta", "".join(row(f"Meta / {k}", text("Key", k, 14, V["subtext"]) + text("Value", v, 14, c, 600),
                                 justify_content="space-between", padding="14px") for k, v, c in
                             [("Due", "Today, 14:00", V["text"]), ("Project", "Side project", V["text"]), ("Priority", "High", V["danger"])]),
@@ -309,7 +322,10 @@ def build():
                           gap="16px", padding="12px 24px", width="390px"))[0]
     fl = next(k["id"] for k in pg.c("get_children", nodeId=cont)["children"] if k["name"] == "Flavours")
     for n in ("Latte", "Frappé", "Macchiato", "Mocha"):
-        pg.inst("Flavour / Selected" if n == "Mocha" else "Flavour / Default", fl, {"Name": f"Catppuccin {n}"}, name=f"Flavour / {n}")
+        look = MODES[n]  # each swatch shows its own flavour, so these two colors are literal on purpose
+        pg.inst("Flavour / Selected" if n == "Mocha" else "Flavour / Default", fl, {"Name": f"Catppuccin {n}"},
+                {"Base": {"backgroundColor": look["base"]}, "Accent": {"backgroundColor": look["accent"]}},
+                name=f"Flavour / {n}")
 
     # ------------------------------------------------------------------- Design system
     pg = pr.page("Design system")

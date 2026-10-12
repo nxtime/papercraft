@@ -1,6 +1,7 @@
 //! egui chrome: menu bar, layers panel, design (properties) panel, floating toolbar, and the
 //! projects home screen.
 
+pub mod design;
 pub mod home;
 pub mod inspector;
 pub mod library;
@@ -37,6 +38,8 @@ pub struct UiState {
     pub library: library::LibraryUi,
     /// Left sidebar shows the library instead of the layers.
     pub show_library: bool,
+    /// ...or the design tab (variables, modes, components).
+    pub show_design: bool,
     pub palette: palette::PaletteUi,
     /// All panels hidden (⌘\\): just the canvas.
     pub hide_ui: bool,
@@ -95,6 +98,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
                 if let Some(n) = ed.doc.get(id) {
                     st.renaming = Some((id, n.name.clone()));
                     st.show_library = false;
+                    st.show_design = false;
                     st.hide_ui = false;
                 }
             }
@@ -286,8 +290,13 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     ui.add_space(6.0);
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
-        for (lib, label) in [(false, "Layers"), (true, "Library")] {
-            let on = st.show_library == lib;
+        for (tab, label) in [(0, "Layers"), (1, "Library"), (2, "Design")] {
+            let current = if st.show_design {
+                2
+            } else {
+                st.show_library as i32
+            };
+            let on = current == tab;
             let r = ui.add(
                 egui::Label::new(
                     RichText::new(label)
@@ -297,10 +306,11 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 .sense(egui::Sense::click()),
             );
             if r.clicked() {
-                st.show_library = lib;
+                st.show_library = tab == 1;
+                st.show_design = tab == 2;
             }
         }
-        if st.show_library {
+        if st.show_library || st.show_design {
             return;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -325,6 +335,10 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     ui.add_space(2.0);
     if st.show_library {
         library::panel(ui, ed, st);
+        return;
+    }
+    if st.show_design {
+        design::panel(ui, ed, st);
         return;
     }
     egui::ScrollArea::vertical()

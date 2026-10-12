@@ -2520,7 +2520,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "paper-rs"
+name = "papercraft"
 version = "0.1.0"
 dependencies = [
  "arboard",

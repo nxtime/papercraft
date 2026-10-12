@@ -1,6 +1,6 @@
 //! Regression: an inline rename used to re-request keyboard focus every frame, so once started
 //! it blocked every other input (number fields, shortcuts) until Enter.
-use paper_rs::{demo, editor::Editor, render::frame, ui::UiState};
+use papercraft::{demo, editor::Editor, render::frame, ui::UiState};
 
 fn run(ctx: &egui::Context, events: Vec<egui::Event>, e: &mut Editor, st: &mut UiState) {
     let input = egui::RawInput {
@@ -20,7 +20,7 @@ fn run(ctx: &egui::Context, events: Vec<egui::Event>, e: &mut Editor, st: &mut U
 #[test]
 fn clicking_another_input_ends_a_page_rename_and_takes_focus() {
     let ctx = egui::Context::default();
-    paper_rs::ui::setup_style(&ctx);
+    papercraft::ui::setup_style(&ctx);
     let mut e = demo::showcase();
     let first = e.doc.children(None).first().copied().unwrap();
     e.select(vec![first]);

@@ -73,15 +73,22 @@ pub fn folder_name(name: &str) -> String {
 }
 
 impl Store {
-    /// `$PAPER_RS_HOME`, else `~/Documents/paper-rs`.
+    /// `$PAPERCRAFT_HOME`, else `~/Documents/papercraft` (`~/Documents/paper-rs` when only that exists).
     pub fn default_root() -> PathBuf {
-        if let Some(p) = std::env::var_os("PAPER_RS_HOME") {
+        if let Some(p) = std::env::var_os("PAPERCRAFT_HOME") {
             return PathBuf::from(p);
         }
-        dirs::document_dir()
+        let docs = dirs::document_dir()
             .or_else(dirs::home_dir)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("paper-rs")
+            .unwrap_or_else(|| PathBuf::from("."));
+        // Projects made before the rename (paper-rs) stay where they are.
+        let legacy = docs.join("paper-rs");
+        let root = docs.join("papercraft");
+        if legacy.is_dir() && !root.exists() {
+            legacy
+        } else {
+            root
+        }
     }
 
     pub fn open(root: impl Into<PathBuf>) -> std::io::Result<Store> {
@@ -399,7 +406,8 @@ mod tests {
     use super::*;
 
     pub fn temp_store() -> Store {
-        let root = std::env::temp_dir().join(format!("paper-rs-store-{:016x}", fastrand::u64(..)));
+        let root =
+            std::env::temp_dir().join(format!("papercraft-store-{:016x}", fastrand::u64(..)));
         Store::open(root).unwrap()
     }
 

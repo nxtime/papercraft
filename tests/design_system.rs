@@ -1,14 +1,14 @@
 //! Design-system tools: color variables, components with instance overrides, and how both
 //! survive undo and a save.
 
-use paper_rs::mcp::{Out, exec};
-use paper_rs::model::{Color, NodeId, Paint};
-use paper_rs::project::Store;
+use papercraft::mcp::{Out, exec};
+use papercraft::model::{Color, NodeId, Paint};
+use papercraft::project::Store;
 use serde_json::{Value, json};
 
 fn host() -> exec::SessionHost {
     let store =
-        Store::open(std::env::temp_dir().join(format!("paper-rs-ds-{:016x}", fastrand::u64(..))))
+        Store::open(std::env::temp_dir().join(format!("papercraft-ds-{:016x}", fastrand::u64(..))))
             .unwrap();
     let mut h = exec::SessionHost::new(store);
     h.session.create(&mut h.ed, "Design system").unwrap();
@@ -109,7 +109,7 @@ fn variables_link_fills_and_move_them_with_undo() {
 
 #[test]
 fn variables_survive_a_save() {
-    use paper_rs::project::format::{PageData, page_from_json, page_to_json};
+    use papercraft::project::format::{PageData, page_from_json, page_to_json};
     let mut h = host();
     call(
         &mut h,
@@ -246,4 +246,135 @@ fn instances_follow_the_component_except_what_was_overridden() {
     let ok = r["createdNodeIds"][0].clone();
     assert_eq!(h.ed.doc.get(node(&ok)).unwrap().name, "Button / OK");
     assert!(h.ed.doc.get(node(&ok)).unwrap().instance.is_some());
+}
+
+#[test]
+fn lint_finds_the_usual_mistakes_and_clears_a_clean_design() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"accent": "#cba6f7", "text": "#111111", "bg": "#ffffff"}}),
+    );
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Screen", "styles": {"width": "300px", "height": "300px", "backgroundColor": "var(--bg)"}}),
+    );
+    call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": concat!(
+            "<div style=\"display:flex;flex-direction:column;gap:13px;padding:10px\">",
+            "<div layer-name=\"Faint\" style=\"color:#cccccc;font-size:14px\">low contrast</div>",
+            "<div layer-name=\"Tiny\" style=\"color:#111111;font-size:9px\">tiny</div>",
+            "<div layer-name=\"Odd\" style=\"color:#111111;font-size:15px\">off scale</div>",
+            "<div layer-name=\"Button / Save\" style=\"display:flex;padding:8px;background:#cba6f7\"><div layer-name=\"Label\" style=\"color:#111111;font-size:14px\">Save</div></div>",
+            "</div>")}),
+    );
+    let r = call(&mut h, "lint_design", json!({}));
+    let rules: Vec<&str> = r["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["rule"].as_str().unwrap())
+        .collect();
+    for want in [
+        "contrast",
+        "text-size",
+        "type-scale",
+        "spacing-grid",
+        "touch-target",
+        "layer-name",
+        "hard-coded-color",
+    ] {
+        assert!(rules.contains(&want), "missing {want}: {r}");
+    }
+    assert_eq!(r["errors"], 1, "{r}");
+    // A tidy design: variables, scale sizes, grid spacing, named layers, tall button.
+    let mut h = host();
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"accent": "#cba6f7", "text": "#111111", "bg": "#ffffff"}}),
+    );
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Screen", "styles": {"width": "300px", "height": "300px", "backgroundColor": "var(--bg)"}}),
+    );
+    call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": concat!(
+            "<div layer-name=\"Content\" style=\"display:flex;flex-direction:column;gap:12px;padding:16px\">",
+            "<div layer-name=\"Title\" style=\"color:var(--text);font-size:24px;font-weight:700\">Hello</div>",
+            "<div layer-name=\"Button / Save\" style=\"display:flex;padding:16px;background:var(--accent)\"><div layer-name=\"Label\" style=\"color:var(--text);font-size:16px\">Save</div></div>",
+            "</div>")}),
+    );
+    let r = call(&mut h, "lint_design", json!({}));
+    assert_eq!(
+        (r["errors"].clone(), r["warnings"].clone()),
+        (json!(0), json!(0)),
+        "{r}"
+    );
+    let css = exec::call(&mut h, "get_variables", &json!({"format": "css"})).unwrap();
+    let Out::Text(css) = &css[0] else { panic!() };
+    assert!(
+        css.starts_with(":root {") && css.contains("--accent: #cba6f7;"),
+        "{css}"
+    );
+}
+
+#[test]
+fn modes_turn_a_design_from_light_to_dark_and_back_with_undo() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_variables",
+        json!({"mode": "Light", "variables": {"bg": "#eff1f5", "text": "#4c4f69"}}),
+    );
+    call(
+        &mut h,
+        "set_variables",
+        json!({"mode": "Dark", "variables": {"bg": "#1e1e2e", "text": "#cdd6f4"}}),
+    );
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Screen", "styles": {"width": "100px", "height": "100px", "backgroundColor": "var(--bg)"}}),
+    );
+    assert_eq!(
+        fill(&h, &ab["id"]).0,
+        Color::rgb(0xef, 0xf1, 0xf5),
+        "the first mode defined is active"
+    );
+    let r = call(&mut h, "set_variable_mode", json!({"mode": "Dark"}));
+    assert_eq!(r["fillsUpdated"], 1);
+    assert_eq!(fill(&h, &ab["id"]).0, Color::rgb(0x1e, 0x1e, 0x2e));
+    assert_eq!(call(&mut h, "get_variables", json!({}))["mode"], "Dark");
+    call(&mut h, "undo", json!({}));
+    assert_eq!(fill(&h, &ab["id"]).0, Color::rgb(0xef, 0xf1, 0xf5));
+    assert_eq!(h.ed.doc.mode.as_deref(), Some("Light"));
+    assert!(exec::call(&mut h, "set_variable_mode", &json!({"mode": "Nope"})).is_err());
+    // Editing the active mode's value later moves its fills and is stored for that mode only.
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"bg": "#ffffff"}}),
+    );
+    assert_eq!(h.ed.doc.modes["Light"]["bg"], Color::rgb(255, 255, 255));
+    assert_eq!(h.ed.doc.modes["Dark"]["bg"], Color::rgb(0x1e, 0x1e, 0x2e));
+    // Modes survive a save.
+    let page = papercraft::project::format::PageData {
+        id: "p".into(),
+        name: h.ed.doc.name.clone(),
+        doc: h.ed.doc.clone(),
+        camera: None,
+    };
+    let back = papercraft::project::format::page_from_json(
+        &papercraft::project::format::page_to_json(&page),
+    )
+    .unwrap();
+    assert_eq!(back.doc, h.ed.doc);
 }

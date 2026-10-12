@@ -1,5 +1,5 @@
 [package]
-name = "paper-rs"
+name = "papercraft"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
@@ -7,20 +7,20 @@ description = "A native infinite-canvas app for planning, working and sketching"
 license = "MIT OR Apache-2.0"
 
 [lib]
-name = "paper_rs"
+name = "papercraft"
 path = "src/lib.rs"
 
 [[bin]]
-name = "paper-rs"
+name = "papercraft"
 path = "src/main.rs"
 
 [[bin]]
-name = "paper-rs-mcp"
-path = "src/bin/paper-rs-mcp.rs"
+name = "papercraft-mcp"
+path = "src/bin/papercraft-mcp.rs"
 
 [[bin]]
-name = "paper-rs-cli"
-path = "src/bin/paper-rs-cli.rs"
+name = "papercraft-cli"
+path = "src/bin/papercraft-cli.rs"
 
 [dependencies]
 egui = "0.36"

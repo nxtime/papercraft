@@ -1,6 +1,6 @@
 # Third-party code and assets
 
-paper-rs is MIT OR Apache-2.0. It ports a few algorithms from MIT-licensed projects (listed
+papercraft is MIT OR Apache-2.0. It ports a few algorithms from MIT-licensed projects (listed
 below with their copyright notices and license text) and bundles the Inter font (SIL OFL 1.1,
 `assets/fonts/OFL.txt`). Figma and Paper are proprietary: only their *behavior* was studied
 (`analysis/FIGMA_NOTES.md`, `analysis/PAPER_ARCHITECTURE.md`), and no code, shaders, icons or

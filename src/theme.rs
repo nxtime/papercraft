@@ -352,7 +352,14 @@ impl Choice {
 
     /// Persisted in the config dir; a missing or unreadable file means `System`.
     fn path() -> Option<std::path::PathBuf> {
-        dirs::config_dir().map(|d| d.join("paper-rs").join("theme"))
+        let dir = dirs::config_dir()?;
+        let new = dir.join("papercraft").join("theme");
+        let legacy = dir.join("paper-rs").join("theme");
+        Some(if legacy.is_file() && !new.exists() {
+            legacy
+        } else {
+            new
+        })
     }
 
     pub fn load() -> Choice {

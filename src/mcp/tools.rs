@@ -1,18 +1,18 @@
 //! Tool catalogue: names, descriptions and input schemas.
 //!
-//! Names and argument shapes follow Paper's MCP server where paper-rs has an equivalent
-//! (`analysis/paper-mcp.md` §2), so agent prompts written for Paper carry over. paper-rs
+//! Names and argument shapes follow Paper's MCP server where papercraft has an equivalent
+//! (`analysis/paper-mcp.md` §2), so agent prompts written for Paper carry over. papercraft
 //! additions: `create_shape` (whiteboard shapes and arrows), `select_nodes`, `undo`, `redo`.
 
 use serde_json::{Value, json};
 
 pub const INSTRUCTIONS: &str = "\
-paper-rs is a local design and whiteboard app with an infinite canvas. These tools read and \
+papercraft is a local design and whiteboard app with an infinite canvas. These tools read and \
 edit the project open in the running app; every change is one undo step and shows up live.
 
 - Start with get_basic_info (pages, artboards, sizes) and get_selection (what the user is \
 looking at). Use list_resources / open_file / create_file to pick a project.
-- For details read get_guide({ topic: \"paper-rs-mcp-instructions\" }) once per session.
+- For details read get_guide({ topic: \"papercraft-mcp-instructions\" }) once per session.
 - pageId defaults to the page the user is viewing; pass it to work on another page without \
 switching the user's view. Node ids are opaque strings; never show them to the user.
 - Build UI with create_artboard, then write_html into it, one visual group per call (a header, \
@@ -86,7 +86,7 @@ pub fn definitions() -> Vec<Value> {
         // ------------------------------------------------------------ projects and pages
         tool(
             "list_resources",
-            "Lists the user's paper-rs projects (local folders), most recently modified first. \
+            "Lists the user's papercraft projects (local folders), most recently modified first. \
              Each item has id, name, path, page count, updatedAt, and `open` for the project open \
              in the app.",
             json!({"limit": {"type": "integer", "description": "Maximum projects to return. Defaults to 50."}}),
@@ -234,7 +234,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "get_font_family_info",
-            "Whether font families are available and their weights/styles. paper-rs renders text \
+            "Whether font families are available and their weights/styles. papercraft renders text \
              with Inter (400, 700, normal and italic); other families fall back to Inter.",
             json!({"familyNames": {"type": "array", "items": {"type": "string"}}}),
             &["familyNames"],
@@ -242,7 +242,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "get_guide",
-            "Read a guide. Topics: \"paper-rs-mcp-instructions\" (read first), \"html\" (what \
+            "Read a guide. Topics: \"papercraft-mcp-instructions\" (read first), \"html\" (what \
              write_html supports), \"whiteboard\" (shapes, arrows, stickies, hand-drawn style).",
             json!({"topic": {"type": "string"}}),
             &["topic"],
@@ -402,10 +402,26 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "lint_design",
+            "Check a page or subtree for common design mistakes and get a fix for each: text \
+             contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type \
+             scale, gap/padding off the 4px grid, buttons and tabs under 44px tall, default layer \
+             names (Frame, Rectangle), and hard-coded colors that equal a variable. Run it before \
+             finish_working_on_nodes and fix errors and warnings; `info` items are suggestions.",
+            json!({"nodeId": {"type": "string", "description": "Subtree to check; omit for the whole page."},
+                   "scale": {"type": "array", "items": {"type": "number"},
+                       "description": "Allowed font sizes. Default 12, 14, 16, 20, 24, 32, 40, 48, 64."},
+                   "pageId": page_id()}),
+            &[],
+            true,
+        ),
+        tool(
             "get_variables",
             "Color variables of the page's project (name -> hex). Fills that follow a variable \
-             were written with `var(--name)`; set_variables moves all of them at once.",
-            json!({"pageId": page_id()}),
+             were written with `var(--name)`; set_variables moves all of them at once. \
+             `format` css returns a `:root { --name: #hex }` block, json a design-tokens object.",
+            json!({"pageId": page_id(),
+                   "format": {"type": "string", "enum": ["css", "json"]}}),
             &[],
             true,
         ),
@@ -418,8 +434,18 @@ pub fn definitions() -> Vec<Value> {
              Variables apply to fills and text color; strokes and gradients keep fixed colors.",
             json!({"variables": {"type": "object", "propertyNames": {"type": "string"},
                 "additionalProperties": {"type": "string"},
-                "description": "{\"accent\": \"#cba6f7\", \"surface\": \"#313244\"}"}}),
+                "description": "{\"accent\": \"#cba6f7\", \"surface\": \"#313244\"}"},
+                   "mode": {"type": "string", "description": "Store the values for this mode (e.g. \"Light\", \"Dark\"); they apply when it is the active mode. The first mode you define becomes active."}}),
             &["variables"],
+            false,
+        ),
+        tool(
+            "set_variable_mode",
+            "Switch the active variable mode (defined with set_variables {mode}): every variable \
+             takes that mode's value and all fills following them change, on every page. One call \
+             turns a whole design from light to dark.",
+            json!({"mode": {"type": "string"}}),
+            &["mode"],
             false,
         ),
         tool(
@@ -459,7 +485,7 @@ pub fn definitions() -> Vec<Value> {
             "Search installed open icon sets (Lucide, Tabler, Phosphor, Heroicons, Material). \
              Returns `set:name` references for <x-paper-icon name=\"lucide:check\" size=\"20\" \
              color=\"var(--text)\"/> in write_html. Without a query it lists installed and \
-             installable sets; install with `paper-rs-cli icons add lucide`.",
+             installable sets; install with `papercraft-cli icons add lucide`.",
             json!({"query": {"type": "string"}, "set": {"type": "string"},
                    "limit": {"type": "number", "description": "Default 20."}}),
             &[],
@@ -536,7 +562,7 @@ pub fn definitions() -> Vec<Value> {
 }
 
 pub const GUIDE_INSTRUCTIONS: &str = "\
-# Designing in paper-rs over MCP
+# Designing in papercraft over MCP
 
 1. Orient: get_basic_info → pages, artboards, sizes; get_selection → what the user points at.
 2. Plan a brief before a new design: palette (3–5 colors), type scale (e.g. 12/14/16/20/28/40),

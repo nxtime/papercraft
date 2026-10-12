@@ -142,7 +142,7 @@ impl App {
         self.ed.status = msg.clone();
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
-            .set_title("paper-rs")
+            .set_title("PaperCraft")
             .set_description(msg)
             .show();
     }
@@ -153,7 +153,7 @@ impl App {
             return self.save_project(true);
         }
         let Some(p) = rfd::FileDialog::new()
-            .add_filter("paper-rs document", &[file::EXTENSION])
+            .add_filter("PaperCraft document", &[file::EXTENSION])
             .set_file_name(format!("{}.{}", self.ed.doc.name, file::EXTENSION))
             .save_file()
         else {
@@ -267,8 +267,14 @@ impl App {
     /// Import a file into a new project and open it.
     fn import_dialog(&mut self) {
         let Some(p) = rfd::FileDialog::new()
-            .add_filter("Supported files", &[file::EXTENSION, "excalidraw", "svg"])
-            .add_filter("paper-rs 0.1 document", &[file::EXTENSION])
+            .add_filter(
+                "Supported files",
+                &[file::EXTENSION, file::LEGACY_EXTENSION, "excalidraw", "svg"],
+            )
+            .add_filter(
+                "PaperCraft document",
+                &[file::EXTENSION, file::LEGACY_EXTENSION],
+            )
             .add_filter("Excalidraw scene", &["excalidraw"])
             .add_filter("SVG", &["svg"])
             .pick_file()
@@ -402,7 +408,7 @@ impl App {
     }
 
     /// Bring a file into the current page: SVG, Excalidraw scene/library, image, or a
-    /// paper-rs page. Without an open project, a new project is created from it.
+    /// papercraft page. Without an open project, a new project is created from it.
     fn import_into_page(&mut self, p: &std::path::Path, at: Option<V2>) {
         let ext = p
             .extension()
@@ -464,7 +470,7 @@ impl App {
                     self.import_file(p);
                     return;
                 }
-                // A paper-rs page or project: add its pages to this project.
+                // A papercraft page or project: add its pages to this project.
                 crate::io::import::import_as_pages(p).map(|(_, pages)| {
                     let n = pages.len();
                     for pg in pages {
@@ -559,6 +565,7 @@ impl App {
                                     "gif",
                                     "webp",
                                     file::EXTENSION,
+                                    file::LEGACY_EXTENSION,
                                 ],
                             )
                             .pick_file()
@@ -670,16 +677,16 @@ impl App {
         g.queue.present(frame);
 
         let title = if self.st.home.is_some() {
-            "paper-rs".to_string()
+            "PaperCraft".to_string()
         } else if self.session.project.is_some() {
             format!(
-                "{} — {} — paper-rs",
+                "{} — {} — PaperCraft",
                 self.st.project_name,
                 self.ed.page_name()
             )
         } else {
             format!(
-                "{}{} — paper-rs",
+                "{}{} — PaperCraft",
                 self.ed.doc.name,
                 if self.ed.is_dirty() { " •" } else { "" }
             )
@@ -828,12 +835,12 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("paper-rs")
+            .with_title("PaperCraft")
             .with_inner_size(winit::dpi::LogicalSize::new(1440.0, 900.0))
             .with_min_inner_size(winit::dpi::LogicalSize::new(720.0, 480.0));
-        // PAPER_RS_OPAQUE=1 turns off vibrancy (and window transparency) on macOS.
+        // PAPERCRAFT_OPAQUE=1 turns off vibrancy (and window transparency) on macOS.
         #[cfg(target_os = "macos")]
-        let translucent = std::env::var_os("PAPER_RS_OPAQUE").is_none();
+        let translucent = std::env::var_os("PAPERCRAFT_OPAQUE").is_none();
         #[cfg(target_os = "macos")]
         let attrs = {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -867,7 +874,7 @@ impl ApplicationHandler<UserEvent> for App {
         let adapter_info = adapter.get_info();
         log::info!("adapter: {adapter_info:?}");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("paper-rs"),
+            label: Some("PaperCraft"),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             ..Default::default()
         }))
@@ -1174,7 +1181,9 @@ impl ApplicationHandler<UserEvent> for App {
                 {
                     let at = self.ed.camera.screen_to_world(self.ed.pointer);
                     self.import_into_page(&p, Some(at));
-                } else if p.extension().is_some_and(|e| e == file::EXTENSION)
+                } else if p
+                    .extension()
+                    .is_some_and(|e| e == file::EXTENSION || e == file::LEGACY_EXTENSION)
                     && self.confirm_discard()
                 {
                     match file::load(&p) {
@@ -1379,14 +1388,14 @@ impl crate::mcp::exec::Host for App {
     }
 }
 
-/// Start the MCP server unless `PAPER_RS_MCP=0`. Calls wake the event loop through `proxy`.
+/// Start the MCP server unless `PAPERCRAFT_MCP=0`. Calls wake the event loop through `proxy`.
 fn start_mcp(
     proxy: winit::event_loop::EventLoopProxy<UserEvent>,
 ) -> Option<(
     std::sync::mpsc::Receiver<crate::mcp::Call>,
     crate::mcp::server::Running,
 )> {
-    if std::env::var("PAPER_RS_MCP").is_ok_and(|v| matches!(v.as_str(), "0" | "off" | "false")) {
+    if std::env::var("PAPERCRAFT_MCP").is_ok_and(|v| matches!(v.as_str(), "0" | "off" | "false")) {
         return None;
     }
     let (tx, rx) = std::sync::mpsc::channel::<crate::mcp::Call>();

@@ -1,11 +1,11 @@
 //! Helpers shared by the integration tests.
 #![allow(dead_code)]
 
-use paper_rs::editor::{Button, Editor, InputEvent, Key, Modifiers};
-use paper_rs::geom::{Camera, Rect, V2, v2};
-use paper_rs::model::Color;
-use paper_rs::render::gpu::Headless;
-use paper_rs::render::scene;
+use papercraft::editor::{Button, Editor, InputEvent, Key, Modifiers};
+use papercraft::geom::{Camera, Rect, V2, v2};
+use papercraft::model::Color;
+use papercraft::render::gpu::Headless;
+use papercraft::render::scene;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -23,7 +23,7 @@ pub fn gpu() -> Option<&'static Headless> {
         }
         Err(e) => {
             assert!(
-                std::env::var_os("PAPER_RS_REQUIRE_GPU").is_none(),
+                std::env::var_os("PAPERCRAFT_REQUIRE_GPU").is_none(),
                 "GPU required: {e}"
             );
             eprintln!("skipping GPU test: {e}");

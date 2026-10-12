@@ -1,10 +1,10 @@
-//! `paper-rs-cli`: drive the running paper-rs app from a shell, with no MCP client or tool
+//! `papercraft-cli`: drive the running papercraft app from a shell, with no MCP client or tool
 //! schemas in an agent's context. Same tools as the MCP server, over the same endpoint
-//! (`http://127.0.0.1:29980/mcp`, or `$PAPER_RS_MCP_PORT`).
+//! (`http://127.0.0.1:29980/mcp`, or `$PAPERCRAFT_MCP_PORT`).
 
 use base64::Engine;
-use paper_rs::icons;
-use paper_rs::mcp::{self, server};
+use papercraft::icons;
+use papercraft::mcp::{self, server};
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -13,21 +13,21 @@ use std::io::Read;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-paper-rs-cli: call the running paper-rs app's tools from a shell
+papercraft-cli: call the running papercraft app's tools from a shell
 
 USAGE:
-  paper-rs-cli list                       tool names and one-line descriptions (works offline)
-  paper-rs-cli schema <tool>              a tool's full description and JSON input schema
-  paper-rs-cli call <tool> [JSON|-]       run a tool; JSON arguments inline, or `-` for stdin
+  papercraft-cli list                       tool names and one-line descriptions (works offline)
+  papercraft-cli schema <tool>              a tool's full description and JSON input schema
+  papercraft-cli call <tool> [JSON|-]       run a tool; JSON arguments inline, or `-` for stdin
         [--out FILE]                      where to save an image result (default: <tool>.png)
-  paper-rs-cli icons list                 installed and installable open icon sets
-  paper-rs-cli icons add <set>...         download sets (lucide tabler phosphor heroicons material)
-  paper-rs-cli icons search <words> [--set S]   find `set:name` references (works offline)
-  paper-rs-cli --url                      print the endpoint it talks to
+  papercraft-cli icons list                 installed and installable open icon sets
+  papercraft-cli icons add <set>...         download sets (lucide tabler phosphor heroicons material)
+  papercraft-cli icons search <words> [--set S]   find `set:name` references (works offline)
+  papercraft-cli --url                      print the endpoint it talks to
 
 Icons are placed with <x-paper-icon name='lucide:check' size='20' color='var(--text)'/> in
 write_html. Sets are fetched from the npm registry with curl and tar into the icons dir
-($PAPER_RS_ICONS, else the user data dir) together with their licence file.
+($PAPERCRAFT_ICONS, else the user data dir) together with their licence file.
 
 Text results go to stdout; image results are saved to a file and the path is printed.
 Exit status is 1 when the tool reports an error or the app isn't running.
@@ -35,7 +35,7 @@ Start the app and open a project first: it serves the tools while open.
 ";
 
 fn fail(msg: impl std::fmt::Display) -> ExitCode {
-    eprintln!("paper-rs-cli: {msg}");
+    eprintln!("papercraft-cli: {msg}");
     ExitCode::FAILURE
 }
 
@@ -84,7 +84,7 @@ fn add_set(id: &str) -> Result<usize, String> {
         .as_str()
         .ok_or("the registry reply has no tarball")?
         .to_string();
-    let tmp = std::env::temp_dir().join(format!("paper-rs-icons-{id}-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("papercraft-icons-{id}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let archive = tmp.join("pkg.tgz");
@@ -154,7 +154,7 @@ fn icons_cmd(args: &[String]) -> ExitCode {
                 match add_set(id) {
                     Ok(n) => println!("{id}: {n} icons in {}", root.join(id).display()),
                     Err(e) => {
-                        eprintln!("paper-rs-cli: {id}: {e}");
+                        eprintln!("papercraft-cli: {id}: {e}");
                         ok = false;
                     }
                 }
@@ -186,7 +186,7 @@ fn icons_cmd(args: &[String]) -> ExitCode {
 
 fn schema(name: &str) -> ExitCode {
     let Some(t) = server::tool_list().into_iter().find(|t| t.name == name) else {
-        return fail(format!("no tool named {name} (see `paper-rs-cli list`)"));
+        return fail(format!("no tool named {name} (see `papercraft-cli list`)"));
     };
     println!(
         "{}",
@@ -201,7 +201,7 @@ async fn call(name: String, args: Value, out: Option<String>) -> Result<bool, St
     let client = ()
         .serve(StreamableHttpClientTransport::from_uri(url.clone()))
         .await
-        .map_err(|e| format!("cannot reach paper-rs at {url}: {e}. Is the app running?"))?;
+        .map_err(|e| format!("cannot reach papercraft at {url}: {e}. Is the app running?"))?;
     let mut p = CallToolRequestParams::new(name.clone());
     match args {
         Value::Object(m) => p.arguments = Some(m),

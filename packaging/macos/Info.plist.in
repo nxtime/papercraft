@@ -6,13 +6,13 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>paper-rs</string>
+  <string>PaperCraft</string>
   <key>CFBundleName</key>
-  <string>paper-rs</string>
+  <string>PaperCraft</string>
   <key>CFBundleExecutable</key>
-  <string>paper-rs</string>
+  <string>PaperCraft</string>
   <key>CFBundleIdentifier</key>
-  <string>dev.paper-rs.app</string>
+  <string>dev.papercraft.app</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -22,7 +22,7 @@
   <key>CFBundleVersion</key>
   <string>@SHORT_VERSION@</string>
   <key>CFBundleIconFile</key>
-  <string>paper-rs</string>
+  <string>papercraft</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.graphics-design</string>
   <key>LSMinimumSystemVersion</key>
@@ -32,6 +32,6 @@
   <key>NSSupportsAutomaticGraphicsSwitching</key>
   <true/>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © the paper-rs authors. MIT OR Apache-2.0.</string>
+  <string>Copyright © the PaperCraft authors. MIT OR Apache-2.0.</string>
 </dict>
 </plist>

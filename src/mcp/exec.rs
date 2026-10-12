@@ -41,7 +41,7 @@ pub trait Host {
 }
 
 /// A host without a window: an editor plus a project session. Used by tests and anything
-/// that wants to drive paper-rs headlessly.
+/// that wants to drive papercraft headlessly.
 pub struct SessionHost {
     pub ed: Editor,
     pub session: Session,
@@ -280,7 +280,9 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "update_styles" => update_styles(ed, &a),
                 "set_text_content" => set_text_content(ed, &a),
                 "get_variables" => get_variables(ed, &a),
+                "lint_design" => lint_design(ed, &a),
                 "set_variables" => set_variables(ed, &a),
+                "set_variable_mode" => set_variable_mode(ed, &a),
                 "get_components" => get_components(ed, &a),
                 "create_component" => create_component(ed, &a),
                 "create_instance" => create_instance(ed, &a),
@@ -332,7 +334,7 @@ fn find_project(store: &Store, key: &str) -> Result<PathBuf, String> {
 fn check_file(host: &mut dyn Host, a: &Args) -> Result<(), String> {
     if !host.canvas_open() {
         return Err(
-            "No project is open in paper-rs (the home screen is showing). Call list_resources \
+            "No project is open in papercraft (the home screen is showing). Call list_resources \
              and open_file, or create_file then open_file."
                 .into(),
         );
@@ -420,9 +422,9 @@ fn create_file(host: &mut dyn Host, a: &Args) -> ToolResult {
 }
 
 fn create_page(ed: &mut Editor, a: &Args) -> ToolResult {
-    let vars = ed.page_doc(ed.active_page).variables.clone();
+    let vars = ed.page_doc(ed.active_page).var_state();
     let i = ed.add_page_in_background(a.str("name"));
-    ed.with_page(i, |ed| ed.doc.variables = vars);
+    ed.with_page(i, |ed| ed.doc.restore_vars(&vars));
     text(json!({"pageId": ed.pages[i].id, "name": ed.pages[i].name}))
 }
 
@@ -869,14 +871,14 @@ fn font_info(a: &Args) -> ToolResult {
 fn guide(a: &Args) -> ToolResult {
     let t = a.req_str("topic")?;
     let s = match t {
-        "paper-rs-mcp-instructions" | "paper-mcp-instructions" | "instructions" => {
+        "papercraft-mcp-instructions" | "paper-mcp-instructions" | "instructions" => {
             tools::GUIDE_INSTRUCTIONS
         }
         "html" | "write_html" => tools::GUIDE_HTML,
         "whiteboard" | "excalidraw" => tools::GUIDE_WHITEBOARD,
         _ => {
             return Err(format!(
-                "unknown topic `{t}`; topics: paper-rs-mcp-instructions, html, whiteboard"
+                "unknown topic `{t}`; topics: papercraft-mcp-instructions, html, whiteboard"
             ));
         }
     };
@@ -1136,7 +1138,7 @@ fn export_pdf(host: &mut dyn Host, a: &Args) -> ToolResult {
         None => {
             let dir = out_dir(a);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            unique_path(&dir, project_name.as_deref().unwrap_or("paper-rs"), "pdf")
+            unique_path(&dir, project_name.as_deref().unwrap_or("papercraft"), "pdf")
         }
     };
     let spec = Spec {
@@ -2674,13 +2676,38 @@ fn set_text_content(ed: &mut Editor, a: &Args) -> ToolResult {
 
 fn get_variables(ed: &mut Editor, a: &Args) -> ToolResult {
     let page = page_arg(ed, a)?;
-    let vars: Map<String, Value> = ed
-        .page_doc(page)
+    let doc = ed.page_doc(page);
+    match a.str("format") {
+        Some("css") => {
+            let body: String = doc
+                .variables
+                .iter()
+                .map(|(k, c)| format!("  --{k}: {};\n", c.to_hex()))
+                .collect();
+            return Ok(vec![Out::Text(format!(":root {{\n{body}}}\n"))]);
+        }
+        Some("json") => {
+            let tokens: Map<String, Value> = doc
+                .variables
+                .iter()
+                .map(|(k, c)| (k.clone(), json!({"$type": "color", "$value": c.to_hex()})))
+                .collect();
+            return text(Value::Object(tokens));
+        }
+        Some(f) => return Err(format!("unknown format `{f}` (css or json)")),
+        None => {}
+    }
+    let vars: Map<String, Value> = doc
         .variables
         .iter()
         .map(|(k, c)| (k.clone(), json!(c.to_hex())))
         .collect();
-    text(json!({"variables": vars, "use": "var(--name) in color styles"}))
+    let mut v = json!({"variables": vars, "use": "var(--name) in color styles"});
+    if !doc.modes.is_empty() {
+        v["mode"] = json!(doc.mode);
+        v["modes"] = json!(doc.modes.keys().collect::<Vec<_>>());
+    }
+    text(v)
 }
 
 fn set_variables(ed: &mut Editor, a: &Args) -> ToolResult {
@@ -2707,13 +2734,17 @@ fn set_variables(ed: &mut Editor, a: &Args) -> ToolResult {
             .ok_or_else(|| format!("variable `{name}`: `{v}` is not a color"))?;
         parsed.push((name, c));
     }
+    let mode = a.str("mode").filter(|m| !m.is_empty());
     let mut updated: Map<String, Value> = Map::new();
     for page in 0..ed.pages.len() {
         let counts = ed.with_page(page, |ed| {
             ed.edit("Set variables", |tx| {
                 parsed
                     .iter()
-                    .map(|(n, c)| tx.set_variable(n, *c))
+                    .map(|(n, c)| match mode {
+                        Some(m) => tx.set_variable_in_mode(m, n, *c),
+                        None => tx.set_variable(n, *c),
+                    })
                     .collect::<Vec<_>>()
             })
         });
@@ -2725,7 +2756,61 @@ fn set_variables(ed: &mut Editor, a: &Args) -> ToolResult {
     text(json!({"fillsUpdated": updated, "pages": ed.pages.len()}))
 }
 
+fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
+    let def = page_arg(ed, a)?;
+    let (page, roots) = match a.str("nodeId").filter(|n| !n.is_empty() && *n != "root") {
+        Some(n) => {
+            let (p, id) = resolve(ed, n, def)?;
+            (p, vec![id])
+        }
+        None => (def, ed.page_doc(def).root.clone()),
+    };
+    let scale: Vec<f64> = match a.get("scale").and_then(Value::as_array) {
+        Some(v) => v.iter().filter_map(Value::as_f64).collect(),
+        None => super::lint::DEFAULT_SCALE.to_vec(),
+    };
+    let doc = ed.page_doc(page);
+    let issues = super::lint::lint(doc, &roots, &scale);
+    let count = |sev: &str| issues.iter().filter(|i| i.severity == sev).count();
+    let mut by_rule: Map<String, Value> = Map::new();
+    for i in &issues {
+        let e = by_rule.entry(i.rule.to_string()).or_insert(json!(0));
+        *e = json!(e.as_u64().unwrap_or(0) + 1);
+    }
+    let list: Vec<Value> = issues
+        .iter()
+        .take(200)
+        .map(|i| {
+            json!({"rule": i.rule, "severity": i.severity, "node": node_key(ed, page, i.node),
+                   "name": doc.get(i.node).map(|n| n.name.clone()), "message": i.message, "fix": i.fix})
+        })
+        .collect();
+    text(json!({
+        "errors": count("error"), "warnings": count("warning"), "info": count("info"),
+        "byRule": by_rule, "issues": list,
+        "truncated": issues.len() > 200,
+    }))
+}
+
 // ------------------------------------------------------------------------------ components
+
+fn set_variable_mode(ed: &mut Editor, a: &Args) -> ToolResult {
+    let mode = a.req_str("mode")?.to_string();
+    if !ed.page_doc(ed.active_page).modes.contains_key(&mode) {
+        let known: Vec<String> = ed.page_doc(ed.active_page).modes.keys().cloned().collect();
+        return Err(format!(
+            "no mode `{mode}`; define it with set_variables {{mode}} first (modes: {})",
+            known.join(", ")
+        ));
+    }
+    let mut fills = 0;
+    for page in 0..ed.pages.len() {
+        fills += ed.with_page(page, |ed| {
+            ed.edit("Set variable mode", |tx| tx.set_mode(&mode))
+        });
+    }
+    text(json!({"mode": mode, "fillsUpdated": fills}))
+}
 
 fn get_components(ed: &mut Editor, a: &Args) -> ToolResult {
     let page = page_arg(ed, a)?;
@@ -2861,7 +2946,7 @@ fn search_icons(a: &Args) -> ToolResult {
                     .map(|s| json!({"set": s.id, "license": s.license, "about": s.about}))
                     .collect::<Vec<_>>()
             );
-            v["install"] = json!("paper-rs-cli icons add <set>");
+            v["install"] = json!("papercraft-cli icons add <set>");
         }
     }
     text(v)

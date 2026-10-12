@@ -1,7 +1,7 @@
 //! Open icon libraries on disk: `<icons dir>/<set>/<name>.svg`.
 //!
-//! The app never bundles or downloads icons: `paper-rs-cli icons add <set>` fetches a set from
-//! the npm registry into the icons dir (`$PAPER_RS_ICONS`, else `<data dir>/paper-rs/icons`), and
+//! The app never bundles or downloads icons: `papercraft-cli icons add <set>` fetches a set from
+//! the npm registry into the icons dir (`$PAPERCRAFT_ICONS`, else `<data dir>/papercraft/icons`), and
 //! `write_html` places them with `<x-paper-icon name="lucide:check">`. Each set keeps the
 //! licence file of the package it came from next to the icons.
 
@@ -60,9 +60,18 @@ pub fn spec(id: &str) -> Option<&'static SetSpec> {
 
 /// Where the sets live.
 pub fn dir() -> PathBuf {
-    std::env::var_os("PAPER_RS_ICONS")
+    std::env::var_os("PAPERCRAFT_ICONS")
         .map(PathBuf::from)
-        .or_else(|| dirs::data_dir().map(|d| d.join("paper-rs").join("icons")))
+        .or_else(|| {
+            let data = dirs::data_dir()?;
+            let new = data.join("papercraft").join("icons");
+            let legacy = data.join("paper-rs").join("icons");
+            Some(if legacy.is_dir() && !new.exists() {
+                legacy
+            } else {
+                new
+            })
+        })
         .unwrap_or_else(|| PathBuf::from("icons"))
 }
 
@@ -152,7 +161,7 @@ pub fn load(root: &Path, reference: &str) -> Result<String, String> {
     }
     if installed(root).is_empty() {
         return Err(
-            "no icon sets installed; run `paper-rs-cli icons add lucide` (see `paper-rs-cli icons list`)"
+            "no icon sets installed; run `papercraft-cli icons add lucide` (see `papercraft-cli icons list`)"
                 .into(),
         );
     }
@@ -173,7 +182,8 @@ mod tests {
 
     #[test]
     fn rejects_path_tricks_and_ranks_exact_names_first() {
-        let root = std::env::temp_dir().join(format!("paper-rs-icons-{:016x}", fastrand::u64(..)));
+        let root =
+            std::env::temp_dir().join(format!("papercraft-icons-{:016x}", fastrand::u64(..)));
         let set = root.join("t");
         std::fs::create_dir_all(&set).unwrap();
         for n in ["check", "check-circle", "arrow-check", "x"] {
