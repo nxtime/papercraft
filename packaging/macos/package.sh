@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and sign (ad-hoc by default) the macOS artifacts into dist/release:
 #   paper-rs-<version>-macos-<arch>.dmg          paper-rs.app on a drag-to-Applications DMG
-#   paper-rs-mcp-<version>-macos-<arch>.zip      the MCP server binary
+#   paper-rs-cli-<version>-macos-<arch>.zip      paper-rs-cli (shell access for agents) and paper-rs-mcp (stdio bridge)
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 # Env: MACOS_SIGN_IDENTITY (default "-" = ad-hoc, not notarized; Gatekeeper rejects it on other Macs).
 set -euo pipefail
@@ -31,7 +31,7 @@ SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
 APP="$WORK/paper-rs.app"
 DMG="$DIST/paper-rs-$VERSION-macos-$ARCH.dmg"
-MCP_ZIP="$DIST/paper-rs-mcp-$VERSION-macos-$ARCH.zip"
+MCP_ZIP="$DIST/paper-rs-cli-$VERSION-macos-$ARCH.zip"
 [ "$IDENTITY" = "-" ] && echo "warning: ad-hoc signing; artifacts are not notarized" >&2
 
 if [ "$SKIP_BUILD" = 0 ]; then
@@ -39,7 +39,7 @@ if [ "$SKIP_BUILD" = 0 ]; then
   (cd "$ROOT" && cargo build --release --locked --bins "${args[@]}")
 fi
 rm -rf "$WORK"; mkdir -p "$WORK/bin" "$DIST"
-for bin in paper-rs paper-rs-mcp; do
+for bin in paper-rs paper-rs-mcp paper-rs-cli; do
   inputs=(); for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
 done
@@ -73,8 +73,8 @@ rm -f "$WORK/raw.dmg"
 sign "$DMG"; codesign --verify --strict --verbose=2 "$DMG"
 
 echo "==> building $MCP_ZIP"
-MCP_DIR="$WORK/paper-rs-mcp-$VERSION-macos-$ARCH"; mkdir -p "$MCP_DIR"
-cp "$WORK/bin/paper-rs-mcp" "$ROOT/README.md" "$ROOT"/LICENSE-* "$MCP_DIR/"
-sign --options runtime "$MCP_DIR/paper-rs-mcp"
+MCP_DIR="$WORK/paper-rs-cli-$VERSION-macos-$ARCH"; mkdir -p "$MCP_DIR"
+cp "$WORK/bin/paper-rs-mcp" "$WORK/bin/paper-rs-cli" "$ROOT/README.md" "$ROOT"/LICENSE-* "$MCP_DIR/"
+sign --options runtime "$MCP_DIR/paper-rs-mcp" "$MCP_DIR/paper-rs-cli"
 rm -f "$MCP_ZIP"; ditto -c -k --keepParent "$MCP_DIR" "$MCP_ZIP"
 echo "==> done"; ls -lh "$DMG" "$MCP_ZIP"

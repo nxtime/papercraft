@@ -116,6 +116,22 @@ claude mcp add --transport http --scope user paper-rs http://127.0.0.1:29980/mcp
 claude mcp add --scope user paper-rs -- /path/to/paper-rs/target/release/paper-rs-mcp
 ```
 
+### Shell (no MCP client needed)
+
+`paper-rs-cli` calls the same tools from a shell, so an agent with a terminal needs no schemas in
+its context. The app must be running with a project open.
+
+```sh
+paper-rs-cli list                          # tool names, one line each (works offline)
+paper-rs-cli schema write_html             # one tool's full schema
+paper-rs-cli call get_basic_info
+paper-rs-cli call create_artboard '{"name":"Hero","styles":{"width":"800px","height":"400px"}}'
+echo '{"nodeId":"12"}' | paper-rs-cli call get_screenshot - --out hero.png
+```
+
+Text goes to stdout, images are saved to `--out` (default `<tool>.png`) and the path is printed,
+and the exit status is 1 on a tool error or when the app isn't running.
+
 ### Codex
 
 ```sh

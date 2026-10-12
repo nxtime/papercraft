@@ -686,3 +686,60 @@ fn agent_design_screenshot() {
         ab_node.rect
     );
 }
+
+/// What a shell-driven agent does with `paper-rs-cli`: list tools, draw, read back, screenshot.
+#[test]
+fn cli_drives_the_running_app() {
+    let (running, _worker) = spawn_app();
+    let dir = std::env::temp_dir().join(format!("paper-rs-cli-{:016x}", fastrand::u64(..)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cli = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_paper-rs-cli"))
+            .env("PAPER_RS_MCP_PORT", running.port.to_string())
+            .current_dir(&dir)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let out = |o: &std::process::Output| String::from_utf8_lossy(&o.stdout).to_string();
+
+    let list = cli(&["list"]);
+    assert!(list.status.success() && out(&list).contains("write_html\t"));
+    let schema = cli(&["schema", "create_artboard"]);
+    assert!(out(&schema).contains("inputSchema"), "{}", out(&schema));
+    assert!(!cli(&["schema", "nope"]).status.success());
+
+    let ab = cli(&[
+        "call",
+        "create_artboard",
+        r##"{"name":"CLI","styles":{"width":"200px","height":"100px","backgroundColor":"#ff0000"}}"##,
+    ]);
+    assert!(
+        ab.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ab.stderr)
+    );
+    let id = serde_json::from_str::<Value>(&out(&ab)).unwrap()["id"].clone();
+    let shot = cli(&[
+        "call",
+        "get_screenshot",
+        &json!({"nodeId": id}).to_string(),
+        "--out",
+        "a.png",
+    ]);
+    assert!(
+        shot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&shot.stderr)
+    );
+    assert!(out(&shot).lines().any(|l| l == "a.png"), "{}", out(&shot));
+    let img = image::open(dir.join("a.png")).unwrap().to_rgba8();
+    assert_eq!(img.dimensions(), (200, 100));
+
+    let bad = cli(&["call", "get_node_info", r#"{"nodeId":"nope"}"#]);
+    assert!(!bad.status.success(), "a tool error exits non-zero");
+    let junk = cli(&["call", "get_node_info", "{not json"]);
+    assert!(!junk.status.success());
+    running.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}

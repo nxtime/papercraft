@@ -18,6 +18,10 @@ path = "src/main.rs"
 name = "paper-rs-mcp"
 path = "src/bin/paper-rs-mcp.rs"
 
+[[bin]]
+name = "paper-rs-cli"
+path = "src/bin/paper-rs-cli.rs"
+
 [dependencies]
 egui = "0.36"
 egui-wgpu = "0.36"
@@ -45,6 +49,7 @@ rmcp = { version = "3.5.1", default-features = false, features = ["server", "bas
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time", "io-std"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 tokio-util = "0.7"
+base64 = "0.23"
 
 [profile.release]
 debug = false
