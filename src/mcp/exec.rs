@@ -288,6 +288,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "set_variable_mode" => set_variable_mode(ed, &a),
                 "set_tokens" => set_tokens(ed, &a),
                 "get_components" => get_components(ed, &a),
+                "import_components" => import_components(ed, &a),
                 "create_component" => create_component(ed, &a),
                 "create_instance" => create_instance(ed, &a),
                 "search_icons" => search_icons(&a),
@@ -3122,6 +3123,117 @@ fn get_components(ed: &mut Editor, a: &Args) -> ToolResult {
         })
         .collect();
     text(json!({"components": items}))
+}
+
+/// Copy main components from another page (a design-system page) onto this one, so instances can
+/// be placed here. Components already here (same name) are left alone.
+fn import_components(ed: &mut Editor, a: &Args) -> ToolResult {
+    let from = find_page(ed, a.req_str("fromPageId")?)?;
+    let to = page_arg(ed, a)?;
+    if from == to {
+        return Err("fromPageId is the page itself".into());
+    }
+    let wanted: Option<Vec<String>> = a.get("names").and_then(Value::as_array).map(|v| {
+        v.iter()
+            .filter_map(Value::as_str)
+            .map(str::to_lowercase)
+            .collect()
+    });
+    // Each component as (name, its subtree's nodes, root first).
+    let mut found: Vec<(String, Vec<Node>)> = {
+        let src = ed.page_doc(from);
+        let mut roots: Vec<&Node> = src
+            .nodes
+            .values()
+            .filter(|n| n.component && n.parent.is_none())
+            .filter(|n| {
+                wanted
+                    .as_ref()
+                    .is_none_or(|w| w.contains(&n.name.to_lowercase()))
+            })
+            .collect();
+        roots.sort_by_key(|n| n.id);
+        roots
+            .into_iter()
+            .map(|r| {
+                let nodes = src
+                    .subtree(r.id)
+                    .into_iter()
+                    .filter_map(|i| src.get(i).cloned())
+                    .collect();
+                (r.name.clone(), nodes)
+            })
+            .collect()
+    };
+    if found.is_empty() {
+        return Err(
+            "no matching top-level components on that page (create_component first)".into(),
+        );
+    }
+    let (imported, skipped) = ed.with_page(to, |ed| {
+        ed.edit("Import components", |tx| {
+            let have: HashSet<String> = tx
+                .doc()
+                .nodes
+                .values()
+                .filter(|n| n.component)
+                .map(|n| n.name.to_lowercase())
+                .collect();
+            // Start to the right of whatever is on the page.
+            let mut x = tx
+                .doc()
+                .root
+                .iter()
+                .filter_map(|r| tx.doc().world_rect(*r))
+                .map(|r| r.right())
+                .fold(f64::MIN, f64::max);
+            x = if x == f64::MIN { 0.0 } else { x + 160.0 };
+            let (mut imported, mut skipped) = (Vec::new(), Vec::new());
+            for (name, nodes) in found.drain(..) {
+                if have.contains(&name.to_lowercase()) {
+                    skipped.push(name);
+                    continue;
+                }
+                let map: HashMap<NodeId, NodeId> =
+                    nodes.iter().map(|n| (n.id, tx.alloc_id())).collect();
+                let root = nodes[0].id;
+                let mut new_root = None;
+                for n in &nodes {
+                    let mut c = n.clone();
+                    c.id = map[&n.id];
+                    c.children = n
+                        .children
+                        .iter()
+                        .filter_map(|k| map.get(k).copied())
+                        .collect();
+                    c.comments.clear();
+                    if let Some(l) = &mut c.instance {
+                        match map.get(&l.main) {
+                            Some(m) => l.main = *m,
+                            None => c.instance = None,
+                        }
+                    }
+                    if n.id == root {
+                        c.rect.x = x;
+                        c.rect.y = 0.0;
+                        x += c.rect.w + 80.0;
+                        new_root = Some(tx.insert(c, None, None));
+                    } else {
+                        c.parent = n.parent.and_then(|p| map.get(&p).copied());
+                        tx.put(c);
+                    }
+                }
+                imported.push((name, new_root));
+            }
+            (imported, skipped)
+        })
+    });
+    let items: Vec<Value> = imported
+        .iter()
+        .map(|(n, id)| json!({"name": n, "id": id.map(|i| node_key(ed, to, i))}))
+        .collect();
+    text(json!({"imported": items, "skipped": skipped,
+        "note": "copies: re-import after deleting a copy to refresh it (its instances here lose overrides)"}))
 }
 
 fn create_component(ed: &mut Editor, a: &Args) -> ToolResult {

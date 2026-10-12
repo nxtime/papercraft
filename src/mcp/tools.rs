@@ -502,6 +502,19 @@ pub fn definitions() -> Vec<Value> {
             true,
         ),
         tool(
+            "import_components",
+            "Copy the main components of another page (typically a `Design System` page) onto this \
+             one, so you can place instances here with create_instance or \
+             <x-paper-instance component=\"Name\"/>. Components with the same name already here \
+             are skipped. Variables and tokens are already shared by every page; components are \
+             copies, not live links.",
+            json!({"fromPageId": {"type": "string"}, "pageId": page_id(),
+                   "names": {"type": "array", "items": {"type": "string"},
+                       "description": "Only these components (default all)."}}),
+            &["fromPageId"],
+            false,
+        ),
+        tool(
             "create_component",
             "Turn a frame or artboard into a main component. Build reusable parts (button, row, \
              chip, tab) once as components, then place them with create_instance or \

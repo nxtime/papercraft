@@ -18,7 +18,7 @@ fn on_every_page(ed: &mut Editor, label: &str, f: impl Fn(&mut crate::history::T
     }
 }
 
-pub fn panel(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
+pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     let heading = |ui: &mut Ui, t: &str| {
         ui.add_space(6.0);
@@ -33,6 +33,54 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
         .id_salt("design")
         .auto_shrink(false)
         .show(ui, |ui| {
+            // ---- open feedback on this page (and a pointer to other pages)
+            let mut open: Vec<(NodeId, String, String)> = ed
+                .doc
+                .nodes
+                .values()
+                .filter(|n| n.open_comments() > 0)
+                .flat_map(|n| {
+                    n.comments
+                        .iter()
+                        .filter(|c| !c.resolved)
+                        .map(|c| (n.id, n.name.clone(), c.text.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            open.sort_by_key(|o| o.0);
+            let elsewhere: usize = (0..ed.pages.len())
+                .filter(|i| *i != ed.active_page)
+                .map(|i| {
+                    ed.page_doc(i)
+                        .nodes
+                        .values()
+                        .map(|n| n.open_comments())
+                        .sum::<usize>()
+                })
+                .sum();
+            if !open.is_empty() || elsewhere > 0 {
+                heading(ui, &format!("Feedback · {} open", open.len() + elsewhere));
+                for (id, name, note) in open {
+                    let short: String = note.chars().take(46).collect();
+                    let r = ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("● {name}: {short}")).size(theme::SECONDARY + 1.0),
+                        )
+                        .sense(egui::Sense::click()),
+                    );
+                    if r.on_hover_text(note).clicked() {
+                        ed.selection = vec![id];
+                        ed.run(crate::editor::shortcuts::Action::ZoomSelection);
+                    }
+                }
+                if elsewhere > 0 {
+                    ui.label(
+                        RichText::new(format!("{elsewhere} more on other pages"))
+                            .size(theme::SECONDARY)
+                            .color(p.secondary),
+                    );
+                }
+            }
             // ---- modes
             if !ed.doc.modes.is_empty() {
                 heading(ui, "Mode");
@@ -82,9 +130,53 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
                     }
                     ui.label(RichText::new(format!("--{name}")).monospace().size(theme::SECONDARY + 1.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("✕")
+                            .on_hover_text("Delete (fills keep their color)")
+                            .clicked()
+                        {
+                            let n = name.clone();
+                            on_every_page(ed, "Delete variable", |tx| tx.remove_variable(&n));
+                        }
                         ui.label(RichText::new(color.to_hex()).monospace().weak());
                     });
                 });
+            }
+            ui.horizontal(|ui| {
+                let w = (ui.available_width() - 44.0).max(60.0);
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut st.variable_draft)
+                        .hint_text("new-variable")
+                        .desired_width(w)
+                        .margin(crate::theme::INPUT_MARGIN),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let name: String = st
+                    .variable_draft
+                    .trim()
+                    .trim_start_matches("--")
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '-' })
+                    .collect();
+                if (ui.small_button("Add").clicked() || enter) && !name.is_empty() {
+                    st.variable_draft.clear();
+                    let base = Color::rgb(0x80, 0x80, 0x80);
+                    on_every_page(ed, "Add variable", |tx| {
+                        tx.set_variable(&name, base);
+                    });
+                }
+            });
+            // ---- tokens
+            if !ed.doc.tokens.is_empty() {
+                heading(ui, "Tokens");
+                for (k, v) in &ed.doc.tokens {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("--{k}")).monospace().size(theme::SECONDARY));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(RichText::new(v).monospace().weak().size(theme::SECONDARY));
+                        });
+                    });
+                }
             }
             // ---- components
             heading(ui, "Components");

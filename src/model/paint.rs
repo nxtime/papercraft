@@ -96,6 +96,12 @@ impl Paint {
             *color = c;
         }
     }
+    /// Stop following a variable (keeps the current color).
+    pub fn unlink_var(&mut self) {
+        if let Paint::Solid { var, .. } = self {
+            *var = None;
+        }
+    }
     /// A solid fill that follows document variable `name`.
     pub fn solid_var(c: Color, name: &str) -> Paint {
         Paint::Solid {

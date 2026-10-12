@@ -53,6 +53,12 @@ pub struct UiState {
     pub reveal: Option<NodeId>,
     /// Text typed into the inspector's feedback box.
     pub feedback_draft: String,
+    /// Text in the layers panel's search box; only matching layers (and their parents) show.
+    pub layer_filter: String,
+    /// Name typed into the Design tab's new-variable box.
+    pub variable_draft: String,
+    /// The last tool an agent ran and when, for the toolbar's activity hint.
+    pub agent: Option<(String, std::time::Instant)>,
 }
 
 /// Where a dragged layer lands relative to a row.
@@ -224,11 +230,18 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             } else {
                 String::new()
             };
-            let sub = if state.is_empty() {
+            let mut sub = if state.is_empty() {
                 ed.page_name().to_string()
             } else {
                 format!("{} — {state}", ed.page_name())
             };
+            if let Some((tool, at)) = &st.agent
+                && at.elapsed() < std::time::Duration::from_secs(4)
+            {
+                sub += &format!("  ·  agent: {tool}");
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(500));
+            }
             ui.label(RichText::new(sub).size(theme::SECONDARY).color(p.secondary));
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -356,6 +369,15 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             }
             st.reveal = Some(id);
         }
+    }
+    if ed.doc.nodes.len() > 12 || !st.layer_filter.is_empty() {
+        ui.add(
+            egui::TextEdit::singleline(&mut st.layer_filter)
+                .hint_text("Search layers")
+                .desired_width(f32::INFINITY)
+                .margin(crate::theme::INPUT_MARGIN),
+        );
+        ui.add_space(2.0);
     }
     egui::ScrollArea::vertical()
         .auto_shrink(false)
@@ -510,10 +532,25 @@ fn kind_icon(k: &NodeKind) -> Icon {
 
 /// One sidebar row, drawn like an NSOutlineView row: 24pt tall, 6pt radius selection in the
 /// accent colour, subtle hover, disclosure chevron, symbol, name, and eye/lock on hover.
+/// Whether `id` or anything below it has a name containing `needle` (lowercase).
+fn layer_matches(doc: &crate::model::Document, id: NodeId, needle: &str) -> bool {
+    doc.get(id).is_some_and(|n| {
+        n.name.to_lowercase().contains(needle)
+            || n.kind
+                .text()
+                .is_some_and(|t| t.to_lowercase().contains(needle))
+            || n.children.iter().any(|c| layer_matches(doc, *c, needle))
+    })
+}
+
 fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: usize) {
     let Some(n) = ed.doc.get(id).cloned() else {
         return;
     };
+    let needle = st.layer_filter.trim().to_lowercase();
+    if !needle.is_empty() && !layer_matches(&ed.doc, id, &needle) {
+        return;
+    }
     let p = theme::pal(ui);
     let selected = ed.selection.contains(&id);
     let width = ui.available_width();
@@ -692,7 +729,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     if hovered {
         ed.hover = Some(id);
     }
-    if !st.collapsed.contains(&id) {
+    if !needle.is_empty() || !st.collapsed.contains(&id) {
         for c in n.children.iter().rev() {
             layer_row(ui, ed, st, *c, depth + 1);
         }

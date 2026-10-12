@@ -1328,6 +1328,7 @@ impl App {
             return;
         }
         for c in calls {
+            self.st.agent = Some((c.name.clone(), std::time::Instant::now()));
             let r = crate::mcp::exec::call(self, &c.name, &c.args);
             if let Err(e) = &r {
                 log::info!("mcp {}: {e}", c.name);

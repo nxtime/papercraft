@@ -570,3 +570,62 @@ fn tokens_shadows_tables_and_named_instances_with_inline_overrides() {
             .contains(&"text".to_string())
     );
 }
+
+#[test]
+fn components_import_to_other_pages_and_instances_work_there() {
+    let mut h = host();
+    let p1 = call(&mut h, "get_basic_info", json!({}))["pages"][0]["id"].clone();
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"pageId": p1, "name": "Screen", "styles": {"width": "100px", "height": "100px"}}),
+    );
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({"pageId": p1, "targetNodeId": ab["id"], "mode": "insert-children",
+        "html": "<div layer-name=\"Pill\" style=\"display:flex;padding:4px 8px;background:#cba6f7\"><div layer-name=\"Label\" style=\"font-size:12px\">Tag</div></div>"}),
+    );
+    call(
+        &mut h,
+        "create_component",
+        json!({"pageId": p1, "nodeId": r["createdNodeIds"][0], "name": "Pill"}),
+    );
+    // Components used on screens must be top level to be imported: move it out of the artboard.
+    call(
+        &mut h,
+        "move_nodes",
+        json!({"pageId": p1, "moves": [{"nodeId": r["createdNodeIds"][0], "parentId": "root"}]}),
+    );
+    let p2 = call(&mut h, "create_page", json!({"name": "Second"}))["pageId"].clone();
+    let imp = call(
+        &mut h,
+        "import_components",
+        json!({"fromPageId": p1, "pageId": p2}),
+    );
+    assert_eq!(imp["imported"][0]["name"], "Pill", "{imp}");
+    let again = call(
+        &mut h,
+        "import_components",
+        json!({"fromPageId": p1, "pageId": p2}),
+    );
+    assert_eq!(again["skipped"][0], "Pill");
+    let ab2 = call(
+        &mut h,
+        "create_artboard",
+        json!({"pageId": p2, "name": "Screen 2", "styles": {"width": "200px", "height": "100px", "display": "flex"}}),
+    );
+    let inst = call(
+        &mut h,
+        "create_instance",
+        json!({"pageId": p2, "componentId": imp["imported"][0]["id"], "parentId": ab2["id"]}),
+    );
+    let label = inst["textLayers"][0]["id"].clone();
+    call(
+        &mut h,
+        "set_text_content",
+        json!({"pageId": p2, "updates": [{"nodeId": label, "textContent": "Hi"}]}),
+    );
+    let comps = call(&mut h, "get_components", json!({"pageId": p2}));
+    assert_eq!(comps["components"][0]["instances"], 1);
+}

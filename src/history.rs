@@ -135,6 +135,31 @@ impl<'a> Tx<'a> {
         self.apply_variable(name, color)
     }
 
+    /// Delete a variable: fills that followed it keep their color but stop following.
+    pub fn remove_variable(&mut self, name: &str) {
+        self.snapshot_variables();
+        self.doc.variables.remove(name);
+        for m in self.doc.modes.values_mut() {
+            m.remove(name);
+        }
+        let users: Vec<NodeId> = self
+            .doc
+            .nodes
+            .values()
+            .filter(|n| n.style.fills.iter().any(|p| p.var() == Some(name)))
+            .map(|n| n.id)
+            .collect();
+        for id in users {
+            if let Some(n) = self.node_mut(id) {
+                for p in &mut n.style.fills {
+                    if p.var() == Some(name) {
+                        p.unlink_var();
+                    }
+                }
+            }
+        }
+    }
+
     /// Define or change a non-color design token.
     pub fn set_token(&mut self, name: &str, value: &str) {
         self.snapshot_variables();
