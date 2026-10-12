@@ -1,12 +1,13 @@
 //! macOS-flavoured look for the egui chrome: Inter font, system accent, light/dark palettes
 //! that follow the system appearance, and thin SF Symbols-style line icons.
 
+use craft_ui::theme::catppuccin::Flavor;
 use egui::{
     Color32, CornerRadius, FontData, FontFamily, FontId, Pos2, Rect, Shadow, Stroke, Vec2, pos2,
     vec2,
 };
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 pub static INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
 pub static INTER_MEDIUM: &[u8] = include_bytes!("../assets/fonts/Inter-Medium.ttf");
@@ -167,9 +168,8 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
 
-fn style_for(s: &mut egui::Style, dark: bool) {
+fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     use egui::TextStyle as T;
-    let p = palette(dark);
     let acc = accent();
     s.visuals = if dark {
         egui::Visuals::dark()
@@ -269,16 +269,153 @@ pub fn blend(base: Color32, over: Color32) -> Color32 {
     Color32::from_rgb(mix(base.r(), or), mix(base.g(), og), mix(base.b(), ob))
 }
 
-/// Fonts plus light and dark styles. egui picks the one matching the system appearance
-/// (reported by egui-winit); headless rendering falls back to light.
+/// The appearance setting: follow the system, force light or dark, or a Catppuccin flavour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Choice {
+    #[default]
+    System,
+    Light,
+    Dark,
+    Catppuccin(Flavor),
+}
+
+impl Choice {
+    pub const ALL: [Choice; 7] = [
+        Choice::System,
+        Choice::Light,
+        Choice::Dark,
+        Choice::Catppuccin(Flavor::Latte),
+        Choice::Catppuccin(Flavor::Frappe),
+        Choice::Catppuccin(Flavor::Macchiato),
+        Choice::Catppuccin(Flavor::Mocha),
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Choice::System => "system",
+            Choice::Light => "light",
+            Choice::Dark => "dark",
+            Choice::Catppuccin(Flavor::Latte) => "catppuccinLatte",
+            Choice::Catppuccin(Flavor::Frappe) => "catppuccinFrappe",
+            Choice::Catppuccin(Flavor::Macchiato) => "catppuccinMacchiato",
+            Choice::Catppuccin(Flavor::Mocha) => "catppuccinMocha",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Choice::System => "System",
+            Choice::Light => "Light",
+            Choice::Dark => "Dark",
+            Choice::Catppuccin(Flavor::Latte) => "Catppuccin Latte",
+            Choice::Catppuccin(Flavor::Frappe) => "Catppuccin Frappé",
+            Choice::Catppuccin(Flavor::Macchiato) => "Catppuccin Macchiato",
+            Choice::Catppuccin(Flavor::Mocha) => "Catppuccin Mocha",
+        }
+    }
+
+    pub fn parse(id: &str) -> Option<Choice> {
+        Choice::ALL.into_iter().find(|c| c.id() == id.trim())
+    }
+
+    fn index(self) -> u8 {
+        Choice::ALL.iter().position(|c| *c == self).unwrap_or(0) as u8
+    }
+
+    /// Persisted in the config dir; a missing or unreadable file means `System`.
+    fn path() -> Option<std::path::PathBuf> {
+        dirs::config_dir().map(|d| d.join("paper-rs").join("theme"))
+    }
+
+    pub fn load() -> Choice {
+        Choice::path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| Choice::parse(&s))
+            .unwrap_or_default()
+    }
+
+    pub fn save(self) {
+        if let Some(p) = Choice::path() {
+            if let Some(dir) = p.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(p, self.id());
+        }
+    }
+}
+
+static CHOICE: AtomicU8 = AtomicU8::new(0);
+
+pub fn choice() -> Choice {
+    Choice::ALL
+        .get(CHOICE.load(Ordering::Relaxed) as usize)
+        .copied()
+        .unwrap_or_default()
+}
+
+/// A Catppuccin flavour mapped onto the chrome palette.
+pub fn catppuccin_palette(f: Flavor) -> Palette {
+    let p = f.palette();
+    let veil = |c: Color32, a| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a);
+    Palette {
+        window: p.base,
+        sidebar: p.mantle,
+        inspector: p.mantle,
+        control: p.surface0,
+        control_border: p.surface1,
+        field: p.crust,
+        text: p.text,
+        secondary: p.subtext0,
+        tertiary: p.overlay0,
+        separator: p.surface0,
+        hover: veil(p.overlay0, 50),
+        pressed: veil(p.overlay0, 90),
+        popover: p.surface0,
+    }
+}
+
+/// The accent follows the chosen flavour (mauve), else the system accent.
+pub fn sync_accent() {
+    set_accent(match choice() {
+        Choice::Catppuccin(f) => f.palette().mauve,
+        _ => system_accent(),
+    });
+}
+
+/// Fonts plus the light and dark styles. egui picks the one matching the system appearance
+/// (reported by egui-winit) unless the choice forces one; headless rendering falls back to light.
 pub fn apply(ctx: &egui::Context) {
+    apply_choice(ctx, choice());
+}
+
+pub fn apply_choice(ctx: &egui::Context, c: Choice) {
+    CHOICE.store(c.index(), Ordering::Relaxed);
+    sync_accent();
     install_fonts(ctx);
+    let (pref, flavor) = match c {
+        Choice::System => (egui::ThemePreference::System, None),
+        Choice::Light => (egui::ThemePreference::Light, None),
+        Choice::Dark => (egui::ThemePreference::Dark, None),
+        Choice::Catppuccin(f) => (
+            if f.is_dark() {
+                egui::ThemePreference::Dark
+            } else {
+                egui::ThemePreference::Light
+            },
+            Some(f),
+        ),
+    };
     ctx.options_mut(|o| {
-        o.theme_preference = egui::ThemePreference::System;
+        o.theme_preference = pref;
         o.fallback_theme = egui::Theme::Light;
     });
-    ctx.style_mut_of(egui::Theme::Light, |s| style_for(s, false));
-    ctx.style_mut_of(egui::Theme::Dark, |s| style_for(s, true));
+    for (theme, dark) in [(egui::Theme::Light, false), (egui::Theme::Dark, true)] {
+        let p = match flavor {
+            Some(f) if f.is_dark() == dark => catppuccin_palette(f),
+            _ => palette(dark),
+        };
+        ctx.style_mut_of(theme, |s| style_for(s, dark, p));
+    }
 }
 
 /// Thin line icons in the spirit of SF Symbols, drawn into a square `rect`.
@@ -812,4 +949,39 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, selected: bool) -> 
         paint_icon(ui.painter(), rect.shrink(inset), icon, color);
     }
     resp
+}
+
+#[cfg(test)]
+mod choice_tests {
+    use super::*;
+
+    #[test]
+    fn choices_round_trip_and_catppuccin_uses_the_flavour_palette() {
+        for c in Choice::ALL {
+            assert_eq!(Choice::parse(c.id()), Some(c), "{}", c.id());
+            if let Choice::Catppuccin(f) = c {
+                let p = catppuccin_palette(f);
+                assert_eq!((p.window, p.text), (f.palette().base, f.palette().text));
+            }
+        }
+        assert_eq!(Choice::parse("nope"), None);
+    }
+
+    #[test]
+    fn a_flavour_forces_its_brightness_on_the_context() {
+        let ctx = egui::Context::default();
+        for c in Choice::ALL {
+            apply_choice(&ctx, c);
+            if let Choice::Catppuccin(f) = c {
+                let dark = ctx.style_of(if f.is_dark() {
+                    egui::Theme::Dark
+                } else {
+                    egui::Theme::Light
+                });
+                assert_eq!(dark.visuals.window_fill, catppuccin_palette(f).popover);
+                assert_eq!(accent(), f.palette().mauve);
+            }
+        }
+        apply_choice(&ctx, Choice::System);
+    }
 }

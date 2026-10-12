@@ -1,0 +1,3 @@
+[submodule "tools/craft-skills"]
+	path = tools/craft-skills
+	url = https://git.marcospaulo.dev.br/storytold/craft-skills.git

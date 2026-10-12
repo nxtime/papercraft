@@ -32,6 +32,7 @@ pub enum Command {
     Layer(NodeId),
     Library(String),
     ToggleLibrary,
+    Theme(theme::Choice),
 }
 
 pub struct Entry {
@@ -130,6 +131,13 @@ pub fn entries(ed: &Editor, st: &UiState) -> Vec<Entry> {
         detail: String::new(),
         cmd: Command::ToggleLibrary,
     });
+    for c in theme::Choice::ALL {
+        out.push(Entry {
+            label: format!("Theme: {}", c.label()),
+            detail: "Appearance".into(),
+            cmd: Command::Theme(c),
+        });
+    }
     for (i, p) in ed.pages.iter().enumerate() {
         out.push(Entry {
             label: format!("Go to page: {}", p.name),
@@ -190,6 +198,8 @@ pub fn run(ed: &mut Editor, st: &mut UiState, cmd: Command) {
             }
         }
         Command::ToggleLibrary => st.show_library = !st.show_library,
+        // Needs the egui context; handled where the palette is drawn.
+        Command::Theme(_) => {}
     }
 }
 
@@ -297,7 +307,12 @@ pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui
         });
     if let Some(c) = chosen {
         st.palette.open = false;
-        run(ed, st, c);
+        if let Command::Theme(t) = c {
+            theme::apply_choice(ctx, t);
+            t.save();
+        } else {
+            run(ed, st, c);
+        }
     }
 }
 

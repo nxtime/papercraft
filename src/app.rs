@@ -73,8 +73,7 @@ pub enum Start {
 impl App {
     pub fn new(start: Start, store: Store) -> App {
         let ctx = egui::Context::default();
-        theme::set_accent(theme::system_accent());
-        ui::setup_style(&ctx);
+        theme::apply_choice(&ctx, theme::Choice::load());
         let library = crate::library::Library::load(&crate::library::Library::path_in(&store.root));
         let mut app = App {
             gfx: None,
@@ -734,6 +733,9 @@ impl App {
             set(&m.snapping, self.ed.snapping);
             set(&m.grid, !self.st.show_grid_off);
             set(&m.help, self.st.show_help);
+            for (c, item) in &m.themes {
+                set(item, *c == theme::choice());
+            }
         }
     }
 
@@ -749,6 +751,10 @@ impl App {
             }
             MenuCmd::ToggleGrid => self.st.show_grid_off = !self.st.show_grid_off,
             MenuCmd::ToggleHelp => self.st.show_help = !self.st.show_help,
+            MenuCmd::Theme(c) => {
+                theme::apply_choice(&self.ctx, c);
+                c.save();
+            }
             // Menu key equivalents never reach egui, so while a text field is focused, hand
             // the standard editing commands to it instead of the canvas.
             MenuCmd::Run(a @ (A::Undo | A::Redo | A::Cut | A::Copy | A::Paste | A::SelectAll))
@@ -954,7 +960,6 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::ThemeChanged(_) => {
                 // Light/dark switch: egui-winit swaps the style; refresh the accent too.
-                theme::set_accent(theme::system_accent());
                 ui::setup_style(&self.ctx);
                 redraw = true;
             }

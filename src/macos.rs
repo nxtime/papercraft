@@ -112,6 +112,7 @@ pub enum MenuCmd {
     Quit,
     ToggleGrid,
     ToggleHelp,
+    Theme(crate::theme::Choice),
 }
 
 pub struct NativeMenu {
@@ -120,6 +121,7 @@ pub struct NativeMenu {
     pub snapping: CheckMenuItem,
     pub grid: CheckMenuItem,
     pub help: CheckMenuItem,
+    pub themes: Vec<(crate::theme::Choice, CheckMenuItem)>,
 }
 
 impl NativeMenu {
@@ -250,6 +252,20 @@ pub fn install_menu() -> NativeMenu {
     let help = CheckMenuItem::new("Keyboard Shortcuts", true, false, acc(cmd, Code::Slash));
     cmds.insert(help.id().clone(), MenuCmd::ToggleHelp);
 
+    let themes: Vec<(crate::theme::Choice, CheckMenuItem)> = crate::theme::Choice::ALL
+        .into_iter()
+        .map(|c| {
+            let item = CheckMenuItem::new(c.label(), true, c == crate::theme::choice(), None);
+            cmds.insert(item.id().clone(), MenuCmd::Theme(c));
+            (c, item)
+        })
+        .collect();
+    let theme_items: Vec<&dyn muda::IsMenuItem> = themes
+        .iter()
+        .map(|(_, i)| i as &dyn muda::IsMenuItem)
+        .collect();
+    let theme_menu = Submenu::with_items("Theme", true, &theme_items).expect("theme menu");
+
     let sep = PredefinedMenuItem::separator;
     let app_menu = Submenu::with_items(
         "paper-rs",
@@ -280,6 +296,7 @@ pub fn install_menu() -> NativeMenu {
             refs.push(&snapping);
             refs.push(&grid);
             refs.push(&help);
+            refs.push(&theme_menu);
             refs.push(&fullscreen);
         }
         if title == "File" {
@@ -313,5 +330,6 @@ pub fn install_menu() -> NativeMenu {
         snapping,
         grid,
         help,
+        themes,
     }
 }
