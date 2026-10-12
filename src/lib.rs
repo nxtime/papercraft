@@ -7,6 +7,7 @@ pub mod demo;
 pub mod editor;
 pub mod geom;
 pub mod history;
+pub mod icons;
 pub mod ink;
 pub mod io;
 pub mod layout;

@@ -5,8 +5,9 @@
 //! and pushes a [`Change`] that can be applied in either direction.
 
 use crate::geom::V2;
+use crate::model::Color;
 use crate::model::{Document, Node, NodeId};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 const MAX_DEPTH: usize = 500;
 
@@ -17,11 +18,14 @@ struct Entry {
     after: Option<Node>,
 }
 
+type Variables = BTreeMap<String, Color>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Change {
     pub label: String,
     entries: Vec<Entry>,
     root: Option<(Vec<NodeId>, Vec<NodeId>)>,
+    variables: Option<(Variables, Variables)>,
     next_id: (u64, u64),
     coalesce_key: Option<String>,
 }
@@ -46,6 +50,13 @@ impl Change {
                 before.clone()
             };
         }
+        if let Some((before, after)) = &self.variables {
+            doc.variables = if forward {
+                after.clone()
+            } else {
+                before.clone()
+            };
+        }
         doc.next_id = if forward {
             self.next_id.1
         } else {
@@ -61,6 +72,7 @@ pub struct Recording {
     before: HashMap<NodeId, Option<Node>>,
     order: Vec<NodeId>,
     root_before: Option<Vec<NodeId>>,
+    variables_before: Option<Variables>,
     next_id_before: u64,
 }
 
@@ -113,6 +125,33 @@ impl<'a> Tx<'a> {
 
     pub fn doc(&self) -> &Document {
         self.doc
+    }
+
+    /// Define or change a document variable and move every fill that follows it. Returns the
+    /// number of fills updated.
+    pub fn set_variable(&mut self, name: &str, color: Color) -> usize {
+        if self.rec.variables_before.is_none() {
+            self.rec.variables_before = Some(self.doc.variables.clone());
+        }
+        self.doc.variables.insert(name.to_string(), color);
+        let users: Vec<NodeId> = self
+            .doc
+            .nodes
+            .values()
+            .filter(|n| n.style.fills.iter().any(|p| p.var() == Some(name)))
+            .map(|n| n.id)
+            .collect();
+        let mut fills = 0;
+        for id in users {
+            let Some(n) = self.node_mut(id) else { continue };
+            for p in &mut n.style.fills {
+                if p.var() == Some(name) {
+                    p.set_solid_color(color);
+                    fills += 1;
+                }
+            }
+        }
+        fills
     }
 
     pub fn node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
@@ -229,13 +268,18 @@ impl History {
             .root_before
             .filter(|b| *b != doc.root)
             .map(|b| (b, doc.root.clone()));
-        if entries.is_empty() && root.is_none() {
+        let variables = rec
+            .variables_before
+            .filter(|b| *b != doc.variables)
+            .map(|b| (b, doc.variables.clone()));
+        if entries.is_empty() && root.is_none() && variables.is_none() {
             return false;
         }
         let change = Change {
             label: rec.label,
             entries,
             root,
+            variables,
             next_id: (rec.next_id_before, doc.next_id),
             coalesce_key,
         };
@@ -309,6 +353,11 @@ fn merge(older: &mut Change, newer: Change) {
     match (&mut older.root, newer.root) {
         (Some((_, after)), Some((_, new_after))) => *after = new_after,
         (r @ None, Some(nr)) => *r = Some(nr),
+        _ => {}
+    }
+    match (&mut older.variables, newer.variables) {
+        (Some((_, after)), Some((_, new_after))) => *after = new_after,
+        (v @ None, Some(nv)) => *v = Some(nv),
         _ => {}
     }
     older.next_id.1 = newer.next_id.1;

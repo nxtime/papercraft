@@ -6,10 +6,10 @@
 //! unit-testable on its own.
 
 use crate::geom::Camera;
-use crate::model::{Document, Node, NodeId};
+use crate::model::{Color, Document, Node, NodeId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub const PROJECT_FORMAT: &str = "paper-rs-project";
 pub const PAGE_FORMAT: &str = "paper-rs-page";
@@ -126,6 +126,8 @@ struct PageFile {
     next_id: u64,
     root: Vec<NodeId>,
     nodes: Vec<Node>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    variables: BTreeMap<String, Color>,
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
@@ -174,6 +176,7 @@ pub fn page_to_json(p: &PageData) -> String {
         next_id: p.doc.next_id,
         root: p.doc.root.clone(),
         nodes,
+        variables: p.doc.variables.clone(),
     };
     serde_json::to_string_pretty(&f).expect("page serializes")
 }
@@ -190,6 +193,7 @@ pub fn page_from_json(s: &str) -> Result<PageData, FormatError> {
         nodes,
         root: f.root,
         next_id: f.next_id.max(max_id + 1),
+        variables: f.variables,
     };
     doc.validate().map_err(FormatError::Invalid)?;
     Ok(PageData {

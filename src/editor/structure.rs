@@ -108,7 +108,7 @@ fn copy_props(main: &Node, inst: &mut Node, overrides: &[String], is_root: bool)
 }
 
 /// Copy a subtree as a new instance subtree under `parent` (ids are fresh).
-fn instantiate(
+pub fn instantiate(
     tx: &mut Tx,
     main: NodeId,
     parent: Option<NodeId>,
@@ -133,6 +133,25 @@ fn instantiate(
         instantiate(tx, c, Some(id), None, None);
     }
     id
+}
+
+/// Mark property groups of an instance node as overridden, so edits to the main component
+/// stop overwriting them. Does nothing for nodes that aren't part of an instance.
+pub fn mark_overrides(tx: &mut Tx, id: NodeId, keys: &[&str]) {
+    let Some(link) = tx.doc().get(id).and_then(|n| n.instance.as_ref()) else {
+        return;
+    };
+    let missing: Vec<String> = keys
+        .iter()
+        .filter(|k| !link.overrides.iter().any(|o| o == *k))
+        .map(|k| k.to_string())
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    if let Some(link) = tx.node_mut(id).and_then(|n| n.instance.as_mut()) {
+        link.overrides.extend(missing);
+    }
 }
 
 /// Bring one instance subtree in line with its main counterpart.

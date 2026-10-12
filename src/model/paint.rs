@@ -37,6 +37,9 @@ pub enum ImageMode {
 pub enum Paint {
     Solid {
         color: Color,
+        /// The document variable this color follows (`Document::variables`), if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        var: Option<String>,
     },
     Linear {
         stops: Vec<Stop>,
@@ -61,7 +64,10 @@ pub enum Paint {
 
 impl Paint {
     pub fn solid(c: Color) -> Paint {
-        Paint::Solid { color: c }
+        Paint::Solid {
+            color: c,
+            var: None,
+        }
     }
     pub fn linear(a: Color, b: Color) -> Paint {
         Paint::Linear {
@@ -77,6 +83,26 @@ impl Paint {
             radius: v2(0.5, 0.5),
         }
     }
+    /// The document variable a solid fill follows.
+    pub fn var(&self) -> Option<&str> {
+        match self {
+            Paint::Solid { var, .. } => var.as_deref(),
+            _ => None,
+        }
+    }
+    /// Change a solid fill's color (keeps its variable link).
+    pub fn set_solid_color(&mut self, c: Color) {
+        if let Paint::Solid { color, .. } = self {
+            *color = c;
+        }
+    }
+    /// A solid fill that follows document variable `name`.
+    pub fn solid_var(c: Color, name: &str) -> Paint {
+        Paint::Solid {
+            color: c,
+            var: Some(name.to_string()),
+        }
+    }
     pub fn kind_name(&self) -> &'static str {
         match self {
             Paint::Solid { .. } => "Solid",
@@ -88,7 +114,7 @@ impl Paint {
     /// A representative color (for swatches and simplified renderers).
     pub fn preview_color(&self) -> Color {
         match self {
-            Paint::Solid { color } => *color,
+            Paint::Solid { color, .. } => *color,
             Paint::Linear { stops, .. } | Paint::Radial { stops, .. } => {
                 stops.first().map_or(Color::BLACK, |s| s.color)
             }

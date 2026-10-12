@@ -143,7 +143,7 @@ impl Style {
     /// The top solid fill color, if the top fill is solid.
     pub fn fill(&self) -> Option<Color> {
         match self.fills.last() {
-            Some(Paint::Solid { color }) => Some(*color),
+            Some(Paint::Solid { color, .. }) => Some(*color),
             _ => None,
         }
     }

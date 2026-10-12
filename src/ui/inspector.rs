@@ -1061,11 +1061,14 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
             return;
         }
         match p {
-            Paint::Solid { color } => {
+            Paint::Solid { color, var } => {
                 if let Some(c) = color_button(ui, ed, *color) {
                     set(ed, Paint::solid(c));
                 }
-                ui.label(RichText::new(color.to_hex()).monospace().weak());
+                let label = var
+                    .as_ref()
+                    .map_or_else(|| color.to_hex(), |v| format!("--{v}"));
+                ui.label(RichText::new(label).monospace().weak());
             }
             Paint::Image {
                 mode,

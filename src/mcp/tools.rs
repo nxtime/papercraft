@@ -22,6 +22,11 @@ padding, align-items, justify-content) is the layout model; no margin, grid or t
 - Edit with update_styles, set_text_content, rename_nodes, duplicate_nodes, move_nodes, \
 delete_nodes. Whiteboard shapes, sticky notes and arrows: create_shape. Hand-drawn style: \
 update_styles with {\"sketch\": true, \"roughness\": 1, \"fillStyle\": \"hachure\"}.
+- Don't write colors as hex in designs: set_variables once (surface, text, accent, ...), then \
+use var(--name). Build repeated parts (button, row, chip) once as components \
+(create_artboard + create_component) and place them with create_instance, overriding text \
+with set_text_content. Icons: search_icons, then <x-paper-icon name=\"phosphor:gear\"/> in \
+write_html. Name every layer (layer-name) like a real file.\n\
 - Check your work with get_screenshot. Artboard height is a starting point: when content \
 clips set height: \"fit-content\" with update_styles.
 - Call finish_working_on_nodes when done.";
@@ -314,6 +319,9 @@ pub fn definitions() -> Vec<Value> {
              fit-content).\n\
              - <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths or data: URIs. \
              <svg> markup is imported as vector layers.\n\
+             - <x-paper-icon name=\"set:name\" size=\"20\" color=\"var(--accent)\"/> places an installed icon (search_icons); \
+             <x-paper-instance component-id=\"ID\" layer-name=\"...\"/> places a component instance; \
+             colors may be var(--name) of set_variables.\n\
              - layer-name=\"...\" names layers; <x-paper-clone node-id=\"ID\" style=\"...\"/> \
              clones an existing node.\n\
              Returns the ids of the created top-level layers and the styles that were ignored.",
@@ -392,6 +400,70 @@ pub fn definitions() -> Vec<Value> {
             }}}),
             &["updates"],
             false,
+        ),
+        tool(
+            "get_variables",
+            "Color variables of the page's project (name -> hex). Fills that follow a variable \
+             were written with `var(--name)`; set_variables moves all of them at once.",
+            json!({"pageId": page_id()}),
+            &[],
+            true,
+        ),
+        tool(
+            "set_variables",
+            "Define or change color variables (names like `surface`, `accent-text`), on every \
+             page. Use them as `var(--name)` in write_html / update_styles / create_artboard \
+             colors (backgroundColor, background, color) instead of hex literals, so a theme \
+             change is one call. Fills already following a changed variable are updated. \
+             Variables apply to fills and text color; strokes and gradients keep fixed colors.",
+            json!({"variables": {"type": "object", "propertyNames": {"type": "string"},
+                "additionalProperties": {"type": "string"},
+                "description": "{\"accent\": \"#cba6f7\", \"surface\": \"#313244\"}"}}),
+            &["variables"],
+            false,
+        ),
+        tool(
+            "get_components",
+            "Main components on a page (id, name, size) with how many instances each has.",
+            json!({"pageId": page_id()}),
+            &[],
+            true,
+        ),
+        tool(
+            "create_component",
+            "Turn a frame or artboard into a main component. Build reusable parts (button, row, \
+             chip, tab) once as components, then place them with create_instance or \
+             <x-paper-instance>. Components and instances live on one page.",
+            json!({"nodeId": {"type": "string", "description": "The frame to convert."},
+                   "name": {"type": "string", "description": "Optional new layer name."},
+                   "pageId": page_id()}),
+            &["nodeId"],
+            false,
+        ),
+        tool(
+            "create_instance",
+            "Place an instance of a component. Edit text and styles on the instance's descendants \
+             with set_text_content / update_styles (they become overrides); edits to the main \
+             component flow to every instance. Returns the instance id and its text layers.",
+            json!({"componentId": {"type": "string"},
+                   "parentId": {"type": "string", "description": "Parent frame; omit or \"root\" for the page."},
+                   "index": {"type": "number", "description": "Position among the parent's children."},
+                   "x": {"type": "number"}, "y": {"type": "number"},
+                   "name": {"type": "string"},
+                   "pageId": page_id()}),
+            &["componentId"],
+            false,
+        ),
+        tool(
+            "search_icons",
+            "Search installed open icon sets (Lucide, Tabler, Phosphor, Heroicons, Material). \
+             Returns `set:name` references for <x-paper-icon name=\"lucide:check\" size=\"20\" \
+             color=\"var(--text)\"/> in write_html. Without a query it lists installed and \
+             installable sets; install with `paper-rs-cli icons add lucide`.",
+            json!({"query": {"type": "string"}, "set": {"type": "string"},
+                   "limit": {"type": "number", "description": "Default 20."}}),
+            &[],
+            true,
         ),
         tool(
             "delete_nodes",

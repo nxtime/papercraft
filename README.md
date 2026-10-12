@@ -132,6 +132,33 @@ echo '{"nodeId":"12"}' | paper-rs-cli call get_screenshot - --out hero.png
 Text goes to stdout, images are saved to `--out` (default `<tool>.png`) and the path is printed,
 and the exit status is 1 on a tool error or when the app isn't running.
 
+### Design systems: variables, components, icons
+
+Agents (and `paper-rs-cli`) get the pieces of a design system, so files aren't a pile of hex codes
+and copies:
+
+```sh
+paper-rs-cli call set_variables '{"variables":{"surface":"#313244","accent":"#cba6f7"}}'
+paper-rs-cli call write_html '{"targetNodeId":"root","mode":"insert-children","html":"<div style=\"background:var(--surface)\">…</div>"}'
+paper-rs-cli call create_component '{"nodeId":"<frame>","name":"Button / Primary"}'
+paper-rs-cli call create_instance  '{"componentId":"<id>","parentId":"<frame>"}'   # then set_text_content on its layers
+paper-rs-cli icons add phosphor lucide      # open icon sets from npm, with their licences
+paper-rs-cli icons search arrow left
+# in write_html: <x-paper-icon name="phosphor:gear" size="20" color="var(--accent)"/>
+```
+
+* **Variables** are named colors per project (`get_variables`, `set_variables`). A fill or text
+  colour written as `var(--name)` stays linked; `set_variables` moves every linked fill on every
+  page in one undoable step, and the link is saved in the file. Strokes and gradients keep fixed
+  colours; fill-based icon sets (Phosphor, Material) follow variables, stroke sets (Lucide) don't.
+* **Components** (`create_component`, `create_instance`, `get_components`, `<x-paper-instance>`):
+  edit the main component and every instance follows, except what an instance overrode (text,
+  fills, size, ... are marked automatically when set through `set_text_content` / `update_styles`).
+  Components and their instances live on one page.
+* **Icons** live in `<data dir>/paper-rs/icons/<set>/` (override with `PAPER_RS_ICONS`). Sets: Lucide
+  (ISC), Tabler (MIT), Phosphor (MIT), Heroicons (MIT), Material Symbols (Apache-2.0); each keeps its
+  licence file. `examples/taskflow.py` builds an 8-screen app with all three.
+
 ### Codex
 
 ```sh

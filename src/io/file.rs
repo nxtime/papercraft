@@ -1,8 +1,9 @@
 //! The `.paper-rs` document format: versioned, pretty-printed JSON.
 
 use crate::geom::Camera;
-use crate::model::{Document, Node, NodeId};
+use crate::model::{Color, Document, Node, NodeId};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub const FORMAT: &str = "paper-rs";
@@ -19,6 +20,8 @@ struct FileV1 {
     next_id: u64,
     root: Vec<NodeId>,
     nodes: Vec<Node>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    variables: BTreeMap<String, Color>,
 }
 
 #[derive(Debug)]
@@ -60,6 +63,7 @@ pub fn to_string(doc: &Document, camera: Option<&Camera>) -> String {
         next_id: doc.next_id,
         root: doc.root.clone(),
         nodes,
+        variables: doc.variables.clone(),
     };
     serde_json::to_string_pretty(&f).expect("document serializes")
 }

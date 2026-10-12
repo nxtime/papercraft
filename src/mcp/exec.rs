@@ -255,6 +255,8 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
             check_file(host, &a)?;
             let ed = host.editor();
             ed.commit_pending();
+            let scope = page_arg(ed, &a).unwrap_or(ed.active_page);
+            css::set_variables_in_scope(&ed.page_doc(scope).variables);
             // The first content on the page the user is looking at is brought into view.
             let was_empty = ed.doc.root.is_empty();
             let r = match name {
@@ -277,6 +279,12 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "create_shape" => create_shape(ed, &a),
                 "update_styles" => update_styles(ed, &a),
                 "set_text_content" => set_text_content(ed, &a),
+                "get_variables" => get_variables(ed, &a),
+                "set_variables" => set_variables(ed, &a),
+                "get_components" => get_components(ed, &a),
+                "create_component" => create_component(ed, &a),
+                "create_instance" => create_instance(ed, &a),
+                "search_icons" => search_icons(&a),
                 "rename_nodes" => rename_nodes(ed, &a),
                 "delete_nodes" => delete_nodes(ed, &a),
                 "duplicate_nodes" => duplicate_nodes(ed, &a),
@@ -412,7 +420,9 @@ fn create_file(host: &mut dyn Host, a: &Args) -> ToolResult {
 }
 
 fn create_page(ed: &mut Editor, a: &Args) -> ToolResult {
+    let vars = ed.page_doc(ed.active_page).variables.clone();
     let i = ed.add_page_in_background(a.str("name"));
+    ed.with_page(i, |ed| ed.doc.variables = vars);
     text(json!({"pageId": ed.pages[i].id, "name": ed.pages[i].name}))
 }
 
@@ -1609,6 +1619,8 @@ impl Builder<'_, '_> {
             "img" => self.image(el, &own, parent, index),
             "svg" => self.svg(el, &own, inherited, parent, index),
             "x-paper-clone" | "paper-clone" => self.clone_el(el, &own, parent, index),
+            "x-paper-instance" => self.instance_el(el, &own, parent, index),
+            "x-paper-icon" => self.icon_el(el, &own, inherited, parent, index),
             "hr" => {
                 let mut st: Styles = vec![
                     ("height".into(), "1px".into()),
@@ -1931,6 +1943,137 @@ impl Builder<'_, '_> {
         }
         self.place(fid, &a, parent);
         Some(fid)
+    }
+
+    fn instance_el(
+        &mut self,
+        el: &Element,
+        own: &Styles,
+        parent: &Parent,
+        index: &mut Option<usize>,
+    ) -> Option<NodeId> {
+        let key = el.attr("component-id").unwrap_or("");
+        let num = key.rsplit(':').next().and_then(|n| n.parse::<u64>().ok());
+        let Some(main) = num
+            .map(NodeId)
+            .filter(|id| self.tx.doc().get(*id).is_some_and(|n| n.component))
+        else {
+            self.warnings.push(format!(
+                "x-paper-instance: `{key}` is not a component on this page (create_component first)"
+            ));
+            return None;
+        };
+        let id = crate::editor::structure::instantiate(self.tx, main, parent.id, *index, None);
+        if let Some(i) = index {
+            *i += 1;
+        }
+        let n = self.tx.node_mut(id).unwrap();
+        if parent.layout.is_some() {
+            n.layout_child.absolute = false;
+        }
+        let a = css::apply(n, own, &parent.ctx());
+        self.note(&a);
+        let keys = css::override_keys(own);
+        crate::editor::structure::mark_overrides(self.tx, id, &keys);
+        if let Some(name) = Self::layer_name(el) {
+            self.tx.node_mut(id).unwrap().name = name;
+        }
+        Some(id)
+    }
+
+    /// `<x-paper-icon name="lucide:check" size="20" color="var(--text)" stroke-width="2"/>`.
+    fn icon_el(
+        &mut self,
+        el: &Element,
+        own: &Styles,
+        inherited: &Styles,
+        parent: &Parent,
+        index: &mut Option<usize>,
+    ) -> Option<NodeId> {
+        let name = el.attr("name").unwrap_or("");
+        let svg = match crate::icons::load(&crate::icons::dir(), name) {
+            Ok(s) => s,
+            Err(e) => {
+                self.warnings.push(format!("x-paper-icon: {e}"));
+                return None;
+            }
+        };
+        let Some(mut svg_el) = html::parse(&svg).into_iter().find_map(|h| match h {
+            Html::Element(e) if e.tag == "svg" => Some(e),
+            _ => None,
+        }) else {
+            self.warnings
+                .push(format!("x-paper-icon: `{name}` is not an SVG file"));
+            return None;
+        };
+        let size = el
+            .attr("size")
+            .or_else(|| el.attr("width"))
+            .and_then(|s| css::length(s, 16.0))
+            .unwrap_or(24.0);
+        let color_src = el
+            .attr("color")
+            .or_else(|| get(own, "color"))
+            .or_else(|| get(inherited, "color"));
+        let (color, var) = color_src
+            .and_then(css::resolve_color_value)
+            .unwrap_or((Color::BLACK, None));
+        svg_el
+            .attrs
+            .retain(|(k, _)| !matches!(k.as_str(), "width" | "height" | "class"));
+        // The importer keeps viewBox units, so bring the artwork to `size` ourselves: wrap it in
+        // a scale group and make the viewBox match the final size.
+        let vb: Vec<f64> = svg_el
+            .attr("viewBox")
+            .map(|v| v.split([' ', ',']).filter_map(|n| n.parse().ok()).collect())
+            .unwrap_or_default();
+        if let [vx, vy, vw, vh] = vb[..]
+            && vw > 0.0
+            && vh > 0.0
+            && let Some(raw) = svg_el.raw.take()
+        {
+            let body = raw.find('>').map_or("", |i| &raw[i + 1..]);
+            let inner = body.trim_end().strip_suffix("</svg>").unwrap_or(body);
+            let k = size / vw.max(vh);
+            svg_el.raw = Some(format!(
+                "<svg><g transform=\"scale({k}) translate({} {})\">{inner}</g></svg>",
+                -vx, -vy
+            ));
+            svg_el.attrs.retain(|(k, _)| k != "viewBox");
+            svg_el
+                .attrs
+                .push(("viewBox".into(), format!("0 0 {size} {size}")));
+        }
+        svg_el.attrs.push(("width".into(), size.to_string()));
+        svg_el.attrs.push(("height".into(), size.to_string()));
+        if let Some(sw) = el.attr("stroke-width") {
+            svg_el.attrs.retain(|(k, _)| k != "stroke-width");
+            svg_el.attrs.push(("stroke-width".into(), sw.to_string()));
+        }
+        let mut st: Styles = own.clone();
+        st.retain(|(k, _)| k != "color");
+        st.push(("color".into(), color.to_hex()));
+        let id = self.svg(&svg_el, &st, inherited, parent, index)?;
+        let label = Self::layer_name(el).unwrap_or_else(|| format!("Icon / {name}"));
+        self.tx.node_mut(id).unwrap().name = label;
+        if let Some(var) = var {
+            for sid in self.tx.doc().subtree(id) {
+                let linked = self.tx.doc().get(sid).is_some_and(|n| {
+                    n.style
+                        .fills
+                        .iter()
+                        .any(|p| matches!(p, Paint::Solid { color: c, var: None } if *c == color))
+                });
+                if linked && let Some(n) = self.tx.node_mut(sid) {
+                    for p in &mut n.style.fills {
+                        if matches!(p, Paint::Solid { color: c, var: None } if *c == color) {
+                            *p = Paint::solid_var(color, &var);
+                        }
+                    }
+                }
+            }
+        }
+        Some(id)
     }
 
     fn clone_el(
@@ -2394,6 +2537,7 @@ fn update_styles(ed: &mut Editor, a: &Args) -> ToolResult {
                     let old = tx.doc().get(*id).unwrap().rect;
                     let mut n = tx.doc().get(*id).unwrap().clone();
                     let applied = css::apply(&mut n, &styles, &parent.ctx());
+                    let override_keys = css::override_keys(&styles);
                     let mut warn = None;
                     if let Some((src, mode)) = &applied.image {
                         match image_asset(src) {
@@ -2420,6 +2564,7 @@ fn update_styles(ed: &mut Editor, a: &Args) -> ToolResult {
                     let keep_h =
                         get(&styles, "height").is_some_and(|v| css::length(v, 16.0).is_some());
                     *tx.node_mut(*id).unwrap() = n;
+                    crate::editor::structure::mark_overrides(tx, *id, &override_keys);
                     remember_stretch(&page_id, *id, &styles);
                     if (old.w - new.w).abs() > 1e-9 || (old.h - new.h).abs() > 1e-9 {
                         crate::layout::resize_children(tx, *id, old, new);
@@ -2506,6 +2651,8 @@ fn set_text_content(ed: &mut Editor, a: &Args) -> ToolResult {
                 )
             })?;
             *node.kind.text_mut().unwrap() = t.clone();
+            crate::editor::structure::mark_overrides(tx, id, &["text"]);
+            let node = tx.node_mut(id).unwrap();
             let len = t.chars().count();
             for s in &mut node.text_style.spans {
                 if s.start == 0 && s.end >= old_len {
@@ -2523,6 +2670,203 @@ fn set_text_content(ed: &mut Editor, a: &Args) -> ToolResult {
     text(json!({"updated": n}))
 }
 
+// ------------------------------------------------------------------------------ variables
+
+fn get_variables(ed: &mut Editor, a: &Args) -> ToolResult {
+    let page = page_arg(ed, a)?;
+    let vars: Map<String, Value> = ed
+        .page_doc(page)
+        .variables
+        .iter()
+        .map(|(k, c)| (k.clone(), json!(c.to_hex())))
+        .collect();
+    text(json!({"variables": vars, "use": "var(--name) in color styles"}))
+}
+
+fn set_variables(ed: &mut Editor, a: &Args) -> ToolResult {
+    let vars = a
+        .get("variables")
+        .and_then(Value::as_object)
+        .filter(|m| !m.is_empty())
+        .ok_or("`variables` must be an object like {\"accent\": \"#cba6f7\"}")?;
+    let mut parsed: Vec<(String, Color)> = Vec::new();
+    for (name, v) in vars {
+        let name = name.trim().trim_start_matches("--").to_string();
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(format!(
+                "variable name `{name}` may only use letters, digits, - and _"
+            ));
+        }
+        let c = v
+            .as_str()
+            .and_then(css::color)
+            .ok_or_else(|| format!("variable `{name}`: `{v}` is not a color"))?;
+        parsed.push((name, c));
+    }
+    let mut updated: Map<String, Value> = Map::new();
+    for page in 0..ed.pages.len() {
+        let counts = ed.with_page(page, |ed| {
+            ed.edit("Set variables", |tx| {
+                parsed
+                    .iter()
+                    .map(|(n, c)| tx.set_variable(n, *c))
+                    .collect::<Vec<_>>()
+            })
+        });
+        for ((name, _), n) in parsed.iter().zip(counts) {
+            let e = updated.entry(name.clone()).or_insert(json!(0));
+            *e = json!(e.as_u64().unwrap_or(0) + n as u64);
+        }
+    }
+    text(json!({"fillsUpdated": updated, "pages": ed.pages.len()}))
+}
+
+// ------------------------------------------------------------------------------ components
+
+fn get_components(ed: &mut Editor, a: &Args) -> ToolResult {
+    let page = page_arg(ed, a)?;
+    let doc = ed.page_doc(page);
+    let mut comps: Vec<&Node> = doc.nodes.values().filter(|n| n.component).collect();
+    comps.sort_by_key(|n| n.id);
+    let items: Vec<Value> = comps
+        .iter()
+        .map(|c| {
+            let uses = doc
+                .nodes
+                .values()
+                .filter(|n| n.instance.as_ref().is_some_and(|l| l.main == c.id) && n.id != c.id)
+                .count();
+            json!({"id": node_key(ed, page, c.id), "name": c.name,
+                   "width": r2(c.rect.w), "height": r2(c.rect.h), "instances": uses})
+        })
+        .collect();
+    text(json!({"components": items}))
+}
+
+fn create_component(ed: &mut Editor, a: &Args) -> ToolResult {
+    let (page, id) = resolve(ed, a.req_str("nodeId")?, page_arg(ed, a)?)?;
+    let name = a
+        .str("name")
+        .map(|n| n.chars().take(50).collect::<String>());
+    ed.with_page(page, |ed| {
+        let n = ed.doc.get(id).ok_or("node not found")?;
+        if !n.is_frame() || n.instance.is_some() {
+            return Err(format!(
+                "{} is a {}; only a frame or artboard that isn't an instance can become a component",
+                n.name,
+                n.kind.type_name()
+            ));
+        }
+        ed.edit("Create component", |tx| {
+            let n = tx.node_mut(id).unwrap();
+            n.component = true;
+            if let Some(name) = name {
+                n.name = name;
+            }
+        });
+        Ok(())
+    })?;
+    let name = ed.page_doc(page).get(id).map(|n| n.name.clone());
+    text(json!({"id": node_key(ed, page, id), "name": name, "component": true}))
+}
+
+fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
+    let (page, comp) = resolve(ed, a.req_str("componentId")?, page_arg(ed, a)?)?;
+    let parent = match a.str("parentId") {
+        None | Some("") | Some("root") => None,
+        Some(p) => {
+            let (pp, id) = resolve(ed, p, page)?;
+            if pp != page {
+                return Err("the parent must be on the same page as the component".into());
+            }
+            Some(id)
+        }
+    };
+    let index = a.num("index").map(|i| i.max(0.0) as usize);
+    let at = a.num("x").zip(a.num("y"));
+    let name = a
+        .str("name")
+        .map(|n| n.chars().take(50).collect::<String>());
+    let id = ed.with_page(page, |ed| {
+        let main = ed.doc.get(comp).ok_or("component not found")?;
+        if !main.component {
+            return Err(format!(
+                "{} is not a component (see create_component)",
+                main.name
+            ));
+        }
+        let size = (main.rect.w, main.rect.h);
+        Ok(ed.edit("Create instance", |tx| {
+            let rect = match (parent, at) {
+                (None, Some((x, y))) => Some(Rect::new(x, y, size.0, size.1)),
+                (None, None) => {
+                    // Beside the existing top-level content, not on top of it.
+                    let right = tx
+                        .doc()
+                        .root
+                        .iter()
+                        .filter_map(|r| tx.doc().world_rect(*r))
+                        .map(|r| r.right())
+                        .fold(f64::MIN, f64::max);
+                    let y = tx.doc().world_rect(comp).map_or(0.0, |r| r.y);
+                    Some(Rect::new(right.max(0.0) + 80.0, y, size.0, size.1))
+                }
+                _ => None,
+            };
+            let id = crate::editor::structure::instantiate(tx, comp, parent, index, rect);
+            if let Some(name) = name {
+                tx.node_mut(id).unwrap().name = name;
+            }
+            id
+        }))
+    })?;
+    let doc = ed.page_doc(page);
+    let parts: Vec<&Node> = doc
+        .subtree(id)
+        .into_iter()
+        .skip(1)
+        .filter_map(|i| doc.get(i))
+        .collect();
+    let layers: Vec<Value> = parts
+        .iter()
+        .map(|n| json!({"id": node_key(ed, page, n.id), "name": n.name, "type": n.kind.type_name(), "text": n.kind.text()}))
+        .collect();
+    let texts: Vec<Value> = parts
+        .iter()
+        .filter(|n| n.kind.text().is_some())
+        .map(|n| json!({"id": node_key(ed, page, n.id), "name": n.name, "text": n.kind.text()}))
+        .collect();
+    text(json!({"id": node_key(ed, page, id), "textLayers": texts, "layers": layers}))
+}
+
+// ------------------------------------------------------------------------------ icons
+
+fn search_icons(a: &Args) -> ToolResult {
+    let root = crate::icons::dir();
+    let limit = a.num("limit").map_or(20, |n| n.clamp(1.0, 200.0) as usize);
+    let mut v = json!({"installed": crate::icons::installed(&root)
+        .into_iter()
+        .map(|(s, n)| json!({"set": s, "icons": n}))
+        .collect::<Vec<_>>()});
+    match a.str("query").filter(|q| !q.is_empty()) {
+        Some(q) => v["results"] = json!(crate::icons::search(&root, q, a.str("set"), limit)),
+        None => {
+            v["installable"] = json!(
+                crate::icons::SETS
+                    .iter()
+                    .map(|s| json!({"set": s.id, "license": s.license, "about": s.about}))
+                    .collect::<Vec<_>>()
+            );
+            v["install"] = json!("paper-rs-cli icons add <set>");
+        }
+    }
+    text(v)
+}
+
 fn rename_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
     let n = batch(
         ed,
@@ -2532,6 +2876,7 @@ fn rename_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
         |u| Ok(u.req_str("name")?.chars().take(50).collect::<String>()),
         |tx, id, name| {
             tx.node_mut(id).unwrap().name = name.clone();
+            crate::editor::structure::mark_overrides(tx, id, &["name"]);
             Ok(())
         },
     )?;

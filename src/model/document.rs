@@ -1,9 +1,9 @@
 //! The document arena: nodes keyed by id plus ordered child lists.
 
-use super::node::{Node, NodeId};
+use super::node::{Color, Node, NodeId};
 use crate::geom::{Rect, V2};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Document {
@@ -12,6 +12,9 @@ pub struct Document {
     /// Top-level nodes in paint order, bottom to top.
     pub root: Vec<NodeId>,
     pub next_id: u64,
+    /// Named colors that fills can follow (`var(--name)` in CSS). Empty for most documents.
+    #[serde(default)]
+    pub variables: BTreeMap<String, Color>,
 }
 
 impl Default for Document {
@@ -21,6 +24,7 @@ impl Default for Document {
             nodes: HashMap::new(),
             root: Vec::new(),
             next_id: 1,
+            variables: BTreeMap::new(),
         }
     }
 }

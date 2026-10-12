@@ -3,6 +3,7 @@
 //! (`http://127.0.0.1:29980/mcp`, or `$PAPER_RS_MCP_PORT`).
 
 use base64::Engine;
+use paper_rs::icons;
 use paper_rs::mcp::{self, server};
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
@@ -19,7 +20,14 @@ USAGE:
   paper-rs-cli schema <tool>              a tool's full description and JSON input schema
   paper-rs-cli call <tool> [JSON|-]       run a tool; JSON arguments inline, or `-` for stdin
         [--out FILE]                      where to save an image result (default: <tool>.png)
+  paper-rs-cli icons list                 installed and installable open icon sets
+  paper-rs-cli icons add <set>...         download sets (lucide tabler phosphor heroicons material)
+  paper-rs-cli icons search <words> [--set S]   find `set:name` references (works offline)
   paper-rs-cli --url                      print the endpoint it talks to
+
+Icons are placed with <x-paper-icon name='lucide:check' size='20' color='var(--text)'/> in
+write_html. Sets are fetched from the npm registry with curl and tar into the icons dir
+($PAPER_RS_ICONS, else the user data dir) together with their licence file.
 
 Text results go to stdout; image results are saved to a file and the path is printed.
 Exit status is 1 when the tool reports an error or the app isn't running.
@@ -36,6 +44,143 @@ fn list() {
         let d = t.description.as_deref().unwrap_or("");
         let first = d.split(['.', '\n']).next().unwrap_or("");
         println!("{}\t{first}", t.name);
+    }
+}
+
+fn run(cmd: &mut std::process::Command, what: &str) -> Result<Vec<u8>, String> {
+    let out = cmd
+        .output()
+        .map_err(|e| format!("{what}: cannot run {:?}: {e}", cmd.get_program()))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{what} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(out.stdout)
+}
+
+/// Download one icon set from the npm registry into the icons dir. Returns the icon count.
+fn add_set(id: &str) -> Result<usize, String> {
+    let spec = icons::spec(id).ok_or_else(|| {
+        format!(
+            "unknown set `{id}`; sets: {}",
+            icons::SETS
+                .iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+    let meta = run(
+        std::process::Command::new("curl").args([
+            "-fsSL",
+            &format!("https://registry.npmjs.org/{}/latest", spec.package),
+        ]),
+        "looking up the package",
+    )?;
+    let meta: Value = serde_json::from_slice(&meta).map_err(|e| e.to_string())?;
+    let tarball = meta["dist"]["tarball"]
+        .as_str()
+        .ok_or("the registry reply has no tarball")?
+        .to_string();
+    let tmp = std::env::temp_dir().join(format!("paper-rs-icons-{id}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let archive = tmp.join("pkg.tgz");
+    let result = (|| {
+        run(
+            std::process::Command::new("curl")
+                .args(["-fsSL", "-o"])
+                .arg(&archive)
+                .arg(&tarball),
+            "downloading",
+        )?;
+        run(
+            std::process::Command::new("tar")
+                .arg("-xzf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(&tmp),
+            "unpacking",
+        )?;
+        let dest = icons::dir().join(id);
+        std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+        let mut n = 0;
+        let src = tmp.join("package").join(spec.dir);
+        for e in std::fs::read_dir(&src)
+            .map_err(|e| format!("{}: {e}", src.display()))?
+            .flatten()
+        {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "svg") {
+                std::fs::copy(&p, dest.join(e.file_name())).map_err(|e| e.to_string())?;
+                n += 1;
+            }
+        }
+        for lic in ["LICENSE", "LICENSE.md", "LICENSE.txt", "license"] {
+            let p = tmp.join("package").join(lic);
+            if p.is_file() {
+                let _ = std::fs::copy(&p, dest.join("LICENSE"));
+                break;
+            }
+        }
+        Ok(n)
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+fn icons_cmd(args: &[String]) -> ExitCode {
+    let root = icons::dir();
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            println!("icons dir: {}", root.display());
+            let have = icons::installed(&root);
+            for s in icons::SETS {
+                let n = have.iter().find(|(h, _)| h == s.id).map_or(0, |h| h.1);
+                let mark = if n > 0 {
+                    format!("{n} installed")
+                } else {
+                    "not installed".into()
+                };
+                println!("{}\t{}\t{}\t{mark}", s.id, s.license, s.about);
+            }
+            ExitCode::SUCCESS
+        }
+        Some("add") if args.len() > 1 => {
+            let mut ok = true;
+            for id in &args[1..] {
+                match add_set(id) {
+                    Ok(n) => println!("{id}: {n} icons in {}", root.join(id).display()),
+                    Err(e) => {
+                        eprintln!("paper-rs-cli: {id}: {e}");
+                        ok = false;
+                    }
+                }
+            }
+            if ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Some("search") if args.len() > 1 => {
+            let set = args
+                .iter()
+                .position(|a| a == "--set")
+                .and_then(|i| args.get(i + 1));
+            let words: Vec<&str> = args[1..]
+                .iter()
+                .map(String::as_str)
+                .filter(|a| *a != "--set" && Some(*a) != set.map(String::as_str))
+                .collect();
+            for r in icons::search(&root, &words.join(" "), set.map(String::as_str), 40) {
+                println!("{r}");
+            }
+            ExitCode::SUCCESS
+        }
+        _ => fail("usage: icons list | icons add <set>... | icons search <words> [--set S]"),
     }
 }
 
@@ -96,6 +241,7 @@ fn main() -> ExitCode {
             Some(n) => return schema(n),
             None => return fail("schema needs a tool name"),
         },
+        Some("icons") => return icons_cmd(&args[1..]),
         Some("--url") => println!("{}", mcp::url(mcp::port())),
         Some("call") => {
             let Some(name) = args.get(1).cloned() else {

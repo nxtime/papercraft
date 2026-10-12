@@ -611,6 +611,98 @@ fn rough_mut(n: &mut Node) -> &mut Rough {
 /// Apply styles to a node. Layout-dependent properties use `ctx`; text properties apply to
 /// text and sticky nodes; box properties to everything else.
 pub fn apply(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applied {
+    // `var(--name)` color values resolve against the document's variables (set per tool call by
+    // `set_variables_in_scope`); the fill they produce keeps the link so later changes follow.
+    let mut linked: Vec<&str> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    let resolved: Vec<(String, String)> = styles
+        .iter()
+        .map(|(k, v)| match var_name(v) {
+            Some((name, fallback)) => match VARS.with(|m| m.borrow().get(name).copied()) {
+                Some(c) => {
+                    if COLOR_PROPS.contains(&k.as_str()) {
+                        linked.push(name);
+                    }
+                    (k.clone(), color_css(c))
+                }
+                None => match fallback {
+                    Some(f) => (k.clone(), f.to_string()),
+                    None => {
+                        unknown.push(format!("{k}: {v} (no variable --{name})"));
+                        (k.clone(), String::new())
+                    }
+                },
+            },
+            None => (k.clone(), v.clone()),
+        })
+        .filter(|(_, v)| !v.is_empty())
+        .collect();
+    let mut a = apply_resolved(n, &resolved, ctx);
+    a.ignored.extend(unknown);
+    for name in linked {
+        if let Some(Paint::Solid { var, .. }) = n.style.fills.last_mut() {
+            *var = Some(name.to_string());
+        }
+    }
+    a
+}
+
+const COLOR_PROPS: [&str; 4] = ["backgroundColor", "background", "color", "fill"];
+
+thread_local! {
+    static VARS: std::cell::RefCell<std::collections::BTreeMap<String, Color>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// Make `vars` the variables `var(--name)` resolves against on this thread.
+pub fn set_variables_in_scope(vars: &std::collections::BTreeMap<String, Color>) {
+    VARS.with(|m| *m.borrow_mut() = vars.clone());
+}
+
+/// A color value that may be `var(--name)`: the color and the variable it came from.
+pub fn resolve_color_value(v: &str) -> Option<(Color, Option<String>)> {
+    match var_name(v) {
+        Some((name, fallback)) => match VARS.with(|m| m.borrow().get(name).copied()) {
+            Some(c) => Some((c, Some(name.to_string()))),
+            None => fallback.and_then(color).map(|c| (c, None)),
+        },
+        None => color(v).map(|c| (c, None)),
+    }
+}
+
+/// Style properties' override groups, for edits made to a part of an instance.
+pub fn override_keys(styles: &[(String, String)]) -> Vec<&'static str> {
+    let mut keys: Vec<&'static str> = Vec::new();
+    for (k, _) in styles {
+        let key = match k.as_str() {
+            "backgroundColor" | "background" | "backgroundImage" | "color" | "fill" => "fills",
+            "width" | "height" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "size",
+            "left" | "top" | "right" | "bottom" | "x" | "y" => "position",
+            "borderRadius" => "radius",
+            "opacity" | "mixBlendMode" => "opacity",
+            "fontSize" | "fontWeight" | "fontStyle" | "lineHeight" | "letterSpacing"
+            | "textAlign" => "font",
+            "visibility" => "visible",
+            k if k.starts_with("border") || k == "stroke" => "stroke",
+            _ => "layout",
+        };
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// `var(--name)` or `var(--name, fallback)` as (name, fallback).
+pub fn var_name(v: &str) -> Option<(&str, Option<&str>)> {
+    let inner = v.trim().strip_prefix("var(")?.strip_suffix(')')?;
+    let (name, fallback) = match inner.split_once(',') {
+        Some((n, f)) => (n, Some(f.trim())),
+        None => (inner, None),
+    };
+    Some((name.trim().strip_prefix("--")?, fallback))
+}
+
+fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applied {
     let mut a = Applied::default();
     // Font size first: `em` values elsewhere depend on it.
     if let Some((_, v)) = styles.iter().rev().find(|(k, _)| k == "fontSize") {
@@ -1327,7 +1419,10 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
                 .iter()
                 .rev()
                 .filter_map(|p| match p {
-                    Paint::Solid { color } => Some(color_css(*color)),
+                    Paint::Solid { color, var } => Some(
+                        var.as_ref()
+                            .map_or_else(|| color_css(*color), |v| format!("var(--{v})")),
+                    ),
                     Paint::Image { asset, .. } => Some(format!("url(paper-asset://{asset})")),
                     g => gradient_css(g),
                 })
