@@ -90,11 +90,11 @@ pub fn get(id: &str) -> Option<Arc<ImageAsset>> {
 
 /// Register every image in a project's `assets/` folder.
 pub fn load_dir(dir: &Path) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
+    let Ok(rd) = crate::vfs::read_dir(dir) else {
         return;
     };
     for e in rd.flatten() {
-        if let Ok(bytes) = std::fs::read(e.path())
+        if let Ok(bytes) = crate::vfs::read(e.path())
             && let Err(err) = register(&bytes)
         {
             log::warn!("{}: {err}", e.path().display());
@@ -107,8 +107,8 @@ pub fn save_to_dir(dir: &Path, ids: impl IntoIterator<Item = String>) -> std::io
     for id in ids {
         let Some(a) = get(&id) else { continue };
         let path = dir.join(format!("{id}.{}", a.ext));
-        if !path.exists() {
-            std::fs::create_dir_all(dir)?;
+        if !crate::vfs::exists(&path) {
+            crate::vfs::create_dir_all(dir)?;
             crate::io::atomic::write(&path, &a.bytes)?;
         }
     }

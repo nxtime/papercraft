@@ -6,7 +6,8 @@ use crate::editor::Editor;
 use crate::project::{FormatError, PageRef, Project, Store, now_ms};
 use crate::render::gpu::Headless;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// Save this long after the first unsaved change (bounded latency, even while editing).
 pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(1000);
@@ -159,7 +160,7 @@ impl Session {
         match render_thumbnail(gpu, doc)? {
             Some(png) => crate::io::atomic::write(&path, &png).map_err(|e| e.to_string()),
             None => {
-                let _ = std::fs::remove_file(&path);
+                let _ = crate::vfs::remove_file(&path);
                 Ok(())
             }
         }
@@ -231,7 +232,7 @@ mod tests {
         Session::new(s.clone()).open(&mut ed2, &dir).unwrap();
         assert_eq!(ed2.doc.nodes, ed.doc.nodes);
         assert!(!ed2.project_dirty());
-        std::fs::remove_dir_all(&s.root).ok();
+        crate::vfs::remove_dir_all(&s.root).ok();
     }
 
     #[test]
@@ -262,6 +263,6 @@ mod tests {
             p.manifest.active_page.as_deref(),
             Some(pages[0].id.as_str())
         );
-        std::fs::remove_dir_all(&s.root).ok();
+        crate::vfs::remove_dir_all(&s.root).ok();
     }
 }

@@ -24,5 +24,6 @@ pub mod text;
 pub mod theme;
 pub mod ui;
 pub mod vector;
+pub mod vfs;
 #[cfg(target_arch = "wasm32")]
 pub mod web;

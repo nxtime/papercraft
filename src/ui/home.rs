@@ -55,7 +55,7 @@ impl HomeView {
     }
 
     fn thumb(&mut self, ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
-        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        let mtime = crate::vfs::metadata(path).and_then(|m| m.modified()).ok();
         if let Some((t, h)) = self.thumbs.get(path)
             && *t == mtime
         {
@@ -439,7 +439,7 @@ fn trash_grid(ui: &mut Ui, hv: &mut HomeView) {
                 ui.vertical(|ui| {
                     ui.set_width(CARD_W);
                     let thumb = e.dir.join(crate::project::THUMBNAIL);
-                    let thumb = thumb.is_file().then_some(thumb);
+                    let thumb = crate::vfs::is_file(&thumb).then_some(thumb);
                     let resp = card_frame(ui, hv, thumb.as_deref(), egui::Id::new(&e.dir));
                     resp.context_menu(|ui| {
                         if ui.button("Restore").clicked() {

@@ -2,17 +2,23 @@
 //! and editor input. The native counterpart is `app.rs`; this one has no project store, no
 //! dialogs and no MCP server yet, it edits one scratch document.
 
-use crate::editor::{Button, Editor, InputEvent, Key, Modifiers};
+use crate::editor::{AppRequest, Button, Editor, InputEvent, Key, Modifiers};
 use crate::geom::{V2, v2};
+use crate::project::Store;
 use crate::render::frame::{self, Painter};
+use crate::session::Session;
 use crate::theme;
 use crate::ui::UiState;
+use crate::ui::home::{HomeAction, HomeView};
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, KeyboardEvent, PointerEvent, WheelEvent};
 
 /// One DOM wheel notch in pixels (browsers report 3 lines ≈ 120px in pixel mode already).
+/// Where the projects live inside the browser's virtual file system.
+const WEB_ROOT: &str = "/papercraft";
+
 const LINE_PX: f64 = 40.0;
 /// Largest ctrl+wheel delta that still zooms smoothly (mouse notches report ±100).
 const MAX_PINCH_DELTA: f64 = 30.0;
@@ -28,6 +34,7 @@ struct Web {
     ctx: egui::Context,
     ed: Editor,
     st: UiState,
+    session: Session,
     events: Vec<egui::Event>,
     mods: Modifiers,
     pointer: Option<egui::Pos2>,
@@ -52,6 +59,9 @@ fn now_ms() -> f64 {
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
+    // fastrand has no entropy source on wasm32-unknown-unknown; without this every session
+    // would mint the same project ids.
+    fastrand::seed(js_sys::Date::now() as u64 ^ (js_sys::Math::random() * u64::MAX as f64) as u64);
     let _ = console_log::init_with_level(log::Level::Info);
     let canvas = window()
         .document()
@@ -59,6 +69,9 @@ pub fn start() {
         .and_then(|e| e.dyn_into::<HtmlCanvasElement>().ok())
         .expect("index.html needs <canvas id=\"papercraft\">");
     wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = crate::vfs::load().await {
+            log::error!("papercraft web: cannot load saved projects: {e}");
+        }
         match Web::new(canvas).await {
             Ok(web) => run(Rc::new(RefCell::new(web))),
             Err(e) => log::error!("papercraft web: {e}"),
@@ -109,6 +122,11 @@ impl Web {
         let ctx = egui::Context::default();
         theme::apply_choice(&ctx, theme::Choice::load());
         let demo = window().location().hash().is_ok_and(|h| h == "#demo");
+        let store = Store::open(WEB_ROOT).map_err(|e| format!("open store: {e}"))?;
+        let mut st = UiState::default();
+        if !demo {
+            st.home = Some(HomeView::load(&store, crate::project::now_ms()));
+        }
         Ok(Web {
             painter: Painter::new(&device, format),
             canvas,
@@ -122,7 +140,8 @@ impl Web {
             } else {
                 Editor::default()
             },
-            st: UiState::default(),
+            st,
+            session: Session::new(store),
             events: vec![],
             mods: Modifiers::NONE,
             pointer: None,
@@ -304,6 +323,116 @@ impl Web {
         true
     }
 
+    fn error(&mut self, msg: String) {
+        log::error!("{msg}");
+        self.ed.status = msg;
+        self.dirty = true;
+    }
+
+    fn save_project(&mut self, full: bool) {
+        self.st.save_state = String::new();
+        let r = if full {
+            self.session.save_all(&mut self.ed)
+        } else {
+            self.session.save(&mut self.ed).map(|_| ())
+        };
+        match r {
+            Ok(()) => self.st.save_state = "Saved".into(),
+            Err(e) => {
+                self.st.save_state = "Not saved".into();
+                self.session.defer();
+                self.error(format!("Could not save project: {e}"));
+            }
+        }
+    }
+
+    fn show_home(&mut self) {
+        let mut hv = self.st.home.take().unwrap_or_default();
+        hv.refresh(&self.session.store, crate::project::now_ms());
+        self.st.home = Some(hv);
+        self.st.project_name.clear();
+        self.st.save_state.clear();
+    }
+
+    fn enter_project(&mut self, r: Result<(), crate::project::format::FormatError>) {
+        match r {
+            Ok(()) => {
+                self.st.home = None;
+                self.st.project_name = self.session.project_name();
+                self.st.save_state.clear();
+                self.ed.status.clear();
+            }
+            Err(e) => self.error(format!("Could not open the project: {e}")),
+        }
+    }
+
+    fn go_home(&mut self) {
+        if self.session.project.is_some() {
+            self.save_project(true);
+            if let Err(e) = self.session.close(&mut self.ed) {
+                self.error(format!("Could not save project: {e}"));
+            }
+        }
+        self.show_home();
+    }
+
+    fn handle_home_actions(&mut self) {
+        let Some(hv) = &mut self.st.home else { return };
+        let actions = std::mem::take(&mut hv.actions);
+        if actions.is_empty() {
+            return;
+        }
+        let store = self.session.store.clone();
+        for a in actions {
+            let r: Result<(), String> = match a {
+                HomeAction::New => {
+                    let r = self.session.create(&mut self.ed, "Untitled");
+                    self.enter_project(r);
+                    Ok(())
+                }
+                HomeAction::Open(dir) => {
+                    let r = self.session.open(&mut self.ed, &dir);
+                    self.enter_project(r);
+                    Ok(())
+                }
+                HomeAction::Rename(dir, name) => store
+                    .rename(&dir, &name)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                HomeAction::Duplicate(dir) => {
+                    store.duplicate(&dir).map(|_| ()).map_err(|e| e.to_string())
+                }
+                HomeAction::Trash(dir) => store.trash(&dir).map(|_| ()).map_err(|e| e.to_string()),
+                HomeAction::Restore(dir) => {
+                    store.restore(&dir).map(|_| ()).map_err(|e| e.to_string())
+                }
+                HomeAction::DeleteForever(dir) => {
+                    store.delete_forever(&dir).map_err(|e| e.to_string())
+                }
+                HomeAction::EmptyTrash => store.empty_trash().map_err(|e| e.to_string()),
+                HomeAction::Import | HomeAction::RevealRoot => {
+                    Err("Not available in the browser yet".into())
+                }
+            };
+            if let Err(e) = r {
+                self.error(e);
+            }
+        }
+        if self.st.home.is_some() {
+            self.show_home();
+        }
+    }
+
+    fn handle_requests(&mut self) {
+        for req in std::mem::take(&mut self.ed.requests) {
+            match req {
+                AppRequest::Home => self.go_home(),
+                // Dialogs, files and the clipboard have no web implementation yet.
+                _ => self.error("Not available in the browser yet".into()),
+            }
+        }
+    }
+
     fn frame(&mut self) {
         let now = now_ms();
         let due = self.repaint_at.is_some_and(|t| now >= t);
@@ -352,8 +481,19 @@ impl Web {
         };
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
         self.canvas_rect = l.canvas;
-        // Requests (dialogs, files, clipboard) have no web implementation yet.
-        self.ed.requests.clear();
+        let busy = !self.ed.requests.is_empty()
+            || self.st.home.as_ref().is_some_and(|h| !h.actions.is_empty());
+        self.handle_requests();
+        self.handle_home_actions();
+        if self
+            .session
+            .autosave_due(&self.ed, web_time::Instant::now())
+        {
+            self.save_project(false);
+        }
+        if busy || self.session.next_deadline().is_some() {
+            self.dirty = true;
+        }
         let delay = l
             .output
             .viewport_output
@@ -462,6 +602,15 @@ fn run(web: Shared) {
         }
     });
     let _ = doc.add_event_listener_with_callback("paste", cb.as_ref().unchecked_ref());
+    cb.forget();
+    let w = web.clone();
+    let cb = Closure::<dyn FnMut()>::new(move || {
+        let mut w = w.borrow_mut();
+        if w.session.project.is_some() {
+            w.save_project(true);
+        }
+    });
+    let _ = doc.add_event_listener_with_callback("pagehide", cb.as_ref().unchecked_ref());
     cb.forget();
     raf(web);
 }

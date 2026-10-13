@@ -405,7 +405,7 @@ impl Choice {
 
     pub fn load() -> Choice {
         Choice::path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|p| crate::vfs::read_to_string(p).ok())
             .and_then(|s| Choice::parse(&s))
             .unwrap_or_default()
     }
@@ -413,9 +413,9 @@ impl Choice {
     pub fn save(self) {
         if let Some(p) = Choice::path() {
             if let Some(dir) = p.parent() {
-                let _ = std::fs::create_dir_all(dir);
+                let _ = crate::vfs::create_dir_all(dir);
             }
-            let _ = std::fs::write(p, self.id());
+            let _ = crate::vfs::write(p, self.id());
         }
     }
 }

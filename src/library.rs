@@ -92,7 +92,7 @@ impl Library {
 
     /// Load the library, seeding it with starter shapes on first use.
     pub fn load(path: &Path) -> Library {
-        let mut lib = std::fs::read_to_string(path)
+        let mut lib = crate::vfs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str::<Library>(&s).ok())
             .filter(|l| l.format == FORMAT && l.version <= VERSION)
@@ -104,7 +104,7 @@ impl Library {
     pub fn save(&self) -> std::io::Result<()> {
         let Some(p) = &self.path else { return Ok(()) };
         if let Some(dir) = p.parent() {
-            std::fs::create_dir_all(dir)?;
+            crate::vfs::create_dir_all(dir)?;
         }
         crate::io::atomic::write(
             p,
@@ -265,7 +265,7 @@ mod tests {
         lib.save().unwrap();
         let back = Library::load(&path);
         assert_eq!(back.items, lib.items);
-        std::fs::remove_dir_all(dir).ok();
+        crate::vfs::remove_dir_all(dir).ok();
     }
 
     #[test]

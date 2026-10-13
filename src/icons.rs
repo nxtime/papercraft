@@ -77,11 +77,11 @@ pub fn dir() -> PathBuf {
 
 /// Installed sets with their icon counts.
 pub fn installed(root: &Path) -> Vec<(String, usize)> {
-    let mut out: Vec<(String, usize)> = std::fs::read_dir(root)
+    let mut out: Vec<(String, usize)> = crate::vfs::read_dir(root)
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| e.path().is_dir())
+        .filter(|e| crate::vfs::is_dir(&e.path()))
         .map(|e| {
             let n = names(root, &e.file_name().to_string_lossy()).len();
             (e.file_name().to_string_lossy().into_owned(), n)
@@ -93,7 +93,7 @@ pub fn installed(root: &Path) -> Vec<(String, usize)> {
 
 /// Icon names (without `.svg`) in a set, sorted.
 pub fn names(root: &Path, set: &str) -> Vec<String> {
-    let mut v: Vec<String> = std::fs::read_dir(root.join(set))
+    let mut v: Vec<String> = crate::vfs::read_dir(root.join(set))
         .into_iter()
         .flatten()
         .flatten()
@@ -155,7 +155,7 @@ pub fn load(root: &Path, reference: &str) -> Result<String, String> {
         None => installed(root).into_iter().map(|(s, _)| s).collect(),
     };
     for s in &sets {
-        if let Ok(svg) = std::fs::read_to_string(root.join(s).join(format!("{name}.svg"))) {
+        if let Ok(svg) = crate::vfs::read_to_string(root.join(s).join(format!("{name}.svg"))) {
             return Ok(svg);
         }
     }
@@ -185,9 +185,9 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("papercraft-icons-{:016x}", fastrand::u64(..)));
         let set = root.join("t");
-        std::fs::create_dir_all(&set).unwrap();
+        crate::vfs::create_dir_all(&set).unwrap();
         for n in ["check", "check-circle", "arrow-check", "x"] {
-            std::fs::write(set.join(format!("{n}.svg")), "<svg/>").unwrap();
+            crate::vfs::write(set.join(format!("{n}.svg")), "<svg/>").unwrap();
         }
         assert!(load(&root, "../etc/passwd").is_err());
         assert!(load(&root, "t:../x").is_err());
@@ -203,6 +203,6 @@ mod tests {
                 .unwrap_err()
                 .contains("no icon sets")
         );
-        std::fs::remove_dir_all(root).ok();
+        crate::vfs::remove_dir_all(root).ok();
     }
 }

@@ -93,7 +93,7 @@ impl Store {
 
     pub fn open(root: impl Into<PathBuf>) -> std::io::Result<Store> {
         let root = root.into();
-        std::fs::create_dir_all(&root)?;
+        crate::vfs::create_dir_all(&root)?;
         Ok(Store { root })
     }
 
@@ -103,7 +103,7 @@ impl Store {
 
     /// Projects, most recently modified first. Unreadable folders are skipped.
     pub fn list(&self) -> Vec<Entry> {
-        let mut out: Vec<Entry> = std::fs::read_dir(&self.root)
+        let mut out: Vec<Entry> = crate::vfs::read_dir(&self.root)
             .into_iter()
             .flatten()
             .flatten()
@@ -113,7 +113,7 @@ impl Store {
                 let manifest = read_manifest(&dir).ok()?;
                 let thumb = dir.join(THUMBNAIL);
                 Some(Entry {
-                    thumbnail: thumb.is_file().then_some(thumb),
+                    thumbnail: crate::vfs::is_file(&thumb).then_some(thumb),
                     dir,
                     manifest,
                 })
@@ -133,7 +133,7 @@ impl Store {
         let base = folder_name(name);
         let mut p = parent.join(&base);
         let mut i = 2;
-        while p.exists() {
+        while crate::vfs::exists(&p) {
             p = parent.join(format!("{base} {i}"));
             i += 1;
         }
@@ -145,7 +145,7 @@ impl Store {
         let taken: Vec<String> = self.list().into_iter().map(|e| e.manifest.name).collect();
         let mut n = name.to_string();
         let mut i = 2;
-        while taken.contains(&n) || self.root.join(folder_name(&n)).exists() {
+        while taken.contains(&n) || crate::vfs::exists(&self.root.join(folder_name(&n))) {
             n = format!("{name} {i}");
             i += 1;
         }
@@ -156,7 +156,7 @@ impl Store {
     pub fn create(&self, name: &str) -> Result<(Project, PageData), FormatError> {
         let name = self.unique_name(name);
         let dir = self.unique_dir(&self.root, &name);
-        std::fs::create_dir_all(dir.join(PAGES_DIR))?;
+        crate::vfs::create_dir_all(dir.join(PAGES_DIR))?;
         let manifest = Manifest::new(&name);
         let page = PageData {
             id: manifest.pages[0].id.clone(),
@@ -181,7 +181,7 @@ impl Store {
     ) -> Result<Project, FormatError> {
         let name = self.unique_name(name);
         let dir = self.unique_dir(&self.root, &name);
-        std::fs::create_dir_all(dir.join(PAGES_DIR))?;
+        crate::vfs::create_dir_all(dir.join(PAGES_DIR))?;
         let mut manifest = Manifest::new(&name);
         manifest.pages = pages
             .iter()
@@ -214,12 +214,12 @@ impl Store {
         if wanted == dir {
             return Ok(dir.to_path_buf());
         }
-        let target = if wanted.exists() {
+        let target = if crate::vfs::exists(&wanted) {
             self.unique_dir(&self.root, new_name)
         } else {
             wanted
         };
-        std::fs::rename(dir, &target)?;
+        crate::vfs::rename(dir, &target)?;
         Ok(target)
     }
 
@@ -244,26 +244,26 @@ impl Store {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        std::fs::create_dir_all(self.trash_root())?;
+        crate::vfs::create_dir_all(self.trash_root())?;
         let deleted = now_ms();
         let target = self
             .trash_root()
             .join(format!("{}~{deleted}", folder_name(&original)));
-        std::fs::rename(dir, &target)?;
+        crate::vfs::rename(dir, &target)?;
         let info = serde_json::json!({ "deleted": deleted, "original": original });
         atomic::write(&target.join(TRASH_INFO), info.to_string().as_bytes())?;
         Ok(target)
     }
 
     pub fn list_trash(&self) -> Vec<TrashEntry> {
-        let mut out: Vec<TrashEntry> = std::fs::read_dir(self.trash_root())
+        let mut out: Vec<TrashEntry> = crate::vfs::read_dir(self.trash_root())
             .into_iter()
             .flatten()
             .flatten()
             .filter_map(|e| {
                 let dir = e.path();
                 let manifest = read_manifest(&dir).ok()?;
-                let info: serde_json::Value = std::fs::read_to_string(dir.join(TRASH_INFO))
+                let info: serde_json::Value = crate::vfs::read_to_string(dir.join(TRASH_INFO))
                     .ok()
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default();
@@ -290,8 +290,8 @@ impl Store {
             .find(|e| e.dir == trash_dir)
             .ok_or_else(|| FormatError::Invalid("not in trash".into()))?;
         let target = self.unique_dir(&self.root, &entry.original);
-        std::fs::rename(trash_dir, &target)?;
-        let _ = std::fs::remove_file(target.join(TRASH_INFO));
+        crate::vfs::rename(trash_dir, &target)?;
+        let _ = crate::vfs::remove_file(target.join(TRASH_INFO));
         Ok(target)
     }
 
@@ -301,7 +301,7 @@ impl Store {
                 "refusing to delete outside the trash",
             ));
         }
-        std::fs::remove_dir_all(trash_dir)
+        crate::vfs::remove_dir_all(trash_dir)
     }
 
     pub fn empty_trash(&self) -> std::io::Result<()> {
@@ -313,18 +313,18 @@ impl Store {
 }
 
 fn read_manifest(dir: &Path) -> Result<Manifest, FormatError> {
-    Manifest::from_json(&std::fs::read_to_string(dir.join(MANIFEST))?)
+    Manifest::from_json(&crate::vfs::read_to_string(dir.join(MANIFEST))?)
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for e in std::fs::read_dir(from)? {
+    crate::vfs::create_dir_all(to)?;
+    for e in crate::vfs::read_dir(from)? {
         let e = e?;
         let target = to.join(e.file_name());
         if e.file_type()?.is_dir() {
             copy_dir(&e.path(), &target)?;
         } else {
-            std::fs::copy(e.path(), target)?;
+            crate::vfs::copy(e.path(), target)?;
         }
     }
     Ok(())
@@ -346,7 +346,7 @@ impl Project {
     }
 
     pub fn load_page(&self, id: &str) -> Result<PageData, FormatError> {
-        let mut p = format::page_from_json(&std::fs::read_to_string(self.page_path(id))?)?;
+        let mut p = format::page_from_json(&crate::vfs::read_to_string(self.page_path(id))?)?;
         if let Some(r) = self.manifest.pages.iter().find(|r| r.id == id) {
             // The manifest owns page names (renames touch only the manifest).
             p.name = r.name.clone();
@@ -379,7 +379,7 @@ impl Project {
     }
 
     pub fn save_page(&self, page: &PageData) -> Result<(), FormatError> {
-        std::fs::create_dir_all(self.dir.join(PAGES_DIR))?;
+        crate::vfs::create_dir_all(self.dir.join(PAGES_DIR))?;
         atomic::write(
             &self.page_path(&page.id),
             format::page_to_json(page).as_bytes(),
@@ -388,7 +388,7 @@ impl Project {
     }
 
     pub fn delete_page_file(&self, id: &str) {
-        let _ = std::fs::remove_file(self.page_path(id));
+        let _ = crate::vfs::remove_file(self.page_path(id));
     }
 
     pub fn write_manifest(&self) -> Result<(), FormatError> {
@@ -447,7 +447,7 @@ mod tests {
         s.empty_trash().unwrap();
         assert!(s.list_trash().is_empty());
         assert!(s.delete_forever(&s.root.join("Alpha")).is_err());
-        std::fs::remove_dir_all(&s.root).ok();
+        crate::vfs::remove_dir_all(&s.root).ok();
     }
 
     #[test]
@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(pages[0], page);
         assert!(pages[1].doc.nodes.is_empty());
         assert_eq!(pages[1].name, "Ghost");
-        std::fs::remove_dir_all(&s.root).ok();
+        crate::vfs::remove_dir_all(&s.root).ok();
     }
 
     #[test]

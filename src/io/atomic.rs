@@ -5,9 +5,13 @@
 //! platform we target, so readers see either the old file or the new one, never a torn write.
 //! On Unix the directory is fsynced too, so the rename itself survives a power loss.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn temp_path(path: &Path) -> PathBuf {
     let name = path
         .file_name()
@@ -20,7 +24,14 @@ fn temp_path(path: &Path) -> PathBuf {
     ))
 }
 
+/// The in-memory tree has no torn writes.
+#[cfg(target_arch = "wasm32")]
+pub fn write(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    crate::vfs::write(path, data)
+}
+
 /// Atomically replace `path` with `data`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn write(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let tmp = temp_path(path);
     let result = (|| {
@@ -38,25 +49,25 @@ pub fn write(path: &Path, data: &[u8]) -> std::io::Result<()> {
     result
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 fn sync_dir(dir: &Path) {
     if let Ok(d) = std::fs::File::open(dir) {
         let _ = d.sync_all();
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
 fn sync_dir(_dir: &Path) {}
 
 /// Remove temp files left behind by a crash mid-write (best effort).
 pub fn clean_stale_temps(dir: &Path) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
+    let Ok(rd) = crate::vfs::read_dir(dir) else {
         return;
     };
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if name.starts_with('.') && name.ends_with(".tmp") {
-            let _ = std::fs::remove_file(e.path());
+            let _ = crate::vfs::remove_file(e.path());
         }
     }
 }

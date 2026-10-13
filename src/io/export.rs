@@ -192,7 +192,7 @@ pub fn write(
                 i += 1;
             }
             used.push(name.clone());
-            std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
+            crate::vfs::create_dir_all(out).map_err(|e| e.to_string())?;
             out.join(format!("{name}.{}", spec.format.ext()))
         };
         match spec.format {

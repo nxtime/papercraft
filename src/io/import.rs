@@ -14,7 +14,7 @@ pub fn import_as_pages(path: &Path) -> Result<(String, Vec<PageData>), String> {
         let pages = p.load_pages().map_err(|e| e.to_string())?;
         return Ok((p.manifest.name, pages));
     }
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let text = crate::vfs::read_to_string(path).map_err(|e| e.to_string())?;
     let page = format::page_from_json(&text).map_err(|e| e.to_string())?;
     let name = if page.name.is_empty() || page.name == "Untitled" {
         stem
