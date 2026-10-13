@@ -25,9 +25,7 @@ path = "src/bin/papercraft-cli.rs"
 [dependencies]
 egui = "0.36"
 egui-wgpu = "0.36"
-egui-winit = "0.36"
 wgpu = "30"
-winit = "0.30"
 lyon = "1"
 ttf-parser = "0.25"
 serde = { version = "1", features = ["derive"] }
@@ -44,11 +42,7 @@ craft-ui = { version = "0.1.0", git = "https://git.marcospaulo.dev.br/masi/craft
 i_overlay = "9.0.1"
 miniz_oxide = "0.9.1"
 usvg = "0.48"
-arboard = { version = "3.6.1", features = ["image-data"] }
-rmcp = { version = "3.5.1", default-features = false, features = ["server", "base64", "transport-streamable-http-server", "transport-io", "client", "transport-streamable-http-client-reqwest"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time", "io-std"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
-tokio-util = "0.7"
+tokio = { version = "1", features = ["sync"] }
 base64 = "0.23"
 
 [build-dependencies]
@@ -71,3 +65,23 @@ objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 raw-window-handle = "0.6"
+
+# Native only: the OS clipboard and the MCP HTTP server do not exist in the browser.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egui-winit = "0.36"
+winit = "0.30"
+arboard = { version = "3.6.1", features = ["image-data"] }
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "base64", "transport-streamable-http-server", "transport-io", "client", "transport-streamable-http-client-reqwest"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time", "io-std"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+tokio-util = "0.7"
+
+# Browser build (`src/web.rs`): canvas + WebGPU/WebGL surface, DOM events instead of winit.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "30", features = ["webgl"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+console_log = "1"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "KeyboardEvent", "PointerEvent", "WheelEvent", "ClipboardEvent", "DataTransfer", "MediaQueryList", "Location", "Performance", "Navigator", "Clipboard", "CssStyleDeclaration", "console"] }

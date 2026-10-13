@@ -14,6 +14,7 @@ pub mod css;
 pub mod exec;
 pub mod html;
 pub mod lint;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod server;
 pub mod tools;
 

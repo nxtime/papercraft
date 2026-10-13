@@ -3,3 +3,4 @@ target/
 dist/
 *.asar
 app.asar.unpacked/
+web/pkg/

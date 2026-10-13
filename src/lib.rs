@@ -1,5 +1,6 @@
 //! papercraft: a native infinite canvas for planning, working and sketching.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod app;
 pub mod assets;
 pub mod connector;
@@ -23,3 +24,5 @@ pub mod text;
 pub mod theme;
 pub mod ui;
 pub mod vector;
+#[cfg(target_arch = "wasm32")]
+pub mod web;

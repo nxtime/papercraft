@@ -46,14 +46,17 @@ impl Provider for Memory {
 }
 
 /// The OS clipboard via arboard (None when no clipboard is available, e.g. headless).
+#[cfg(not(target_arch = "wasm32"))]
 pub struct System(arboard::Clipboard);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl System {
     pub fn new() -> Option<System> {
         arboard::Clipboard::new().ok().map(System)
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Provider for System {
     fn read_text(&mut self) -> Option<String> {
         self.0.get_text().ok()
