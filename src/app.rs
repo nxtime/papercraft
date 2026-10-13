@@ -855,13 +855,22 @@ fn map_key(k: &WKey) -> Option<Key> {
     })
 }
 
+fn app_icon() -> Option<winit::window::Icon> {
+    let png = include_bytes!("../assets/app-icon/papercraft-macos-512.png");
+    let img = image::load_from_memory(png).ok()?.to_rgba8();
+    let img = image::imageops::resize(&img, 256, 256, image::imageops::FilterType::Lanczos3);
+    winit::window::Icon::from_rgba(img.into_raw(), 256, 256).ok()
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gfx.is_some() {
             return;
         }
+        let icon = app_icon();
         let attrs = Window::default_attributes()
             .with_title("PaperCraft")
+            .with_window_icon(icon.clone())
             .with_inner_size(winit::dpi::LogicalSize::new(1440.0, 900.0))
             .with_min_inner_size(winit::dpi::LogicalSize::new(720.0, 480.0));
         // PAPERCRAFT_OPAQUE=1 turns off vibrancy (and window transparency) on macOS.
@@ -878,7 +887,10 @@ impl ApplicationHandler<UserEvent> for App {
                 .with_transparent(translucent)
         };
         #[cfg(windows)]
-        let attrs = attrs.with_decorations(false);
+        let attrs = {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attrs.with_decorations(false).with_taskbar_icon(icon)
+        };
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.st.custom_titlebar = cfg!(windows);
         window.set_ime_allowed(true);
