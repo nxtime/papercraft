@@ -39,6 +39,8 @@ pub struct App {
     start: Instant,
     canvas: egui::Rect,
     captured: bool,
+    /// Title bar close button pressed; handled like `CloseRequested` in `about_to_wait`.
+    close_requested: bool,
     title: String,
     /// When egui asked for a delayed repaint (tooltips, caret blink, animations).
     next_repaint: Option<Instant>,
@@ -84,6 +86,7 @@ impl App {
             start: Instant::now(),
             canvas: egui::Rect::NOTHING,
             captured: false,
+            close_requested: false,
             title: String::new(),
             next_repaint: None,
             #[cfg(target_os = "macos")]
@@ -618,6 +621,28 @@ impl App {
         }
     }
 
+    fn try_exit(&mut self, event_loop: &ActiveEventLoop) {
+        if self.session.project.is_some() {
+            self.save_project(true);
+        }
+        if self.confirm_discard() {
+            event_loop.exit();
+        }
+    }
+
+    fn handle_win_cmd(&mut self) {
+        let Some(cmd) = self.st.win_cmd.take() else {
+            return;
+        };
+        let Some(g) = self.gfx.as_ref() else { return };
+        match cmd {
+            ui::WinCmd::Drag => _ = g.window.drag_window(),
+            ui::WinCmd::Minimize => g.window.set_minimized(true),
+            ui::WinCmd::ToggleMaximize => g.window.set_maximized(!g.window.is_maximized()),
+            ui::WinCmd::Close => self.close_requested = true,
+        }
+    }
+
     fn redraw(&mut self) {
         let now = self.now();
         self.ed.tick(now);
@@ -698,6 +723,7 @@ impl App {
         let pending = !self.ed.requests.is_empty()
             || self.st.home.as_ref().is_some_and(|h| !h.actions.is_empty());
         self.handle_requests();
+        self.handle_win_cmd();
         self.handle_home_actions();
         self.tick_autosave();
         if self.st.library.dirty {
@@ -851,7 +877,10 @@ impl ApplicationHandler<UserEvent> for App {
                 .with_title_hidden(true)
                 .with_transparent(translucent)
         };
+        #[cfg(windows)]
+        let attrs = attrs.with_decorations(false);
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        self.st.custom_titlebar = cfg!(windows);
         window.set_ime_allowed(true);
         #[cfg(target_os = "macos")]
         {
@@ -934,14 +963,7 @@ impl ApplicationHandler<UserEvent> for App {
         let mut redraw = resp.repaint;
         let now = self.now();
         match event {
-            WindowEvent::CloseRequested => {
-                if self.session.project.is_some() {
-                    self.save_project(true);
-                }
-                if self.confirm_discard() {
-                    event_loop.exit();
-                }
-            }
+            WindowEvent::CloseRequested => self.try_exit(event_loop),
             WindowEvent::Resized(s) => {
                 let g = self.gfx.as_mut().unwrap();
                 g.config.width = s.width.max(1);
@@ -1213,6 +1235,9 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if std::mem::take(&mut self.close_requested) {
+            self.try_exit(event_loop);
+        }
         // Autosave runs off a timer so it also fires while the window sits idle.
         if self
             .session

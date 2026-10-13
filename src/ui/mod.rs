@@ -15,6 +15,14 @@ use crate::theme::{self, Icon};
 use egui::{Align2, Color32, RichText, Ui};
 use std::collections::HashSet;
 
+#[derive(Clone, Copy)]
+pub enum WinCmd {
+    Drag,
+    Minimize,
+    ToggleMaximize,
+    Close,
+}
+
 #[derive(Default)]
 pub struct UiState {
     pub collapsed: HashSet<NodeId>,
@@ -26,6 +34,11 @@ pub struct UiState {
     /// The window has native chrome: a system menu bar (so no egui menu) and traffic lights
     /// inset into the toolbar / sidebar.
     pub native_chrome: bool,
+    /// Windows: native decorations are off and `title_bar` draws the menu, drag area and
+    /// window buttons.
+    pub custom_titlebar: bool,
+    /// Window action requested by the title bar, run by the app after the frame.
+    pub win_cmd: Option<WinCmd>,
     /// The sidebar sits over an NSVisualEffectView, so paint it transparent.
     pub translucent_sidebar: bool,
     /// When set, the projects home screen is shown instead of the editor.
@@ -98,6 +111,13 @@ pub(crate) fn title_text(text: impl Into<String>) -> RichText {
 
 /// Lay out the chrome and return the remaining canvas rectangle (logical px).
 pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
+    if st.custom_titlebar {
+        let p = theme::pal(ui);
+        egui::Panel::top("titlebar")
+            .exact_size(TITLEBAR_H)
+            .frame(egui::Frame::NONE.fill(p.window))
+            .show(ui, |ui| title_bar(ui, ed, st));
+    }
     if let Some(hv) = &mut st.home {
         home::draw(ui, hv, st.native_chrome, st.translucent_sidebar);
         return egui::Rect::NOTHING;
@@ -203,7 +223,7 @@ fn menu_entries(ui: &mut Ui, ed: &mut Editor, entries: &[shortcuts::MenuEntry]) 
 fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     ui.horizontal_centered(|ui| {
-        if !st.native_chrome {
+        if !st.native_chrome && !st.custom_titlebar {
             menu_bar(ui, ed);
             ui.add_space(8.0);
         }
@@ -295,6 +315,10 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor) {
             menu_entries(ui, ed, &entries);
         });
     }
+    theme_menu(ui);
+}
+
+fn theme_menu(ui: &mut Ui) {
     ui.menu_button("Theme", |ui| {
         for c in theme::Choice::ALL {
             if ui
@@ -306,6 +330,76 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor) {
                 ui.close();
             }
         }
+    });
+}
+
+const TITLEBAR_H: f32 = 32.0;
+const WIN_BTN_W: f32 = 46.0;
+
+/// Custom window chrome: menus on the left, empty space drags the window, buttons on the right.
+fn title_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    let p = theme::pal(ui);
+    let rect = ui.max_rect();
+    let drag = ui.interact(rect, ui.id().with("drag"), egui::Sense::click_and_drag());
+    if drag.double_clicked() {
+        st.win_cmd = Some(WinCmd::ToggleMaximize);
+    } else if drag.drag_started() {
+        st.win_cmd = Some(WinCmd::Drag);
+    }
+    ui.horizontal_centered(|ui| {
+        ui.add_space(8.0);
+        if st.home.is_some() {
+            theme_menu(ui);
+        } else {
+            menu_bar(ui, ed);
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for (cmd, hover) in [
+                (WinCmd::Close, Color32::from_rgb(0xe8, 0x11, 0x23)),
+                (WinCmd::ToggleMaximize, p.hover),
+                (WinCmd::Minimize, p.hover),
+            ] {
+                let (r, resp) = ui.allocate_exact_size(
+                    egui::vec2(WIN_BTN_W, TITLEBAR_H),
+                    egui::Sense::click(),
+                );
+                let hot = resp.hovered();
+                if hot {
+                    ui.painter().rect_filled(r, 0.0, hover);
+                }
+                let ink = if hot && matches!(cmd, WinCmd::Close) {
+                    Color32::WHITE
+                } else {
+                    p.text
+                };
+                let stroke = egui::Stroke::new(1.0, ink);
+                let c = r.center();
+                let h = 5.0;
+                match cmd {
+                    WinCmd::Minimize => {
+                        ui.painter().hline(c.x - h..=c.x + h, c.y, stroke);
+                    }
+                    WinCmd::ToggleMaximize => {
+                        ui.painter().rect_stroke(
+                            egui::Rect::from_center_size(c, egui::Vec2::splat(h * 2.0)),
+                            0.0,
+                            stroke,
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    _ => {
+                        let d = egui::vec2(h, h);
+                        let e = egui::vec2(h, -h);
+                        ui.painter().line_segment([c - d, c + d], stroke);
+                        ui.painter().line_segment([c - e, c + e], stroke);
+                    }
+                }
+                if resp.clicked() {
+                    st.win_cmd = Some(cmd);
+                }
+            }
+        });
     });
 }
 
