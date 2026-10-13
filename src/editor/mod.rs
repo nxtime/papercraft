@@ -104,6 +104,9 @@ impl Tool {
     }
 }
 
+/// Ctrl+wheel zoom rate: one 40px wheel notch is about 13%.
+const ZOOM_PER_SCROLL_PX: f64 = 0.003;
+
 /// Requests the editor can't fulfil itself (dialogs, file system, clipboard).
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppRequest {
@@ -633,7 +636,7 @@ impl Editor {
             }
             InputEvent::Scroll { delta, pos } => {
                 if self.mods.ctrl || self.mods.logo {
-                    let factor = (-delta.y * 0.01).exp();
+                    let factor = (-delta.y * ZOOM_PER_SCROLL_PX).exp();
                     self.camera.zoom_about(pos, self.camera.zoom * factor);
                 } else {
                     self.camera.pan_by_screen(-delta);

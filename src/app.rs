@@ -337,6 +337,21 @@ impl App {
                     store.delete_forever(&dir).map_err(|e| e.to_string())
                 }
                 HomeAction::EmptyTrash => store.empty_trash().map_err(|e| e.to_string()),
+                HomeAction::RevealRoot => {
+                    let opener = if cfg!(windows) {
+                        "explorer"
+                    } else if cfg!(target_os = "macos") {
+                        "open"
+                    } else {
+                        "xdg-open"
+                    };
+                    // explorer exits non-zero even on success, so only spawn failure counts.
+                    std::process::Command::new(opener)
+                        .arg(&store.root)
+                        .spawn()
+                        .map(|_| ())
+                        .map_err(|e| format!("cannot open {}: {e}", store.root.display()))
+                }
             };
             if let Err(e) = r {
                 self.error(e);

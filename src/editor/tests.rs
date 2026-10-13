@@ -82,7 +82,7 @@ fn wheel_pans_and_ctrl_wheel_zooms_about_cursor() {
         ..Modifiers::NONE
     }));
     e.handle(InputEvent::Scroll {
-        delta: v2(0.0, -100.0),
+        delta: v2(0.0, -400.0),
         pos: anchor,
     });
     assert!(e.camera.zoom > 2.5);

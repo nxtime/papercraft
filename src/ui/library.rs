@@ -105,6 +105,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         .id_salt("library")
         .auto_shrink(false)
         .show(ui, |ui| {
+            crate::theme::figma_fields(ui);
             for row in items.chunks(cols) {
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;

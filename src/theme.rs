@@ -20,7 +20,7 @@ pub const MAC_BLUE: Color32 = Color32::from_rgb(0x00, 0x7a, 0xff);
 pub const BODY: f32 = 13.0;
 pub const SECONDARY: f32 = 11.0;
 /// Inner margin of text inputs (egui's default is a cramped 4x2).
-pub const INPUT_MARGIN: egui::Margin = egui::Margin::symmetric(8, 5);
+pub const INPUT_MARGIN: egui::Margin = egui::Margin::symmetric(10, 7);
 /// Height of the unified toolbar.
 pub const TOOLBAR_H: f32 = 40.0;
 /// Traffic lights: left inset and the height of the bar they are centred in (points).
@@ -192,6 +192,47 @@ pub fn install_fonts(ctx: &egui::Context) {
 pub fn medium(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("medium".into()))
 }
+/// Figma-style inspector controls inside `ui`: flat tinted fields, no borders, 28px rows.
+pub fn figma_fields(ui: &mut egui::Ui) {
+    let dark = ui.visuals().dark_mode;
+    let tint = |a: u8| {
+        if dark {
+            Color32::from_white_alpha(a)
+        } else {
+            Color32::from_black_alpha(a)
+        }
+    };
+    let (rest, hover, press) = (tint(14), tint(24), tint(34));
+    let sp = ui.spacing_mut();
+    sp.interact_size.y = FIELD_H;
+    sp.button_padding = vec2(8.0, 4.0);
+    sp.item_spacing = vec2(8.0, 6.0);
+    let v = ui.visuals_mut();
+    v.text_edit_bg_color = Some(rest);
+    v.extreme_bg_color = rest;
+    let r5 = CornerRadius::same(5);
+    let w = &mut v.widgets;
+    for (s, fill) in [
+        (&mut w.inactive, rest),
+        (&mut w.hovered, hover),
+        (&mut w.active, press),
+        (&mut w.open, press),
+    ] {
+        s.bg_fill = fill;
+        s.weak_bg_fill = fill;
+        s.bg_stroke = Stroke::NONE;
+        s.corner_radius = r5;
+    }
+}
+
+/// Height of an inspector field row.
+pub const FIELD_H: f32 = 28.0;
+
+/// egui's `small_button` zeroes the padding; this keeps the theme's but stays compact.
+pub fn small_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.add(egui::Button::new(text).min_size(vec2(0.0, 24.0)))
+}
+
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
@@ -213,8 +254,8 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     ]
     .into();
     s.spacing.item_spacing = vec2(6.0, 4.0);
-    s.spacing.button_padding = vec2(9.0, 4.0);
-    s.spacing.interact_size = vec2(24.0, 26.0);
+    s.spacing.button_padding = vec2(12.0, 6.0);
+    s.spacing.interact_size = vec2(26.0, 30.0);
     s.spacing.menu_margin = egui::Margin::same(5);
     s.spacing.window_margin = egui::Margin::same(12);
     s.spacing.scroll = egui::style::ScrollStyle {

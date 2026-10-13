@@ -33,6 +33,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         .id_salt("design")
         .auto_shrink(false)
         .show(ui, |ui| {
+            crate::theme::figma_fields(ui);
             // ---- open feedback on this page (and a pointer to other pages)
             let mut open: Vec<(NodeId, String, String)> = ed
                 .doc
@@ -130,8 +131,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     }
                     ui.label(RichText::new(format!("--{name}")).monospace().size(theme::SECONDARY + 1.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("✕")
+                        if crate::theme::small_button(ui, "✕")
                             .on_hover_text("Delete (fills keep their color)")
                             .clicked()
                         {
@@ -158,7 +158,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     .chars()
                     .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '-' })
                     .collect();
-                if (ui.small_button("Add").clicked() || enter) && !name.is_empty() {
+                if (crate::theme::small_button(ui, "Add").clicked() || enter) && !name.is_empty() {
                     st.variable_draft.clear();
                     let base = Color::rgb(0x80, 0x80, 0x80);
                     on_every_page(ed, "Add variable", |tx| {
@@ -208,11 +208,11 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     ui.label(RichText::new(&name).font(theme::medium(theme::BODY)));
                     ui.label(RichText::new(format!("{uses}")).weak().size(theme::SECONDARY));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Insert").on_hover_text("Place an instance in view").clicked() {
+                        if crate::theme::small_button(ui, "Insert").on_hover_text("Place an instance in view").clicked() {
                             let at = ed.camera.screen_to_world(ed.viewport * 0.5);
                             ed.create_instance(id, at);
                         }
-                        if ui.small_button("Go to").on_hover_text("Select the main component").clicked() {
+                        if crate::theme::small_button(ui, "Go to").on_hover_text("Select the main component").clicked() {
                             ed.selection = vec![id];
                             ed.run(crate::editor::shortcuts::Action::ZoomSelection);
                         }

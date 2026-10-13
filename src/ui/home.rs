@@ -18,6 +18,8 @@ pub enum HomeAction {
     Restore(PathBuf),
     DeleteForever(PathBuf),
     EmptyTrash,
+    /// Show the projects folder in the system file manager.
+    RevealRoot,
 }
 
 #[derive(Default)]
@@ -124,12 +126,13 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, native_chrome: bool, translucent: bo
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 ui.add_space(4.0);
-                ui.label(
-                    RichText::new(hv.root.display().to_string())
-                        .size(theme::SECONDARY - 1.0)
-                        .color(p.secondary),
-                )
-                .on_hover_text("Projects folder");
+                let path = RichText::new(hv.root.display().to_string())
+                    .size(theme::SECONDARY - 1.0)
+                    .color(p.secondary);
+                ui.label(path).on_hover_text("Projects folder");
+                if sidebar_item(ui, Icon::Page, "Open projects folder", None, false) {
+                    hv.actions.push(HomeAction::RevealRoot);
+                }
             });
         });
     egui::Panel::top("home-toolbar")

@@ -224,8 +224,10 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     ui.horizontal_centered(|ui| {
         if !st.native_chrome && !st.custom_titlebar {
-            menu_bar(ui, ed);
-            ui.add_space(8.0);
+            ui.scope(|ui| menu_bar(ui, ed));
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
         }
         if theme::icon_button(ui, theme::Icon::Grid, 26.0, false)
             .on_hover_text("All projects")
@@ -310,6 +312,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 /// egui menus for platforms without a native menu bar (inline, so the toolbar row keeps
 /// the title and zoom controls).
 fn menu_bar(ui: &mut Ui, ed: &mut Editor) {
+    flat_menus(ui);
     for (title, entries) in shortcuts::menus() {
         ui.menu_button(title, |ui| {
             menu_entries(ui, ed, &entries);
@@ -318,7 +321,23 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor) {
     theme_menu(ui);
 }
 
+/// Menu titles read as plain text: no fill or border at rest, a tint on hover/press.
+fn flat_menus(ui: &mut Ui) {
+    let p = theme::pal(ui);
+    ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
+    ui.spacing_mut().item_spacing.x = 0.0;
+    let w = &mut ui.visuals_mut().widgets;
+    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    w.hovered.weak_bg_fill = p.hover;
+    w.active.weak_bg_fill = p.pressed;
+    w.open.weak_bg_fill = p.pressed;
+    for s in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        s.bg_stroke = egui::Stroke::NONE;
+    }
+}
+
 fn theme_menu(ui: &mut Ui) {
+    flat_menus(ui);
     ui.menu_button("Theme", |ui| {
         for c in theme::Choice::ALL {
             if ui
@@ -360,10 +379,8 @@ fn title_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 (WinCmd::ToggleMaximize, p.hover),
                 (WinCmd::Minimize, p.hover),
             ] {
-                let (r, resp) = ui.allocate_exact_size(
-                    egui::vec2(WIN_BTN_W, TITLEBAR_H),
-                    egui::Sense::click(),
-                );
+                let (r, resp) =
+                    ui.allocate_exact_size(egui::vec2(WIN_BTN_W, TITLEBAR_H), egui::Sense::click());
                 let hot = resp.hovered();
                 if hot {
                     ui.painter().rect_filled(r, 0.0, hover);
@@ -404,6 +421,7 @@ fn title_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 }
 
 fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    theme::figma_fields(ui);
     pages::panel(ui, ed, st);
     ui.add_space(4.0);
     let r = ui.available_rect_before_wrap();
