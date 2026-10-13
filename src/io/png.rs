@@ -9,14 +9,20 @@ use crate::render::scene::{self, View};
 /// Largest exported edge, in pixels.
 pub const MAX_EDGE: f64 = 16384.0;
 
-/// Render `roots` (or all top-level nodes) at `scale` px per unit.
-pub fn render(
-    gpu: &Headless,
+/// What the GPU has to draw for a PNG: the frame, its pixel size and the clear colour.
+struct Plan {
+    frame: scene::CanvasFrame,
+    size: [u32; 2],
+    clear: [f64; 4],
+    transparent: bool,
+}
+
+fn plan(
     doc: &Document,
     roots: Option<&[NodeId]>,
     scale: f64,
     background: Option<Color>,
-) -> Result<image::RgbaImage, String> {
+) -> Result<Plan, String> {
     let roots: Vec<NodeId> = roots
         .map(|r| r.to_vec())
         .unwrap_or_else(|| doc.root.clone());
@@ -44,8 +50,43 @@ pub fn render(
         }
         None => [0.0; 4],
     };
-    let mut img = gpu.render_frame(&frame, size, 1.0, clear);
-    if background.is_none() {
+    Ok(Plan {
+        frame,
+        size,
+        clear,
+        transparent: background.is_none(),
+    })
+}
+
+/// Render `roots` (or all top-level nodes) at `scale` px per unit.
+pub fn render(
+    gpu: &Headless,
+    doc: &Document,
+    roots: Option<&[NodeId]>,
+    scale: f64,
+    background: Option<Color>,
+) -> Result<image::RgbaImage, String> {
+    let p = plan(doc, roots, scale, background)?;
+    let mut img = gpu.render_frame(&p.frame, p.size, 1.0, p.clear);
+    if p.transparent {
+        unpremultiply_edges(&mut img);
+    }
+    Ok(img)
+}
+
+/// [`render`] for the browser, where the GPU readback cannot block.
+pub async fn render_async(
+    gpu: &Headless,
+    doc: &Document,
+    roots: Option<&[NodeId]>,
+    scale: f64,
+    background: Option<Color>,
+) -> Result<image::RgbaImage, String> {
+    let p = plan(doc, roots, scale, background)?;
+    let mut img = gpu
+        .render_frame_async(&p.frame, p.size, 1.0, p.clear)
+        .await?;
+    if p.transparent {
         unpremultiply_edges(&mut img);
     }
     Ok(img)

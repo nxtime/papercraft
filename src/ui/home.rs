@@ -38,6 +38,13 @@ pub struct HomeView {
 
 const CARD_W: f32 = 232.0;
 const THUMB_H: f32 = 148.0;
+/// `HomeAction::RevealRoot` opens the folder natively; a browser has none, so the same action
+/// downloads a zip of every project there.
+const REVEAL_LABEL: &str = if cfg!(target_arch = "wasm32") {
+    "Download backup"
+} else {
+    "Open projects folder"
+};
 
 impl HomeView {
     /// Re-read the project list and trash from the store (keeps cached thumbnails).
@@ -61,7 +68,9 @@ impl HomeView {
         {
             return Some(h.clone());
         }
-        let img = image::open(path).ok()?.to_rgba8();
+        let img = image::load_from_memory(&crate::vfs::read(path).ok()?)
+            .ok()?
+            .to_rgba8();
         let size = [img.width() as usize, img.height() as usize];
         let ci = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
         let h = ctx.load_texture(path.to_string_lossy(), ci, egui::TextureOptions::LINEAR);
@@ -130,7 +139,7 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, native_chrome: bool, translucent: bo
                     .size(theme::SECONDARY - 1.0)
                     .color(p.secondary);
                 ui.label(path).on_hover_text("Projects folder");
-                if sidebar_item(ui, Icon::Page, "Open projects folder", None, false) {
+                if sidebar_item(ui, Icon::Page, REVEAL_LABEL, None, false) {
                     hv.actions.push(HomeAction::RevealRoot);
                 }
             });

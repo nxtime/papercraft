@@ -1,17 +1,33 @@
 //! Browser shell: a canvas with a WebGPU/WebGL surface, DOM events translated into egui input
-//! and editor input. The native counterpart is `app.rs`; this one has no project store, no
-//! dialogs and no MCP server yet, it edits one scratch document.
+//! and editor input. The native counterpart is `app.rs`. Files live in the in-memory/IndexedDB
+//! `vfs`; there are no dialogs, so imports are file pickers / drops (`files.rs`), exports are
+//! downloads, and an AI agent reaches the tab through the relay (`relay.rs`).
+//!
+//! GPU readback cannot block in a browser, so everything that needs pixels (agent screenshots,
+//! PNG export, thumbnails, "copy as PNG") renders offscreen on the window's own device and awaits
+//! `Headless::read_async`: the executor answers `get_screenshot` with a
+//! `mcp::exec::NEEDS_RENDER` marker and the shell replies when the render finishes.
 
+mod dom;
+mod files;
+mod relay;
+
+use crate::editor::shortcuts::Action;
 use crate::editor::{AppRequest, Button, Editor, InputEvent, Key, Modifiers};
 use crate::geom::{V2, v2};
-use crate::project::Store;
+use crate::mcp::ToolResult;
+use crate::mcp::exec::{self, Host, ShotRequest};
+use crate::mcp::relay_proto::Reply;
+use crate::project::{Project, Store};
 use crate::render::frame::{self, Painter};
+use crate::render::gpu::Headless;
 use crate::session::Session;
 use crate::theme;
 use crate::ui::UiState;
+use crate::ui::agent::{AgentAction, AgentUi};
 use crate::ui::home::{HomeAction, HomeView};
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, KeyboardEvent, PointerEvent, WheelEvent};
 
@@ -23,6 +39,9 @@ const LINE_PX: f64 = 40.0;
 /// Largest ctrl+wheel delta that still zooms smoothly (mouse notches report ±100).
 const MAX_PINCH_DELTA: f64 = 30.0;
 const PINCH_ZOOM_PER_PX: f64 = 0.01;
+/// How long a status message stays in the corner, and an error toast on screen.
+const STATUS_VISIBLE_MS: f64 = 6_000.0;
+const ERROR_VISIBLE_MS: f64 = 8_000.0;
 
 struct Web {
     canvas: HtmlCanvasElement,
@@ -44,6 +63,15 @@ struct Web {
     /// Another frame is needed (input arrived, or egui asked for a repaint).
     dirty: bool,
     repaint_at: Option<f64>,
+    adapter_info: wgpu::AdapterInfo,
+    /// This shell, for work that finishes after the current event (readbacks, file reads).
+    me: Weak<RefCell<Web>>,
+    relay: relay::Relay,
+    /// What the editor's clipboard provider reads and writes (see `dom::Mirror`).
+    mirror: dom::SharedMirror,
+    toast_until: Option<f64>,
+    /// The status text last seen and when it first appeared, to let it fade.
+    status_seen: (String, f64),
 }
 
 type Shared = Rc<RefCell<Web>>;
@@ -101,6 +129,7 @@ impl Web {
             })
             .await
             .map_err(|e| format!("create device: {e}"))?;
+        let adapter_info = adapter.get_info();
         let caps = surface.get_capabilities(&adapter);
         let format = caps
             .formats
@@ -127,6 +156,20 @@ impl Web {
         if !demo {
             st.home = Some(HomeView::load(&store, crate::project::now_ms()));
         }
+        st.library.library =
+            crate::library::Library::load(&crate::library::Library::path_in(&store.root));
+        let relay = relay::Relay::new();
+        st.agent_link = Some(AgentUi {
+            url: relay.agent_url(),
+            ..Default::default()
+        });
+        let mirror = dom::SharedMirror::default();
+        let mut ed = if demo {
+            crate::demo::showcase()
+        } else {
+            Editor::default()
+        };
+        ed.clipboard_io = Some(Box::new(dom::WebClipboard(mirror.clone())));
         Ok(Web {
             painter: Painter::new(&device, format),
             canvas,
@@ -135,11 +178,7 @@ impl Web {
             queue,
             config,
             ctx,
-            ed: if demo {
-                crate::demo::showcase()
-            } else {
-                Editor::default()
-            },
+            ed,
             st,
             session: Session::new(store),
             events: vec![],
@@ -150,6 +189,12 @@ impl Web {
             start_ms: now_ms(),
             dirty: true,
             repaint_at: None,
+            adapter_info,
+            me: Weak::new(),
+            relay,
+            mirror,
+            toast_until: None,
+            status_seen: (String::new(), 0.0),
         })
     }
 
@@ -299,7 +344,17 @@ impl Web {
         if down && typing {
             self.events.push(egui::Event::Text(name.clone()));
         }
-        if self.ctx.egui_wants_keyboard_input() {
+        // Cmd/Ctrl+V must reach the browser so it fires `paste` (the only way to read the
+        // clipboard); copy and cut do too while a text field has focus.
+        let code = e.code();
+        let wants_text = self.ctx.egui_wants_keyboard_input();
+        if self.mods.ctrl
+            && !self.mods.alt
+            && (code == "KeyV" || (wants_text && ["KeyC", "KeyX"].contains(&code.as_str())))
+        {
+            return false;
+        }
+        if wants_text {
             return true;
         }
         let chord = self.mods.alt || self.mods.ctrl;
@@ -323,10 +378,52 @@ impl Web {
         true
     }
 
+    /// Show a failure to the user: a toast (visible on the home screen too) and the status bar.
     fn error(&mut self, msg: String) {
         log::error!("{msg}");
+        self.toast_until = Some(now_ms() + ERROR_VISIBLE_MS);
+        self.st.toast = Some((msg.clone(), true));
         self.ed.status = msg;
         self.dirty = true;
+    }
+
+    /// The window's device as an offscreen renderer (screenshots, export, thumbnails).
+    fn gpu_handle(&self) -> Headless {
+        Headless {
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+            adapter_info: self.adapter_info.clone(),
+        }
+    }
+
+    /// Run the tool calls the relay queued, on the main thread at the start of the frame.
+    fn pump_calls(&mut self) {
+        while let Some(call) = self.relay.next_call() {
+            self.dirty = true;
+            match exec::call(self, &call.name, &call.args) {
+                Err(e) => match ShotRequest::from_marker(&e) {
+                    Some(req) => self.start_screenshot(call.id, req),
+                    None => self.relay.send(&Reply::err(call.id, e)),
+                },
+                Ok(out) => self.relay.send(&Reply::ok(call.id, out)),
+            }
+        }
+    }
+
+    /// Render a screenshot offscreen and answer call `id` when the readback lands.
+    fn start_screenshot(&mut self, id: u64, req: ShotRequest) {
+        let doc = self.ed.page_doc(req.page).clone();
+        let gpu = self.gpu_handle();
+        self.finish(
+            async move { exec::screenshot_async(&gpu, &doc, &req).await },
+            move |w, r: ToolResult| {
+                let reply = match r {
+                    Ok(out) => Reply::ok(id, out),
+                    Err(e) => Reply::err(id, e),
+                };
+                w.relay.send(&reply);
+            },
+        );
     }
 
     fn save_project(&mut self, full: bool) {
@@ -342,7 +439,11 @@ impl Web {
                 self.st.save_state = "Not saved".into();
                 self.session.defer();
                 self.error(format!("Could not save project: {e}"));
+                return;
             }
+        }
+        if self.session.thumbnail_due(web_time::Instant::now(), full) {
+            self.start_thumbnail();
         }
     }
 
@@ -410,8 +511,13 @@ impl Web {
                     store.delete_forever(&dir).map_err(|e| e.to_string())
                 }
                 HomeAction::EmptyTrash => store.empty_trash().map_err(|e| e.to_string()),
-                HomeAction::Import | HomeAction::RevealRoot => {
-                    Err("Not available in the browser yet".into())
+                HomeAction::Import => {
+                    self.request_import();
+                    Ok(())
+                }
+                HomeAction::RevealRoot => {
+                    self.download_backup();
+                    Ok(())
                 }
             };
             if let Err(e) = r {
@@ -427,20 +533,100 @@ impl Web {
         for req in std::mem::take(&mut self.ed.requests) {
             match req {
                 AppRequest::Home => self.go_home(),
-                // Dialogs, files and the clipboard have no web implementation yet.
-                _ => self.error("Not available in the browser yet".into()),
+                AppRequest::ImageFill(ids, i) => self.request_image_fill(ids, i),
+                AppRequest::PlaceImage => self.request_place_image(),
+                AppRequest::New => {
+                    if self.session.project.is_some() {
+                        self.save_project(true);
+                    }
+                    let r = self.session.create(&mut self.ed, "Untitled");
+                    self.enter_project(r);
+                }
+                AppRequest::Open => self.request_import(),
+                AppRequest::Save => self.save_project(false),
+                AppRequest::SaveAs => {
+                    let Some(dir) = self.session.project.as_ref().map(|p| p.dir.clone()) else {
+                        continue;
+                    };
+                    self.save_project(true);
+                    match self.session.store.duplicate(&dir) {
+                        Ok(copy) => {
+                            let r = self.session.open(&mut self.ed, &copy);
+                            self.enter_project(r);
+                        }
+                        Err(e) => self.error(format!("Could not duplicate: {e}")),
+                    }
+                }
+                AppRequest::ExportFormat(f) => self.export_format(f),
+                AppRequest::Export(spec) => self.export(spec),
+                AppRequest::CopyAsPng => self.copy_as_png(),
+            }
+        }
+    }
+
+    /// Ask for a frame at `t` (ms) unless an earlier one is already planned.
+    fn wake_at(&mut self, t: f64) {
+        self.repaint_at = Some(self.repaint_at.map_or(t, |r| r.min(t)));
+    }
+
+    /// Fade out the toast and the status text, surface storage failures, and plan the wake-ups.
+    fn tick_notices(&mut self, now: f64) {
+        if let Some(e) = crate::vfs::take_persist_error() {
+            self.st.save_state = "Not saved".into();
+            self.error(e);
+        }
+        if self.toast_until.is_some_and(|t| now >= t) {
+            self.toast_until = None;
+            self.st.toast = None;
+        }
+        if self.ed.status != self.status_seen.0 {
+            self.status_seen = (self.ed.status.clone(), now);
+        }
+        if !self.ed.status.is_empty() && now - self.status_seen.1 >= STATUS_VISIBLE_MS {
+            self.ed.status.clear();
+            self.status_seen.0.clear();
+        }
+        if let Some(t) = self.toast_until {
+            self.wake_at(t);
+        }
+        if !self.ed.status.is_empty() {
+            self.wake_at(self.status_seen.1 + STATUS_VISIBLE_MS);
+        }
+    }
+
+    fn handle_agent_actions(&mut self, now: f64) {
+        let Some(a) = &mut self.st.agent_link else {
+            return;
+        };
+        let state = self.relay.state();
+        if a.state != state {
+            a.state = state;
+            self.dirty = true;
+        }
+        for act in std::mem::take(&mut a.actions) {
+            match act {
+                AgentAction::Regenerate => {
+                    self.relay.regenerate(now);
+                    a.url = self.relay.agent_url();
+                    self.dirty = true;
+                }
             }
         }
     }
 
     fn frame(&mut self) {
         let now = now_ms();
+        self.pump_calls();
+        if self.relay.tick(now) {
+            self.dirty = true;
+        }
         let due = self.repaint_at.is_some_and(|t| now >= t);
-        if !self.dirty && !due {
+        if !self.dirty && !due && !crate::vfs::has_persist_error() {
             return;
         }
         self.dirty = false;
         self.repaint_at = None;
+        self.tick_notices(now);
         let ppp = self.ppp();
         let w = window();
         let css = egui::vec2(
@@ -485,6 +671,13 @@ impl Web {
             || self.st.home.as_ref().is_some_and(|h| !h.actions.is_empty());
         self.handle_requests();
         self.handle_home_actions();
+        self.handle_agent_actions(now);
+        if self.st.library.dirty {
+            self.st.library.dirty = false;
+            if let Err(e) = self.st.library.library.save() {
+                self.error(format!("Could not save the library: {e}"));
+            }
+        }
         if self
             .session
             .autosave_due(&self.ed, web_time::Instant::now())
@@ -502,7 +695,7 @@ impl Web {
         if delay.is_zero() {
             self.dirty = true;
         } else if delay != std::time::Duration::MAX {
-            self.repaint_at = Some(now + delay.as_secs_f64() * 1000.0);
+            self.wake_at(now + delay.as_secs_f64() * 1000.0);
         }
         if let Some(text) = l
             .output
@@ -542,8 +735,141 @@ impl Web {
     }
 }
 
+/// Mirrors `impl Host for App` (`app.rs`): the same executor drives both shells.
+impl Host for Web {
+    fn editor(&mut self) -> &mut Editor {
+        &mut self.ed
+    }
+    fn store(&self) -> &Store {
+        &self.session.store
+    }
+    fn project(&self) -> Option<&Project> {
+        self.session
+            .project
+            .as_ref()
+            .filter(|_| self.st.home.is_none())
+    }
+    fn canvas_open(&self) -> bool {
+        self.st.home.is_none()
+    }
+    fn open_project(&mut self, dir: &std::path::Path) -> Result<(), String> {
+        if self.session.project.is_some() {
+            self.session
+                .save_all(&mut self.ed)
+                .map_err(|e| format!("could not save the open project: {e}"))?;
+        }
+        self.session
+            .open(&mut self.ed, dir)
+            .map_err(|e| format!("could not open {}: {e}", dir.display()))?;
+        self.st.home = None;
+        self.st.project_name = self.session.project_name();
+        self.st.save_state.clear();
+        self.ed.status.clear();
+        Ok(())
+    }
+    fn save(&mut self) -> Result<(), String> {
+        if self.session.project.is_some() {
+            self.session
+                .save_all(&mut self.ed)
+                .map_err(|e| e.to_string())?;
+            self.st.save_state = "Saved".into();
+        }
+        Ok(())
+    }
+    /// Pixels are read back asynchronously here: `get_screenshot` defers to the shell.
+    fn gpu(&mut self) -> Option<Headless> {
+        None
+    }
+    fn defer_pixels(&self) -> bool {
+        true
+    }
+}
+
+impl Web {
+    /// A DOM `paste`: into an egui text field, the canvas text editor, or as layers / an image.
+    fn paste_event(&mut self, text: String, files: Option<web_sys::FileList>) {
+        self.dirty = true;
+        if self.ctx.egui_wants_keyboard_input() {
+            self.events.push(egui::Event::Paste(text));
+            return;
+        }
+        if self.st.home.is_some() {
+            return;
+        }
+        if self.ed.text_edit.is_some() && !text.is_empty() {
+            self.ed.handle(InputEvent::Text(text));
+            return;
+        }
+        if let Some(files) = files.filter(|f| f.length() > 0) {
+            self.finish(
+                async move { dom::read_list(&files).await },
+                |w, r| match r {
+                    Ok(files) => {
+                        let image = files
+                            .iter()
+                            .find_map(|f| image::load_from_memory(&f.bytes).ok());
+                        let Some(image) = image else {
+                            return w.import_files(files, None);
+                        };
+                        {
+                            let mut m = w.mirror.borrow_mut();
+                            m.text = None;
+                            m.image = Some(image.to_rgba8());
+                        }
+                        w.ed.run(Action::Paste);
+                    }
+                    Err(e) => w.error(e),
+                },
+            );
+            return;
+        }
+        if !text.is_empty() {
+            let mut m = self.mirror.borrow_mut();
+            m.text = Some(text);
+            m.image = None;
+        }
+        self.ed.run(Action::Paste);
+    }
+
+    /// A DOM `copy` / `cut` that the keydown handler did not already take (browser menu, or
+    /// focus in an egui text field).
+    fn copy_event(&mut self, e: &web_sys::ClipboardEvent, cut: bool) {
+        self.dirty = true;
+        e.prevent_default();
+        if self.ctx.egui_wants_keyboard_input() {
+            self.events.push(if cut {
+                egui::Event::Cut
+            } else {
+                egui::Event::Copy
+            });
+            return;
+        }
+        if self.st.home.is_some() {
+            return;
+        }
+        self.ed.run(if cut { Action::Cut } else { Action::Copy });
+        let text = self.mirror.borrow().text.clone();
+        if let (Some(text), Some(data)) = (text, e.clipboard_data()) {
+            let _ = data.set_data("text/plain", &text);
+        }
+    }
+}
+
 fn run(web: Shared) {
     let canvas = web.borrow().canvas.clone();
+    let weak = Rc::downgrade(&web);
+    web.borrow_mut().me = weak.clone();
+    // A hidden tab gets no animation frames, but an agent may still be driving it.
+    web.borrow().relay.set_wake(Rc::new(move || {
+        if !window().document().is_some_and(|d| d.hidden()) {
+            return;
+        }
+        if let Some(w) = weak.upgrade()
+            && let Ok(mut w) = w.try_borrow_mut()
+        {
+            w.pump_calls();
+        }
+    }));
     let on = |name: &str, f: Box<dyn FnMut(web_sys::Event)>| {
         let cb = Closure::wrap(f);
         let _ = canvas.add_event_listener_with_callback(name, cb.as_ref().unchecked_ref());
@@ -591,18 +917,55 @@ fn run(web: Shared) {
     }
     let w = web.clone();
     let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
-        if let Ok(e) = e.dyn_into::<web_sys::ClipboardEvent>()
-            && let Some(text) = e
-                .clipboard_data()
-                .and_then(|d| d.get_data("text/plain").ok())
-        {
-            let mut w = w.borrow_mut();
-            w.events.push(egui::Event::Paste(text));
-            w.dirty = true;
-        }
+        let Ok(e) = e.dyn_into::<web_sys::ClipboardEvent>() else {
+            return;
+        };
+        e.prevent_default();
+        let data = e.clipboard_data();
+        let text = data
+            .as_ref()
+            .and_then(|d| d.get_data("text/plain").ok())
+            .unwrap_or_default();
+        let files = data.and_then(|d| d.files());
+        w.borrow_mut().paste_event(text, files);
     });
     let _ = doc.add_event_listener_with_callback("paste", cb.as_ref().unchecked_ref());
     cb.forget();
+    for (name, cut) in [("copy", false), ("cut", true)] {
+        let w = web.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            if let Ok(e) = e.dyn_into::<web_sys::ClipboardEvent>() {
+                w.borrow_mut().copy_event(&e, cut);
+            }
+        });
+        let _ = doc.add_event_listener_with_callback(name, cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+    on("dragover", Box::new(|e| e.prevent_default()));
+    let w = web.clone();
+    on(
+        "drop",
+        Box::new(move |e| {
+            e.prevent_default();
+            let Ok(e) = e.dyn_into::<web_sys::DragEvent>() else {
+                return;
+            };
+            let Some(files) = e.data_transfer().and_then(|d| d.files()) else {
+                return;
+            };
+            if files.length() == 0 {
+                return;
+            }
+            let at = egui::pos2(e.offset_x() as f32, e.offset_y() as f32);
+            w.borrow().finish(
+                async move { dom::read_list(&files).await },
+                move |w, r| match r {
+                    Ok(files) => w.import_files(files, Some(at)),
+                    Err(e) => w.error(e),
+                },
+            );
+        }),
+    );
     let w = web.clone();
     let cb = Closure::<dyn FnMut()>::new(move || {
         let mut w = w.borrow_mut();

@@ -66,11 +66,13 @@ pub fn dir() -> PathBuf {
             let data = dirs::data_dir()?;
             let new = data.join("papercraft").join("icons");
             let legacy = data.join("paper-rs").join("icons");
-            Some(if legacy.is_dir() && !new.exists() {
-                legacy
-            } else {
-                new
-            })
+            Some(
+                if crate::vfs::is_dir(&legacy) && !crate::vfs::exists(&new) {
+                    legacy
+                } else {
+                    new
+                },
+            )
         })
         .unwrap_or_else(|| PathBuf::from("icons"))
 }

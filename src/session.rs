@@ -166,12 +166,59 @@ impl Session {
         }
     }
 
+    /// Mark the thumbnail as taken and hand back what has to be rendered (the browser renders it
+    /// asynchronously and then calls [`finish_thumbnail`]).
+    pub fn start_thumbnail(&mut self, ed: &Editor) -> Option<ThumbJob> {
+        let p = self.project.as_ref()?;
+        self.thumb_stale = false;
+        self.last_thumb = Some(Instant::now());
+        Some(ThumbJob {
+            path: p.thumbnail_path(),
+            doc: ed.page_doc(0).clone(),
+        })
+    }
+
     /// Close the project: final save; the caller then shows the home screen.
     pub fn close(&mut self, ed: &mut Editor) -> Result<(), FormatError> {
         let r = self.save_all(ed);
         self.project = None;
         self.dirty_since = None;
         r
+    }
+}
+
+/// A thumbnail waiting to be rendered: the first page as it was when the job started.
+pub struct ThumbJob {
+    pub path: std::path::PathBuf,
+    pub doc: crate::model::Document,
+}
+
+/// Scale that fits the document's bounds into the thumbnail box, None when it's empty.
+fn thumbnail_scale(doc: &crate::model::Document) -> Option<f64> {
+    let b = crate::io::svg::export_bounds(doc, &doc.root)?;
+    Some((THUMB_SIZE.0 / b.w).min(THUMB_SIZE.1 / b.h).min(2.0))
+}
+
+/// [`render_thumbnail`] without blocking on the GPU (browser).
+pub async fn render_thumbnail_async(
+    gpu: &Headless,
+    doc: &crate::model::Document,
+) -> Result<Option<Vec<u8>>, String> {
+    let Some(scale) = thumbnail_scale(doc) else {
+        return Ok(None);
+    };
+    let img = crate::io::png::render_async(gpu, doc, None, scale, None).await?;
+    crate::io::export::encode_png(&img).map(Some)
+}
+
+/// Store a rendered thumbnail (None: the page is empty, so remove any old one).
+pub fn finish_thumbnail(path: &std::path::Path, png: Option<Vec<u8>>) -> Result<(), String> {
+    match png {
+        Some(png) => crate::io::atomic::write(path, &png).map_err(|e| e.to_string()),
+        None => {
+            let _ = crate::vfs::remove_file(path);
+            Ok(())
+        }
     }
 }
 

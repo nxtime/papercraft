@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 pub type Dispatch = Arc<dyn Fn(Call) -> bool + Send + Sync>;
 
 /// Longest a tool call may take on the editor thread.
-const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The tool catalogue as rmcp tools.
 pub fn tool_list() -> Vec<Tool> {
@@ -107,7 +107,8 @@ impl ServerHandler for PaperServer {
 }
 
 /// Add the `Accept` header the streamable HTTP transport requires when a client omits it.
-async fn fix_accept(
+/// Shared with the relay, which serves the same transport to remote agents.
+pub(crate) async fn fix_accept(
     mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {

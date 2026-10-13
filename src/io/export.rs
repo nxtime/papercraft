@@ -222,3 +222,62 @@ pub fn write(
     }
     Ok(written)
 }
+
+/// The PNG bytes of an image.
+pub fn encode_png(img: &image::RgbaImage) -> Result<Vec<u8>, String> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(buf.into_inner())
+}
+
+/// [`write`] into memory for the browser, which downloads instead of writing paths. Returns
+/// `(file name, bytes)` per output file; `base` names a single-file export. PNG goes through
+/// the non-blocking GPU readback, so this is the only export entry point that works in wasm.
+pub async fn render_files(
+    spec: &Spec,
+    items: &[Item<'_>],
+    base: &str,
+    gpu: &Headless,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if items.is_empty() {
+        return Err("nothing to export".into());
+    }
+    let bg = (!spec.transparent).then_some(Color::WHITE);
+    let ext = spec.format.ext();
+    if spec.format == Format::Pdf {
+        let frames = spec.scope == Scope::Frames;
+        let pages: Vec<_> = items
+            .iter()
+            .flat_map(|it| crate::io::pdf::pages_for(it.doc, Some(&it.roots), frames, bg))
+            .collect();
+        if pages.is_empty() {
+            return Err("nothing to export".into());
+        }
+        return Ok(vec![(
+            format!("{}.{ext}", safe(base)),
+            crate::io::pdf::export(&pages),
+        )]);
+    }
+    let single = spec.single_file(items.len());
+    let mut used = std::collections::HashSet::new();
+    let mut files = Vec::new();
+    for it in items {
+        let name = if single {
+            format!("{}.{ext}", safe(base))
+        } else {
+            crate::io::zip::unique_name(&format!("{}.{ext}", safe(&it.name)), &mut used)
+        };
+        let bytes = match spec.format {
+            Format::Svg => crate::io::svg::export(it.doc, Some(&it.roots), bg)
+                .ok_or("nothing to export")?
+                .into_bytes(),
+            Format::Png => encode_png(
+                &crate::io::png::render_async(gpu, it.doc, Some(&it.roots), spec.scale, bg).await?,
+            )?,
+            Format::Pdf => unreachable!(),
+        };
+        files.push((name, bytes));
+    }
+    Ok(files)
+}

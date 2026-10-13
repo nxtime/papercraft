@@ -52,7 +52,7 @@ fn m1_infinite_canvas_pan_and_zoom() {
         ..Modifiers::NONE
     }));
     e.handle(InputEvent::Scroll {
-        delta: v2(0.0, -(3.0f64.ln() * 100.0)),
+        delta: v2(0.0, -(3.0f64.ln() / 0.003)),
         pos: anchor,
     });
     e.handle(InputEvent::Modifiers(Modifiers::NONE));

@@ -22,6 +22,10 @@ path = "src/bin/papercraft-mcp.rs"
 name = "papercraft-cli"
 path = "src/bin/papercraft-cli.rs"
 
+[[bin]]
+name = "papercraft-relay"
+path = "src/bin/papercraft-relay.rs"
+
 [dependencies]
 egui = "0.36"
 egui-wgpu = "0.36"
@@ -52,6 +56,14 @@ winresource = "0.1"
 [profile.release]
 debug = false
 
+# Browser bundle only (`web/build.sh`): size over compile time. Native release is untouched.
+[profile.web]
+inherits = "release"
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = "z"
+
 [profile.dev.package."*"]
 opt-level = 2
 
@@ -59,6 +71,8 @@ opt-level = 2
 resvg = "0.48"
 rmcp = { version = "3.5.1", default-features = false, features = ["transport-child-process"] }
 reqwest = { version = "0.13", default-features = false }
+# The relay test drives a fake tab over a real WebSocket; same version axum's `ws` uses.
+tokio-tungstenite = "0.29"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21", default-features = false }
@@ -73,8 +87,8 @@ egui-winit = "0.36"
 winit = "0.30"
 arboard = { version = "3.6.1", features = ["image-data"] }
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "base64", "transport-streamable-http-server", "transport-io", "client", "transport-streamable-http-client-reqwest"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time", "io-std"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time", "io-std", "fs"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
 tokio-util = "0.7"
 
 # Browser build (`src/web.rs`): canvas + WebGPU/WebGL surface, DOM events instead of winit.
@@ -85,4 +99,4 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 console_log = "1"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "KeyboardEvent", "PointerEvent", "WheelEvent", "ClipboardEvent", "DataTransfer", "MediaQueryList", "Location", "Performance", "Navigator", "Clipboard", "CssStyleDeclaration", "console"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "KeyboardEvent", "PointerEvent", "WheelEvent", "ClipboardEvent", "DataTransfer", "MediaQueryList", "Location", "Performance", "Navigator", "Clipboard", "CssStyleDeclaration", "console", "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "Storage", "Crypto", "DragEvent", "FileList", "File", "Blob"] }

@@ -9,11 +9,16 @@
 //! * [`exec`]: runs one tool call against a [`exec::Host`] (the app, or a headless session).
 //! * [`tools`]: tool names, descriptions and schemas; [`css`] and [`html`]: the style and
 //!   markup mapping used by `write_html` / `update_styles`.
+//! * [`relay_proto`]: JSON frames between the relay and a browser tab; [`relay`]: the
+//!   relay server itself (native only).
 
 pub mod css;
 pub mod exec;
 pub mod html;
 pub mod lint;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod relay;
+pub mod relay_proto;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;
 pub mod tools;

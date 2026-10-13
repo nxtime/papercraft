@@ -1,6 +1,7 @@
 //! egui chrome: menu bar, layers panel, design (properties) panel, floating toolbar, and the
 //! projects home screen.
 
+pub mod agent;
 pub mod design;
 pub mod home;
 pub mod inspector;
@@ -72,6 +73,11 @@ pub struct UiState {
     pub variable_draft: String,
     /// The last tool an agent ran and when, for the toolbar's activity hint.
     pub agent: Option<(String, std::time::Instant)>,
+    /// The browser's remote-agent link (Agent menu); None everywhere but the web shell.
+    pub agent_link: Option<agent::AgentUi>,
+    /// A message shown over the home screen and the canvas (text, is_error); the shell that
+    /// sets it also clears it. Only the web shell uses it: native shows errors in dialogs.
+    pub toast: Option<(String, bool)>,
 }
 
 /// Where a dragged layer lands relative to a row.
@@ -117,6 +123,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             .exact_size(TITLEBAR_H)
             .frame(egui::Frame::NONE.fill(p.window))
             .show(ui, |ui| title_bar(ui, ed, st));
+    }
+    if let Some(a) = &mut st.agent_link {
+        a.window(ui.ctx());
+    }
+    if let Some((text, error)) = &st.toast {
+        toast(ui.ctx(), text, *error);
     }
     if let Some(hv) = &mut st.home {
         home::draw(ui, hv, st.native_chrome, st.translucent_sidebar);
@@ -224,7 +236,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     ui.horizontal_centered(|ui| {
         if !st.native_chrome && !st.custom_titlebar {
-            ui.scope(|ui| menu_bar(ui, ed));
+            ui.scope(|ui| menu_bar(ui, ed, &mut st.agent_link));
             ui.add_space(6.0);
             ui.separator();
             ui.add_space(6.0);
@@ -268,6 +280,9 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
+            if let Some(a) = &st.agent_link {
+                a.dot(ui);
+            }
             if theme::icon_button(ui, theme::Icon::Question, 26.0, st.show_help)
                 .on_hover_text("Keyboard shortcuts")
                 .clicked()
@@ -311,12 +326,15 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 
 /// egui menus for platforms without a native menu bar (inline, so the toolbar row keeps
 /// the title and zoom controls).
-fn menu_bar(ui: &mut Ui, ed: &mut Editor) {
+fn menu_bar(ui: &mut Ui, ed: &mut Editor, agent: &mut Option<agent::AgentUi>) {
     flat_menus(ui);
     for (title, entries) in shortcuts::menus() {
         ui.menu_button(title, |ui| {
             menu_entries(ui, ed, &entries);
         });
+    }
+    if let Some(a) = agent {
+        a.menu(ui);
     }
     theme_menu(ui);
 }
@@ -370,7 +388,7 @@ fn title_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         if st.home.is_some() {
             theme_menu(ui);
         } else {
-            menu_bar(ui, ed);
+            menu_bar(ui, ed, &mut st.agent_link);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -915,6 +933,32 @@ fn toolbar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                             }
                         }
                     });
+                });
+        });
+}
+
+/// Colour of an error toast's background.
+const TOAST_ERROR: Color32 = Color32::from_rgb(0xb4, 0x2b, 0x2b);
+
+fn toast(ctx: &egui::Context, text: &str, error: bool) {
+    egui::Area::new("toast".into())
+        .order(egui::Order::Tooltip)
+        .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 44.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            let p = theme::pal(ui);
+            let (fill, ink) = if error {
+                (TOAST_ERROR, Color32::WHITE)
+            } else {
+                (p.popover, p.secondary)
+            };
+            egui::Frame::popup(ui.style())
+                .fill(fill)
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::symmetric(14, 8))
+                .show(ui, |ui| {
+                    ui.set_max_width(520.0);
+                    ui.label(RichText::new(text).color(ink));
                 });
         });
 }

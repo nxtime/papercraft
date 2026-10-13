@@ -1,4 +1,5 @@
 pub mod atomic;
+pub mod backup;
 pub mod clipboard;
 pub mod excalidraw;
 pub mod export;
@@ -8,3 +9,4 @@ pub mod pdf;
 pub mod png;
 pub mod svg;
 pub mod svg_import;
+pub mod zip;

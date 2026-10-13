@@ -392,6 +392,7 @@ impl Choice {
     }
 
     /// Persisted in the config dir; a missing or unreadable file means `System`.
+    #[cfg(not(target_arch = "wasm32"))]
     fn path() -> Option<std::path::PathBuf> {
         let dir = dirs::config_dir()?;
         let new = dir.join("papercraft").join("theme");
@@ -401,6 +402,12 @@ impl Choice {
         } else {
             new
         })
+    }
+
+    /// No config dir in a browser: the virtual file system holds it at a fixed path.
+    #[cfg(target_arch = "wasm32")]
+    fn path() -> Option<std::path::PathBuf> {
+        Some(std::path::PathBuf::from(WEB_PATH))
     }
 
     pub fn load() -> Choice {
@@ -419,6 +426,10 @@ impl Choice {
         }
     }
 }
+
+/// Where the theme choice lives in the browser's virtual file system.
+#[cfg(target_arch = "wasm32")]
+const WEB_PATH: &str = "/config/theme";
 
 static CHOICE: AtomicU8 = AtomicU8::new(0);
 

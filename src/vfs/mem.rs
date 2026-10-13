@@ -69,12 +69,48 @@ fn key(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+thread_local! {
+    /// The latest IndexedDB write that failed (quota, private mode, blocked database). The files
+    /// stay in memory, so the shell shows this and the user can still download a backup.
+    static PERSIST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Take the latest failed IndexedDB write, if any.
+pub fn take_persist_error() -> Option<String> {
+    PERSIST_ERROR.with(|e| e.borrow_mut().take())
+}
+
+/// A failed write is waiting to be shown.
+pub fn has_persist_error() -> bool {
+    PERSIST_ERROR.with(|e| e.borrow().is_some())
+}
+
+fn persist(p: &Path, what: &'static str, promise: js_sys::Promise) {
+    let name = p.display().to_string();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = wasm_bindgen_futures::JsFuture::from(promise).await {
+            let why = e
+                .as_string()
+                .or_else(|| {
+                    js_sys::Reflect::get(&e, &"message".into())
+                        .ok()?
+                        .as_string()
+                })
+                .unwrap_or_else(|| "storage error".into());
+            PERSIST_ERROR.with(|slot| {
+                *slot.borrow_mut() =
+                    Some(format!("Could not {what} {name} in browser storage: {why}"));
+            });
+        }
+    });
+}
+
 fn persist_put(p: &Path, data: &[u8]) {
-    let _ = idb_put(&key(p), data);
+    persist(p, "save", idb_put(&key(p), data));
 }
 
 fn persist_delete(p: &Path) {
-    let _ = idb_delete(&key(p));
+    persist(p, "delete", idb_delete(&key(p)));
 }
 
 fn not_found(p: &Path) -> Error {

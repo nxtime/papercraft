@@ -38,6 +38,12 @@ pub trait Host {
     fn save(&mut self) -> Result<(), String>;
     /// An offscreen renderer for screenshots and PNG export.
     fn gpu(&mut self) -> Option<Headless>;
+    /// The host cannot render synchronously but will render a [`ShotRequest`] itself and answer
+    /// the call later (the browser: GPU readback is asynchronous there). When true and
+    /// [`Host::gpu`] is None, `get_screenshot` returns a [`NEEDS_RENDER`] marker error.
+    fn defer_pixels(&self) -> bool {
+        false
+    }
 }
 
 /// A host without a window: an editor plus a project session. Used by tests and anything
@@ -317,7 +323,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
 fn find_project(store: &Store, key: &str) -> Result<PathBuf, String> {
     let key = key.trim().trim_start_matches("/file/");
     let p = Path::new(key);
-    if p.is_absolute() && p.join(crate::project::MANIFEST).is_file() {
+    if p.is_absolute() && crate::vfs::is_file(&p.join(crate::project::MANIFEST)) {
         return Ok(p.to_path_buf());
     }
     let list = store.list();
@@ -800,10 +806,55 @@ fn tree_summary(ed: &mut Editor, a: &Args) -> ToolResult {
 /// Largest screenshot edge, in pixels.
 const SHOT_MAX_EDGE: f64 = 2048.0;
 
+/// Prefix of the error `get_screenshot` returns on a host that renders asynchronously: the rest
+/// is a JSON [`ShotRequest`]. The shell renders it, then replies with [`screenshot_async`].
+pub const NEEDS_RENDER: &str = "papercraft:needs-render:";
+
+/// What a screenshot has to draw, resolved against the editor at call time.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ShotRequest {
+    pub page: usize,
+    pub roots: Vec<NodeId>,
+    pub scale: f64,
+}
+
+impl ShotRequest {
+    /// The request inside a [`NEEDS_RENDER`] marker error, if `err` is one.
+    pub fn from_marker(err: &str) -> Option<ShotRequest> {
+        serde_json::from_str(err.strip_prefix(NEEDS_RENDER)?).ok()
+    }
+}
+
+/// PNG-encode a screenshot. None (with `scale` reduced) when the payload is too big to send.
+fn shot_out(img: &image::RgbaImage, scale: &mut f64) -> Result<Option<Vec<Out>>, String> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    let png = buf.into_inner();
+    // Keep the base64 payload comfortably under API image limits (~5 MB).
+    if png.len() > 3_500_000 && *scale > 0.2 {
+        *scale *= 0.7;
+        return Ok(None);
+    }
+    let (w, h) = img.dimensions();
+    Ok(Some(vec![
+        Out::Image {
+            data: png,
+            mime: "image/png".into(),
+        },
+        Out::Text(
+            json!({"width": w, "height": h, "scale": (*scale * 1000.0).round() / 1000.0})
+                .to_string(),
+        ),
+    ]))
+}
+
 fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
-    let gpu = host
-        .gpu()
-        .ok_or("screenshots need a GPU and none is available")?;
+    let gpu = host.gpu();
+    let defer = host.defer_pixels();
+    if gpu.is_none() && !defer {
+        return Err("screenshots need a GPU and none is available".into());
+    }
     let ed = host.editor();
     let def = page_arg(ed, a)?;
     let (page, roots) = match a.str("nodeId").filter(|k| !k.is_empty() && *k != ROOT) {
@@ -817,28 +868,32 @@ fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
     let b = crate::io::svg::export_bounds(doc, &roots).ok_or("nothing to capture (empty)")?;
     let want = a.num("scale").unwrap_or(1.0).clamp(0.1, 4.0);
     let mut scale = want.min(SHOT_MAX_EDGE / b.w.max(b.h).max(1.0));
+    let Some(gpu) = gpu else {
+        let req = ShotRequest { page, roots, scale };
+        return Err(format!(
+            "{NEEDS_RENDER}{}",
+            serde_json::to_string(&req).map_err(|e| e.to_string())?
+        ));
+    };
     loop {
         let img = crate::io::png::render(&gpu, doc, Some(&roots), scale, Some(Color::WHITE))?;
-        let mut buf = std::io::Cursor::new(Vec::new());
-        img.write_to(&mut buf, image::ImageFormat::Png)
-            .map_err(|e| e.to_string())?;
-        let png = buf.into_inner();
-        // Keep the base64 payload comfortably under API image limits (~5 MB).
-        if png.len() > 3_500_000 && scale > 0.2 {
-            scale *= 0.7;
-            continue;
+        if let Some(out) = shot_out(&img, &mut scale)? {
+            return Ok(out);
         }
-        let (w, h) = img.dimensions();
-        return Ok(vec![
-            Out::Image {
-                data: png,
-                mime: "image/png".into(),
-            },
-            Out::Text(
-                json!({"width": w, "height": h, "scale": (scale * 1000.0).round() / 1000.0})
-                    .to_string(),
-            ),
-        ]);
+    }
+}
+
+/// Finish a deferred screenshot: the same rendering as [`screenshot`], awaiting the readback.
+/// `doc` is the page the [`ShotRequest`] named, as it is now.
+pub async fn screenshot_async(gpu: &Headless, doc: &Document, req: &ShotRequest) -> ToolResult {
+    let mut scale = req.scale;
+    loop {
+        let img =
+            crate::io::png::render_async(gpu, doc, Some(&req.roots), scale, Some(Color::WHITE))
+                .await?;
+        if let Some(out) = shot_out(&img, &mut scale)? {
+            return Ok(out);
+        }
     }
 }
 
@@ -1168,6 +1223,7 @@ fn jsx_node(
 
 // ------------------------------------------------------------------------------ export
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_scale(s: Option<&str>, b: Rect) -> Result<f64, String> {
     let Some(s) = s.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(2.0);
@@ -1185,6 +1241,7 @@ fn parse_scale(s: Option<&str>, b: Rect) -> Result<f64, String> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn out_dir(a: &Args) -> PathBuf {
     a.str("directory")
         .map(PathBuf::from)
@@ -1193,6 +1250,7 @@ fn out_dir(a: &Args) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     let stem = crate::project::folder_name(stem);
     let mut p = dir.join(format!("{stem}.{ext}"));
@@ -1204,6 +1262,22 @@ fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     p
 }
 
+/// The browser has no folder to write to: exports there are downloads from the UI.
+#[cfg(target_arch = "wasm32")]
+const NO_DISK: &str = "this tool writes files to disk, which a browser tab cannot do; \
+                       use get_screenshot, or the Export menu in the PaperCraft tab";
+
+#[cfg(target_arch = "wasm32")]
+fn export(_: &mut dyn Host, _: &Args) -> ToolResult {
+    Err(NO_DISK.into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn export_pdf(_: &mut dyn Host, _: &Args) -> ToolResult {
+    Err(NO_DISK.into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn export(host: &mut dyn Host, a: &Args) -> ToolResult {
     use crate::io::export::{Format, Item, Scope, Spec};
     let gpu = host.gpu();
@@ -1265,6 +1339,7 @@ fn export(host: &mut dyn Host, a: &Args) -> ToolResult {
     text(json!({"files": written}))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn export_pdf(host: &mut dyn Host, a: &Args) -> ToolResult {
     use crate::io::export::{Format, Item, Scope, Spec};
     let project_name = host.project().map(|p| p.manifest.name.clone());
@@ -1455,7 +1530,7 @@ fn image_asset(src: &str) -> Result<String, String> {
             return Ok(path.to_string());
         }
         let path = percent_decode(path);
-        std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?
+        crate::vfs::read(&path).map_err(|e| format!("{path}: {e}"))?
     };
     if bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml") {
         return Err("SVG images: put the <svg> markup inline instead".into());
