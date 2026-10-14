@@ -142,7 +142,9 @@ struct Link {
 impl Link {
     fn new(shared: Arc<Shared>, ct: CancellationToken) -> Link {
         let dispatch = dispatch(shared.clone());
+        // Served under a public hostname; the URL token is the credential, not the Host header.
         let config = StreamableHttpServerConfig::default()
+            .disable_allowed_hosts()
             .enforce_origin_validation()
             .with_max_request_body_bytes(MAX_MCP_BODY_BYTES)
             .with_cancellation_token(ct);

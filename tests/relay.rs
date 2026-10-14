@@ -194,6 +194,18 @@ async fn bad_tokens_browsers_and_unknown_routes_are_refused() {
         .unwrap();
     assert_eq!(r.status(), 403);
 
+    // A public hostname in Host is fine: the token is the credential.
+    let r = http
+        .post(format!("{base}/s/{good}/mcp"))
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("host", "papercraft.example.com")
+        .body(init)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(r.status(), 403);
+
     // Tokens are 32..=64 lowercase hex characters; anything else is a plain 404.
     for (label, bad) in [
         ("uppercase", good.to_uppercase()),
