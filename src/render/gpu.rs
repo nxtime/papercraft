@@ -58,6 +58,9 @@ fn ramp(t: f32, row: u32) -> vec4<f32> {
 fn fs(i: VsOut) -> @location(0) vec4<f32> {
     let k = i.kind & 255u;
     let row = i.kind >> 8u;
+    // Derivatives must be taken in uniform control flow (WebGPU rejects textureSample under `k`).
+    let duv_dx = dpdx(i.uv);
+    let duv_dy = dpdy(i.uv);
     var c = i.color;
     if (k == 1u) {
         let r = ramp(i.uv.x, row);
@@ -69,7 +72,7 @@ fn fs(i: VsOut) -> @location(0) vec4<f32> {
         if (k == 3u && (i.uv.x < 0.0 || i.uv.y < 0.0 || i.uv.x > 1.0 || i.uv.y > 1.0)) {
             discard;
         }
-        let t = textureSample(img_tex, img_samp, i.uv);
+        let t = textureSampleGrad(img_tex, img_samp, i.uv, duv_dx, duv_dy);
         c = vec4<f32>(t.rgb, t.a * i.color.a);
     }
     // Premultiplied output; every pipeline blends premultiplied.
