@@ -306,3 +306,113 @@ async fn static_files_are_served_with_their_type() {
     std::fs::remove_dir_all(&dir).ok();
     running.stop();
 }
+
+/// Shared projects: files round-trip, bad paths are refused, and a second tab hears about the
+/// first tab's changes (but a tab does not hear its own).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_projects_store_files_and_tell_the_other_tabs() {
+    let dir = std::env::temp_dir().join(format!("papercraft-data-{:016x}", fastrand::u64(..)));
+    let listen: SocketAddr = "127.0.0.1:0".parse().expect("a valid address");
+    let running =
+        relay::spawn_with_data(listen, None, None, Some(dir.clone())).expect("the relay binds");
+    let port = running.port();
+    let base = format!("http://127.0.0.1:{port}");
+    let http = reqwest::Client::new();
+    let t = token();
+
+    // Unknown project: nothing to list.
+    let r = http
+        .get(format!("{base}/p/{t}/files"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+
+    // Tab B listens before A writes.
+    let url = format!("ws://127.0.0.1:{port}/p/{t}/ws?client=b");
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let (mut ws, _) = ws_connect(url).expect("connect");
+        while let Ok(Ws::Text(m)) = ws.read() {
+            tx.send(m.to_string()).ok();
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let put = |path: &str, client: &str| {
+        http.put(format!("{base}/p/{t}/f/{path}"))
+            .header("x-client", client)
+            .body("hello")
+            .send()
+    };
+    assert_eq!(put("pages/p1.json", "a").await.unwrap().status(), 200);
+    let ev: Value = serde_json::from_str(&rx.recv_timeout(CONNECT_WAIT).unwrap()).unwrap();
+    assert_eq!(
+        (ev["op"].as_str(), ev["path"].as_str()),
+        (Some("put"), Some("pages/p1.json"))
+    );
+
+    // B's own writes are not echoed back to B.
+    assert_eq!(put("project.json", "b").await.unwrap().status(), 200);
+    assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+
+    let r = http
+        .get(format!("{base}/p/{t}/f/pages/p1.json"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.text().await.unwrap(), "hello");
+    let files: Value = http
+        .get(format!("{base}/p/{t}/files"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(files.as_array().unwrap().len(), 2);
+
+    let r = http
+        .delete(format!("{base}/p/{t}/f/pages/p1.json"))
+        .header("x-client", "a")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+    let ev: Value = serde_json::from_str(&rx.recv_timeout(CONNECT_WAIT).unwrap()).unwrap();
+    assert_eq!(ev["op"], "del");
+    let r = http
+        .get(format!("{base}/p/{t}/f/pages/p1.json"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+
+    // Traversal and bad tokens are plain 404s.
+    for url in [
+        format!("{base}/p/{t}/f/%2e%2e/escape"),
+        format!("{base}/p/{t}/f/a/%2e%2e/%2e%2e/escape"),
+        format!("{base}/p/ZZ/f/project.json"),
+    ] {
+        let r = http.put(&url).body("x").send().await.unwrap();
+        assert_eq!(r.status(), 404, "{url}");
+    }
+    assert!(!dir.join("escape").exists());
+
+    std::fs::remove_dir_all(&dir).ok();
+    running.stop();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_project_routes_are_off_without_a_data_dir() {
+    let running = spawn_relay();
+    let base = format!("http://127.0.0.1:{}", running.port());
+    let r = reqwest::Client::new()
+        .put(format!("{base}/p/{}/f/project.json", token()))
+        .body("x")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+    running.stop();
+}

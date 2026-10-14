@@ -411,13 +411,17 @@ async fn serve_static(State(relay): State<Arc<Relay>>, uri: Uri) -> Response {
     }
 }
 
-fn router(relay: Arc<Relay>) -> axum::Router {
-    axum::Router::new()
+fn router(relay: Arc<Relay>, store: Option<Arc<super::store::Store>>) -> axum::Router {
+    let app = axum::Router::new()
         .route("/tab/{token}", any(tab_socket))
         .route("/s/{token}/mcp", any(mcp_endpoint))
         .fallback(serve_static)
         .layer(axum::middleware::from_fn(super::server::fix_accept))
-        .with_state(relay)
+        .with_state(relay);
+    match store {
+        Some(store) => app.merge(super::store::router(store)),
+        None => app,
+    }
 }
 
 /// A running relay; stops when dropped.
@@ -458,6 +462,17 @@ pub fn spawn(
     static_dir: Option<PathBuf>,
     allow_origin: Option<String>,
 ) -> Result<Running, String> {
+    spawn_with_data(listen, static_dir, allow_origin, None)
+}
+
+/// [`spawn`], plus `data_dir`: where shared projects are kept (the `/p/` routes are off
+/// without it).
+pub fn spawn_with_data(
+    listen: SocketAddr,
+    static_dir: Option<PathBuf>,
+    allow_origin: Option<String>,
+    data_dir: Option<PathBuf>,
+) -> Result<Running, String> {
     let listener = std::net::TcpListener::bind(listen)
         .map_err(|e| format!("cannot listen on {listen}: {e}"))?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -487,7 +502,7 @@ pub fn spawn(
                     static_dir,
                     ct: thread_ct.child_token(),
                 });
-                if let Err(e) = axum::serve(listener, router(relay))
+                if let Err(e) = axum::serve(listener, router(relay, data_dir.map(super::store::Store::new)))
                     .with_graceful_shutdown(thread_ct.cancelled_owned())
                     .await
                 {

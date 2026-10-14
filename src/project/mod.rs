@@ -229,6 +229,8 @@ impl Store {
         let name = self.unique_name(&format!("{} copy", src.manifest.name));
         let target = self.unique_dir(&self.root, &name);
         copy_dir(dir, &target)?;
+        // A copy is its own project, not another editor of the shared one.
+        crate::vfs::remove_file(target.join(crate::sync::SHARE_FILE)).ok();
         let mut p = Project::open(&target)?;
         p.manifest.id = new_id();
         p.manifest.name = name;

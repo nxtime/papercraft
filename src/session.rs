@@ -13,11 +13,16 @@ use web_time::Instant;
 pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(1000);
 /// Re-render the home-screen thumbnail at most this often while editing.
 pub const THUMBNAIL_INTERVAL: Duration = Duration::from_secs(20);
+/// How often the shell looks at what the sync engines downloaded.
+const SYNC_CHECK: Duration = Duration::from_secs(1);
 pub const THUMB_SIZE: (f64, f64) = (464.0, 296.0);
 
 pub struct Session {
     pub store: Store,
     pub project: Option<Project>,
+    /// Shared projects kept in step with a relay.
+    pub sync: crate::sync::Sync,
+    sync_checked: Option<Instant>,
     dirty_since: Option<Instant>,
     thumb_stale: bool,
     last_thumb: Option<Instant>,
@@ -25,9 +30,13 @@ pub struct Session {
 
 impl Session {
     pub fn new(store: Store) -> Session {
+        let mut sync = crate::sync::Sync::default();
+        sync.start_all(&store.root);
         Session {
             store,
             project: None,
+            sync,
+            sync_checked: None,
             dirty_since: None,
             thumb_stale: false,
             last_thumb: None,
@@ -72,6 +81,81 @@ impl Session {
         }
         let since = *self.dirty_since.get_or_insert(now);
         now.duration_since(since) >= AUTOSAVE_DELAY && !ed.is_busy()
+    }
+
+    /// When the sync engines should next be looked at (None while nothing is shared).
+    pub fn sync_deadline(&self) -> Option<Instant> {
+        self.sync.is_active().then(|| {
+            self.sync_checked
+                .map_or_else(Instant::now, |t| t + SYNC_CHECK)
+        })
+    }
+
+    /// Look at the sync engines: the open project is reloaded when they downloaded changes,
+    /// unless it holds unsaved edits (those win and go up on the next save). True when a check
+    /// ran, so the shell can refresh the home list and the sync status shown there.
+    pub fn sync_poll(&mut self, ed: &mut Editor, now: Instant) -> bool {
+        if self.sync_deadline().is_none_or(|d| now < d) {
+            return false;
+        }
+        self.sync_checked = Some(now);
+        let open = self.project.as_ref().map(|p| p.dir.clone());
+        for dir in self.sync.dirs() {
+            let is_open = open.as_ref() == Some(&dir);
+            if is_open && ed.project_dirty() {
+                continue;
+            }
+            if self.sync.status(&dir).is_some_and(|s| s.take_changed()) {
+                if is_open && let Err(e) = self.open(ed, &dir) {
+                    log::warn!("reload shared project: {e}");
+                }
+            }
+        }
+        true
+    }
+
+    /// Put the project in `dir` on the relay at `server`.
+    pub fn share_project(&mut self, dir: &Path, server: &str) -> Result<(), String> {
+        self.sync.share(dir, server).map(|_| ())
+    }
+
+    /// Open the shared project behind `link` as a project of its own; its files arrive with the
+    /// first sync.
+    pub fn join_shared(&mut self, link: &str) -> Result<(), String> {
+        let token = crate::sync::Share::from_link(link)?.token;
+        let dir = self.store.root.join(format!("shared-{}", &token[..8]));
+        if crate::sync::Share::load(&dir).is_some() {
+            return Ok(());
+        }
+        self.sync.join(&dir, link)
+    }
+
+    /// The shared projects for the home screen: their status and links.
+    pub fn shared_info(
+        &self,
+    ) -> std::collections::HashMap<std::path::PathBuf, crate::ui::home::ShareInfo> {
+        self.sync
+            .dirs()
+            .into_iter()
+            .filter_map(|dir| {
+                let s = self.sync.status(&dir)?;
+                let info = crate::ui::home::ShareInfo {
+                    status: s.label(),
+                    link: s.link.clone(),
+                };
+                Some((dir, info))
+            })
+            .collect()
+    }
+
+    /// The server of any shared project here: the likely answer for the next "Share…".
+    pub fn server_hint(&self) -> String {
+        self.sync
+            .dirs()
+            .iter()
+            .find_map(|d| crate::sync::Share::load(d))
+            .map(|s| s.server)
+            .unwrap_or_default()
     }
 
     /// Retry later (after a failed save) instead of spinning on an overdue deadline.

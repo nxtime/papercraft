@@ -13,12 +13,13 @@ const USAGE: &str = "\
 papercraft-relay — MCP relay for a PaperCraft tab in a browser
 
 USAGE:
-  papercraft-relay [--listen 0.0.0.0:8787] [--static <dir>] [--allow-origin <origin>]
+  papercraft-relay [--listen 0.0.0.0:8787] [--static <dir>] [--allow-origin <origin>] [--data <dir>]
 
 OPTIONS:
   --listen <addr>       address to serve on (default: $PAPERCRAFT_RELAY_LISTEN or 0.0.0.0:8787)
   --static <dir>        serve the built web app from <dir> (e.g. the repo's web/ directory)
   --allow-origin <o>    only let this browser origin connect a tab (default: any)
+  --data <dir>          keep shared projects in <dir> (off without it): /p/{token}/...
   --help                print this text
 
 The tab picks a 32..64 hex character token and shows the agent URL
@@ -33,12 +34,14 @@ struct Args {
     listen: String,
     static_dir: Option<PathBuf>,
     allow_origin: Option<String>,
+    data_dir: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut listen = std::env::var(ENV_LISTEN).unwrap_or_else(|_| DEFAULT_LISTEN.to_string());
     let mut static_dir = None;
     let mut allow_origin = None;
+    let mut data_dir = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -46,6 +49,7 @@ fn parse_args() -> Result<Args, String> {
             "--listen" => listen = value()?,
             "--static" => static_dir = Some(PathBuf::from(value()?)),
             "--allow-origin" => allow_origin = Some(value()?),
+            "--data" => data_dir = Some(PathBuf::from(value()?)),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
     }
@@ -53,6 +57,7 @@ fn parse_args() -> Result<Args, String> {
         listen,
         static_dir,
         allow_origin,
+        data_dir,
     })
 }
 
@@ -79,7 +84,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let running = match relay::spawn(listen, args.static_dir.clone(), args.allow_origin.clone()) {
+    let running = match relay::spawn_with_data(
+        listen,
+        args.static_dir.clone(),
+        args.allow_origin.clone(),
+        args.data_dir.clone(),
+    ) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("papercraft-relay: {e}");

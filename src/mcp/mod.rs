@@ -21,6 +21,8 @@ pub mod relay;
 pub mod relay_proto;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod store;
 pub mod tools;
 
 /// Paper uses 29979; papercraft listens next door so both apps can run side by side.

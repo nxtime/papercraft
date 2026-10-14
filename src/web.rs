@@ -170,6 +170,15 @@ impl Web {
             Editor::default()
         };
         ed.clipboard_io = Some(Box::new(dom::WebClipboard(mirror.clone())));
+        let mut session = Session::new(store);
+        // A share link (`/?share=<token>`) opens the shared project; joining twice is a no-op.
+        let loc = window().location();
+        if let (Ok(search), Ok(origin)) = (loc.search(), loc.origin())
+            && let Some(token) = search.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("share="))
+            && let Err(e) = session.join_shared(&format!("{origin}/?share={token}"))
+        {
+            log::warn!("share link: {e}");
+        }
         Ok(Web {
             painter: Painter::new(&device, format),
             canvas,
@@ -180,7 +189,7 @@ impl Web {
             ctx,
             ed,
             st,
-            session: Session::new(store),
+            session,
             events: vec![],
             mods: Modifiers::NONE,
             pointer: None,
@@ -447,9 +456,29 @@ impl Web {
         }
     }
 
+    /// The server this page came from: where "Share…" puts a project unless told otherwise.
+    fn default_server(&self) -> String {
+        window().location().origin().unwrap_or_default()
+    }
+
+    /// Look at the shared projects' sync engines (about once a second).
+    fn tick_sync(&mut self, now: f64) {
+        if self.session.sync_poll(&mut self.ed, web_time::Instant::now()) {
+            if self.st.home.is_some() {
+                self.show_home();
+            }
+            self.dirty = true;
+        }
+        if self.session.sync_deadline().is_some() {
+            self.wake_at(now + 1000.0);
+        }
+    }
+
     fn show_home(&mut self) {
         let mut hv = self.st.home.take().unwrap_or_default();
         hv.refresh(&self.session.store, crate::project::now_ms());
+        hv.shared = self.session.shared_info();
+        hv.default_server = self.default_server();
         self.st.home = Some(hv);
         self.st.project_name.clear();
         self.st.save_state.clear();
@@ -503,7 +532,17 @@ impl Web {
                 HomeAction::Duplicate(dir) => {
                     store.duplicate(&dir).map(|_| ()).map_err(|e| e.to_string())
                 }
-                HomeAction::Trash(dir) => store.trash(&dir).map(|_| ()).map_err(|e| e.to_string()),
+                HomeAction::Trash(dir) => {
+                    // A trashed project leaves the share; restoring it brings back a local copy.
+                    self.session.sync.unshare(&dir);
+                    store.trash(&dir).map(|_| ()).map_err(|e| e.to_string())
+                }
+                HomeAction::Share(dir, server) => self.session.share_project(&dir, &server),
+                HomeAction::Join(link) => self.session.join_shared(&link),
+                HomeAction::Unshare(dir) => {
+                    self.session.sync.unshare(&dir);
+                    Ok(())
+                }
                 HomeAction::Restore(dir) => {
                     store.restore(&dir).map(|_| ()).map_err(|e| e.to_string())
                 }
@@ -672,6 +711,7 @@ impl Web {
         self.handle_requests();
         self.handle_home_actions();
         self.handle_agent_actions(now);
+        self.tick_sync(now);
         if self.st.library.dirty {
             self.st.library.dirty = false;
             if let Err(e) = self.st.library.library.save() {

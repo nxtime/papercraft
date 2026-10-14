@@ -219,9 +219,27 @@ impl App {
         }
     }
 
+    fn default_server(&self) -> String {
+        self.session.server_hint()
+    }
+
+    /// Look at the shared projects' sync engines (about once a second).
+    fn tick_sync(&mut self) {
+        if self.session.sync_poll(&mut self.ed, Instant::now()) {
+            if self.st.home.is_some() {
+                self.show_home();
+            }
+            if let Some(g) = &self.gfx {
+                g.window.request_redraw();
+            }
+        }
+    }
+
     fn show_home(&mut self) {
         let mut hv = self.st.home.take().unwrap_or_default();
         hv.refresh(&self.session.store, crate::project::now_ms());
+        hv.shared = self.session.shared_info();
+        hv.default_server = self.default_server();
         self.st.home = Some(hv);
         self.st.project_name.clear();
         self.st.save_state.clear();
@@ -330,7 +348,17 @@ impl App {
                 HomeAction::Duplicate(dir) => {
                     store.duplicate(&dir).map(|_| ()).map_err(|e| e.to_string())
                 }
-                HomeAction::Trash(dir) => store.trash(&dir).map(|_| ()).map_err(|e| e.to_string()),
+                HomeAction::Trash(dir) => {
+                    // A trashed project leaves the share; restoring it brings back a local copy.
+                    self.session.sync.unshare(&dir);
+                    store.trash(&dir).map(|_| ()).map_err(|e| e.to_string())
+                }
+                HomeAction::Share(dir, server) => self.session.share_project(&dir, &server),
+                HomeAction::Join(link) => self.session.join_shared(&link),
+                HomeAction::Unshare(dir) => {
+                    self.session.sync.unshare(&dir);
+                    Ok(())
+                }
                 HomeAction::Restore(dir) => {
                     store.restore(&dir).map(|_| ()).map_err(|e| e.to_string())
                 }
@@ -1277,10 +1305,15 @@ impl ApplicationHandler<UserEvent> for App {
                 g.window.request_redraw();
             }
         }
-        let wake = match (self.next_repaint, self.session.next_deadline()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        self.tick_sync();
+        let wake = [
+            self.next_repaint,
+            self.session.next_deadline(),
+            self.session.sync_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         match wake {
             Some(t) if Instant::now() >= t => {
                 if self.next_repaint.is_some_and(|r| r <= t) {

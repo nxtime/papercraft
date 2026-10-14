@@ -20,6 +20,28 @@ pub enum HomeAction {
     EmptyTrash,
     /// Show the projects folder in the system file manager.
     RevealRoot,
+    /// Put a project on this server (a relay) so others can open and edit it.
+    Share(PathBuf, String),
+    /// Open the shared project behind a share link.
+    Join(String),
+    /// Stop syncing a project; it stays here as a local copy.
+    Unshare(PathBuf),
+}
+
+/// The small window opened by "Share…" and "Join shared project…".
+#[derive(Debug, Clone)]
+pub struct ShareDialog {
+    /// The project to share, or None to join.
+    pub dir: Option<PathBuf>,
+    /// The server to share on, or the link to join.
+    pub text: String,
+}
+
+/// What the sync engine reports for one shared project.
+#[derive(Debug, Clone)]
+pub struct ShareInfo {
+    pub status: String,
+    pub link: String,
 }
 
 #[derive(Default)]
@@ -33,6 +55,11 @@ pub struct HomeView {
     /// "Now" for relative timestamps (unix ms); fixed in screenshots.
     pub now_ms: u64,
     pub root: PathBuf,
+    pub dialog: Option<ShareDialog>,
+    /// Shared projects by folder, filled by the shell every frame.
+    pub shared: HashMap<PathBuf, ShareInfo>,
+    /// Where a new share goes unless the user types another server.
+    pub default_server: String,
     thumbs: HashMap<PathBuf, (Option<SystemTime>, egui::TextureHandle)>,
 }
 
@@ -180,6 +207,12 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, native_chrome: bool, translucent: bo
                         if ui.button("Import…").clicked() {
                             hv.actions.push(HomeAction::Import);
                         }
+                        if ui.button("Join shared…").clicked() {
+                            hv.dialog = Some(ShareDialog {
+                                dir: None,
+                                text: String::new(),
+                            });
+                        }
                     }
                 });
             });
@@ -203,6 +236,55 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, native_chrome: bool, translucent: bo
                     }
                 });
         });
+    share_dialog(ui, hv);
+}
+
+fn share_dialog(ui: &mut Ui, hv: &mut HomeView) {
+    let Some(mut d) = hv.dialog.take() else {
+        return;
+    };
+    let (mut keep, mut submit) = (true, false);
+    let (title, hint, button) = match d.dir {
+        Some(_) => (
+            "Share project",
+            "Server, e.g. https://papercraft.example.com",
+            "Share",
+        ),
+        None => ("Join shared project", "Paste the share link", "Join"),
+    };
+    egui::Window::new(title)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .open(&mut keep)
+        .show(ui.ctx(), |ui| {
+            ui.set_width(380.0);
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut d.text)
+                    .hint_text(hint)
+                    .desired_width(f32::INFINITY),
+            );
+            if d.dir.is_some() {
+                ui.label(
+                    RichText::new("Anyone with the link can open and edit the project.")
+                        .size(theme::SECONDARY)
+                        .color(theme::pal(ui).secondary),
+                );
+            }
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button(button).clicked() || enter {
+                submit = true;
+            }
+        });
+    if submit && !d.text.trim().is_empty() {
+        let text = d.text.trim().to_string();
+        hv.actions.push(match d.dir {
+            Some(dir) => HomeAction::Share(dir, text),
+            None => HomeAction::Join(text),
+        });
+    } else if keep {
+        hv.dialog = Some(d);
+    }
 }
 
 fn sidebar_item(
@@ -403,10 +485,39 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
             .size(theme::SECONDARY)
             .color(p.secondary),
         );
+        if let Some(s) = hv.shared.get(&e.dir) {
+            ui.label(
+                RichText::new(format!("Shared · {}", s.status))
+                    .size(theme::SECONDARY)
+                    .color(p.secondary),
+            );
+        }
     });
 }
 
 fn card_menu(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
+    match hv.shared.get(&e.dir).map(|s| s.link.clone()) {
+        Some(link) => {
+            if ui.button("Copy share link").clicked() {
+                ui.ctx().copy_text(link);
+                ui.close();
+            }
+            if ui.button("Stop sharing").clicked() {
+                hv.actions.push(HomeAction::Unshare(e.dir.clone()));
+                ui.close();
+            }
+        }
+        None => {
+            if ui.button("Share…").clicked() {
+                hv.dialog = Some(ShareDialog {
+                    dir: Some(e.dir.clone()),
+                    text: hv.default_server.clone(),
+                });
+                ui.close();
+            }
+        }
+    }
+    ui.separator();
     if ui.button("Open").clicked() {
         hv.actions.push(HomeAction::Open(e.dir.clone()));
         ui.close();
