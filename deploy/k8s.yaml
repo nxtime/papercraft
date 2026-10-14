@@ -55,7 +55,7 @@ spec:
           persistentVolumeClaim: {claimName: papercraft-data}
       containers:
         - name: web
-          image: localhost:32000/papercraft-web:0.2.0-110c99d-wgsl
+          image: localhost:32000/papercraft-web:0.2.0-ea6f1b3
           args: ["--library", "--allow-origin", "https://papercraft.marcospaulo.dev.br"]
           volumeMounts:
             - {name: data, mountPath: /data}
