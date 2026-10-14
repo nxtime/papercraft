@@ -1,0 +1,7 @@
+target/
+analysis/
+.git/
+.worktrees/
+web/pkg/
+dist/
+packaging/

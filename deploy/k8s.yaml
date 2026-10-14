@@ -1,0 +1,85 @@
+# Shared projects live in /data (`--data`) on the HDD: PV /srv/hdd/papercraft, class hdd-storage, Retain (same pattern as actual, kavita, ...).
+# Anyone holding a share link can read and edit that project; the Tailnet-only ingress is the outer boundary.
+# Tailnet access (DNS, TLS, ingress) is added with `expose papercraft/papercraft papercraft`; see deploy/README.md.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: papercraft
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-hdd-papercraft
+spec:
+  capacity: {storage: 5Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: hdd-storage
+  volumeMode: Filesystem
+  local: {path: /srv/hdd/papercraft}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - {key: kubernetes.io/hostname, operator: In, values: [kubernets]}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: papercraft-data
+  namespace: papercraft
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hdd-storage
+  volumeName: pv-hdd-papercraft
+  resources:
+    requests: {storage: 5Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: papercraft
+  namespace: papercraft
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: papercraft}
+  template:
+    metadata:
+      labels: {app: papercraft}
+    spec:
+      securityContext: {fsGroup: 10001}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: papercraft-data}
+      containers:
+        - name: web
+          image: localhost:32000/papercraft-web:0.2.0-110c99d-wgsl
+          args: ["--allow-origin", "https://papercraft.marcospaulo.dev.br"]
+          volumeMounts:
+            - {name: data, mountPath: /data}
+          ports:
+            - containerPort: 8787
+          readinessProbe:
+            httpGet: {path: /index.html, port: 8787}
+          livenessProbe:
+            httpGet: {path: /index.html, port: 8787}
+            initialDelaySeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: papercraft
+  namespace: papercraft
+spec:
+  selector: {app: papercraft}
+  ports:
+    - port: 80
+      targetPort: 8787
