@@ -60,6 +60,8 @@ pub struct HomeView {
     pub shared: HashMap<PathBuf, ShareInfo>,
     /// Where a new share goes unless the user types another server.
     pub default_server: String,
+    /// The server keeps a library: every project is shared, so no share controls.
+    pub library: bool,
     thumbs: HashMap<PathBuf, (Option<SystemTime>, egui::TextureHandle)>,
 }
 
@@ -207,7 +209,7 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, native_chrome: bool, translucent: bo
                         if ui.button("Import…").clicked() {
                             hv.actions.push(HomeAction::Import);
                         }
-                        if ui.button("Join shared…").clicked() {
+                        if !hv.library && ui.button("Join shared…").clicked() {
                             hv.dialog = Some(ShareDialog {
                                 dir: None,
                                 text: String::new(),
@@ -486,8 +488,9 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
             .color(p.secondary),
         );
         if let Some(s) = hv.shared.get(&e.dir) {
+            let prefix = if hv.library { "" } else { "Shared · " };
             ui.label(
-                RichText::new(format!("Shared · {}", s.status))
+                RichText::new(format!("{prefix}{}", s.status))
                     .size(theme::SECONDARY)
                     .color(p.secondary),
             );
@@ -497,6 +500,7 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
 
 fn card_menu(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
     match hv.shared.get(&e.dir).map(|s| s.link.clone()) {
+        _ if hv.library => {}
         Some(link) => {
             if ui.button("Copy share link").clicked() {
                 ui.ctx().copy_text(link);
@@ -517,7 +521,9 @@ fn card_menu(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
             }
         }
     }
-    ui.separator();
+    if !hv.library {
+        ui.separator();
+    }
     if ui.button("Open").clicked() {
         hv.actions.push(HomeAction::Open(e.dir.clone()));
         ui.close();

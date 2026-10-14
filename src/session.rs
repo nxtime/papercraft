@@ -99,9 +99,21 @@ impl Session {
             return false;
         }
         self.sync_checked = Some(now);
+        if self.sync.library_active() {
+            // The library task writes `.share` files for projects it joined or shared.
+            self.sync.start_all(&self.store.root);
+        }
         let open = self.project.as_ref().map(|p| p.dir.clone());
         for dir in self.sync.dirs() {
             let is_open = open.as_ref() == Some(&dir);
+            // A project the server dropped waits until it is closed.
+            if !is_open && let Some(gone) = self.sync.status(&dir).and_then(|s| s.gone()) {
+                self.sync.unshare(&dir);
+                if gone == crate::sync::Gone::Deleted {
+                    self.store.trash(&dir).ok();
+                }
+                continue;
+            }
             if is_open && ed.project_dirty() {
                 continue;
             }
@@ -146,6 +158,12 @@ impl Session {
                 Some((dir, info))
             })
             .collect()
+    }
+
+    /// Keep a library with the relay at `server`, if it runs one (see `Sync::enable_library`).
+    pub fn follow_library(&mut self, server: &str) {
+        let root = self.store.root.clone();
+        self.sync.enable_library(&root, server);
     }
 
     /// The server of any shared project here: the likely answer for the next "Share…".

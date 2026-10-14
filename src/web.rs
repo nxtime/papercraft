@@ -179,6 +179,10 @@ impl Web {
         {
             log::warn!("share link: {e}");
         }
+        // A relay started with --library keeps every project for every device that opens it.
+        if !demo && let Ok(origin) = loc.origin() {
+            session.follow_library(&origin);
+        }
         Ok(Web {
             painter: Painter::new(&device, format),
             canvas,
@@ -479,6 +483,7 @@ impl Web {
         hv.refresh(&self.session.store, crate::project::now_ms());
         hv.shared = self.session.shared_info();
         hv.default_server = self.default_server();
+        hv.library = self.session.sync.library_active();
         self.st.home = Some(hv);
         self.st.project_name.clear();
         self.st.save_state.clear();
@@ -533,8 +538,9 @@ impl Web {
                     store.duplicate(&dir).map(|_| ()).map_err(|e| e.to_string())
                 }
                 HomeAction::Trash(dir) => {
-                    // A trashed project leaves the share; restoring it brings back a local copy.
-                    self.session.sync.unshare(&dir);
+                    // A trashed project leaves the share (and a library); restoring it brings
+                    // back a local copy.
+                    self.session.sync.drop_project(&dir);
                     store.trash(&dir).map(|_| ()).map_err(|e| e.to_string())
                 }
                 HomeAction::Share(dir, server) => self.session.share_project(&dir, &server),

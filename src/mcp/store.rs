@@ -11,6 +11,14 @@
 //!
 //! The token is the only credential, like the agent link: anyone holding it can read and edit.
 //! A bad token or path is a plain 404.
+//!
+//! With `Data::library` the relay is a personal library instead: every project in the data
+//! directory is listed, so a device needs no link to find them (the network is the boundary):
+//!
+//! ```text
+//! GET    /library                JSON array of every project's token
+//! DELETE /p/{token}              move the project to `.trash/` (kept on disk); later `files` answer 410
+//! ```
 
 use super::relay_proto;
 use axum::body::Bytes;
@@ -47,16 +55,28 @@ struct Project {
     tx: broadcast::Sender<Arc<Event>>,
 }
 
+/// Where deleted library projects go, inside the data directory.
+const TRASH: &str = ".trash";
+
+/// The `--data` directory, and whether it is a library (`--library`).
+#[derive(Clone)]
+pub struct Data {
+    pub dir: PathBuf,
+    pub library: bool,
+}
+
 /// The `--data` directory and the live state of the projects in it.
 pub struct Store {
     root: PathBuf,
+    library: bool,
     projects: Mutex<HashMap<String, Arc<Project>>>,
 }
 
 impl Store {
-    pub fn new(root: PathBuf) -> Arc<Store> {
+    pub fn new(data: Data) -> Arc<Store> {
         Arc::new(Store {
-            root,
+            root: data.dir,
+            library: data.library,
             projects: Mutex::new(HashMap::new()),
         })
     }
@@ -71,6 +91,14 @@ impl Store {
                 })
             })
             .clone()
+    }
+
+    /// True when `token` was deleted: its project sits in the trash and is gone from the root.
+    fn was_deleted(&self, token: &str) -> bool {
+        let prefix = format!("{token}-");
+        std::fs::read_dir(self.root.join(TRASH)).is_ok_and(|mut d| {
+            d.any(|e| e.is_ok_and(|e| e.file_name().to_string_lossy().starts_with(&prefix)))
+        })
     }
 
     fn publish(&self, token: &str, op: &'static str, path: String, client: String) {
@@ -149,6 +177,9 @@ async fn list(State(store): State<Arc<Store>>, Path(token): Path<String>) -> Res
     }
     let dir = store.root.join(&token);
     if !dir.is_dir() {
+        if store.was_deleted(&token) {
+            return StatusCode::GONE.into_response();
+        }
         return not_found();
     }
     let files = tokio::task::spawn_blocking(move || {
@@ -159,6 +190,42 @@ async fn list(State(store): State<Arc<Store>>, Path(token): Path<String>) -> Res
     .await
     .unwrap_or_default();
     axum::Json(files).into_response()
+}
+
+/// Every project's token (library mode).
+async fn library(State(store): State<Arc<Store>>) -> Response {
+    let mut tokens: Vec<String> = std::fs::read_dir(&store.root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| relay_proto::valid_token(name))
+        .collect();
+    tokens.sort();
+    axum::Json(tokens).into_response()
+}
+
+/// Delete a project: it moves to `.trash/<token>-<ms>` so nothing is lost on the server.
+async fn delete_project(State(store): State<Arc<Store>>, Path(token): Path<String>) -> Response {
+    if !relay_proto::valid_token(&token) {
+        return not_found();
+    }
+    let dir = store.root.join(&token);
+    if !dir.is_dir() {
+        return not_found();
+    }
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let trash = store.root.join(TRASH);
+    let moved = tokio::fs::create_dir_all(&trash).await.is_ok()
+        && tokio::fs::rename(&dir, trash.join(format!("{token}-{ms}"))).await.is_ok();
+    if !moved {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    store.projects.lock().unwrap_or_else(PoisonError::into_inner).remove(&token);
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn read(
@@ -274,12 +341,16 @@ async fn serve(mut socket: WebSocket, mut rx: broadcast::Receiver<Arc<Event>>, m
 }
 
 pub fn router(store: Arc<Store>) -> axum::Router {
-    axum::Router::new()
+    let mut app = axum::Router::new()
         .route("/p/{token}/files", get(list))
         .route("/p/{token}/f/{*path}", get(read).put(write).delete(remove))
-        .route("/p/{token}/ws", get(socket))
-        .layer(DefaultBodyLimit::max(MAX_FILE_BYTES))
-        .with_state(store)
+        .route("/p/{token}/ws", get(socket));
+    if store.library {
+        app = app
+            .route("/library", get(library))
+            .route("/p/{token}", axum::routing::delete(delete_project));
+    }
+    app.layer(DefaultBodyLimit::max(MAX_FILE_BYTES)).with_state(store)
 }
 
 #[cfg(test)]

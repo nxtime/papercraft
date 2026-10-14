@@ -5,6 +5,7 @@
 //! built web app (`web/index.html` + `web/pkg`) from the same origin, so one process hosts it.
 
 use papercraft::mcp::relay;
+use papercraft::mcp::store::Data;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -13,13 +14,16 @@ const USAGE: &str = "\
 papercraft-relay — MCP relay for a PaperCraft tab in a browser
 
 USAGE:
-  papercraft-relay [--listen 0.0.0.0:8787] [--static <dir>] [--allow-origin <origin>] [--data <dir>]
+  papercraft-relay [--listen 0.0.0.0:8787] [--static <dir>] [--allow-origin <origin>] [--data <dir>] [--library]
 
 OPTIONS:
   --listen <addr>       address to serve on (default: $PAPERCRAFT_RELAY_LISTEN or 0.0.0.0:8787)
   --static <dir>        serve the built web app from <dir> (e.g. the repo's web/ directory)
   --allow-origin <o>    only let this browser origin connect a tab (default: any)
   --data <dir>          keep shared projects in <dir> (off without it): /p/{token}/...
+  --library             with --data: a personal library. Every project in <dir> is listed at
+                        /library and synced to every device that opens this server, with no
+                        link needed, so only run it where the network is the boundary
   --help                print this text
 
 The tab picks a 32..64 hex character token and shows the agent URL
@@ -35,6 +39,7 @@ struct Args {
     static_dir: Option<PathBuf>,
     allow_origin: Option<String>,
     data_dir: Option<PathBuf>,
+    library: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -42,6 +47,7 @@ fn parse_args() -> Result<Args, String> {
     let mut static_dir = None;
     let mut allow_origin = None;
     let mut data_dir = None;
+    let mut library = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -50,6 +56,7 @@ fn parse_args() -> Result<Args, String> {
             "--static" => static_dir = Some(PathBuf::from(value()?)),
             "--allow-origin" => allow_origin = Some(value()?),
             "--data" => data_dir = Some(PathBuf::from(value()?)),
+            "--library" => library = true,
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
     }
@@ -58,6 +65,7 @@ fn parse_args() -> Result<Args, String> {
         static_dir,
         allow_origin,
         data_dir,
+        library,
     })
 }
 
@@ -74,6 +82,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if args.library && args.data_dir.is_none() {
+        eprintln!("papercraft-relay: --library needs --data <dir>");
+        return ExitCode::FAILURE;
+    }
     let listen: SocketAddr = match args.listen.parse() {
         Ok(a) => a,
         Err(_) => {
@@ -88,7 +100,10 @@ fn main() -> ExitCode {
         listen,
         args.static_dir.clone(),
         args.allow_origin.clone(),
-        args.data_dir.clone(),
+        args.data_dir.clone().map(|dir| Data {
+            dir,
+            library: args.library,
+        }),
     ) {
         Ok(r) => r,
         Err(e) => {

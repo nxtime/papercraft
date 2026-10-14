@@ -465,13 +465,12 @@ pub fn spawn(
     spawn_with_data(listen, static_dir, allow_origin, None)
 }
 
-/// [`spawn`], plus `data_dir`: where shared projects are kept (the `/p/` routes are off
-/// without it).
+/// [`spawn`], plus `data`: where shared projects are kept (the `/p/` routes are off without it).
 pub fn spawn_with_data(
     listen: SocketAddr,
     static_dir: Option<PathBuf>,
     allow_origin: Option<String>,
-    data_dir: Option<PathBuf>,
+    data: Option<super::store::Data>,
 ) -> Result<Running, String> {
     let listener = std::net::TcpListener::bind(listen)
         .map_err(|e| format!("cannot listen on {listen}: {e}"))?;
@@ -502,7 +501,7 @@ pub fn spawn_with_data(
                     static_dir,
                     ct: thread_ct.child_token(),
                 });
-                if let Err(e) = axum::serve(listener, router(relay, data_dir.map(super::store::Store::new)))
+                if let Err(e) = axum::serve(listener, router(relay, data.map(super::store::Store::new)))
                     .with_graceful_shutdown(thread_ct.cancelled_owned())
                     .await
                 {

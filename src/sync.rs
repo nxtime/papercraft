@@ -11,6 +11,11 @@
 //!   the shell reloads the open project.
 //!
 //! Granularity is a whole file (one page), last write wins.
+//!
+//! A relay started with `--library` is a personal library: [`Sync::enable_library`] lists it
+//! every [`LIBRARY_POLL`], joins the projects this device does not have and shares the local
+//! ones, so every device that opens the server ends up with the same projects. The sync loops
+//! above do the actual file work; the library only writes `.share` files.
 
 use crate::mcp::relay_proto;
 use crate::vfs;
@@ -25,6 +30,8 @@ use std::time::Duration;
 pub const SHARE_FILE: &str = ".share";
 /// How often a shared project asks the server what changed.
 const POLL: Duration = Duration::from_secs(2);
+/// How often a library device looks for projects added or deleted elsewhere.
+const LIBRARY_POLL: Duration = Duration::from_secs(5);
 /// Files that stay on this machine: the sync state and the home-screen preview.
 const LOCAL_ONLY: [&str; 2] = [SHARE_FILE, "thumbnail.png"];
 
@@ -151,13 +158,49 @@ struct RemoteFile {
     mtime: u64,
 }
 
-async fn list_remote(base: &str) -> Result<BTreeMap<String, u64>, String> {
+/// Why a shared project stopped syncing for good.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Gone {
+    /// Someone deleted it on the server (library mode): it belongs in this device's trash.
+    Deleted,
+    /// It had synced before but the server no longer knows it, as after losing its data:
+    /// the folder is the only copy left, so it stays and can be shared again.
+    Lost,
+}
+
+#[derive(Debug)]
+pub enum SyncError {
+    Gone(Gone),
+    Other(String),
+}
+
+impl From<String> for SyncError {
+    fn from(e: String) -> SyncError {
+        SyncError::Other(e)
+    }
+}
+
+impl std::fmt::Display for SyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SyncError::Gone(Gone::Deleted) => f.write_str("deleted on the server"),
+            SyncError::Gone(Gone::Lost) => f.write_str("the server no longer has this project"),
+            SyncError::Other(e) => f.write_str(e),
+        }
+    }
+}
+
+/// The server's files for a project. `synced_before`: this folder has already synced once, so
+/// an unknown project is a loss, not a first upload.
+async fn list_remote(base: &str, synced_before: bool) -> Result<BTreeMap<String, u64>, SyncError> {
     let (code, body) = net::request("GET", &format!("{base}/files"), None).await?;
     match code {
         200 => {}
+        410 => return Err(SyncError::Gone(Gone::Deleted)),
         // Nothing uploaded yet: the first sync of a freshly shared project.
-        404 => return Ok(BTreeMap::new()),
-        c => return Err(format!("the server answered {c}")),
+        404 if !synced_before => return Ok(BTreeMap::new()),
+        404 => return Err(SyncError::Gone(Gone::Lost)),
+        c => return Err(format!("the server answered {c}").into()),
     }
     let files: Vec<RemoteFile> = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
     Ok(files
@@ -169,10 +212,10 @@ async fn list_remote(base: &str) -> Result<BTreeMap<String, u64>, String> {
 
 /// One round: reconcile the folder with the server. True when the server's version of some
 /// file was applied here, so the open project may need reloading.
-pub async fn sync_once(dir: &Path) -> Result<bool, String> {
-    let mut share = Share::load(dir).ok_or("this project is not shared")?;
+pub async fn sync_once(dir: &Path) -> Result<bool, SyncError> {
+    let mut share = Share::load(dir).ok_or_else(|| "this project is not shared".to_string())?;
     let base = share.base();
-    let remote = list_remote(&base).await?;
+    let remote = list_remote(&base, !share.synced.is_empty()).await?;
     let local = scan(dir);
     let paths: BTreeSet<&String> = remote
         .keys()
@@ -189,7 +232,7 @@ pub async fn sync_once(dir: &Path) -> Result<bool, String> {
             let Some(hash) = l else {
                 let (code, _) = net::request("DELETE", &url, None).await?;
                 if code != 204 && code != 404 {
-                    return Err(format!("could not delete {path}: server answered {code}"));
+                    return Err(format!("could not delete {path}: server answered {code}").into());
                 }
                 synced.remove(path);
                 continue;
@@ -197,7 +240,7 @@ pub async fn sync_once(dir: &Path) -> Result<bool, String> {
             let bytes = vfs::read(&file).map_err(|e| format!("{path}: {e}"))?;
             let (code, body) = net::request("PUT", &url, Some(bytes)).await?;
             if code != 200 {
-                return Err(format!("could not upload {path}: server answered {code}"));
+                return Err(format!("could not upload {path}: server answered {code}").into());
             }
             let remote = String::from_utf8_lossy(&body).trim().parse().unwrap_or(0);
             synced.insert(
@@ -216,7 +259,7 @@ pub async fn sync_once(dir: &Path) -> Result<bool, String> {
             };
             let (code, bytes) = net::request("GET", &url, None).await?;
             if code != 200 {
-                return Err(format!("could not download {path}: server answered {code}"));
+                return Err(format!("could not download {path}: server answered {code}").into());
             }
             if let Some(parent) = file.parent() {
                 vfs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -250,6 +293,7 @@ pub struct Status {
 #[derive(Default)]
 struct Inner {
     error: Option<String>,
+    gone: Option<Gone>,
     synced_once: bool,
     changed: bool,
 }
@@ -262,6 +306,11 @@ impl Status {
     /// The server's copy changed files in the folder since the last call.
     pub fn take_changed(&self) -> bool {
         std::mem::take(&mut self.inner().changed)
+    }
+
+    /// Why this project stopped syncing for good, if it did.
+    pub fn gone(&self) -> Option<Gone> {
+        self.inner().gone
     }
 
     pub fn label(&self) -> String {
@@ -285,10 +334,57 @@ async fn run(dir: PathBuf, status: Arc<Status>) {
                     i.synced_once = true;
                     i.changed |= changed;
                 }
-                Err(e) => i.error = Some(e),
+                Err(SyncError::Gone(g)) => {
+                    i.gone = Some(g);
+                    status.stop.store(true, Ordering::Relaxed);
+                }
+                Err(e) => i.error = Some(e.to_string()),
             }
         }
         net::sleep(POLL).await;
+    }
+}
+
+/// One look at the library: share local projects, join the ones this device lacks. False when
+/// the relay has no library.
+pub async fn library_round(root: &Path, server: &str) -> Result<bool, String> {
+    let (code, body) = net::request("GET", &format!("{server}/library"), None).await?;
+    match code {
+        200 => {}
+        404 => return Ok(false),
+        c => return Err(format!("the server answered {c}")),
+    }
+    let tokens: Vec<String> = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    let mut known = BTreeSet::new();
+    for e in vfs::read_dir(root).into_iter().flatten().flatten() {
+        let hidden = e.file_name().to_string_lossy().starts_with('.');
+        if !hidden && let Some(s) = Share::load(&e.path()) {
+            known.insert(s.token);
+        }
+    }
+    let store = crate::project::Store::open(root).map_err(|e| e.to_string())?;
+    for entry in store.list() {
+        if Share::load(&entry.dir).is_none() {
+            Share::new(server).save(&entry.dir)?;
+        }
+    }
+    for token in tokens.iter().filter(|t| !known.contains(*t)) {
+        let share = Share::from_link(&format!("{server}/?share={token}"))?;
+        let dir = root.join(format!("shared-{}", &token[..8]));
+        vfs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        share.save(&dir)?;
+    }
+    Ok(true)
+}
+
+async fn run_library(root: PathBuf, server: String, alive: Arc<AtomicBool>) {
+    while alive.load(Ordering::Relaxed) {
+        match library_round(&root, &server).await {
+            Ok(true) => {}
+            Ok(false) => alive.store(false, Ordering::Relaxed),
+            Err(e) => log::warn!("library: {e}"),
+        }
+        net::sleep(LIBRARY_POLL).await;
     }
 }
 
@@ -296,6 +392,14 @@ async fn run(dir: PathBuf, status: Arc<Status>) {
 #[derive(Default)]
 pub struct Sync {
     running: HashMap<PathBuf, Arc<Status>>,
+    library: Option<Library>,
+}
+
+/// The relay this device keeps a library with; `alive` goes false when it turns out not to
+/// be one.
+struct Library {
+    server: String,
+    alive: Arc<AtomicBool>,
 }
 
 impl Sync {
@@ -354,7 +458,47 @@ impl Sync {
     }
 
     pub fn is_active(&self) -> bool {
-        !self.running.is_empty()
+        !self.running.is_empty() || self.library_active()
+    }
+
+    /// Keep a library with the relay at `server` (the page's own origin on the web): its
+    /// projects appear here and this device's projects appear there. Does nothing, quietly, when
+    /// the relay was not started with `--library`.
+    pub fn enable_library(&mut self, root: &Path, server: &str) {
+        if self.library.is_some() {
+            return;
+        }
+        let server = server.trim_end_matches('/').to_string();
+        let alive = Arc::new(AtomicBool::new(true));
+        net::spawn(run_library(root.to_path_buf(), server.clone(), alive.clone()));
+        self.library = Some(Library { server, alive });
+    }
+
+    /// True while a library relay is being followed: projects there are the user's own, so
+    /// the share/join controls do not apply.
+    pub fn library_active(&self) -> bool {
+        self.library
+            .as_ref()
+            .is_some_and(|l| l.alive.load(Ordering::Relaxed))
+    }
+
+    /// A project leaves this device for good (trashed). In a library it is deleted on the relay
+    /// too, so the other devices drop it; otherwise only this folder stops syncing.
+    pub fn drop_project(&mut self, dir: &Path) {
+        if let (Some(lib), Some(share)) = (&self.library, Share::load(dir))
+            && lib.alive.load(Ordering::Relaxed)
+            && share.server == lib.server
+        {
+            let url = share.base();
+            net::spawn(async move {
+                match net::request("DELETE", &url, None).await {
+                    Ok((204 | 404 | 410, _)) => {}
+                    Ok((code, _)) => log::warn!("library: delete answered {code}"),
+                    Err(e) => log::warn!("library: could not delete: {e}"),
+                }
+            });
+        }
+        self.unshare(dir);
     }
 
     /// Stop syncing `dir` and forget its share (the files stay).

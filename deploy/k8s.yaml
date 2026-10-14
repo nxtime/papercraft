@@ -1,5 +1,6 @@
 # Shared projects live in /data (`--data`) on the HDD: PV /srv/hdd/papercraft, class hdd-storage, Retain (same pattern as actual, kavita, ...).
-# Anyone holding a share link can read and edit that project; the Tailnet-only ingress is the outer boundary.
+# --library: every project in /data is listed at /library and synced to every device that opens the site, with no link
+# needed. There are no accounts, so the Tailnet-only ingress is the whole access boundary; never expose this publicly.
 # Tailnet access (DNS, TLS, ingress) is added with `expose papercraft/papercraft papercraft`; see deploy/README.md.
 apiVersion: v1
 kind: Namespace
@@ -55,7 +56,7 @@ spec:
       containers:
         - name: web
           image: localhost:32000/papercraft-web:0.2.0-110c99d-wgsl
-          args: ["--allow-origin", "https://papercraft.marcospaulo.dev.br"]
+          args: ["--library", "--allow-origin", "https://papercraft.marcospaulo.dev.br"]
           volumeMounts:
             - {name: data, mountPath: /data}
           ports:
