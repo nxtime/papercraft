@@ -23,7 +23,16 @@ fn read(dir: &Path, rel: &str) -> Option<String> {
 async fn two_folders_follow_each_other_through_the_relay() {
     let data = temp("data");
     let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let running = relay::spawn_with_data(listen, None, None, Some(Data { dir: data.clone(), library: false })).unwrap();
+    let running = relay::spawn_with_data(
+        listen,
+        None,
+        None,
+        Some(Data {
+            dir: data.clone(),
+            library: false,
+        }),
+    )
+    .unwrap();
     let server = format!("http://127.0.0.1:{}", running.port());
 
     // A shares a project with two pages.
@@ -96,7 +105,10 @@ fn names(root: &Path) -> Vec<String> {
 
 fn library_relay(data: &Path, library: bool) -> (relay::Running, String) {
     let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let data = Data { dir: data.to_path_buf(), library };
+    let data = Data {
+        dir: data.to_path_buf(),
+        library,
+    };
     let running = relay::spawn_with_data(listen, None, None, Some(data)).unwrap();
     let server = format!("http://127.0.0.1:{}", running.port());
     (running, server)
@@ -128,10 +140,21 @@ async fn a_library_shows_every_project_on_every_device() {
 
     // B deletes it on the server: the data is kept in .trash, A is told it is deleted.
     let http = reqwest::Client::new();
-    let res = http.delete(format!("{server}/p/{token}")).send().await.unwrap();
+    let res = http
+        .delete(format!("{server}/p/{token}"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 204);
     assert!(data.join(".trash").read_dir().unwrap().next().is_some());
-    let listed = http.get(format!("{server}/library")).send().await.unwrap().text().await.unwrap();
+    let listed = http
+        .get(format!("{server}/library"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     assert!(!listed.contains(&token), "{listed}");
     match sync::sync_once(&alpha).await {
         Err(sync::SyncError::Gone(sync::Gone::Deleted)) => {}

@@ -174,7 +174,10 @@ impl Web {
         // A share link (`/?share=<token>`) opens the shared project; joining twice is a no-op.
         let loc = window().location();
         if let (Ok(search), Ok(origin)) = (loc.search(), loc.origin())
-            && let Some(token) = search.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("share="))
+            && let Some(token) = search
+                .trim_start_matches('?')
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("share="))
             && let Err(e) = session.join_shared(&format!("{origin}/?share={token}"))
         {
             log::warn!("share link: {e}");
@@ -467,7 +470,10 @@ impl Web {
 
     /// Look at the shared projects' sync engines (about once a second).
     fn tick_sync(&mut self, now: f64) {
-        if self.session.sync_poll(&mut self.ed, web_time::Instant::now()) {
+        if self
+            .session
+            .sync_poll(&mut self.ed, web_time::Instant::now())
+        {
             if self.st.home.is_some() {
                 self.show_home();
             }

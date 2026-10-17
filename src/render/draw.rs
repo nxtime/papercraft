@@ -354,18 +354,88 @@ pub fn node_draw(n: &Node, wr: Rect, opacity: f64) -> NodeDraw {
                     }
                 }
             }
-            if let Some(c) = n.style.stroke
-                && n.style.stroke_width > 0.0
-                && let Some(sp) = stroke_path(n, wr)
-            {
-                ops.push(DrawOp::Stroke {
-                    path: sp,
-                    color: rgba(c, opacity),
-                    width: n.style.stroke_width,
-                    cap: n.style.cap,
-                    join: n.style.join,
-                    dash: n.style.dash.clone(),
-                });
+            if let Some(c) = n.style.stroke {
+                if let Some(sides) = n.style.stroke_sides
+                    && matches!(n.kind, NodeKind::Frame { .. } | NodeKind::Rect)
+                    && sides.iter().any(|&w| (w - sides[0]).abs() > 1e-9)
+                {
+                    let col = rgba(c, opacity);
+                    let side_specs = [
+                        (
+                            sides[0],
+                            Rect::new(wr.x, wr.y, wr.w, sides[0].min(wr.h)),
+                            [
+                                v2(wr.x, wr.y + sides[0] * 0.5),
+                                v2(wr.right(), wr.y + sides[0] * 0.5),
+                            ],
+                        ),
+                        (
+                            sides[1],
+                            Rect::new(
+                                (wr.right() - sides[1]).max(wr.x),
+                                wr.y,
+                                sides[1].min(wr.w),
+                                wr.h,
+                            ),
+                            [
+                                v2(wr.right() - sides[1] * 0.5, wr.y),
+                                v2(wr.right() - sides[1] * 0.5, wr.bottom()),
+                            ],
+                        ),
+                        (
+                            sides[2],
+                            Rect::new(
+                                wr.x,
+                                (wr.bottom() - sides[2]).max(wr.y),
+                                wr.w,
+                                sides[2].min(wr.h),
+                            ),
+                            [
+                                v2(wr.x, wr.bottom() - sides[2] * 0.5),
+                                v2(wr.right(), wr.bottom() - sides[2] * 0.5),
+                            ],
+                        ),
+                        (
+                            sides[3],
+                            Rect::new(wr.x, wr.y, sides[3].min(wr.w), wr.h),
+                            [
+                                v2(wr.x + sides[3] * 0.5, wr.y),
+                                v2(wr.x + sides[3] * 0.5, wr.bottom()),
+                            ],
+                        ),
+                    ];
+                    for (w, sr, line_pts) in side_specs {
+                        if w > 0.0 && sr.w > 0.0 && sr.h > 0.0 {
+                            if !n.style.dash.is_empty() {
+                                ops.push(DrawOp::Stroke {
+                                    path: VPath::polyline(&line_pts, false),
+                                    color: col,
+                                    width: w,
+                                    cap: Cap::Butt,
+                                    join: n.style.join,
+                                    dash: n.style.dash.clone(),
+                                });
+                            } else {
+                                ops.push(DrawOp::Fill {
+                                    path: vector::rounded_rect(sr, [0.0; 4]),
+                                    paint: PaintSpec::Solid(col),
+                                    even_odd: false,
+                                });
+                            }
+                        }
+                    }
+                } else if n.style.stroke_width > 0.0
+                    && let Some(sp) = stroke_path(n, wr)
+                {
+                    ops.push(DrawOp::Stroke {
+                        path: sp,
+                        color: rgba(c, opacity),
+                        width: n.style.stroke_width,
+                        cap: n.style.cap,
+                        join: n.style.join,
+                        dash: n.style.dash.clone(),
+                    });
+                }
             }
         }
     }
@@ -464,18 +534,54 @@ fn text_ops(n: &Node, wr: Rect, opacity: f64, ops: &mut Vec<DrawOp>) {
             glyphs,
         });
     }
-    // Underline / strikethrough as thin rectangles.
+    // Underline / strikethrough as thin rectangles (or wavy stroke for wavy underlines).
     for g in l.glyphs.iter().filter(|g| g.underline || g.strike) {
         let th = (g.size / 14.0).max(0.5);
-        for (on, dy) in [(g.underline, g.size * 0.12), (g.strike, -g.size * 0.28)] {
-            if on {
-                let r = Rect::new(o.x + g.x, o.y + g.baseline + dy, g.advance, th);
+        if g.underline {
+            let u_col = g.underline_color.unwrap_or(g.color);
+            if g.underline_wavy {
+                let x0 = o.x + g.x;
+                let x1 = x0 + g.advance;
+                let y0 = o.y + g.baseline + g.size * 0.14;
+                let step = (g.size * 0.14).max(1.8);
+                let amp = (g.size * 0.06).max(0.8);
+                let mut pts = Vec::new();
+                let mut x = x0;
+                let mut k = 0usize;
+                while x < x1 - 1e-6 {
+                    let dy = if k.is_multiple_of(2) { -amp } else { amp };
+                    pts.push(v2(x, y0 + dy));
+                    x += step;
+                    k += 1;
+                }
+                let dy = if k.is_multiple_of(2) { -amp } else { amp };
+                pts.push(v2(x1, y0 + dy));
+                if pts.len() >= 2 {
+                    ops.push(DrawOp::Stroke {
+                        path: VPath::polyline(&pts, false),
+                        color: rgba(u_col, opacity),
+                        width: th,
+                        cap: Cap::Round,
+                        join: Join::Round,
+                        dash: Vec::new(),
+                    });
+                }
+            } else {
+                let r = Rect::new(o.x + g.x, o.y + g.baseline + g.size * 0.12, g.advance, th);
                 ops.push(DrawOp::Fill {
                     path: vector::rounded_rect(r, [0.0; 4]),
-                    paint: PaintSpec::Solid(rgba(g.color, opacity)),
+                    paint: PaintSpec::Solid(rgba(u_col, opacity)),
                     even_odd: false,
                 });
             }
+        }
+        if g.strike {
+            let r = Rect::new(o.x + g.x, o.y + g.baseline - g.size * 0.28, g.advance, th);
+            ops.push(DrawOp::Fill {
+                path: vector::rounded_rect(r, [0.0; 4]),
+                paint: PaintSpec::Solid(rgba(g.color, opacity)),
+                even_odd: false,
+            });
         }
     }
 }

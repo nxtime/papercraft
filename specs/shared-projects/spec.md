@@ -59,3 +59,13 @@ after a relay restart (tabs resync from `/files` on reconnect, so a lower rev is
   locally; editing a page in tab A shows up in tab B without a manual reload. Wasm check builds
   clean and native tests stay green.
 - Local (non-shared) projects behave exactly as before.
+
+## Where it lives
+
+| Concern | Code |
+|---------|------|
+| Server store, `/p/` routes, path and token checks | `src/mcp/store.rs`, merged into the relay router in `src/mcp/relay.rs` (`spawn_with_data`); `--data` flag in `src/bin/papercraft-relay.rs` |
+| Sync engine (both targets), `.share` file, link parsing, server-path sanitising | `src/sync.rs` (HTTP: reqwest native, `fetch` wasm) |
+| Reload of the open project, status, join/share entry points | `src/session.rs` (`sync_poll`, `share_project`, `join_shared`) |
+| Home screen: Share…, Join shared…, status badge, copy link | `src/ui/home.rs`; actions handled in `src/app.rs` and `src/web.rs`; `?share=` auto-join in `src/web.rs` |
+| Tests | `tests/relay.rs` (store routes), `tests/sync.rs` (two folders through a real relay), unit tests in `src/sync.rs` and `src/mcp/store.rs` |

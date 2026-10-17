@@ -199,12 +199,13 @@ Read a guide. Topics: "papercraft-mcp-instructions" (read first), "html" (what w
 
 ### `get_screenshot` (read-only)
 
-Render a node (or the whole page when nodeId is omitted or "root") to a PNG and return it as an image. Scale 1 (default) is enough for layout checks; use 2 to read small text. Large images are scaled down to fit API limits.
+Render a node (or the whole page when nodeId is omitted or "root") to a PNG and return it as an image. Scale 1 (default) is enough for layout checks; use 2 to read small text. Large images are scaled down to fit API limits. In `papercraft-cli`, pass `-o`/`--out FILE` or `{"out": "FILE"}` to choose the output file path.
 
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `nodeId` | string |  | The node to capture; omit for the whole page. |
+| `out` | string |  | Optional file path to save the PNG to (also used by `papercraft-cli`). |
 | `scale` | number |  | Render scale: 1 (default) or 2. |
 
 
@@ -248,12 +249,12 @@ Creates an artboard (top-level frame) and returns its id; then add content with 
 
 Parse HTML with inline styles into layers. Write incrementally: each call should add one visual group (a header, one list row, a card) so the user sees progress.
 - mode "insert-children" appends the HTML inside targetNodeId ("root" = the page); "replace" replaces targetNodeId with it.
-- Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, align-items, justify-content, flex-grow, flex-wrap) is the layout model; block elements stack vertically. position:absolute with left/top is supported. No margin, grid or tables.
-- Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, letter-spacing, text-align, text-decoration; <b>/<i>/<u>/<s>/<span style> make rich text. Font family is always Inter.
-- Boxes: background(-color/-image: colors, linear/radial gradients, url()), border, border-radius, opacity, overflow:hidden, mix-blend-mode, width/height (px, %, fit-content).
+- Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, align-items, justify-content, align-self, flex-grow, flex-wrap) is the layout model; block elements stack vertically. position:absolute with left/top is supported. No margin, grid or tables.
+- Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, letter-spacing, text-align, text-decoration (including `wavy` and `text-decoration-color`); <b>/<i>/<u>/<s>/<span style> make rich text. Font family is always Inter.
+- Boxes: background(-color/-image: colors, linear/radial gradients, url()), border (and border-top/right/bottom/left), border-radius, opacity, overflow:hidden, mix-blend-mode, width/height (px, %, fit-content), min-width/max-width/min-height/max-height.
 - <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths or data: URIs. <svg> markup is imported as vector layers.
-- <x-paper-icon name="set:name" size="20" color="var(--accent)"/> places an installed icon (search_icons); <x-paper-instance component-id="ID" layer-name="..."/> places a component instance; colors may be var(--name) of set_variables.
-- layer-name="..." names layers; <x-paper-clone node-id="ID" style="..."/> clones an existing node.
+- <x-paper-icon name="set:name" size="20" color="var(--accent)"/> places an installed icon (search_icons); <x-paper-instance component="Name" component-id="ID" layer-name="..."/> places a component instance; colors may be var(--name) of set_variables.
+- layer-name="..." names layers; <x-paper-clone node-id="ID" style="..."/> clones an existing node (supports cross-page `<page>:<id>`).
 Returns the ids of the created top-level layers and the styles that were ignored.
 
 
@@ -306,22 +307,22 @@ Delete nodes and their descendants. Verify parents with get_node_info first when
 
 ### `duplicate_nodes`
 
-Deep-clone nodes. Each copy goes under parentId when given, else next to its source; duplicated artboards are placed in an empty spot. Returns new ids and a descendantIdMap from every original descendant id to its copy.
+Deep-clone nodes, including across pages (via `toPageId` or a cross-page `parentId`; `<x-paper-clone node-id="<page>:<id>"/>` also works across pages). Each copy goes under parentId when given, else next to its source; duplicated artboards are placed in an empty spot. Returns new ids and a descendantIdMap from every original descendant id to its copy.
 
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `nodes` | array of object | yes |  |
+| `nodes` | array of object | yes | Items accept `{id, parentId?, toPageId?}`. |
 
 
 ### `move_nodes`
 
-Move nodes keeping their ids. Each move is {nodeId, before: siblingId}, {nodeId, after: siblingId} or {nodeId, parentId, index?} (parentId "root" = the page root). Moves apply in order. In auto-layout parents this changes the visual order; in free parents it changes stacking and keeps the world position.
+Move nodes keeping their ids (or onto another page via `toPageId` or a cross-page `parentId` / `before` / `after`). Each move is {nodeId, before: siblingId}, {nodeId, after: siblingId} or {nodeId, parentId, toPageId?, index?} (parentId "root" = the page root). Moves apply in order. In auto-layout parents this changes the visual order; in free parents it changes stacking and keeps the world position.
 
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `moves` | array of object | yes |  |
+| `moves` | array of object | yes | Items accept `{nodeId, before?, after?, parentId?, toPageId?, index?}`. |
 
 
 ### `create_shape`
@@ -388,9 +389,20 @@ Switch the active variable mode (defined with set_variables {mode}): every varia
 Main components on a page (id, name, size) with how many instances each has.
 
 
+### `import_components`
+
+Copy the main components anywhere on `fromPageId` (including inside artboards, typically on a `Design System` page) onto this one, so you can place instances here with `create_instance` or `<x-paper-instance component="Name" component-id="ID"/>`. Components with the same name already here are skipped. Variables and tokens are already shared by every page; components are copies, not live links.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `fromPageId` | string | yes | Source page id. |
+| `names` | array of string |  | Only these components (default all). |
+
+
 ### `create_component`
 
-Turn a frame or artboard into a main component. Build reusable parts (button, row, chip, tab) once as components, then place them with create_instance or <x-paper-instance>. Components and instances live on one page.
+Turn a frame or artboard into a main component. Build reusable parts (button, row, chip, tab) once as components, then place them with create_instance or `<x-paper-instance component="Name" component-id="ID"/>`. Components and instances live on one page.
 
 
 | Argument | Type | Required | Notes |
@@ -460,6 +472,43 @@ Check a page or subtree for common design mistakes and get a fix for each: text 
 
 
 ## Session
+
+
+### `get_feedback` (read-only)
+
+Notes the user left on layers (the Feedback box in the inspector, shown as amber dots on the canvas): which layer, where it sits, what to change. Omitting `pageId` queries all pages across the project; `openCount` and `resolvedCount` are returned alongside per-page counts in `get_basic_info`. Call it at the start of a session and after each round of edits; fix every open note, then `resolve_feedback`. `get_selection` also includes the selected layers' notes.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `includeResolved` | boolean |  | Include resolved notes. |
+| `nodeId` | string |  | Only this layer. |
+| `pageId` | string |  | Omit to query all pages across the project. |
+
+
+### `add_feedback`
+
+Leave a note on a layer (author `agent` by default), e.g. a question or a problem you could not fix. The user sees it in the inspector and as a dot on the canvas.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `author` | string |  | Defaults to `agent`. |
+| `nodeId` | string | yes |  |
+| `text` | string | yes |  |
+
+
+### `resolve_feedback`
+
+Mark notes on a layer resolved, with a short reply saying what you changed. Without `commentId` every open note on the layer is resolved. `delete` removes instead.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `commentId` | number |  |  |
+| `delete` | boolean |  |  |
+| `nodeId` | string | yes |  |
+| `reply` | string |  |  |
 
 
 ### `select_nodes`

@@ -20,30 +20,30 @@
 | `<img src>` | an image fill. `src` is an absolute path, a `file://` URL, `paper-asset:///abs/path` or a `data:` URI. `http(s)` is not fetched |
 | `<svg>...</svg>` | vector layers (paths, gradients, strokes) |
 | `<x-paper-icon name="set:name" size="20" color="var(--x)"/>` | an icon from an installed set (`phosphor:gear`) |
-| `<x-paper-instance component-id="ID"/>` | an instance of a component |
-| `<x-paper-clone node-id="ID" style="..."/>` | a deep copy of an existing node |
+| `<x-paper-instance component="Name" component-id="ID" overrides='{"Label":"Save"}'/>` | an instance of a component (lookup by `component="Name"` or `component-id="ID"`) |
+| `<x-paper-clone node-id="ID" style="..."/>` | a deep copy of an existing node (supports cross-page `<page>:<id>`) |
 | `layer-name="..."` on any of the above | the layer's name (names are truncated to 50 characters) |
 
 ## Layout
 
-Supported: `display:flex` (and `inline-flex`), `flex-direction`, `flex-wrap`, `gap`, `row-gap`, `column-gap`, `padding` (shorthand, per side, `padding-inline`, `padding-block`), `align-items`, `justify-content` (including `space-between`), `align-self`, `flex-grow` / `flex: 1`, `width`, `height` (px, %, `fit-content`), `min-`/`max-` sizes (accepted), `overflow:hidden` (clips), `position:absolute` with `left`/`top`/`right`/`bottom`, `display:none`, `visibility`.
+Supported: `display:flex` (and `inline-flex`), `flex-direction`, `flex-wrap`, `gap`, `row-gap`, `column-gap`, `padding` (shorthand, per side, `padding-inline`, `padding-block`), `align-items`, `justify-content` (including `space-between`), `align-self` (`start`, `center`, `end`, `stretch`), `flex-grow` / `flex: 1`, `width`, `height` (px, %, `fit-content`), `min-width`, `max-width`, `min-height`, `max-height`, `overflow:hidden` (clips), `position:absolute` with `left`/`top`/`right`/`bottom`, `display:none`, `visibility`.
 
 Not supported (check `ignoredStyles` to be sure): `margin` (use `gap` and `padding`), `display:grid`, tables, `float`, `calc()`, viewport units, `transform` and rotation.
 
 Tips:
 
-* Artboards are `display:flex; flex-direction:column`. Children of a column stretch to the full width unless they have a width or `align-items` says otherwise.
+* Artboards are `display:flex; flex-direction:column`. Children of a column stretch to the full width unless they have a width or `align-items` / `align-self` says otherwise.
 * To center something, put it in a flex parent with `align-items:center; justify-content:center`.
 * To make a row fill the remaining space, give the child `flex-grow:1`.
 * Use `height:"fit-content"` on artboards that should grow with content; fixed heights clip.
 
 ## Text
 
-Supported: `font-size` (px), `font-weight` (600 and above renders bold; otherwise regular), `font-style:italic`, `color`, `line-height` (px or unitless), `letter-spacing`, `text-align`, `text-decoration`. The font is always **Inter**; `font-family` is ignored, and there are only regular and bold weights (plus italic), so hierarchy comes from size, weight, color and space.
+Supported: `font-size` (px), `font-weight` (600 and above renders bold; otherwise regular), `font-style:italic`, `color`, `line-height` (px or unitless), `letter-spacing`, `text-align`, `text-decoration` (including `text-decoration-color` and `text-decoration-style: wavy`, e.g. `text-decoration: underline wavy var(--warning)`). The font is always **Inter**; `font-family` is ignored, and there are only regular and bold weights (plus italic), so hierarchy comes from size, weight, color and space.
 
 ## Boxes
 
-Supported: `background` and `background-color` (hex, `rgb()`, `hsl()`, `var(--name)`), gradients (`linear-gradient`, `radial-gradient`), `background-image: url()`, `background-size` (`contain`, `100% 100%`), `border` (width, style, color; one stroke per node), `border-radius` (shorthand and per corner; `999px` makes a pill), `opacity`, `mix-blend-mode`. Strokes and gradients keep their resolved colors; they do not follow variables later.
+Supported: `background` and `background-color` (hex, `rgb()`, `hsl()`, `var(--name)`), gradients (`linear-gradient`, `radial-gradient`), `background-image: url()`, `background-size` (`contain`, `100% 100%`), `border` and per-side `border-top`, `border-right`, `border-bottom`, `border-left` (width, style, color), `border-radius` (shorthand and per corner; `999px` makes a pill), `opacity`, `mix-blend-mode`. Strokes and gradients keep their resolved colors; they do not follow variables later.
 
 Not supported (reported as ignored): `box-shadow`, `filter`, `backdrop-filter`, `text-shadow`, `outline-offset`, CSS animations and transitions.
 

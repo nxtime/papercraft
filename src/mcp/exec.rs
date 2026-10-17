@@ -508,9 +508,14 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
         .iter()
         .enumerate()
         .map(|(i, p)| {
+            let pdoc = ed.page_doc(i);
+            let open_fb: usize = pdoc.nodes.values().map(|n| n.open_comments()).sum();
+            let resolved_fb: usize = pdoc.nodes.values().map(|n| n.resolved_comments()).sum();
             json!({
                 "id": p.id, "name": p.name, "isActive": i == ed.active_page,
-                "nodeCount": ed.page_doc(i).nodes.len(),
+                "nodeCount": pdoc.nodes.len(),
+                "openFeedback": open_fb,
+                "resolvedFeedback": resolved_fb,
             })
         })
         .collect();
@@ -531,6 +536,9 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
         "selectionCount": if page == ed.active_page { ed.selection.len() } else { 0 },
         "openFeedback": (0..ed.pages.len())
             .map(|p| ed.page_doc(p).nodes.values().map(|n| n.open_comments()).sum::<usize>())
+            .sum::<usize>(),
+        "resolvedFeedback": (0..ed.pages.len())
+            .map(|p| ed.page_doc(p).nodes.values().map(|n| n.resolved_comments()).sum::<usize>())
             .sum::<usize>(),
         "nodeIdFormat": "\"<page>:<n>\", e.g. \"".to_string() + &node_key(ed, page, NodeId(1)) + "\"",
     }))
@@ -578,8 +586,16 @@ fn get_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
         (None, None) => (0..ed.pages.len()).collect(),
     };
     let mut items = Vec::new();
+    let mut total_open = 0usize;
+    let mut total_resolved = 0usize;
     for page in pages {
         let doc = ed.page_doc(page);
+        for n in doc.nodes.values() {
+            if only.is_none_or(|(_, id)| n.id == id) {
+                total_open += n.open_comments();
+                total_resolved += n.resolved_comments();
+            }
+        }
         let mut nodes: Vec<&Node> = doc
             .nodes
             .values()
@@ -595,7 +611,9 @@ fn get_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
         nodes.sort_by_key(|n| n.id);
         for n in nodes {
             let mut v = json!({
-                "nodeId": node_key(ed, page, n.id), "page": ed.pages[page].name,
+                "nodeId": node_key(ed, page, n.id),
+                "pageId": ed.pages[page].id,
+                "page": ed.pages[page].name,
                 "name": n.name, "type": n.kind.type_name(), "path": node_path(doc, n.id),
                 "width": r2(n.rect.w), "height": r2(n.rect.h),
                 "feedback": comments_json(n, with_resolved),
@@ -608,6 +626,8 @@ fn get_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
     }
     text(json!({
         "count": items.len(),
+        "openCount": total_open,
+        "resolvedCount": total_resolved,
         "items": items,
         "next": "fix what each note asks, then resolve_feedback with a short reply",
     }))
@@ -863,6 +883,11 @@ fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
     if gpu.is_none() && !defer {
         return Err("screenshots need a GPU and none is available".into());
     }
+    let out_path = a
+        .str("out")
+        .or_else(|| a.str("path"))
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
     let ed = host.editor();
     let def = page_arg(ed, a)?;
     let (page, roots) = match a.str("nodeId").filter(|k| !k.is_empty() && *k != ROOT) {
@@ -885,7 +910,21 @@ fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
     };
     loop {
         let img = crate::io::png::render(&gpu, doc, Some(&roots), scale, Some(Color::WHITE))?;
-        if let Some(out) = shot_out(&img, &mut scale)? {
+        if let Some(mut out) = shot_out(&img, &mut scale)? {
+            if let Some(p) = &out_path {
+                if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Some(Out::Image { data, .. }) = out.first() {
+                    std::fs::write(p, data).map_err(|e| format!("{}: {e}", p.display()))?;
+                }
+                if let Some(Out::Text(txt)) = out.get_mut(1)
+                    && let Ok(mut v) = serde_json::from_str::<Value>(txt)
+                {
+                    v["path"] = json!(p.to_string_lossy());
+                    *txt = v.to_string();
+                }
+            }
             return Ok(out);
         }
     }
@@ -1663,6 +1702,9 @@ const INHERITED: &[&str] = &[
     "fontFamily",
     "whiteSpace",
     "textDecoration",
+    "textDecorationLine",
+    "textDecorationColor",
+    "textDecorationStyle",
 ];
 
 fn get<'s>(st: &'s Styles, k: &str) -> Option<&'s str> {
@@ -1697,6 +1739,8 @@ struct Run {
     bold: Option<bool>,
     italic: Option<bool>,
     underline: Option<bool>,
+    underline_color: Option<Color>,
+    underline_wavy: Option<bool>,
     strike: Option<bool>,
     color: Option<Color>,
     size: Option<f64>,
@@ -1747,6 +1791,22 @@ fn collect_runs(nodes: &[Html], run: Run, base_fs: f64, out: &mut Vec<(char, Run
                         "textDecoration" | "textDecorationLine" => {
                             r.underline = Some(lower.contains("underline"));
                             r.strike = Some(lower.contains("line-through"));
+                            if lower.contains("wavy") {
+                                r.underline_wavy = Some(true);
+                            }
+                            for tok in css::split_ws(v) {
+                                if let Some((c, _)) = css::resolve_color_value(&tok) {
+                                    r.underline_color = Some(c);
+                                }
+                            }
+                        }
+                        "textDecorationColor" => {
+                            if let Some((c, _)) = css::resolve_color_value(v) {
+                                r.underline_color = Some(c);
+                            }
+                        }
+                        "textDecorationStyle" => {
+                            r.underline_wavy = Some(lower.contains("wavy"));
                         }
                         "color" => r.color = css::color(v).or(r.color),
                         "fontSize" => {
@@ -1790,9 +1850,17 @@ fn collapse(chars: Vec<(char, Run)>, pre: bool) -> Vec<(char, Run)> {
     out
 }
 
+fn match_page_key(pid: &str, pname: &str, key: &str) -> bool {
+    let key = key.trim();
+    pid == key
+        || (pid.starts_with(key) && key.len() >= 4)
+        || (!pname.is_empty() && pname.eq_ignore_ascii_case(key))
+}
+
 struct Builder<'t, 'a> {
     tx: &'t mut Tx<'a>,
     page_id: String,
+    all_pages: &'t [(String, String, Document)],
     ignored: BTreeSet<String>,
     warnings: Vec<String>,
 }
@@ -2017,6 +2085,12 @@ impl Builder<'_, '_> {
                     }
                     if r.underline.is_some() {
                         s.underline = r.underline;
+                    }
+                    if r.underline_color.is_some() {
+                        s.underline_color = r.underline_color;
+                    }
+                    if r.underline_wavy.is_some() {
+                        s.underline_wavy = r.underline_wavy;
                     }
                     if r.strike.is_some() {
                         s.strike = r.strike;
@@ -2257,11 +2331,17 @@ impl Builder<'_, '_> {
         let key = el
             .attr("component-id")
             .or_else(|| el.attr("component"))
-            .unwrap_or("");
-        let num = key.rsplit(':').next().and_then(|n| n.parse::<u64>().ok());
-        // By id, or by component name (`component="Button / Primary"`).
-        let main = num
-            .map(NodeId)
+            .or_else(|| el.attr("name"))
+            .unwrap_or("")
+            .trim()
+            .trim_start_matches('#');
+        let (page_part, num_part) = match key.split_once(':') {
+            Some((p, n)) => (Some(p), n.parse::<u64>().ok().map(NodeId)),
+            None => (None, key.parse::<u64>().ok().map(NodeId)),
+        };
+        // By id on this page, or by component name (`component="Button / Primary"`).
+        let mut main = num_part
+            .filter(|_| page_part.is_none_or(|p| match_page_key(&self.page_id, "", p)))
             .filter(|id| self.tx.doc().get(*id).is_some_and(|n| n.component))
             .or_else(|| {
                 let mut named: Vec<&Node> = self
@@ -2274,6 +2354,53 @@ impl Builder<'_, '_> {
                 named.sort_by_key(|n| n.id);
                 named.first().map(|n| n.id)
             });
+        // If not on this page, look across other pages and auto-import a copy.
+        if main.is_none() {
+            let ext = self.all_pages.iter().find_map(|(pid, pname, doc)| {
+                if pid == &self.page_id {
+                    return None;
+                }
+                if let (Some(p), Some(id)) = (page_part, num_part) {
+                    if match_page_key(pid, pname, p) && doc.get(id).is_some_and(|n| n.component) {
+                        return Some((doc, id));
+                    }
+                }
+                let mut named: Vec<&Node> = doc
+                    .nodes
+                    .values()
+                    .filter(|n| n.component && n.name.eq_ignore_ascii_case(key))
+                    .collect();
+                named.sort_by_key(|n| n.id);
+                named.first().map(|n| (doc, n.id))
+            });
+            if let Some((src_doc, src_comp)) = ext {
+                let right = self
+                    .tx
+                    .doc()
+                    .root
+                    .iter()
+                    .filter_map(|r| self.tx.doc().world_rect(*r))
+                    .map(|r| r.right())
+                    .fold(f64::MIN, f64::max);
+                let x = if right == f64::MIN {
+                    0.0
+                } else {
+                    right + 160.0
+                };
+                let w = src_doc
+                    .world_rect(src_comp)
+                    .unwrap_or_else(|| src_doc.get(src_comp).unwrap().rect);
+                let (imported_id, _) = clone_subtree_from_doc(
+                    self.tx,
+                    src_doc,
+                    src_comp,
+                    None,
+                    None,
+                    v2(x, 0.0) - w.min(),
+                );
+                main = Some(imported_id);
+            }
+        }
         let Some(main) = main else {
             self.warnings.push(format!(
                 "x-paper-instance: `{key}` is not a component on this page (create_component first, \
@@ -2463,18 +2590,40 @@ impl Builder<'_, '_> {
         parent: &Parent,
         index: &mut Option<usize>,
     ) -> Option<NodeId> {
-        let key = el.attr("node-id").unwrap_or("");
-        let num = key.rsplit(':').next().and_then(|n| n.parse::<u64>().ok());
-        let Some(src) = num
-            .map(NodeId)
-            .filter(|id| self.tx.doc().get(*id).is_some())
-        else {
-            self.warnings.push(format!(
-                "x-paper-clone: node `{key}` not found on this page"
-            ));
+        let key = el
+            .attr("node-id")
+            .unwrap_or("")
+            .trim()
+            .trim_start_matches('#');
+        let (page_part, num) = match key.split_once(':') {
+            Some((p, n)) => (Some(p), n.parse::<u64>().ok().map(NodeId)),
+            None => (None, key.parse::<u64>().ok().map(NodeId)),
+        };
+        let Some(src) = num else {
+            self.warnings
+                .push(format!("x-paper-clone: node `{key}` not found"));
             return None;
         };
-        let (id, _) = clone_subtree(self.tx, src, parent.id, *index, V2::ZERO);
+        let same_page = page_part.is_none_or(|p| match_page_key(&self.page_id, "", p));
+        let id = if same_page && self.tx.doc().get(src).is_some() {
+            clone_subtree(self.tx, src, parent.id, *index, V2::ZERO).0
+        } else if let Some((_, _, src_doc)) =
+            self.all_pages
+                .iter()
+                .find(|(pid, pname, doc)| match page_part {
+                    Some(p) => match_page_key(pid, pname, p) && doc.get(src).is_some(),
+                    None => pid != &self.page_id && doc.get(src).is_some(),
+                })
+        {
+            let w = src_doc
+                .world_rect(src)
+                .unwrap_or_else(|| src_doc.get(src).unwrap().rect);
+            clone_subtree_from_doc(self.tx, src_doc, src, parent.id, *index, -w.min()).0
+        } else {
+            self.warnings
+                .push(format!("x-paper-clone: node `{key}` not found"));
+            return None;
+        };
         if let Some(i) = index {
             *i += 1;
         }
@@ -2490,6 +2639,66 @@ impl Builder<'_, '_> {
         }
         Some(id)
     }
+}
+
+/// Deep-copy a subtree from `src_doc` into `tx` under `parent` (keeping its world position plus
+/// `offset`). Returns the new root and the (old → new) id pairs.
+fn clone_subtree_from_doc(
+    tx: &mut Tx,
+    src_doc: &Document,
+    src: NodeId,
+    parent: Option<NodeId>,
+    index: Option<usize>,
+    offset: V2,
+) -> (NodeId, Vec<(NodeId, NodeId)>) {
+    let ids = src_doc.subtree(src);
+    let nodes: Vec<Node> = ids
+        .iter()
+        .map(|i| src_doc.get(*i).unwrap().clone())
+        .collect();
+    let mut map = HashMap::new();
+    for n in &nodes {
+        map.insert(n.id, tx.alloc_id());
+    }
+    let world = src_doc
+        .world_rect(src)
+        .unwrap_or_else(|| src_doc.get(src).unwrap().rect);
+    let origin = tx.doc().parent_origin(parent);
+    for n in &nodes {
+        let mut c = n.clone();
+        c.id = map[&n.id];
+        c.children = n
+            .children
+            .iter()
+            .filter_map(|x| map.get(x).copied())
+            .collect();
+        if let Some(l) = &mut c.instance {
+            if let Some(m) = map.get(&l.main) {
+                l.main = *m;
+            } else if !tx.doc().get(l.main).is_some_and(|mn| mn.component) {
+                c.instance = None;
+            }
+        }
+        if let NodeKind::Connector { start, end, .. } = &mut c.kind {
+            for b in [start, end].into_iter().flatten() {
+                if let Some(nn) = map.get(&b.node) {
+                    b.node = *nn;
+                }
+            }
+        }
+        if n.id == src {
+            c.rect = world.translate(offset - origin);
+            tx.insert(c, parent, index);
+        } else {
+            c.parent = n.parent.and_then(|p| map.get(&p).copied());
+            tx.put(c);
+        }
+    }
+    for id in map.values() {
+        crate::editor::whiteboard::update_connector(tx, *id);
+    }
+    let pairs = ids.iter().map(|i| (*i, map[i])).collect();
+    (map[&src], pairs)
 }
 
 /// Deep-copy a subtree under `parent` (keeping its world position plus `offset`). Returns the
@@ -2642,6 +2851,12 @@ fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
     }
     let tree = html::parse(src);
     let page_id = ed.pages[page].id.clone();
+    let all_pages: Vec<(String, String, Document)> = ed
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.id.clone(), p.name.clone(), ed.page_doc(i).clone()))
+        .collect();
     let (created, ignored, warnings) = ed.with_page(page, |ed| {
         ed.edit("Write HTML", |tx| {
             // Where the new content goes.
@@ -2668,6 +2883,7 @@ fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
             let mut b = Builder {
                 tx,
                 page_id: page_id.clone(),
+                all_pages: &all_pages,
                 ignored: BTreeSet::new(),
                 warnings: Vec::new(),
             };
@@ -3338,7 +3554,13 @@ fn import_components(ed: &mut Editor, a: &Args) -> ToolResult {
         let mut roots: Vec<&Node> = src
             .nodes
             .values()
-            .filter(|n| n.component && n.parent.is_none())
+            .filter(|n| {
+                n.component
+                    && !src
+                        .ancestors(n.id)
+                        .iter()
+                        .any(|a| src.get(*a).is_some_and(|an| an.component))
+            })
             .filter(|n| {
                 wanted
                     .as_ref()
@@ -3359,9 +3581,7 @@ fn import_components(ed: &mut Editor, a: &Args) -> ToolResult {
             .collect()
     };
     if found.is_empty() {
-        return Err(
-            "no matching top-level components on that page (create_component first)".into(),
-        );
+        return Err("no matching components on that page (create_component first)".into());
     }
     let (imported, skipped) = ed.with_page(to, |ed| {
         ed.edit("Import components", |tx| {
@@ -3678,61 +3898,93 @@ fn delete_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
 
 fn duplicate_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
     let def = page_arg(ed, a)?;
+    let top_to_page = match a.str("toPageId").filter(|p| !p.is_empty()) {
+        Some(p) => Some(find_page(ed, p)?),
+        None => None,
+    };
     let mut jobs = Vec::new();
     for item in a.arr("nodes")? {
         let item = Args(item.as_object().ok_or("each item must be an object")?);
-        let (page, id) = resolve(ed, item.req_str("id")?, def)?;
-        let parent = match item.str("parentId").filter(|p| !p.is_empty()) {
-            None => None,
-            Some(ROOT) => Some(None),
+        let (src_page, id) = resolve(ed, item.req_str("id")?, def)?;
+        let item_to_page = match item.str("toPageId").filter(|p| !p.is_empty()) {
+            Some(p) => Some(find_page(ed, p)?),
+            None => top_to_page,
+        };
+        let (dest_page, parent) = match item.str("parentId").filter(|p| !p.is_empty()) {
+            None => match item_to_page {
+                Some(dp) if dp != src_page => (dp, Some(None)),
+                _ => (src_page, None),
+            },
+            Some(ROOT) => (item_to_page.unwrap_or(src_page), Some(None)),
             Some(p) => {
-                let (pp, pid) = resolve(ed, p, page)?;
-                if pp != page {
-                    return Err("duplicating to another page isn't supported".into());
-                }
+                let (pp, pid) = resolve(ed, p, item_to_page.unwrap_or(src_page))?;
                 if !ed.page_doc(pp).get(pid).unwrap().is_container() {
                     return Err("parentId must be a frame or group".into());
                 }
-                Some(Some(pid))
+                (pp, Some(Some(pid)))
             }
         };
-        jobs.push((page, id, parent));
+        jobs.push((src_page, dest_page, id, parent));
     }
     let mut out = Vec::new();
-    for (page, id, parent) in jobs {
-        let (new, pairs) = ed.with_page(page, |ed| {
-            ed.edit("Duplicate", |tx| {
-                let n = tx.doc().get(id).unwrap();
-                let same_parent = parent.is_none_or(|p| p == n.parent);
-                let target = parent.unwrap_or(n.parent);
-                let index = if same_parent {
-                    tx.doc()
-                        .children(target)
-                        .iter()
-                        .position(|c| *c == id)
-                        .map(|i| i + 1)
-                } else {
-                    None
-                };
-                let offset = if target.is_none() && n.is_frame() {
-                    let w = tx.doc().world_rect(id).unwrap();
-                    free_spot(tx.doc(), w.w) - w.min()
-                } else {
-                    V2::ZERO
-                };
-                let r = clone_subtree(tx, id, target, index, offset);
-                relayout(tx, Some(r.0));
-                r
+    for (src_page, dest_page, id, parent) in jobs {
+        let (new, pairs) = if src_page == dest_page {
+            ed.with_page(src_page, |ed| {
+                ed.edit("Duplicate", |tx| {
+                    let n = tx.doc().get(id).unwrap();
+                    let same_parent = parent.is_none_or(|p| p == n.parent);
+                    let target = parent.unwrap_or(n.parent);
+                    let index = if same_parent {
+                        tx.doc()
+                            .children(target)
+                            .iter()
+                            .position(|c| *c == id)
+                            .map(|i| i + 1)
+                    } else {
+                        None
+                    };
+                    let offset = if target.is_none() && n.is_frame() {
+                        let w = tx.doc().world_rect(id).unwrap();
+                        free_spot(tx.doc(), w.w) - w.min()
+                    } else {
+                        V2::ZERO
+                    };
+                    let r = clone_subtree(tx, id, target, index, offset);
+                    relayout(tx, Some(r.0));
+                    r
+                })
             })
-        });
+        } else {
+            let src_doc = ed.page_doc(src_page).clone();
+            ed.with_page(dest_page, |ed| {
+                ed.edit("Duplicate", |tx| {
+                    let n = src_doc.get(id).unwrap();
+                    let target = parent.flatten();
+                    let w = src_doc.world_rect(id).unwrap_or(n.rect);
+                    let offset = if target.is_none() {
+                        free_spot(tx.doc(), w.w) - w.min()
+                    } else {
+                        -w.min()
+                    };
+                    let r = clone_subtree_from_doc(tx, &src_doc, id, target, None, offset);
+                    relayout(tx, target.or(Some(r.0)));
+                    r
+                })
+            })
+        };
         let map: Map<String, Value> = pairs
             .iter()
             .filter(|(o, _)| *o != id)
-            .map(|(o, n)| (node_key(ed, page, *o), json!(node_key(ed, page, *n))))
+            .map(|(o, n)| {
+                (
+                    node_key(ed, src_page, *o),
+                    json!(node_key(ed, dest_page, *n)),
+                )
+            })
             .collect();
         out.push(json!({
-            "sourceId": node_key(ed, page, id),
-            "newId": node_key(ed, page, new),
+            "sourceId": node_key(ed, src_page, id),
+            "newId": node_key(ed, dest_page, new),
             "descendantIdMap": map,
         }));
     }
@@ -3741,80 +3993,135 @@ fn duplicate_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
 
 fn move_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
     let def = page_arg(ed, a)?;
+    let top_to_page = match a.str("toPageId").filter(|p| !p.is_empty()) {
+        Some(p) => Some(find_page(ed, p)?),
+        None => None,
+    };
     let moves = a.arr("moves")?;
     let mut done = 0;
     for m in moves {
         let m = Args(m.as_object().ok_or("each move must be an object")?);
-        let (page, id) = resolve(ed, m.req_str("nodeId")?, def)?;
-        let sib = |k: &str| -> Result<Option<NodeId>, String> {
-            match m.str(k) {
+        let (src_page, id) = resolve(ed, m.req_str("nodeId")?, def)?;
+        let mut dest_page = match m.str("toPageId").filter(|p| !p.is_empty()) {
+            Some(p) => find_page(ed, p)?,
+            None => top_to_page.unwrap_or(src_page),
+        };
+        let sib = |k: &str, dp: &mut usize| -> Result<Option<NodeId>, String> {
+            match m.str(k).filter(|s| !s.is_empty()) {
                 None => Ok(None),
                 Some(s) => {
-                    let (p, sid) = resolve(ed, s, page)?;
-                    if p != page {
-                        return Err(
-                            "moving between pages isn't supported; duplicate and delete instead"
-                                .into(),
-                        );
-                    }
+                    let (p, sid) = resolve(ed, s, *dp)?;
+                    *dp = p;
                     Ok(Some(sid))
                 }
             }
         };
-        let (before, after) = (sib("before")?, sib("after")?);
-        let parent: Option<Option<NodeId>> = match m.str("parentId") {
-            None => None,
+        let before = sib("before", &mut dest_page)?;
+        let after = sib("after", &mut dest_page)?;
+        let parent: Option<Option<NodeId>> = match m.str("parentId").filter(|p| !p.is_empty()) {
+            None => {
+                if dest_page != src_page && before.is_none() && after.is_none() {
+                    Some(None)
+                } else {
+                    None
+                }
+            }
             Some(ROOT) => Some(None),
             Some(p) => {
-                let (pp, pid) = resolve(ed, p, page)?;
-                if pp != page {
-                    return Err(
-                        "moving between pages isn't supported; duplicate and delete instead".into(),
-                    );
-                }
+                let (pp, pid) = resolve(ed, p, dest_page)?;
+                dest_page = pp;
                 Some(Some(pid))
             }
         };
         let index = m.num("index").map(|i| i.max(0.0) as usize);
-        ed.with_page(page, |ed| {
-            ed.edit("Move", |tx| -> Result<(), String> {
-                let doc = tx.doc();
-                let (target, sibling) = if let Some(s) = before.or(after) {
-                    (doc.get(s).unwrap().parent, Some(s))
-                } else if let Some(p) = parent {
-                    (p, None)
-                } else {
-                    return Err("each move needs before, after or parentId".into());
-                };
-                if sibling == Some(id) {
-                    return Err("a node can't be moved next to itself".into());
-                }
-                if let Some(t) = target {
-                    if t == id || doc.is_ancestor(id, t) {
-                        return Err("can't move a node into itself or its descendants".into());
+        if dest_page == src_page {
+            ed.with_page(src_page, |ed| {
+                ed.edit("Move", |tx| -> Result<(), String> {
+                    let doc = tx.doc();
+                    let (target, sibling) = if let Some(s) = before.or(after) {
+                        (doc.get(s).unwrap().parent, Some(s))
+                    } else if let Some(p) = parent {
+                        (p, None)
+                    } else {
+                        return Err("each move needs before, after or parentId".into());
+                    };
+                    if sibling == Some(id) {
+                        return Err("a node can't be moved next to itself".into());
                     }
-                    if !doc.get(t).unwrap().is_container() {
-                        return Err("the destination can't have children".into());
+                    if let Some(t) = target {
+                        if t == id || doc.is_ancestor(id, t) {
+                            return Err("can't move a node into itself or its descendants".into());
+                        }
+                        if !doc.get(t).unwrap().is_container() {
+                            return Err("the destination can't have children".into());
+                        }
                     }
-                }
-                tx.reparent(id, target, None);
-                let list: Vec<NodeId> = tx
-                    .doc()
-                    .children(target)
-                    .iter()
-                    .copied()
-                    .filter(|c| *c != id)
-                    .collect();
-                let i = match sibling {
-                    Some(s) => {
-                        list.iter().position(|c| *c == s).unwrap() + usize::from(after.is_some())
-                    }
-                    None => index.unwrap_or(list.len()).min(list.len()),
-                };
-                tx.move_to_index(id, i);
-                Ok(())
-            })
-        })?;
+                    tx.reparent(id, target, None);
+                    let list: Vec<NodeId> = tx
+                        .doc()
+                        .children(target)
+                        .iter()
+                        .copied()
+                        .filter(|c| *c != id)
+                        .collect();
+                    let i = match sibling {
+                        Some(s) => {
+                            list.iter().position(|c| *c == s).unwrap()
+                                + usize::from(after.is_some())
+                        }
+                        None => index.unwrap_or(list.len()).min(list.len()),
+                    };
+                    tx.move_to_index(id, i);
+                    Ok(())
+                })
+            })?;
+        } else {
+            let ddoc = ed.page_doc(dest_page);
+            let (target, sibling) = if let Some(s) = before.or(after) {
+                (ddoc.get(s).unwrap().parent, Some(s))
+            } else if let Some(p) = parent {
+                (p, None)
+            } else {
+                return Err("each move needs before, after, parentId or toPageId".into());
+            };
+            if let Some(t) = target
+                && !ddoc.get(t).unwrap().is_container()
+            {
+                return Err("the destination can't have children".into());
+            }
+            let src_doc = ed.page_doc(src_page).clone();
+            ed.with_page(src_page, |ed| {
+                ed.edit("Move", |tx| {
+                    tx.remove(id);
+                });
+                ed.selection.retain(|s| ed.doc.get(*s).is_some());
+            });
+            ed.with_page(dest_page, |ed| {
+                ed.edit("Move", |tx| {
+                    let w = src_doc
+                        .world_rect(id)
+                        .unwrap_or_else(|| src_doc.get(id).unwrap().rect);
+                    let offset = if target.is_none() {
+                        free_spot(tx.doc(), w.w) - w.min()
+                    } else {
+                        -w.min()
+                    };
+                    let list_len = tx.doc().children(target).len();
+                    let idx = match sibling {
+                        Some(s) => tx
+                            .doc()
+                            .children(target)
+                            .iter()
+                            .position(|c| *c == s)
+                            .map(|p| p + usize::from(after.is_some())),
+                        None => Some(index.unwrap_or(list_len).min(list_len)),
+                    };
+                    let (new_root, _) =
+                        clone_subtree_from_doc(tx, &src_doc, id, target, idx, offset);
+                    relayout(tx, target.or(Some(new_root)));
+                });
+            });
+        }
         done += 1;
     }
     text(json!({"moved": done}))
@@ -3884,5 +4191,99 @@ mod tests {
             .map(|(c, _)| *c)
             .collect();
         assert_eq!(bold, "bold");
+    }
+
+    #[test]
+    fn cross_page_components_and_layers() {
+        let mut ed = Editor::default();
+        let p0_id = ed.pages[0].id.clone();
+        // Create an artboard with a nested component on page 0.
+        write_html(
+            &mut ed,
+            &Args(
+                json!({
+                    "targetNodeId": "root",
+                    "html": "<div layer-name=\"Sheet\" style=\"width: 400px; height: 300px\"><div layer-name=\"Button / Primary\" style=\"display: flex; background: #313244; padding: 8px; width: 100px; height: 40px\"><span>Save</span></div></div>"
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+        let btn_id = ed
+            .page_doc(0)
+            .nodes
+            .values()
+            .find(|n| n.name == "Button / Primary" && n.is_frame())
+            .unwrap()
+            .id;
+        let btn_key = node_key(&ed, 0, btn_id);
+        create_component(
+            &mut ed,
+            &Args(json!({"nodeId": btn_key}).as_object().unwrap()),
+        )
+        .unwrap();
+
+        // Create page 1 and import nested component from page 0.
+        create_page(
+            &mut ed,
+            &Args(json!({"name": "Page 2"}).as_object().unwrap()),
+        )
+        .unwrap();
+        let p1_id = ed.pages[1].id.clone();
+        let imp = import_components(
+            &mut ed,
+            &Args(
+                json!({"fromPageId": p0_id, "pageId": p1_id})
+                    .as_object()
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
+        let Out::Text(imp_txt) = &imp[0] else {
+            panic!()
+        };
+        assert!(imp_txt.contains("Button / Primary"), "{imp_txt}");
+
+        // Cross-page <x-paper-clone> from page 0 into page 1.
+        let cloned = write_html(
+            &mut ed,
+            &Args(
+                json!({
+                    "pageId": p1_id,
+                    "targetNodeId": "root",
+                    "html": format!("<x-paper-clone node-id=\"{btn_key}\" layer-name=\"Cloned Btn\"/>")
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+        let Out::Text(cloned_txt) = &cloned[0] else {
+            panic!()
+        };
+        assert!(cloned_txt.contains("createdNodeIds"), "{cloned_txt}");
+        assert!(
+            ed.page_doc(1)
+                .nodes
+                .values()
+                .any(|n| n.name == "Cloned Btn")
+        );
+
+        // Also test feedback counts across pages.
+        add_feedback(
+            &mut ed,
+            &Args(
+                json!({"nodeId": btn_key, "text": "Make taller"})
+                    .as_object()
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
+        let fb = get_feedback(&mut ed, &Args(json!({}).as_object().unwrap())).unwrap();
+        let Out::Text(fb_txt) = &fb[0] else { panic!() };
+        let fb_val: Value = serde_json::from_str(fb_txt).unwrap();
+        assert_eq!(fb_val["openCount"], 1, "{fb_txt}");
+        assert!(fb_val["items"][0]["pageId"].is_string(), "{fb_txt}");
     }
 }

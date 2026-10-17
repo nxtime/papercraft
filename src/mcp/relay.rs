@@ -501,9 +501,10 @@ pub fn spawn_with_data(
                     static_dir,
                     ct: thread_ct.child_token(),
                 });
-                if let Err(e) = axum::serve(listener, router(relay, data.map(super::store::Store::new)))
-                    .with_graceful_shutdown(thread_ct.cancelled_owned())
-                    .await
+                if let Err(e) =
+                    axum::serve(listener, router(relay, data.map(super::store::Store::new)))
+                        .with_graceful_shutdown(thread_ct.cancelled_owned())
+                        .await
                 {
                     log::error!("relay: server stopped: {e}");
                 }

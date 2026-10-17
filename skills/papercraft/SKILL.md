@@ -23,9 +23,9 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
 ## 2. The loop: build, look, lint, fix
 
 1. **Tokens first.** `set_variables` once (roles: `bg`, `surface`, `border`, `text`, `text-muted`, `accent`, `on-accent`, `danger`). Add a second mode for dark or light. No hex in the design afterwards.
-2. **Components first.** Anything that appears twice (button, field, chip, row, tab bar) is built once as an artboard, `create_component`, then placed with `create_instance`.
+2. **Components first.** Anything that appears twice (button, field, chip, row, tab bar) is built once as an artboard, `create_component`, then placed with `create_instance` or `<x-paper-instance component="Name" component-id="ID"/>`.
 3. **Build in small steps.** `create_artboard`, then one `write_html` per visual group (header, card, row) so the user sees progress. Name every layer with `layer-name`.
-4. **Look.** `get_screenshot` of the artboard after each group or two. Scale 2 to read small text. Read it as a designer: hierarchy, alignment, spacing rhythm, clipping, wrapping.
+4. **Look.** `get_screenshot` of the artboard after each group or two (pass `out` or `-o`/`--out FILE` in `papercraft-cli` to choose the output path). Scale 2 to read small text. Read it as a designer: hierarchy, alignment, spacing rhythm, clipping, wrapping.
 5. **Lint.** `lint_design` on the artboard. Fix every error and warning; consider the `info` items. Run it again until errors and warnings are zero.
 6. **Fix with the smallest edit.** `update_styles` and `set_text_content` on the existing nodes, not a rewrite. Rewrite a group with `write_html` mode `replace` only when its structure is wrong.
 7. **Finish.** `finish_working_on_nodes` (saves). Tell the user what you made in a sentence or two, with artboard names, not ids.
@@ -56,7 +56,7 @@ Lint passes are necessary, not sufficient: contrast and grids say nothing about 
 <div layer-name="Nav / Home" style="display:flex;align-items:center;gap:12px"><x-paper-icon name="phosphor:house" size="20" color="var(--text-muted)"/><div layer-name="Label" style="font-size:16px;color:var(--text-muted)">Home</div></div>
 ```
 
-Artboards: mobile 390×844, tablet 768×1024, desktop 1440×900. Create with `height:"fit-content"` when the content decides the height. Replace margin with `gap` and `padding`.
+Artboards: mobile 390×844, tablet 768×1024, desktop 1440×900. Create with `height:"fit-content"` when the content decides the height. Replace margin with `gap` and `padding`. `min-width`, `max-width`, `min-height`, `max-height`, `align-self` (`start`, `center`, `end`, `stretch`), per-side borders (`border-top`, `border-right`, `border-bottom`, `border-left`), and `text-decoration-color` / `wavy` (`text-decoration: underline wavy var(--warning)`) are also supported.
 
 Full flows: [recipes.md](references/recipes.md).
 
@@ -71,14 +71,14 @@ Full flows: [recipes.md](references/recipes.md).
 | Verify generated code against design | `verify_code` (`nodeId`, `target`, `code`) |
 | Compare two frames or subtrees | `diff_frames` (`beforeId`, `afterId`) |
 | Find nodes by text or style | `find_nodes` |
-| See it | `get_screenshot` (`nodeId`, `scale` 1 or 2) |
+| See it | `get_screenshot` (`nodeId`, `scale` 1 or 2, `out` / `-o\|--out FILE`) |
 | New screen | `create_artboard` (`width` and `height` required) |
 | Add content | `write_html` (`insert-children` or `replace`) |
 | Change styles or text | `update_styles`, `set_text_content`, `rename_nodes` |
 | Whiteboard shapes, sticky notes, arrows | `create_shape` |
-| Copy, move, delete | `duplicate_nodes`, `move_nodes`, `delete_nodes` |
+| Copy, move, delete (including across pages) | `duplicate_nodes` (`toPageId`), `move_nodes` (`toPageId`), `<x-paper-clone node-id="<page>:<id>"/>`, `delete_nodes` |
 | Tokens | `get_variables` (`format`: `css` \| `json` \| `tailwind`), `set_variables` (`mode`), `set_tokens`, `set_variable_mode` |
-| Reuse & components | `create_component`, `create_instance`, `swap_instance`, `detach_instance`, `import_components`, `get_components`, `<x-paper-instance>` |
+| Reuse & components | `create_component`, `create_instance`, `swap_instance`, `detach_instance`, `import_components`, `get_components`, `<x-paper-instance component="Name" component-id="ID"/>` |
 | Icons | `search_icons`, `<x-paper-icon name="set:name">`; CLI: `papercraft-cli icons add\|list\|search` |
 | Check & auto-fix quality | `lint_design` (`fix: true` to auto-fix grid/scale/variables/targets) |
 | Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf` |
@@ -100,10 +100,10 @@ When implementing a PaperCraft design in production code (React/TSX, Tailwind JS
 * **Color variables (`set_variables`) apply to fills and text color**; strokes and gradients keep fixed colors. Non-color tokens (`set_tokens`) provide shared spacing, radius, and shadow values expanded on write; `lint_design` (`fix: true`) enforces scale and 4px grid discipline.
 * **No CSS margin, grid or tables in `write_html`; no CSS filters or transforms** (reported under `ignoredStyles`). Replace margin with `gap` and `padding`.
 * **No rotation.** Nodes are axis-aligned.
-* **Components and their instances live on one page** (use `import_components` to copy main components from another page). Variants are modeled as separate components (`Button / Primary`, `Button / Secondary`) and can be swapped in place with `swap_instance` (preserving overrides) or unlinked with `detach_instance`.
+* **Components and their instances live on one page** (use `import_components` to copy main components from anywhere on another page, including inside artboards, then instantiate with `<x-paper-instance component="Name"/>` or `component-id="ID"`). Variants are modeled as separate components (`Button / Primary`, `Button / Secondary`) and can be swapped in place with `swap_instance` (preserving overrides) or unlinked with `detach_instance`.
 * **Supported imports, diffs, and code handoff**: `.fig` file import is supported, `diff_frames` compares two frames/subtrees at the property level, `get_jsx` exports `inline`, `tailwind`, `react`, `angular`, `html`, or `egui`, and `get_design_spec` + `verify_code` provide full AI design-to-code handoff and enforcement.
 * **Remote images are not fetched.** Use a local path or `data:` URI.
-* **One project open at a time**; moving layers between pages is not supported.
+* **One project open at a time**; copying and moving layers between pages is supported via `duplicate_nodes` / `move_nodes` (`toPageId`) and cross-page `<x-paper-clone node-id="<page>:<id>"/>`.
 * **Text boxes with fixed widths can wrap earlier than in a browser.** Check headlines in the screenshot and widen.
 * **Instances are skipped by lint**; lint the main component.
 

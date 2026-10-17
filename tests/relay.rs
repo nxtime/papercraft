@@ -5,8 +5,8 @@
 
 use papercraft::mcp::Out;
 use papercraft::mcp::relay::{self, NO_TAB_ERROR};
-use papercraft::mcp::store::Data;
 use papercraft::mcp::relay_proto::{Call as CallFrame, Reply};
+use papercraft::mcp::store::Data;
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock};
 use serde_json::{Value, json};
@@ -314,8 +314,16 @@ async fn static_files_are_served_with_their_type() {
 async fn shared_projects_store_files_and_tell_the_other_tabs() {
     let dir = std::env::temp_dir().join(format!("papercraft-data-{:016x}", fastrand::u64(..)));
     let listen: SocketAddr = "127.0.0.1:0".parse().expect("a valid address");
-    let running =
-        relay::spawn_with_data(listen, None, None, Some(Data { dir: dir.clone(), library: false })).expect("the relay binds");
+    let running = relay::spawn_with_data(
+        listen,
+        None,
+        None,
+        Some(Data {
+            dir: dir.clone(),
+            library: false,
+        }),
+    )
+    .expect("the relay binds");
     let port = running.port();
     let base = format!("http://127.0.0.1:{port}");
     let http = reqwest::Client::new();

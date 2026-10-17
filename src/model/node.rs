@@ -88,6 +88,9 @@ pub struct Style {
     pub fills: Vec<Paint>,
     pub stroke: Option<Color>,
     pub stroke_width: f64,
+    /// Per-side stroke widths (top, right, bottom, left); overrides uniform `stroke_width` when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_sides: Option<[f64; 4]>,
     #[serde(skip_serializing_if = "is_default")]
     pub stroke_align: StrokeAlign,
     /// Dash pattern (lengths in px); empty = solid.
@@ -133,6 +136,7 @@ impl Default for Style {
             fills: Vec::new(),
             stroke: None,
             stroke_width: 1.0,
+            stroke_sides: None,
             stroke_align: StrokeAlign::Center,
             dash: Vec::new(),
             cap: Cap::Butt,
@@ -433,6 +437,9 @@ pub struct Comment {
 impl Node {
     pub fn open_comments(&self) -> usize {
         self.comments.iter().filter(|c| !c.resolved).count()
+    }
+    pub fn resolved_comments(&self) -> usize {
+        self.comments.iter().filter(|c| c.resolved).count()
     }
 }
 

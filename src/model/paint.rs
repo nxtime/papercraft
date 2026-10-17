@@ -306,6 +306,10 @@ pub struct TextSpan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub underline: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline_color: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline_wavy: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strike: Option<bool>,
 }
 
@@ -338,6 +342,8 @@ pub struct CharStyle {
     pub size: f64,
     pub color: Color,
     pub underline: bool,
+    pub underline_color: Option<Color>,
+    pub underline_wavy: bool,
     pub strike: bool,
 }
 
@@ -349,6 +355,8 @@ impl TextStyle {
             size,
             color,
             underline: false,
+            underline_color: None,
+            underline_wavy: false,
             strike: false,
         };
         for sp in &self.spans {
@@ -367,6 +375,12 @@ impl TextStyle {
                 }
                 if let Some(u) = sp.underline {
                     s.underline = u;
+                }
+                if let Some(uc) = sp.underline_color {
+                    s.underline_color = Some(uc);
+                }
+                if let Some(uw) = sp.underline_wavy {
+                    s.underline_wavy = uw;
                 }
                 if let Some(u) = sp.strike {
                     s.strike = u;
@@ -440,13 +454,6 @@ impl TextStyle {
             let mut any = false;
             for s in self.spans.iter().filter(|s| s.start <= a && s.end >= b) {
                 any = true;
-                m.bold = s.bold.or(m.bold);
-                m.italic = s.italic.or(m.italic);
-                m.size = s.size.or(m.size);
-                m.color = s.color.or(m.color);
-                m.underline = s.underline.or(m.underline);
-                m.strike = s.strike.or(m.strike);
-                // Later spans take precedence.
                 if s.bold.is_some() {
                     m.bold = s.bold;
                 }
@@ -462,6 +469,12 @@ impl TextStyle {
                 if s.underline.is_some() {
                     m.underline = s.underline;
                 }
+                if s.underline_color.is_some() {
+                    m.underline_color = s.underline_color;
+                }
+                if s.underline_wavy.is_some() {
+                    m.underline_wavy = s.underline_wavy;
+                }
                 if s.strike.is_some() {
                     m.strike = s.strike;
                 }
@@ -471,18 +484,26 @@ impl TextStyle {
                 && m.size.is_none()
                 && m.color.is_none()
                 && m.underline.is_none()
+                && m.underline_color.is_none()
+                && m.underline_wavy.is_none()
                 && m.strike.is_none();
             if !any || empty {
                 continue;
             }
+            let key = |x: &TextSpan| {
+                (
+                    x.bold,
+                    x.italic,
+                    x.size,
+                    x.color,
+                    x.underline,
+                    x.underline_color,
+                    x.underline_wavy,
+                    x.strike,
+                )
+            };
             match out.last_mut() {
-                Some(l)
-                    if l.end == a
-                        && (l.bold, l.italic, l.size, l.color, l.underline, l.strike)
-                            == (m.bold, m.italic, m.size, m.color, m.underline, m.strike) =>
-                {
-                    l.end = b
-                }
+                Some(l) if l.end == a && key(l) == key(&m) => l.end = b,
                 _ => out.push(m),
             }
         }
@@ -573,8 +594,12 @@ pub struct Constraints {
     pub v: Constraint,
 }
 
+fn is_none_pair(p: &[Option<f64>; 2]) -> bool {
+    p[0].is_none() && p[1].is_none()
+}
+
 /// Per-node layout participation (as a child of an auto-layout or constrained frame).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LayoutChild {
     /// Horizontal and vertical sizing.
@@ -582,6 +607,15 @@ pub struct LayoutChild {
     /// Ignore auto layout (positioned by constraints instead).
     pub absolute: bool,
     pub constraints: Constraints,
+    /// Per-child cross-axis alignment override (`align-self: start | center | end`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align_self: Option<Align>,
+    /// Minimum `[width, height]` in px (`min-width`, `min-height`).
+    #[serde(default, skip_serializing_if = "is_none_pair")]
+    pub min_size: [Option<f64>; 2],
+    /// Maximum `[width, height]` in px (`max-width`, `max-height`).
+    #[serde(default, skip_serializing_if = "is_none_pair")]
+    pub max_size: [Option<f64>; 2],
 }
 
 impl LayoutChild {

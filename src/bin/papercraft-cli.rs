@@ -19,7 +19,7 @@ USAGE:
   papercraft-cli list                       tool names and one-line descriptions (works offline)
   papercraft-cli schema <tool>              a tool's full description and JSON input schema
   papercraft-cli call <tool> [JSON|-]       run a tool; JSON arguments inline, or `-` for stdin
-        [--out FILE]                      where to save an image result (default: <tool>.png)
+        [-o|--out FILE]                   where to save an image result (default: <tool>.png, or {\"out\": \"FILE\"})
   papercraft-cli icons list                 installed and installable open icon sets
   papercraft-cli icons add <set>...         download sets (lucide tabler phosphor heroicons material)
   papercraft-cli icons search <words> [--set S]   find `set:name` references (works offline)
@@ -197,6 +197,13 @@ fn schema(name: &str) -> ExitCode {
 }
 
 async fn call(name: String, args: Value, out: Option<String>) -> Result<bool, String> {
+    let out = out.or_else(|| {
+        args.get("out")
+            .or_else(|| args.get("path"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    });
     let url = mcp::url(mcp::port());
     let client = ()
         .serve(StreamableHttpClientTransport::from_uri(url.clone()))
@@ -219,6 +226,12 @@ async fn call(name: String, args: Value, out: Option<String>) -> Result<bool, St
                     .decode(v["data"].as_str().unwrap_or(""))
                     .map_err(|e| format!("bad image data: {e}"))?;
                 let path = out.clone().unwrap_or_else(|| format!("{name}.png"));
+                if let Some(p) = std::path::Path::new(&path)
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                {
+                    let _ = std::fs::create_dir_all(p);
+                }
                 std::fs::write(&path, data).map_err(|e| format!("{path}: {e}"))?;
                 println!("{path}");
             }
@@ -230,11 +243,19 @@ async fn call(name: String, args: Value, out: Option<String>) -> Result<bool, St
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let out = args
-        .iter()
-        .position(|a| a == "--out")
-        .and_then(|i| (i + 1 < args.len()).then(|| args.drain(i..=i + 1).nth(1)))
-        .flatten();
+    let mut out: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        if (args[i] == "--out" || args[i] == "-o") && i + 1 < args.len() {
+            out = Some(args.drain(i..=i + 1).nth(1).unwrap());
+        } else if let Some(v) = args[i].strip_prefix("--out=") {
+            let v = v.to_string();
+            args.remove(i);
+            out = Some(v);
+        } else {
+            i += 1;
+        }
+    }
     match args.first().map(String::as_str) {
         Some("list") => list(),
         Some("schema") => match args.get(1) {

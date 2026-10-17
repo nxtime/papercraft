@@ -220,11 +220,17 @@ async fn delete_project(State(store): State<Arc<Store>>, Path(token): Path<Strin
         .map_or(0, |d| d.as_millis());
     let trash = store.root.join(TRASH);
     let moved = tokio::fs::create_dir_all(&trash).await.is_ok()
-        && tokio::fs::rename(&dir, trash.join(format!("{token}-{ms}"))).await.is_ok();
+        && tokio::fs::rename(&dir, trash.join(format!("{token}-{ms}")))
+            .await
+            .is_ok();
     if !moved {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    store.projects.lock().unwrap_or_else(PoisonError::into_inner).remove(&token);
+    store
+        .projects
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&token);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -350,7 +356,8 @@ pub fn router(store: Arc<Store>) -> axum::Router {
             .route("/library", get(library))
             .route("/p/{token}", axum::routing::delete(delete_project));
     }
-    app.layer(DefaultBodyLimit::max(MAX_FILE_BYTES)).with_state(store)
+    app.layer(DefaultBodyLimit::max(MAX_FILE_BYTES))
+        .with_state(store)
 }
 
 #[cfg(test)]

@@ -620,7 +620,7 @@ pub fn apply(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applie
         .map(|(k, v)| match var_name(v) {
             Some((name, fallback)) => match VARS.with(|m| m.borrow().get(name).copied()) {
                 Some(c) => {
-                    if COLOR_PROPS.contains(&k.as_str()) {
+                    if COLOR_PROPS.contains(&k.as_str()) && k != "textDecorationColor" {
                         linked.push(name);
                     }
                     (k.clone(), color_css(c))
@@ -664,7 +664,13 @@ pub fn apply(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applie
     a
 }
 
-const COLOR_PROPS: [&str; 4] = ["backgroundColor", "background", "color", "fill"];
+const COLOR_PROPS: [&str; 5] = [
+    "backgroundColor",
+    "background",
+    "color",
+    "fill",
+    "textDecorationColor",
+];
 
 thread_local! {
     static VARS: std::cell::RefCell<std::collections::BTreeMap<String, Color>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
@@ -826,8 +832,16 @@ pub fn override_keys(styles: &[(String, String)]) -> Vec<&'static str> {
             "left" | "top" | "right" | "bottom" | "x" | "y" => "position",
             "borderRadius" => "radius",
             "opacity" | "mixBlendMode" => "opacity",
-            "fontSize" | "fontWeight" | "fontStyle" | "lineHeight" | "letterSpacing"
-            | "textAlign" => "font",
+            "fontSize"
+            | "fontWeight"
+            | "fontStyle"
+            | "lineHeight"
+            | "letterSpacing"
+            | "textAlign"
+            | "textDecoration"
+            | "textDecorationLine"
+            | "textDecorationColor"
+            | "textDecorationStyle" => "font",
             "visibility" => "visible",
             k if k.starts_with("border") || k == "stroke" => "stroke",
             _ => "layout",
@@ -1075,23 +1089,49 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                     None => false,
                 }
             }
-            "alignSelf" => match ctx.parent_layout {
-                Some(pl) if lower == "stretch" => {
-                    let ca = if pl.direction == Direction::Horizontal {
+            "alignSelf" => {
+                let ca = ctx.parent_layout.map(|pl| {
+                    if pl.direction == Direction::Horizontal {
                         1
                     } else {
                         0
-                    };
-                    axis_set(n, ca, Sizing::Fill);
-                    if ca == 0
-                        && let NodeKind::Text { auto_width, .. } = &mut n.kind
-                    {
-                        *auto_width = false;
                     }
-                    true
+                });
+                match lower.as_str() {
+                    "stretch" => {
+                        n.layout_child.align_self = None;
+                        if let Some(ca) = ca {
+                            axis_set(n, ca, Sizing::Fill);
+                            if ca == 0
+                                && let NodeKind::Text { auto_width, .. } = &mut n.kind
+                            {
+                                *auto_width = false;
+                            }
+                        }
+                        true
+                    }
+                    "auto" | "normal" => {
+                        n.layout_child.align_self = None;
+                        true
+                    }
+                    _ if align_of(&lower).is_some() => {
+                        let al = align_of(&lower).unwrap();
+                        n.layout_child.align_self = Some(al);
+                        if let Some(ca) = ca
+                            && n.layout_child.sizing[ca] == Sizing::Fill
+                        {
+                            n.layout_child.sizing[ca] = if matches!(n.kind, NodeKind::Frame { .. })
+                            {
+                                Sizing::Hug
+                            } else {
+                                Sizing::Fixed
+                            };
+                        }
+                        true
+                    }
+                    _ => false,
                 }
-                _ => false,
-            },
+            }
             "textTransform" if is_text => {
                 if let Some(t) = n.kind.text_mut() {
                     match lower.as_str() {
@@ -1121,14 +1161,44 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 }
                 None => false,
             },
-            "flexShrink" | "flexBasis" | "boxSizing" | "minWidth" | "minHeight" | "maxWidth"
-            | "maxHeight" | "zIndex" | "cursor" | "whiteSpace" | "fontFamily" | "wordBreak"
-            | "overflowWrap" => {
+            "minWidth" | "minHeight" => {
+                let axis = usize::from(k == "minHeight");
+                if matches!(lower.as_str(), "none" | "auto" | "0") {
+                    n.layout_child.min_size[axis] = None;
+                    true
+                } else if let Some(px) = length(v, fs) {
+                    n.layout_child.min_size[axis] = Some(px.max(0.0));
+                    if axis == 0 && n.rect.w < px {
+                        n.rect.w = px;
+                    } else if axis == 1 && n.rect.h < px {
+                        n.rect.h = px;
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            "maxWidth" | "maxHeight" => {
+                let axis = usize::from(k == "maxHeight");
+                if matches!(lower.as_str(), "none" | "auto") {
+                    n.layout_child.max_size[axis] = None;
+                    true
+                } else if let Some(px) = length(v, fs) {
+                    n.layout_child.max_size[axis] = Some(px.max(0.0));
+                    if axis == 0 && n.rect.w > px {
+                        n.rect.w = px;
+                    } else if axis == 1 && n.rect.h > px {
+                        n.rect.h = px;
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            "flexShrink" | "flexBasis" | "boxSizing" | "zIndex" | "cursor" | "whiteSpace"
+            | "fontFamily" | "wordBreak" | "overflowWrap" => {
                 // Accepted without an equivalent; harmless. fontFamily: Inter is the only face.
-                !matches!(
-                    k.as_str(),
-                    "minWidth" | "minHeight" | "maxWidth" | "maxHeight"
-                )
+                true
             }
             "overflow" if n.is_frame() => {
                 if let NodeKind::Frame { clip } = &mut n.kind {
@@ -1224,18 +1294,79 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
             "textDecoration" | "textDecorationLine" if is_text => {
                 let u = lower.contains("underline");
                 let s = lower.contains("line-through");
+                let wavy = lower.contains("wavy");
+                let dc = split_ws(v).into_iter().find_map(|tok| color(&tok));
                 set_text_flag(n, |sp| {
                     sp.underline = Some(u);
                     sp.strike = Some(s);
+                    if wavy {
+                        sp.underline_wavy = Some(true);
+                    }
+                    if let Some(c) = dc {
+                        sp.underline_color = Some(c);
+                    }
                 });
                 true
             }
-            "fontWeight" | "fontStyle" | "lineHeight" | "letterSpacing" | "textAlign"
-            | "textDecoration" => true, // inherited by text children
-            "border" | "outline" | "borderTop" | "borderRight" | "borderBottom" | "borderLeft" => {
+            "textDecorationColor" if is_text => match color(v) {
+                Some(c) => {
+                    set_text_flag(n, |sp| sp.underline_color = Some(c));
+                    true
+                }
+                None => false,
+            },
+            "textDecorationStyle" if is_text => {
+                let wavy = lower.contains("wavy");
+                set_text_flag(n, |sp| sp.underline_wavy = Some(wavy));
+                true
+            }
+            "fontWeight"
+            | "fontStyle"
+            | "lineHeight"
+            | "letterSpacing"
+            | "textAlign"
+            | "textDecoration"
+            | "textDecorationLine"
+            | "textDecorationColor"
+            | "textDecorationStyle" => true, // inherited by text children
+            "border" | "outline" => {
+                n.style.stroke_sides = None;
                 apply_border(n, v, fs)
             }
-            "borderColor" | "stroke" => match color(v) {
+            "borderTop" | "borderRight" | "borderBottom" | "borderLeft" => {
+                let side_idx = ["borderTop", "borderRight", "borderBottom", "borderLeft"]
+                    .iter()
+                    .position(|x| x == k)
+                    .unwrap();
+                apply_border_side(n, side_idx, v, fs)
+            }
+            "borderTopWidth" | "borderRightWidth" | "borderBottomWidth" | "borderLeftWidth" => {
+                match length(v, fs) {
+                    Some(w) => {
+                        let side_idx = [
+                            "borderTopWidth",
+                            "borderRightWidth",
+                            "borderBottomWidth",
+                            "borderLeftWidth",
+                        ]
+                        .iter()
+                        .position(|x| x == k)
+                        .unwrap();
+                        let mut sides = n.style.stroke_sides.unwrap_or([0.0; 4]);
+                        sides[side_idx] = w.max(0.0);
+                        n.style.stroke_sides = if sides == [0.0; 4] { None } else { Some(sides) };
+                        n.style.stroke_width = sides.iter().copied().fold(0.0, f64::max);
+                        n.style.stroke_align = crate::model::StrokeAlign::Inside;
+                        if n.style.stroke_width > 0.0 && n.style.stroke.is_none() {
+                            n.style.stroke = Some(Color::INK);
+                        }
+                        true
+                    }
+                    None => false,
+                }
+            }
+            "borderColor" | "stroke" | "borderTopColor" | "borderRightColor"
+            | "borderBottomColor" | "borderLeftColor" => match color(v) {
                 Some(c) => {
                     n.style.stroke = (c.a > 0).then_some(c);
                     if n.style.stroke_width <= 0.0 {
@@ -1245,19 +1376,39 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 }
                 None => false,
             },
-            "borderWidth" | "strokeWidth" => match length(v, fs) {
-                Some(w) => {
-                    n.style.stroke_width = w;
-                    if k == "borderWidth" {
-                        n.style.stroke_align = crate::model::StrokeAlign::Inside;
+            "borderWidth" | "strokeWidth" => {
+                if k == "borderWidth"
+                    && let Some(w) = four(v, fs)
+                {
+                    n.style.stroke_align = crate::model::StrokeAlign::Inside;
+                    if w.iter().all(|&x| (x - w[0]).abs() < 1e-9) {
+                        n.style.stroke_sides = None;
+                        n.style.stroke_width = w[0];
+                    } else {
+                        n.style.stroke_sides = Some(w);
+                        n.style.stroke_width = w.iter().copied().fold(0.0, f64::max);
                     }
-                    if w > 0.0 && n.style.stroke.is_none() {
+                    if n.style.stroke_width > 0.0 && n.style.stroke.is_none() {
                         n.style.stroke = Some(Color::INK);
                     }
                     true
+                } else {
+                    match length(v, fs) {
+                        Some(w) => {
+                            n.style.stroke_sides = None;
+                            n.style.stroke_width = w;
+                            if k == "borderWidth" {
+                                n.style.stroke_align = crate::model::StrokeAlign::Inside;
+                            }
+                            if w > 0.0 && n.style.stroke.is_none() {
+                                n.style.stroke = Some(Color::INK);
+                            }
+                            true
+                        }
+                        None => false,
+                    }
                 }
-                None => false,
-            },
+            }
             "borderStyle" | "strokeStyle" => {
                 set_dash(n, &lower);
                 true
@@ -1425,6 +1576,53 @@ fn apply_border(n: &mut Node, v: &str, fs: f64) -> bool {
     any
 }
 
+fn apply_border_side(n: &mut Node, side_idx: usize, v: &str, fs: f64) -> bool {
+    let lower = v.to_ascii_lowercase();
+    let mut sides = n.style.stroke_sides.unwrap_or([0.0; 4]);
+    if lower == "none" || lower == "0" {
+        sides[side_idx] = 0.0;
+        n.style.stroke_sides = if sides == [0.0; 4] { None } else { Some(sides) };
+        n.style.stroke_width = sides.iter().copied().fold(0.0, f64::max);
+        if sides == [0.0; 4] {
+            n.style.stroke = None;
+        }
+        return true;
+    }
+    let mut any = false;
+    let mut width = None;
+    let mut col = None;
+    let mut style = "solid".to_string();
+    for p in split_ws(v) {
+        if let Some(w) = length(&p, fs) {
+            width = Some(w);
+            any = true;
+        } else if let Some(c) = color(&p) {
+            col = Some(c);
+            any = true;
+        } else if matches!(
+            p.to_ascii_lowercase().as_str(),
+            "solid" | "dashed" | "dotted" | "double"
+        ) {
+            style = p.to_ascii_lowercase();
+            any = true;
+        }
+    }
+    if any {
+        let w = width.unwrap_or(1.0);
+        sides[side_idx] = w;
+        n.style.stroke_sides = Some(sides);
+        n.style.stroke_width = sides.iter().copied().fold(0.0, f64::max);
+        if let Some(c) = col {
+            n.style.stroke = (c.a > 0).then_some(c);
+        } else if n.style.stroke.is_none() && !lower.contains("transparent") {
+            n.style.stroke = Some(Color::INK);
+        }
+        n.style.stroke_align = crate::model::StrokeAlign::Inside;
+        set_dash(n, &style);
+    }
+    any
+}
+
 fn apply_background(n: &mut Node, k: &str, v: &str, a: &mut Applied) -> bool {
     let lower = v.to_ascii_lowercase();
     if lower == "none" || lower == "transparent" {
@@ -1510,6 +1708,21 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
         put("width", size_css(0, n.rect.w));
         put("height", size_css(1, n.rect.h));
     }
+    if let Some(mw) = n.layout_child.min_size[0] {
+        put("minWidth", px(mw));
+    }
+    if let Some(mh) = n.layout_child.min_size[1] {
+        put("minHeight", px(mh));
+    }
+    if let Some(xw) = n.layout_child.max_size[0] {
+        put("maxWidth", px(xw));
+    }
+    if let Some(xh) = n.layout_child.max_size[1] {
+        put("maxHeight", px(xh));
+    }
+    if let Some(al) = n.layout_child.align_self {
+        put("alignSelf", align_css(al).into());
+    }
     if let Some(pl) = parent_layout
         && in_flow
     {
@@ -1521,7 +1734,7 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
         if n.layout_child.sizing[ma] == Sizing::Fill {
             put("flexGrow", "1".into());
         }
-        if n.layout_child.sizing[1 - ma] == Sizing::Fill {
+        if n.layout_child.align_self.is_none() && n.layout_child.sizing[1 - ma] == Sizing::Fill {
             put("alignSelf", "stretch".into());
         }
         put("flexShrink", "0".into());
@@ -1635,10 +1848,23 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
         } else {
             "dashed"
         };
-        put(
-            "border",
-            format!("{} {kind} {}", px(n.style.stroke_width), color_css(s)),
-        );
+        if let Some(sides) = n.style.stroke_sides
+            && sides.iter().any(|&w| (w - sides[0]).abs() > 1e-9)
+        {
+            for (i, key) in ["borderTop", "borderRight", "borderBottom", "borderLeft"]
+                .into_iter()
+                .enumerate()
+            {
+                if sides[i] > 0.0 {
+                    put(key, format!("{} {kind} {}", px(sides[i]), color_css(s)));
+                }
+            }
+        } else {
+            put(
+                "border",
+                format!("{} {kind} {}", px(n.style.stroke_width), color_css(s)),
+            );
+        }
     }
     if let Some(r) = n.style.radii {
         put(
@@ -1773,5 +1999,61 @@ mod tests {
         );
         let r = n.style.rough.unwrap();
         assert_eq!((r.roughness, r.fill_style), (2.0, FillStyle::CrossHatch));
+    }
+
+    #[test]
+    fn border_sides_align_self_min_max_and_wavy_underline() {
+        let mut n = Node::new(
+            NodeId(4),
+            NodeKind::Frame { clip: false },
+            Rect::new(0.0, 0.0, 100.0, 20.0),
+        );
+        let a = apply(
+            &mut n,
+            &parse_inline(
+                "border-left: 3px solid #5eead4; align-self: center; min-height: 44px; max-height: 120px",
+            ),
+            &Context {
+                parent_layout: Some(AutoLayout::default()),
+                parent_size: Some((300.0, 300.0)),
+            },
+        );
+        assert!(a.ignored.is_empty(), "{:?}", a.ignored);
+        assert_eq!(n.style.stroke_sides, Some([0.0, 0.0, 0.0, 3.0]));
+        assert_eq!(n.style.stroke_width, 3.0);
+        assert_eq!(n.style.stroke, Some(Color::rgb(0x5e, 0xea, 0xd4)));
+        assert_eq!(n.layout_child.align_self, Some(Align::Center));
+        assert_eq!(n.layout_child.min_size[1], Some(44.0));
+        assert_eq!(n.layout_child.max_size[1], Some(120.0));
+        assert_eq!(n.rect.h, 44.0);
+        let back = computed(&n, Some(&AutoLayout::default()), false);
+        assert_eq!(back["borderLeft"], "3px solid #5eead4");
+        assert!(!back.contains_key("border"));
+        assert_eq!(back["alignSelf"], "center");
+        assert_eq!(back["minHeight"], "44px");
+        assert_eq!(back["maxHeight"], "120px");
+
+        let mut tn = Node::new(
+            NodeId(5),
+            NodeKind::Text {
+                text: "Hello".into(),
+                font_size: 16.0,
+                auto_width: true,
+                align: TextAlign::Left,
+            },
+            Rect::new(0.0, 0.0, 50.0, 20.0),
+        );
+        let ta = apply(
+            &mut tn,
+            &parse_inline(
+                "text-decoration: underline; text-decoration-color: #f9e2af; text-decoration-style: wavy",
+            ),
+            &Context::default(),
+        );
+        assert!(ta.ignored.is_empty(), "{:?}", ta.ignored);
+        let sp = &tn.text_style.spans[0];
+        assert_eq!(sp.underline, Some(true));
+        assert_eq!(sp.underline_color, Some(Color::rgb(0xf9, 0xe2, 0xaf)));
+        assert_eq!(sp.underline_wavy, Some(true));
     }
 }

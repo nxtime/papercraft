@@ -72,6 +72,8 @@ pub struct PlacedGlyph {
     /// Char index into the source string this glyph comes from.
     pub char_index: usize,
     pub underline: bool,
+    pub underline_color: Option<Color>,
+    pub underline_wavy: bool,
     pub strike: bool,
 }
 
@@ -223,6 +225,8 @@ pub fn layout_rich(
                 advance: a,
                 char_index: i,
                 underline: st.underline,
+                underline_color: st.underline_color,
+                underline_wavy: st.underline_wavy,
                 strike: st.strike,
             });
             x += a;

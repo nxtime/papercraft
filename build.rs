@@ -17,7 +17,10 @@ fn main() {
         .set("ProductName", "PaperCraft")
         .set("FileDescription", "PaperCraft infinite canvas")
         .set("CompanyName", "PaperCraft Authors")
-        .set("LegalCopyright", "Copyright (c) the PaperCraft authors. MIT OR Apache-2.0.")
+        .set(
+            "LegalCopyright",
+            "Copyright (c) the PaperCraft authors. MIT OR Apache-2.0.",
+        )
         .set("OriginalFilename", "papercraft.exe")
         .set("InternalName", "papercraft");
     if let Err(e) = res.compile() {

@@ -470,7 +470,11 @@ impl Sync {
         }
         let server = server.trim_end_matches('/').to_string();
         let alive = Arc::new(AtomicBool::new(true));
-        net::spawn(run_library(root.to_path_buf(), server.clone(), alive.clone()));
+        net::spawn(run_library(
+            root.to_path_buf(),
+            server.clone(),
+            alive.clone(),
+        ));
         self.library = Some(Library { server, alive });
     }
 

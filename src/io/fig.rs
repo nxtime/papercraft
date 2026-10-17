@@ -2000,6 +2000,7 @@ fn rest_layout_child(j: &Json) -> LayoutChild {
         sizing,
         absolute,
         constraints,
+        ..LayoutChild::default()
     }
 }
 

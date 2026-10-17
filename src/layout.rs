@@ -29,6 +29,17 @@ fn set(r: &mut Rect, axis: usize, pos: f64, size: f64) {
     }
 }
 
+fn clamp_size(lc: &crate::model::LayoutChild, axis: usize, s: f64) -> f64 {
+    let mut out = s.max(0.0);
+    if let Some(min) = lc.min_size[axis] {
+        out = out.max(min);
+    }
+    if let Some(max) = lc.max_size[axis] {
+        out = out.min(max.max(lc.min_size[axis].unwrap_or(0.0)));
+    }
+    out
+}
+
 /// Children that take part in the flow.
 pub fn flow_children(doc: &Document, id: NodeId) -> Vec<NodeId> {
     doc.children(Some(id))
@@ -45,7 +56,9 @@ pub fn flow_children(doc: &Document, id: NodeId) -> Vec<NodeId> {
 fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
     let n = doc.get(id).unwrap();
     let (_, cur) = get(&n.rect, axis);
-    let Some(l) = n.layout else { return cur };
+    let Some(l) = n.layout else {
+        return clamp_size(&n.layout_child, axis, cur);
+    };
     let kids = flow_children(doc, id);
     let pad = if axis == 0 {
         l.padding[3] + l.padding[1]
@@ -57,13 +70,13 @@ fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
         .map(|k| {
             let kn = doc.get(*k).unwrap();
             match kn.layout_child.sizing[axis] {
-                Sizing::Hug => hug_size(doc, *k, axis),
+                Sizing::Hug => clamp_size(&kn.layout_child, axis, hug_size(doc, *k, axis)),
                 Sizing::Fill => 0.0,
-                Sizing::Fixed => get(&kn.rect, axis).1,
+                Sizing::Fixed => clamp_size(&kn.layout_child, axis, get(&kn.rect, axis).1),
             }
         })
         .collect();
-    if axis == main_axis(&l) && !l.wrap {
+    let result = if axis == main_axis(&l) && !l.wrap {
         let gap = if l.gap_auto { 0.0 } else { l.gap };
         pad + sizes.iter().sum::<f64>() + gap * (kids.len().saturating_sub(1)) as f64
     } else if axis == main_axis(&l) {
@@ -79,11 +92,12 @@ fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
                 line.iter()
                     .map(|k| {
                         let kn = doc.get(*k).unwrap();
-                        match kn.layout_child.sizing[axis] {
+                        let raw = match kn.layout_child.sizing[axis] {
                             Sizing::Hug => hug_size(doc, *k, axis),
                             Sizing::Fill => get(&kn.rect, axis).1,
                             Sizing::Fixed => get(&kn.rect, axis).1,
-                        }
+                        };
+                        clamp_size(&kn.layout_child, axis, raw)
                     })
                     .fold(0.0, f64::max)
             })
@@ -91,7 +105,8 @@ fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
         pad + cross.iter().sum::<f64>() + l.cross_gap * cross.len().saturating_sub(1) as f64
     } else {
         pad + sizes.iter().cloned().fold(0.0, f64::max)
-    }
+    };
+    clamp_size(&n.layout_child, axis, result)
 }
 
 fn wrap_lines(
@@ -112,10 +127,11 @@ fn wrap_lines(
     let mut x = 0.0;
     for k in kids {
         let kn = doc.get(*k).unwrap();
-        let s = match kn.layout_child.sizing[ma] {
+        let raw_s = match kn.layout_child.sizing[ma] {
             Sizing::Hug => hug_size(doc, *k, ma),
             _ => get(&kn.rect, ma).1,
         };
+        let s = clamp_size(&kn.layout_child, ma, raw_s);
         let line = lines.last_mut().unwrap();
         if !line.is_empty() && x + l.gap + s > inner + 1e-9 {
             lines.push(vec![*k]);
@@ -166,6 +182,8 @@ pub fn layout_frame(tx: &mut Tx, id: NodeId) -> bool {
                 set(&mut rect, axis, p, s.max(0.0));
             }
         }
+        let (p, cur_s) = get(&rect, axis);
+        set(&mut rect, axis, p, clamp_size(&n.layout_child, axis, cur_s));
     }
     if rect != n.rect {
         tx.node_mut(id).unwrap().rect = rect;
@@ -208,10 +226,11 @@ fn arrange(tx: &mut Tx, id: NodeId, l: &AutoLayout, rect: Rect, ma: usize, ca: u
                 line.iter()
                     .map(|k| {
                         let kn = tx.doc().get(*k).unwrap();
-                        match kn.layout_child.sizing[ca] {
+                        let raw = match kn.layout_child.sizing[ca] {
                             Sizing::Hug => hug_size(tx.doc(), *k, ca),
                             Sizing::Fill | Sizing::Fixed => get(&kn.rect, ca).1,
-                        }
+                        };
+                        clamp_size(&kn.layout_child, ca, raw)
                     })
                     .fold(0.0, f64::max)
             })
@@ -239,8 +258,8 @@ fn arrange(tx: &mut Tx, id: NodeId, l: &AutoLayout, rect: Rect, ma: usize, ca: u
                 let kn = tx.doc().get(*k).unwrap();
                 match kn.layout_child.sizing[ma] {
                     Sizing::Fill => 0.0,
-                    Sizing::Hug => hug_size(tx.doc(), *k, ma),
-                    Sizing::Fixed => get(&kn.rect, ma).1,
+                    Sizing::Hug => clamp_size(&kn.layout_child, ma, hug_size(tx.doc(), *k, ma)),
+                    Sizing::Fixed => clamp_size(&kn.layout_child, ma, get(&kn.rect, ma).1),
                 }
             })
             .collect();
@@ -252,7 +271,7 @@ fn arrange(tx: &mut Tx, id: NodeId, l: &AutoLayout, rect: Rect, ma: usize, ca: u
         if !fills.is_empty() && !l.wrap {
             let share = ((inner_m - fixed) / fills.len() as f64).max(0.0);
             for i in &fills {
-                sizes[*i] = share;
+                sizes[*i] = clamp_size(&tx.doc().get(line[*i]).unwrap().layout_child, ma, share);
             }
         }
         let used: f64 = sizes.iter().sum::<f64>() + gap * line.len().saturating_sub(1) as f64;
@@ -274,15 +293,29 @@ fn arrange(tx: &mut Tx, id: NodeId, l: &AutoLayout, rect: Rect, ma: usize, ca: u
         for (i, k) in line.iter().enumerate() {
             let kn = tx.doc().get(*k).unwrap();
             let mut r = kn.rect;
+            let cross_align = kn.layout_child.align_self.unwrap_or(l.align_cross);
             let (cpos, cs) = match kn.layout_child.sizing[ca] {
-                Sizing::Fill => (cross_cursor, lh.max(0.0)),
+                Sizing::Fill => {
+                    let cs = clamp_size(&kn.layout_child, ca, lh.max(0.0));
+                    let cy = if cs < lh {
+                        match cross_align {
+                            Align::Start => cross_cursor,
+                            Align::Center => cross_cursor + (lh - cs) * 0.5,
+                            Align::End => cross_cursor + lh - cs,
+                        }
+                    } else {
+                        cross_cursor
+                    };
+                    (cy, cs)
+                }
                 Sizing::Fixed | Sizing::Hug => {
-                    let ch = if kn.layout_child.sizing[ca] == Sizing::Hug {
+                    let raw_ch = if kn.layout_child.sizing[ca] == Sizing::Hug {
                         hug_size(tx.doc(), *k, ca)
                     } else {
                         get(&r, ca).1
                     };
-                    let cy = match l.align_cross {
+                    let ch = clamp_size(&kn.layout_child, ca, raw_ch);
+                    let cy = match cross_align {
                         Align::Start => cross_cursor,
                         Align::Center => cross_cursor + (lh - ch) * 0.5,
                         Align::End => cross_cursor + lh - ch,
@@ -1006,5 +1039,86 @@ mod tests {
             tx.doc().get(ids[3]).unwrap().rect,
             Rect::new(10.0, 70.0, 80.0, 50.0)
         );
+    }
+
+    #[test]
+    fn align_self_overrides_parent_cross_align() {
+        let mut doc = Document::default();
+        let mut rec = Recording::new("t", &doc);
+        let mut tx = Tx::new(&mut doc, &mut rec);
+        let fid = tx.alloc_id();
+        let mut f = Node::new(
+            fid,
+            NodeKind::Frame { clip: true },
+            Rect::new(0.0, 0.0, 300.0, 100.0),
+        );
+        f.layout = Some(AutoLayout {
+            direction: Direction::Horizontal,
+            gap: 10.0,
+            padding: [0.0; 4],
+            align_cross: Align::Start,
+            ..Default::default()
+        });
+        f.layout_child.sizing = FX;
+        tx.insert(f, None, None);
+
+        let mut ids = Vec::new();
+        for self_align in [None, Some(Align::Center), Some(Align::End)] {
+            let id = tx.alloc_id();
+            let mut n = Node::new(id, NodeKind::Rect, Rect::new(0.0, 0.0, 40.0, 20.0));
+            n.layout_child.sizing = FX;
+            n.layout_child.align_self = self_align;
+            tx.insert(n, Some(fid), None);
+            ids.push(id);
+        }
+        layout_frame(&mut tx, fid);
+        assert_eq!(
+            tx.doc().get(ids[0]).unwrap().rect,
+            Rect::new(0.0, 0.0, 40.0, 20.0)
+        );
+        assert_eq!(
+            tx.doc().get(ids[1]).unwrap().rect,
+            Rect::new(50.0, 40.0, 40.0, 20.0)
+        );
+        assert_eq!(
+            tx.doc().get(ids[2]).unwrap().rect,
+            Rect::new(100.0, 80.0, 40.0, 20.0)
+        );
+    }
+
+    #[test]
+    fn min_size_and_max_size_clamping() {
+        let mut doc = Document::default();
+        let mut rec = Recording::new("t", &doc);
+        let mut tx = Tx::new(&mut doc, &mut rec);
+        let fid = tx.alloc_id();
+        let mut f = Node::new(
+            fid,
+            NodeKind::Frame { clip: true },
+            Rect::new(0.0, 0.0, 400.0, 10.0),
+        );
+        f.layout = Some(AutoLayout {
+            direction: Direction::Horizontal,
+            gap: 0.0,
+            padding: [0.0; 4],
+            align_cross: Align::Center,
+            ..Default::default()
+        });
+        f.layout_child.sizing = [Sizing::Hug, Sizing::Hug];
+        f.layout_child.min_size = [None, Some(44.0)];
+        f.layout_child.max_size = [Some(300.0), None];
+        tx.insert(f, None, None);
+
+        let cid = tx.alloc_id();
+        let mut c = Node::new(cid, NodeKind::Rect, Rect::new(0.0, 0.0, 500.0, 20.0));
+        c.layout_child.sizing = FX;
+        c.layout_child.max_size = [Some(350.0), None];
+        tx.insert(c, Some(fid), None);
+
+        layout_frame(&mut tx, fid);
+        let fr = tx.doc().get(fid).unwrap().rect;
+        assert_eq!((fr.w, fr.h), (300.0, 44.0));
+        let cr = tx.doc().get(cid).unwrap().rect;
+        assert_eq!(cr, Rect::new(0.0, 12.0, 350.0, 20.0));
     }
 }

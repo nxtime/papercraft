@@ -187,6 +187,7 @@ pub fn definitions() -> Vec<Value> {
             json!({
                 "nodeId": node_id("The node to capture; omit for the whole page."),
                 "scale": {"type": "number", "description": "Render scale: 1 (default) or 2."},
+                "out": {"type": "string", "description": "Optional file path to save the PNG to (also used by papercraft-cli)."},
                 "pageId": page_id(),
             }),
             &[],
@@ -345,22 +346,22 @@ pub fn definitions() -> Vec<Value> {
              - mode \"insert-children\" appends the HTML inside targetNodeId (\"root\" = the page); \
              \"replace\" replaces targetNodeId with it.\n\
              - Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, \
-             align-items, justify-content, flex-grow, flex-wrap) is the layout model; block \
+             align-items, justify-content, align-self, flex-grow, flex-wrap) is the layout model; block \
              elements stack vertically. position:absolute with left/top is supported. No margin, \
              grid or tables.\n\
              - Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, \
-             letter-spacing, text-align, text-decoration; <b>/<i>/<u>/<s>/<span style> make rich \
-             text. Font family is always Inter.\n\
-             - Boxes: background(-color/-image: colors, linear/radial gradients, url()), border, \
-             border-radius, opacity, overflow:hidden, mix-blend-mode, width/height (px, %, \
-             fit-content).\n\
+             letter-spacing, text-align, text-decoration (including wavy and text-decoration-color); \
+             <b>/<i>/<u>/<s>/<span style> make rich text. Font family is always Inter.\n\
+             - Boxes: background(-color/-image: colors, linear/radial gradients, url()), border \
+             (and border-top/right/bottom/left), border-radius, opacity, overflow:hidden, \
+             mix-blend-mode, width/height (px, %, fit-content), min-width/max-width/min-height/max-height.\n\
              - <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths or data: URIs. \
              <svg> markup is imported as vector layers.\n\
              - <x-paper-icon name=\"set:name\" size=\"20\" color=\"var(--accent)\"/> places an installed icon (search_icons); \
-             <x-paper-instance component-id=\"ID\" layer-name=\"...\"/> places a component instance; \
+             <x-paper-instance component=\"Name\" component-id=\"ID\" layer-name=\"...\"/> places a component instance; \
              colors may be var(--name) of set_variables.\n\
              - layer-name=\"...\" names layers; <x-paper-clone node-id=\"ID\" style=\"...\"/> \
-             clones an existing node.\n\
+             clones an existing node (supports cross-page `<page>:<id>`).\n\
              Returns the ids of the created top-level layers and the styles that were ignored.",
             json!({
                 "html": {"type": "string", "description": "HTML to parse into layers."},
@@ -441,10 +442,11 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "get_feedback",
             "Notes the user left on layers (the Feedback box in the inspector, shown as amber dots \
-             on the canvas): which layer, where it sits, what to change. Call it at the start of a \
-             session and after each round of edits; fix every open note, then resolve_feedback. \
-             get_basic_info reports `openFeedback`, and get_selection includes the selected \
-             layers' notes.",
+             on the canvas): which layer, where it sits, what to change. Omitting `pageId` queries \
+             all pages across the project; `openCount` and `resolvedCount` are returned alongside \
+             per-page counts in `get_basic_info`. Call it at the start of a session and after each \
+             round of edits; fix every open note, then resolve_feedback. `get_selection` also \
+             includes the selected layers' notes.",
             json!({"nodeId": {"type": "string", "description": "Only this layer."},
                    "pageId": page_id(),
                    "includeResolved": {"type": "boolean"}}),
@@ -543,11 +545,11 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "import_components",
-            "Copy the main components of another page (typically a `Design System` page) onto this \
-             one, so you can place instances here with create_instance or \
-             <x-paper-instance component=\"Name\"/>. Components with the same name already here \
-             are skipped. Variables and tokens are already shared by every page; components are \
-             copies, not live links.",
+            "Copy the main components anywhere on `fromPageId` (including inside artboards, \
+             typically on a `Design System` page) onto this one, so you can place instances here \
+             with create_instance or <x-paper-instance component=\"Name\"/> / component-id=\"ID\". \
+             Components with the same name already here are skipped. Variables and tokens are \
+             already shared by every page; components are copies, not live links.",
             json!({"fromPageId": {"type": "string"}, "pageId": page_id(),
                    "names": {"type": "array", "items": {"type": "string"},
                        "description": "Only these components (default all)."}}),
@@ -618,12 +620,18 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "duplicate_nodes",
-            "Deep-clone nodes. Each copy goes under parentId when given, else next to its source; \
-             duplicated artboards are placed in an empty spot. Returns new ids and a \
-             descendantIdMap from every original descendant id to its copy.",
+            "Deep-clone nodes, including across pages (via `toPageId` or a cross-page `parentId`; \
+             `<x-paper-clone node-id=\"<page>:<id>\"/>` also works across pages). Each copy goes \
+             under parentId when given, else next to its source; duplicated artboards are placed \
+             in an empty spot. Returns new ids and a descendantIdMap from every original \
+             descendant id to its copy.",
             json!({"nodes": {"type": "array", "items": {
                 "type": "object",
-                "properties": {"id": {"type": "string"}, "parentId": {"type": "string"}},
+                "properties": {
+                    "id": {"type": "string"},
+                    "parentId": {"type": "string"},
+                    "toPageId": {"type": "string", "description": "Optional destination page id when copying/moving to another page."},
+                },
                 "required": ["id"],
             }}}),
             &["nodes"],
@@ -631,15 +639,17 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "move_nodes",
-            "Move nodes keeping their ids. Each move is {nodeId, before: siblingId}, {nodeId, \
-             after: siblingId} or {nodeId, parentId, index?} (parentId \"root\" = the page root). \
-             Moves apply in order. In auto-layout parents this changes the visual order; in free \
-             parents it changes stacking and keeps the world position.",
+            "Move nodes keeping their ids (or onto another page via `toPageId` or a cross-page \
+             `parentId` / `before` / `after`). Each move is {nodeId, before: siblingId}, {nodeId, \
+             after: siblingId} or {nodeId, parentId, toPageId?, index?} (parentId \"root\" = the \
+             page root). Moves apply in order. In auto-layout parents this changes the visual \
+             order; in free parents it changes stacking and keeps the world position.",
             json!({"moves": {"type": "array", "minItems": 1, "items": {
                 "type": "object",
                 "properties": {
                     "nodeId": {"type": "string"}, "before": {"type": "string"},
                     "after": {"type": "string"}, "parentId": {"type": "string"},
+                    "toPageId": {"type": "string", "description": "Optional destination page id when copying/moving to another page."},
                     "index": {"type": "integer", "minimum": 0},
                 },
                 "required": ["nodeId"],
@@ -724,17 +734,22 @@ pub const GUIDE_HTML: &str = "\
 Elements: div/section/header/footer/nav/main/article/aside/ul/ol/li/button/form → frames;
 p/h1–h6/span/label/a/strong/em/code/pre (elements holding only text) → text layers (with a
 frame around them when they have a background, border or padding); img → image rectangle;
-svg → vector layers; br → line break; x-paper-clone node-id=ID → copy of an existing layer.
+svg → vector layers; br → line break;
+<x-paper-instance component=\"Name\" component-id=\"ID\" overrides='{\"Label\":\"Save\"}'/> → component instance;
+<x-paper-clone node-id=\"ID\"/> → copy of an existing layer (supports cross-page `<page>:<id>`).
 
 Default sizes (like CSS): h1 32px bold, h2 24px bold, h3 20px bold, h4–h6 16px bold, p 16px,
 small 13px, code/pre 14px; color is inherited, default black.
 
-Styles: width, height (px, %, fit-content), left/top/right/bottom with position:absolute,
-display (flex, block, none), flex-direction, flex-wrap, gap, row-gap, column-gap, padding*,
-justify-content, align-items, align-self, flex-grow, overflow, background, background-color,
+Styles: width, height (px, %, fit-content), min-width, max-width, min-height, max-height,
+left/top/right/bottom with position:absolute, display (flex, block, none), flex-direction,
+flex-wrap, gap, row-gap, column-gap, padding*, justify-content, align-items,
+align-self (start, center, end, stretch), flex-grow, overflow, background, background-color,
 background-image (url(), linear-gradient(), radial-gradient()), background-size/object-fit,
-border, border-color/width/style, border-radius (1–4 values), opacity, mix-blend-mode, color,
-font-size, font-weight, font-style, line-height, letter-spacing, text-align, text-decoration.
+border, border-top/border-right/border-bottom/border-left, border-color/width/style,
+border-radius (1–4 values), opacity, mix-blend-mode, color, font-size, font-weight, font-style,
+line-height, letter-spacing, text-align, text-decoration (including `text-decoration-color` and
+`text-decoration-style: wavy`, e.g. `text-decoration: underline wavy var(--warning)`).
 Ignored (reported back): margin, grid, box-shadow, transform, filters, transitions.";
 
 pub const GUIDE_WHITEBOARD: &str = "\
