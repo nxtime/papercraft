@@ -134,6 +134,9 @@ impl<'a> Args<'a> {
             _ => None,
         })
     }
+    fn bool(&self, k: &str) -> Option<bool> {
+        self.get(k).and_then(Value::as_bool)
+    }
     fn arr(&self, k: &str) -> Result<&'a Vec<Value>, String> {
         self.get(k)
             .and_then(Value::as_array)
@@ -275,6 +278,8 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "get_tree_summary" => tree_summary(ed, &a),
                 "get_screenshot" => screenshot(host, &a),
                 "get_jsx" => jsx(host, &a),
+                "get_design_spec" => get_design_spec(ed, &a),
+                "verify_code" => verify_code(ed, &a),
                 "get_computed_styles" => computed_styles(ed, &a),
                 "get_fill_image" => fill_image(ed, &a),
                 "find_nodes" => find_nodes(ed, &a),
@@ -297,6 +302,9 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "import_components" => import_components(ed, &a),
                 "create_component" => create_component(ed, &a),
                 "create_instance" => create_instance(ed, &a),
+                "swap_instance" => swap_instance(ed, &a),
+                "detach_instance" => detach_instance(ed, &a),
+                "diff_frames" => diff_frames(ed, &a),
                 "search_icons" => search_icons(&a),
                 "rename_nodes" => rename_nodes(ed, &a),
                 "delete_nodes" => delete_nodes(ed, &a),
@@ -1100,9 +1108,50 @@ fn jsx(host: &mut dyn Host, a: &Args) -> ToolResult {
     let ed = host.editor();
     let (page, id) = resolve(ed, a.req_str("nodeId")?, page_arg(ed, a)?)?;
     let doc = ed.page_doc(page);
-    let mut out = String::new();
-    jsx_node(doc, id, 0, true, assets_dir.as_deref(), &mut out);
-    Ok(vec![Out::Text(out)])
+    match a.str("format") {
+        None | Some("") | Some("inline") | Some("inline-styles") => {
+            let mut out = String::new();
+            jsx_node(doc, id, 0, true, assets_dir.as_deref(), &mut out);
+            Ok(vec![Out::Text(out)])
+        }
+        Some(
+            f @ ("tailwind" | "jsx" | "react" | "tsx" | "angular" | "ng" | "html" | "css" | "egui"
+            | "rust"),
+        ) => Ok(vec![Out::Text(super::codegen::code_for_target(
+            doc, id, f,
+        )?)]),
+        Some(f) => Err(format!(
+            "unknown format `{f}` (inline, tailwind, react, angular, html, or egui)"
+        )),
+    }
+}
+
+fn get_design_spec(ed: &mut Editor, a: &Args) -> ToolResult {
+    let (page, id) = resolve(ed, a.req_str("nodeId")?, page_arg(ed, a)?)?;
+    let doc = ed.page_doc(page);
+    let target = a.str("target").filter(|s| !s.is_empty()).unwrap_or("react");
+    match a.str("format").unwrap_or("markdown") {
+        "" | "markdown" | "md" => {
+            let md = super::codegen::to_ai_spec_markdown(doc, id, target)?;
+            Ok(vec![Out::Text(md)])
+        }
+        "json" => {
+            let spec = super::codegen::to_ai_spec(doc, id, target)?;
+            text(spec)
+        }
+        other => Err(format!(
+            "unknown format `{other}` (expected markdown or json)"
+        )),
+    }
+}
+
+fn verify_code(ed: &mut Editor, a: &Args) -> ToolResult {
+    let (page, id) = resolve(ed, a.req_str("nodeId")?, page_arg(ed, a)?)?;
+    let doc = ed.page_doc(page);
+    let target = a.req_str("target")?;
+    let code = a.req_str("code")?;
+    let report = super::enforcer::verify_code(doc, id, target, code)?;
+    text(super::enforcer::to_json(&report))
 }
 
 fn style_obj(m: &Map<String, Value>) -> String {
@@ -3015,17 +3064,25 @@ fn get_variables(ed: &mut Editor, a: &Args) -> ToolResult {
                 .map(|(k, c)| format!("  --{k}: {};\n", c.to_hex()))
                 .chain(doc.tokens.iter().map(|(k, v)| format!("  --{k}: {v};\n")))
                 .collect();
-            return Ok(vec![Out::Text(format!(":root {{\n{body}}}\n"))]);
+            let mut out = format!(":root {{\n{body}}}\n");
+            for (mode, vars) in &doc.modes {
+                out.push_str(&format!("[data-theme=\"{mode}\"] {{\n"));
+                for (k, c) in vars {
+                    out.push_str(&format!("  --{k}: {};\n", c.to_hex()));
+                }
+                out.push_str("}\n");
+            }
+            return Ok(vec![Out::Text(out)]);
         }
         Some("json") => {
-            let tokens: Map<String, Value> = doc
-                .variables
-                .iter()
-                .map(|(k, c)| (k.clone(), json!({"$type": "color", "$value": c.to_hex()})))
-                .collect();
-            return text(Value::Object(tokens));
+            return text(super::codegen::export_variables_dtcg(doc));
         }
-        Some(f) => return Err(format!("unknown format `{f}` (css or json)")),
+        Some("tailwind") => {
+            return Ok(vec![Out::Text(super::codegen::export_variables_tailwind(
+                doc,
+            ))]);
+        }
+        Some(f) => return Err(format!("unknown format `{f}` (css, json, or tailwind)")),
         None => {}
     }
     let vars: Map<String, Value> = doc
@@ -3103,6 +3160,15 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
         Some(v) => v.iter().filter_map(Value::as_f64).collect(),
         None => super::lint::DEFAULT_SCALE.to_vec(),
     };
+    let fixed = if a.bool("fix").unwrap_or(false) {
+        ed.with_page(page, |ed| {
+            ed.edit("Auto-fix design lint", |tx| {
+                super::lint::autofix(tx, &roots, &scale)
+            })
+        })
+    } else {
+        0
+    };
     let doc = ed.page_doc(page);
     let issues = super::lint::lint(doc, &roots, &scale);
     let count = |sev: &str| issues.iter().filter(|i| i.severity == sev).count();
@@ -3121,6 +3187,7 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
         .collect();
     text(json!({
         "errors": count("error"), "warnings": count("warning"), "info": count("info"),
+        "fixedNodes": fixed,
         "byRule": by_rule, "issues": list,
         "truncated": issues.len() > 200,
     }))
@@ -3456,6 +3523,80 @@ fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
         .map(|n| json!({"id": node_key(ed, page, n.id), "name": n.name, "text": n.kind.text()}))
         .collect();
     text(json!({"id": node_key(ed, page, id), "textLayers": texts, "layers": layers}))
+}
+
+fn swap_instance(ed: &mut Editor, a: &Args) -> ToolResult {
+    let def = page_arg(ed, a)?;
+    let (page, inst) = resolve(ed, a.req_str("nodeId")?, def)?;
+    let (comp_page, new_main) = resolve(ed, a.req_str("componentId")?, page)?;
+    if page != comp_page {
+        return Err("instance and component must be on the same page".into());
+    }
+    ed.with_page(page, |ed| {
+        if !ed.is_instance_root(inst) {
+            return Err(format!(
+                "`{}` is not a component instance root",
+                a.req_str("nodeId").unwrap_or_default()
+            ));
+        }
+        if !ed.doc.get(new_main).is_some_and(|m| m.component) {
+            return Err(format!(
+                "`{}` is not a main component",
+                a.req_str("componentId").unwrap_or_default()
+            ));
+        }
+        let ok = ed.edit("Swap instance", |tx| {
+            crate::editor::structure::swap_instance_tx(tx, inst, new_main)
+        });
+        if !ok {
+            return Err("could not swap instance to that component".into());
+        }
+        Ok(())
+    })?;
+    text(json!({
+        "id": node_key(ed, page, inst),
+        "componentId": node_key(ed, page, new_main),
+        "swapped": true,
+    }))
+}
+
+fn detach_instance(ed: &mut Editor, a: &Args) -> ToolResult {
+    let def = page_arg(ed, a)?;
+    let keys = match a.strs("nodeIds") {
+        Ok(k) => k,
+        Err(_) => vec![a.req_str("nodeId")?.to_string()],
+    };
+    let (page, ids) = resolve_all(ed, &keys, def)?;
+    let detached = ed.with_page(page, |ed| {
+        ed.edit("Detach instance", |tx| {
+            let mut count = 0;
+            for r in &ids {
+                if tx.doc().get(*r).and_then(|n| n.instance.as_ref()).is_some() {
+                    for id in tx.doc().subtree(*r) {
+                        if let Some(n) = tx.node_mut(id) {
+                            n.instance = None;
+                        }
+                    }
+                    count += 1;
+                }
+            }
+            count
+        })
+    });
+    text(json!({
+        "detached": detached,
+        "nodeIds": ids.iter().map(|i| node_key(ed, page, *i)).collect::<Vec<_>>(),
+    }))
+}
+
+fn diff_frames(ed: &mut Editor, a: &Args) -> ToolResult {
+    let def = page_arg(ed, a)?;
+    let (page_a, id_a) = resolve(ed, a.req_str("beforeId")?, def)?;
+    let (page_b, id_b) = resolve(ed, a.req_str("afterId")?, def)?;
+    let doc_a = ed.page_doc(page_a);
+    let doc_b = ed.page_doc(page_b);
+    let diff = super::diff::diff_subtrees(doc_a, id_a, doc_b, id_b)?;
+    text(super::diff::to_json(&diff))
 }
 
 // ------------------------------------------------------------------------------ icons

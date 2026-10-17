@@ -16,7 +16,18 @@ pub fn import_as_pages(path: &Path) -> Result<(String, Vec<PageData>), String> {
         let pages = p.load_pages().map_err(|e| e.to_string())?;
         return Ok((p.manifest.name, pages));
     }
-    let text = crate::vfs::read_to_string(path).map_err(|e| e.to_string())?;
+    let bytes = crate::vfs::read(path).map_err(|e| e.to_string())?;
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if ext == "fig" || crate::io::fig::is_fig(&bytes) {
+        return crate::io::fig::import_fig_bytes(&stem, &bytes);
+    }
+    let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+    if crate::io::fig::is_figma_rest_json(&text) {
+        return crate::io::fig::import_rest_json(&stem, &text);
+    }
     page_from_text(&stem, &text)
 }
 
@@ -64,6 +75,9 @@ pub fn import_bytes(name: &str, bytes: &[u8]) -> Result<Imported, String> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "Imported".into());
     let ext = extension(name);
+    if ext == "fig" || crate::io::fig::is_fig(bytes) {
+        return crate::io::fig::import_fig_bytes(&stem, bytes).map(|(n, p)| Imported::Pages(n, p));
+    }
     if ext == "zip" || super::backup::is_zip(bytes) {
         return Ok(Imported::Backup);
     }
@@ -76,7 +90,12 @@ pub fn import_bytes(name: &str, bytes: &[u8]) -> Result<Imported, String> {
             group: Some(stem),
         }),
         "excalidraw" | "json" => {
-            let doc = crate::io::excalidraw::import_scene(text()?)?;
+            let t = text()?;
+            if crate::io::fig::is_figma_rest_json(t) {
+                return crate::io::fig::import_rest_json(&stem, t)
+                    .map(|(n, p)| Imported::Pages(n, p));
+            }
+            let doc = crate::io::excalidraw::import_scene(t)?;
             let nodes = doc
                 .paint_order()
                 .into_iter()

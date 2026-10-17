@@ -3,6 +3,7 @@ pub mod backup;
 pub mod clipboard;
 pub mod excalidraw;
 pub mod export;
+pub mod fig;
 pub mod file;
 pub mod import;
 pub mod pdf;

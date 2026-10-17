@@ -783,6 +783,55 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             ed.run(crate::editor::shortcuts::Action::CopyAsSvg);
         }
     });
+    let root_id = ed
+        .top_selection()
+        .first()
+        .copied()
+        .or_else(|| ed.doc.root.first().copied());
+    if let Some(root_id) = root_id {
+        ui.add_space(6.0);
+        ui.label(title_text("Code & AI Handoff"));
+        if st.code_target.is_empty() {
+            st.code_target = "react".into();
+        }
+        let targets = [
+            ("react", "React (TSX)"),
+            ("tailwind", "Tailwind JSX"),
+            ("angular", "Angular"),
+            ("html", "HTML + CSS"),
+            ("egui", "Rust (egui)"),
+        ];
+        let cur = targets
+            .iter()
+            .find(|(k, _)| *k == st.code_target)
+            .map_or("react", |(k, _)| *k);
+        row(ui, "Target", |ui| {
+            if let Some(v) = combo(ui, "code-target", cur, &targets, ui.available_width()) {
+                st.code_target = v.into();
+            }
+        });
+        ui.horizontal(|ui| {
+            let w = half(ui);
+            if ui
+                .add(egui::Button::new("Copy Code").min_size(egui::vec2(w, 24.0)))
+                .clicked()
+                && let Ok(code) =
+                    crate::mcp::codegen::code_for_target(&ed.doc, root_id, &st.code_target)
+            {
+                ui.ctx().copy_text(code);
+                ed.status = format!("Copied {} code to clipboard", st.code_target);
+            }
+            if ui
+                .add(egui::Button::new("Copy AI Spec").min_size(egui::vec2(w, 24.0)))
+                .clicked()
+                && let Ok(md) =
+                    crate::mcp::codegen::to_ai_spec_markdown(&ed.doc, root_id, &st.code_target)
+            {
+                ui.ctx().copy_text(md);
+                ed.status = format!("Copied {} AI spec to clipboard", st.code_target);
+            }
+        });
+    }
 }
 
 fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
@@ -877,14 +926,49 @@ fn header(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         first.kind.type_name()
     };
     ui.label(title_text(format!("{kind} · {}", first.name)));
+    let is_inst_root = ed.is_instance_root(first.id);
+    let has_subtree_overrides = is_inst_root
+        && ed.doc.subtree(first.id).into_iter().any(|id| {
+            ed.doc
+                .get(id)
+                .and_then(|n| n.instance.as_ref())
+                .is_some_and(|l| !l.overrides.is_empty())
+        });
+    let other_comps: Vec<(NodeId, String)> = if is_inst_root {
+        let cur_main = ed.instance_main_root(first.id);
+        let mut v: Vec<(NodeId, String)> = ed
+            .doc
+            .nodes
+            .values()
+            .filter(|n| n.component && Some(n.id) != cur_main && n.id != first.id)
+            .map(|n| (n.id, n.name.clone()))
+            .collect();
+        v.sort_by_key(|c| c.0);
+        v
+    } else {
+        Vec::new()
+    };
     ui.horizontal_wrapped(|ui| {
         if first.component {
             if crate::theme::small_button(ui, "Create instance").clicked() {
                 ed.instance_of_selection();
             }
-        } else if ed.is_instance_root(first.id) {
+        } else if is_inst_root {
             if crate::theme::small_button(ui, "Go to main").clicked() {
                 ed.go_to_main();
+            }
+            if !other_comps.is_empty() {
+                ui.menu_button("Swap", |ui| {
+                    for (comp_id, cname) in &other_comps {
+                        if ui.button(cname).clicked() {
+                            ed.swap_instance(first.id, *comp_id);
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            if has_subtree_overrides && crate::theme::small_button(ui, "Reset").clicked() {
+                ed.reset_overrides();
             }
             if crate::theme::small_button(ui, "Detach").clicked() {
                 ed.detach_instance();
@@ -894,7 +978,8 @@ fn header(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         {
             ed.create_component();
         }
-        if first.instance.is_some()
+        if !is_inst_root
+            && first.instance.is_some()
             && first
                 .instance
                 .as_ref()
@@ -1437,9 +1522,42 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
         }
         match p {
             Paint::Solid { color, var } => {
-                let w = ui.available_width() - 32.0;
-                if let Some(c) = color_field(ui, ed, *color, var.as_deref(), w) {
+                let has_vars = !ed.doc.variables.is_empty() || var.is_some();
+                let w = ui.available_width() - if has_vars { 68.0 } else { 32.0 };
+                if let Some(c) = color_field(ui, ed, *color, var.as_deref(), w.max(60.0)) {
                     set(ed, Paint::solid(c));
+                }
+                if has_vars {
+                    let vars: Vec<(String, Color)> = ed
+                        .doc
+                        .variables
+                        .iter()
+                        .map(|(k, v)| (k.clone(), *v))
+                        .collect();
+                    let btn_label = if var.is_some() { "var" } else { "--" };
+                    ui.menu_button(btn_label, |ui| {
+                        for (vname, vcol) in &vars {
+                            let active = var.as_deref() == Some(vname.as_str());
+                            if ui
+                                .selectable_label(active, format!("--{vname} ({})", vcol.to_hex()))
+                                .clicked()
+                            {
+                                set(ed, Paint::solid_var(*vcol, vname));
+                                ui.close();
+                            }
+                        }
+                        if var.is_some() {
+                            if !vars.is_empty() {
+                                ui.separator();
+                            }
+                            if ui.button("Unlink variable").clicked() {
+                                let mut unlinked = p.clone();
+                                unlinked.unlink_var();
+                                set(ed, unlinked);
+                                ui.close();
+                            }
+                        }
+                    });
                 }
             }
             Paint::Image {

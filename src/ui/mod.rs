@@ -71,6 +71,16 @@ pub struct UiState {
     pub layer_filter: String,
     /// Name typed into the Design tab's new-variable box.
     pub variable_draft: String,
+    /// Name typed into the Design tab's new-mode box.
+    pub mode_draft: String,
+    /// Name typed into the Design tab's new-token name box.
+    pub token_name_draft: String,
+    /// Value typed into the Design tab's new-token value box.
+    pub token_val_draft: String,
+    /// Filter text for the Design tab's components list.
+    pub component_filter: String,
+    /// Variable currently being renamed inline `(old_name, draft_new_name)`.
+    pub var_renaming: Option<(String, String)>,
     /// The last tool an agent ran and when, for the toolbar's activity hint.
     pub agent: Option<(String, std::time::Instant)>,
     /// The browser's remote-agent link (Agent menu); None everywhere but the web shell.
@@ -78,6 +88,8 @@ pub struct UiState {
     /// A message shown over the home screen and the canvas (text, is_error); the shell that
     /// sets it also clears it. Only the web shell uses it: native shows errors in dialogs.
     pub toast: Option<(String, bool)>,
+    /// Selected codegen target in the inspector's Code & AI Handoff section.
+    pub code_target: String,
 }
 
 /// Where a dragged layer lands relative to a row.

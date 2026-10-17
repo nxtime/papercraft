@@ -13,31 +13,31 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 1 | Inspector UI for variables | todo | Variables exist only through `get_variables` / `set_variables`. No panel to list, rename, edit or bind them. |
-| 2 | Inspector UI for components | todo | Create component, detach and go-to-main are shortcuts (⌘⌥K / ⌘⌥B); there is no Components panel or asset browser. |
+| 1 | Inspector UI for variables | **done** | Design tab lists/renames/adds/deletes variables & modes; Inspector binds/unlinks solid fills to variables. |
+| 2 | Inspector UI for components | **done** | Design tab searches components, inserts instances, swaps/resets/detaches instances; Inspector header swaps/resets instances. |
 | 3 | Design lint | **done** | `lint_design`: WCAG contrast, 4px grid, type scale, tiny text, 44px targets, default names, hard-coded colors. |
-| 4 | Lint auto-fix | todo | `lint_design` suggests a fix per issue; nothing applies it. Safe candidates: snap spacing, rename layers, relink colors to variables. |
-| 5 | Lint in the UI | todo | Show issues on the canvas or in a panel, click to select. |
-| 6 | Variable modes | partial | Done through tools: `set_variables {mode}` stores values per mode and `set_variable_mode` switches the whole project. Not yet in the UI, and not per frame or page. |
-| 7 | Number variables (spacing, radius, font size) | todo | Variables are colors only, and only for fills and text color. |
+| 4 | Lint auto-fix | **done** | `lint_design {fix: true}` and UI `Fix` / `Fix all`: snaps spacing to 4px grid, snaps type scale, enforces 44px targets, links matching colors to variables. |
+| 5 | Lint in the UI | **done** | Live Lint section in Design tab; click issue to select & zoom, or click `Fix` / `Fix all`. |
+| 6 | Variable modes | **done** | Mode selector + create/delete modes in Design tab and via `set_variables {mode}` / `set_variable_mode`. |
+| 7 | Number variables (spacing, radius, font size) | partial | Non-color tokens (`--spacing-md`) editable in Design tab and substituted in CSS; typed per-field bindings todo. |
 | 8 | Stroke and gradient variables | todo | Strokes and gradients keep fixed colors. |
 | 9 | Text styles | todo | Named type styles (Heading / L, Body / M) that update every text layer using them. |
 | 10 | Component variants and properties | todo | Variants are separate components named `Button / Primary`. No variant sets, boolean or text properties. |
-| 11 | Swap instance, detach by tool | partial | Detach is a shortcut in the UI. No `swap_instance` or `detach_instance` tool. |
+| 11 | Swap instance, detach by tool | **done** | `swap_instance` and `detach_instance` MCP tools + UI controls in Design tab and Inspector. |
 | 12 | Cross-page and shared libraries | todo | Components and instances must live on one page. |
-| 13 | Export design tokens | partial | `get_variables` with `format: "css"` or `"json"` returns tokens. No Tailwind or Style Dictionary output, no file export from the UI. |
-| 14 | Apply a design system to existing work | todo | Map hard-coded colors and sizes onto variables and components in one pass. |
+| 13 | Export design tokens | **done** | `get_variables` with `format: "css"`, `"json"` (W3C DTCG + modes), or `"tailwind"` (`@theme`), plus Copy CSS / Copy JSON in Design tab. |
+| 14 | Apply a design system to existing work | partial | `lint_design {fix: true}` links matching literal colors to variables and snaps spacing/type scale. |
 
 ## 2. Agent workflow
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 15 | MCP and CLI tool surface | **done** | 40 tools, one undo step per call, `papercraft-cli list / schema / call`. |
+| 15 | MCP and CLI tool surface | **done** | 43 tools, one undo step per call, `papercraft-cli list / schema / call`. |
 | 16 | Agent skills | **done** | `skills/papercraft` and `skills/papercraft-design`. |
 | 17 | Accessibility annotations | todo | Reading order, roles and alt text on layers, checked by the linter. |
-| 18 | Code export from frames | todo | `get_jsx` returns inline-style JSX only. No React / HTML+CSS with variables, no Tailwind (the `tailwind` format is accepted and ignored). |
+| 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |
 | 19 | Plugin and skill marketplace | todo | Skills are copied by hand today. |
-| 20 | Screenshot diffing | todo | Compare two renders of a frame to confirm a change did what was asked. |
+| 20 | Screenshot diffing | **done** | `diff_frames` tool (`src/mcp/diff.rs`) for structural/property frame diffing + `diff_rgba` pixel diffing with highlight PNG. |
 | 21 | Moving nodes between pages | todo | `move_nodes` stays on one page. |
 | 22 | Remote images in `write_html` | todo | Only local paths and `data:` URIs. |
 
@@ -48,7 +48,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 23 | Prototyping links and flows | todo | No click-through between frames. |
 | 24 | Responsive constraints and breakpoint preview | partial | Constraints (left, right, stretch, center, scale) exist in the editor; there is no breakpoint preview or per-size variants. |
 | 25 | Shadows, blur and effects | todo | CSS `box-shadow` and filters are reported as ignored. |
-| 26 | Margin and grid layout | todo | Flexbox only. |
+| 26 | Margin and grid layout | partial | Wrapped-line cross alignment, per-line fill/align, and `layout_grid` track layout (`src/layout.rs`) implemented; CSS margin still ignored. |
 | 27 | Font choice | todo | Inter only. |
 | 28 | Rotation | todo | Nodes are axis-aligned. |
 | 29 | Overlay, dodge, burn, light blend modes on the canvas | todo | Exact in SVG and PDF export, approximated as Normal on the canvas. |
@@ -60,7 +60,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 32 | Version history | todo | Undo per page and crash-safe autosave only; no named versions or restore. |
-| 33 | Figma import | todo | SVG and Excalidraw import exist; `.fig` does not. |
+| 33 | Figma import | **done** | `.fig` binary (Kiwi wire decoder + zip container) and Figma REST API JSON import in `src/io/fig.rs`. |
 | 34 | Multiplayer and cloud sync | todo | Local-first by design. If added, it must stay optional. |
 | 35 | Release builds for Windows and Linux | todo | The code targets them (wgpu, winit); packaging today is the macOS DMG and the `papercraft-cli` zip. |
 

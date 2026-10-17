@@ -99,13 +99,47 @@ Compact indented text tree of a subtree: type, name, id and size per node. Much 
 
 ### `get_jsx` (read-only)
 
-JSX for a node and its descendants with inline styles (frames become flex divs, text becomes spans, vectors become inline SVG). Use it to export a design to code.
+Export a node and its descendants to code: `"inline"` (default, React JSX with inline styles), `"tailwind"` (React JSX with Tailwind CSS utility classes), `"react"` (typed React TSX component with Tailwind classes), `"angular"` (Angular standalone `@Component` with template and CSS), `"html"` (self-contained `<style>` + HTML markup), or `"egui"` (Rust `egui` layout code with a `tokens` module).
 
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `format` | inline-styles/tailwind |  | Only inline styles are produced; "tailwind" is accepted for compatibility. |
+| `format` | `inline` \| `inline-styles` \| `tailwind` \| `react` \| `angular` \| `html` \| `egui` |  | Output format: `"inline"` (default), `"tailwind"`, `"react"`, `"angular"`, `"html"`, or `"egui"`. |
 | `nodeId` | string | yes | The node to convert. |
+
+
+### `get_design_spec` (read-only)
+
+Extract a comprehensive AI design-to-code specification (`ai_spec_markdown` and structured JSON `spec`) for a node and its descendants. Includes the hierarchy, exact auto-layout flow/sizing (`fixed`, `hug`, `fill`), bound design tokens (`--var`), component instances, text content, implementation rules, and reference code for the chosen `target`. Always call this before implementing a design in code.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `nodeId` | string | yes | The root frame or node to extract the spec for. |
+| `target` | `react` \| `tailwind` \| `angular` \| `html` \| `egui` |  | Target framework/format (defaults to `"react"`). |
+
+
+### `verify_code` (read-only)
+
+Enforce design-to-code fidelity by checking written `code` against the source PaperCraft node (`nodeId`) for the given `target`. Reports a `score` (0–100), `passed` boolean, and structured violations (`missing-text`, `hardcoded-color`, `forbidden-absolute`, `missing-layout`, `missing-component`, `spacing-drift`) with actionable fixes.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `code` | string | yes | The generated or hand-written implementation code to verify. |
+| `nodeId` | string | yes | The PaperCraft node id the code implements. |
+| `target` | `react` \| `tailwind` \| `angular` \| `html` \| `egui` | yes | Target language/framework of `code`. |
+
+
+### `diff_frames` (read-only)
+
+Compare two frames or subtrees (`beforeId` and `afterId`) and report property-level differences (size, position, fills, stroke, corner radius, opacity, text, layout, added/removed children).
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `beforeId` | string | yes | First frame or node id (baseline). |
+| `afterId` | string | yes | Second frame or node id (comparison). |
 
 
 ### `get_computed_styles` (read-only)
@@ -320,12 +354,12 @@ Create a whiteboard element: rectangle, ellipse, diamond, triangle, polygon, sta
 
 ### `get_variables` (read-only)
 
-Color variables of the page's project (name -> hex). Fills that follow a variable were written with `var(--name)`; set_variables moves all of them at once. `format` css returns a `:root { --name: #hex }` block, json a design-tokens object.
+Color variables and design tokens of the page's project (name -> hex/value). Fills that follow a variable were written with `var(--name)`; set_variables moves all of them at once. `format` `css` returns a `:root { --name: #hex }` block (plus `[data-theme]` rules for modes), `json` returns a W3C DTCG design-tokens object, and `tailwind` returns a Tailwind v4 `@theme` block.
 
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `format` | css/json |  |  |
+| `format` | `css` \| `json` \| `tailwind` |  | Output format: `css`, `json` (W3C DTCG), or `tailwind` (`@theme`). |
 
 
 ### `set_variables`
@@ -380,6 +414,27 @@ Place an instance of a component. Edit text and styles on the instance's descend
 | `y` | number |  |  |
 
 
+### `swap_instance`
+
+Swap an instance root to point at a different main component on the same page, preserving overrides on descendants matched by name and layer type.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `componentId` | string | yes | The new main component id. |
+| `nodeId` | string | yes | The instance root node to swap. |
+
+
+### `detach_instance`
+
+Detach one or more component instances into plain frames, breaking their link to the main component while keeping their current appearance and children.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `nodeIds` | array of string | yes | Instance root nodes to detach. |
+
+
 ### `search_icons` (read-only)
 
 Search installed open icon sets (Lucide, Tabler, Phosphor, Heroicons, Material). Returns `set:name` references for <x-paper-icon name="lucide:check" size="20" color="var(--text)"/> in write_html. Without a query it lists installed and installable sets; install with `papercraft-cli icons add lucide`.
@@ -394,11 +449,12 @@ Search installed open icon sets (Lucide, Tabler, Phosphor, Heroicons, Material).
 
 ### `lint_design` (read-only)
 
-Check a page or subtree for common design mistakes and get a fix for each: text contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type scale, gap/padding off the 4px grid, buttons and tabs under 44px tall, default layer names (Frame, Rectangle), and hard-coded colors that equal a variable. Run it before finish_working_on_nodes and fix errors and warnings; `info` items are suggestions.
+Check a page or subtree for common design mistakes and get a fix for each: text contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type scale, gap/padding off the 4px grid, buttons and tabs under 44px tall, default layer names (Frame, Rectangle), and hard-coded colors that equal a variable. Run it before finish_working_on_nodes and fix errors and warnings; `info` items are suggestions. Pass `fix: true` to automatically snap spacing/padding to 4px, relink matching color variables, snap text sizes, and enlarge small touch targets.
 
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
+| `fix` | boolean |  | Apply safe automatic fixes before reporting remaining issues. |
 | `nodeId` | string |  | Subtree to check; omit for the whole page. |
 | `scale` | array of number |  | Allowed font sizes. Default 12, 14, 16, 20, 24, 32, 40, 48, 64. |
 

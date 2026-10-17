@@ -77,7 +77,14 @@ fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
             .iter()
             .map(|line| {
                 line.iter()
-                    .map(|k| get(&doc.get(*k).unwrap().rect, axis).1)
+                    .map(|k| {
+                        let kn = doc.get(*k).unwrap();
+                        match kn.layout_child.sizing[axis] {
+                            Sizing::Hug => hug_size(doc, *k, axis),
+                            Sizing::Fill => get(&kn.rect, axis).1,
+                            Sizing::Fixed => get(&kn.rect, axis).1,
+                        }
+                    })
                     .fold(0.0, f64::max)
             })
             .collect();
@@ -104,7 +111,11 @@ fn wrap_lines(
     let mut lines: Vec<Vec<NodeId>> = vec![Vec::new()];
     let mut x = 0.0;
     for k in kids {
-        let s = get(&doc.get(*k).unwrap().rect, ma).1;
+        let kn = doc.get(*k).unwrap();
+        let s = match kn.layout_child.sizing[ma] {
+            Sizing::Hug => hug_size(doc, *k, ma),
+            _ => get(&kn.rect, ma).1,
+        };
         let line = lines.last_mut().unwrap();
         if !line.is_empty() && x + l.gap + s > inner + 1e-9 {
             lines.push(vec![*k]);
@@ -190,8 +201,37 @@ fn arrange(tx: &mut Tx, id: NodeId, l: &AutoLayout, rect: Rect, ma: usize, ca: u
     } else {
         vec![kids.clone()]
     };
-    let mut cross_cursor = p0c;
-    for line in lines {
+    let line_cross_sizes: Vec<f64> = if l.wrap {
+        lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|k| {
+                        let kn = tx.doc().get(*k).unwrap();
+                        match kn.layout_child.sizing[ca] {
+                            Sizing::Hug => hug_size(tx.doc(), *k, ca),
+                            Sizing::Fill | Sizing::Fixed => get(&kn.rect, ca).1,
+                        }
+                    })
+                    .fold(0.0, f64::max)
+            })
+            .collect()
+    } else {
+        vec![inner_c; lines.len()]
+    };
+    let mut cross_cursor = if l.wrap {
+        let total_cross: f64 = line_cross_sizes.iter().sum::<f64>()
+            + l.cross_gap * lines.len().saturating_sub(1) as f64;
+        let free_cross = (inner_c - total_cross).max(0.0);
+        p0c + match l.align_cross {
+            Align::Start => 0.0,
+            Align::Center => free_cross * 0.5,
+            Align::End => free_cross,
+        }
+    } else {
+        p0c
+    };
+    for (li, line) in lines.into_iter().enumerate() {
         // Main sizes: fixed / hug as they are; fill shares the rest equally.
         let mut sizes: Vec<f64> = line
             .iter()
@@ -199,7 +239,8 @@ fn arrange(tx: &mut Tx, id: NodeId, l: &AutoLayout, rect: Rect, ma: usize, ca: u
                 let kn = tx.doc().get(*k).unwrap();
                 match kn.layout_child.sizing[ma] {
                     Sizing::Fill => 0.0,
-                    _ => get(&kn.rect, ma).1,
+                    Sizing::Hug => hug_size(tx.doc(), *k, ma),
+                    Sizing::Fixed => get(&kn.rect, ma).1,
                 }
             })
             .collect();
@@ -229,24 +270,25 @@ fn arrange(tx: &mut Tx, id: NodeId, l: &AutoLayout, rect: Rect, ma: usize, ca: u
             };
             (start, gap)
         };
-        let line_cross = if l.wrap {
-            line.iter()
-                .map(|k| get(&tx.doc().get(*k).unwrap().rect, ca).1)
-                .fold(0.0, f64::max)
-        } else {
-            inner_c
-        };
+        let lh = line_cross_sizes[li];
         for (i, k) in line.iter().enumerate() {
             let kn = tx.doc().get(*k).unwrap();
             let mut r = kn.rect;
-            let cs = match kn.layout_child.sizing[ca] {
-                Sizing::Fill => line_cross.max(0.0),
-                _ => get(&r, ca).1,
-            };
-            let cpos = match l.align_cross {
-                Align::Start => cross_cursor,
-                Align::Center => cross_cursor + (line_cross - cs) * 0.5,
-                Align::End => cross_cursor + line_cross - cs,
+            let (cpos, cs) = match kn.layout_child.sizing[ca] {
+                Sizing::Fill => (cross_cursor, lh.max(0.0)),
+                Sizing::Fixed | Sizing::Hug => {
+                    let ch = if kn.layout_child.sizing[ca] == Sizing::Hug {
+                        hug_size(tx.doc(), *k, ca)
+                    } else {
+                        get(&r, ca).1
+                    };
+                    let cy = match l.align_cross {
+                        Align::Start => cross_cursor,
+                        Align::Center => cross_cursor + (lh - ch) * 0.5,
+                        Align::End => cross_cursor + lh - ch,
+                    };
+                    (cy, ch)
+                }
             };
             set(&mut r, ma, cursor, sizes[i]);
             set(&mut r, ca, cpos, cs);
@@ -266,7 +308,7 @@ fn arrange(tx: &mut Tx, id: NodeId, l: &AutoLayout, rect: Rect, ma: usize, ca: u
                 }
             }
         }
-        cross_cursor += line_cross + l.cross_gap;
+        cross_cursor += lh + l.cross_gap;
     }
     // Fill children that are auto-layout frames lay out their own content again.
     for k in kids {
@@ -278,6 +320,149 @@ fn arrange(tx: &mut Tx, id: NodeId, l: &AutoLayout, rect: Rect, ma: usize, ca: u
         }
     }
     // Absolute children keep their constraints-based position.
+}
+
+/// Lay out `flow_children(tx.doc(), id)` into a `cols`-column CSS-style grid inside frame `id`.
+/// Returns true if anything moved or resized.
+pub fn layout_grid(tx: &mut Tx, id: NodeId, cols: usize, col_gap: f64, row_gap: f64) -> bool {
+    let Some(n0) = tx.doc().get(id).cloned() else {
+        return false;
+    };
+    let cols = cols.max(1);
+    let before: Vec<(NodeId, Rect)> = tx
+        .doc()
+        .subtree(id)
+        .iter()
+        .filter_map(|i| tx.doc().get(*i).map(|n| (*i, n.rect)))
+        .collect();
+
+    let kids = flow_children(tx.doc(), id);
+    for k in &kids {
+        if tx.doc().get(*k).is_some_and(|c| c.layout.is_some()) {
+            layout_frame(tx, *k);
+        }
+    }
+
+    let n = tx.doc().get(id).unwrap().clone();
+    let pad = n.layout.unwrap_or_default().padding;
+    let (pt, pr, pb, pl) = (pad[0], pad[1], pad[2], pad[3]);
+    let rows = kids.len().div_ceil(cols);
+
+    let mut col_w: Vec<f64> = vec![0.0; cols];
+    let mut col_fill = vec![false; cols];
+    for (idx, k) in kids.iter().enumerate() {
+        let c = idx % cols;
+        let kn = tx.doc().get(*k).unwrap();
+        if kn.layout_child.sizing[0] == Sizing::Fill {
+            col_fill[c] = true;
+        } else {
+            let w = if kn.layout_child.sizing[0] == Sizing::Hug {
+                hug_size(tx.doc(), *k, 0)
+            } else {
+                kn.rect.w
+            };
+            col_w[c] = col_w[c].max(w);
+        }
+    }
+
+    let total_col_gaps = col_gap * cols.saturating_sub(1) as f64;
+    let fill_cols: Vec<usize> = (0..cols).filter(|&c| col_fill[c]).collect();
+    if !fill_cols.is_empty() {
+        let fixed_w: f64 = (0..cols).filter(|&c| !col_fill[c]).map(|c| col_w[c]).sum();
+        let inner_w = (n.rect.w - pl - pr).max(0.0);
+        let share = ((inner_w - total_col_gaps - fixed_w) / fill_cols.len() as f64).max(0.0);
+        for c in fill_cols {
+            col_w[c] = share;
+        }
+    }
+
+    let mut row_h: Vec<f64> = vec![0.0; rows];
+    for (idx, k) in kids.iter().enumerate() {
+        let r = idx / cols;
+        let kn = tx.doc().get(*k).unwrap();
+        let h = if kn.layout_child.sizing[1] == Sizing::Hug {
+            hug_size(tx.doc(), *k, 1)
+        } else {
+            kn.rect.h
+        };
+        row_h[r] = row_h[r].max(h);
+    }
+
+    let total_row_gaps = row_gap * rows.saturating_sub(1) as f64;
+    let mut rect = n.rect;
+    if n.layout_child.sizing[0] == Sizing::Hug {
+        let tracks_w = if kids.is_empty() {
+            0.0
+        } else {
+            col_w.iter().sum::<f64>() + total_col_gaps
+        };
+        rect.w = (pl + pr + tracks_w).max(0.0);
+    }
+    if n.layout_child.sizing[1] == Sizing::Hug {
+        let tracks_h = if rows == 0 {
+            0.0
+        } else {
+            row_h.iter().sum::<f64>() + total_row_gaps
+        };
+        rect.h = (pt + pb + tracks_h).max(0.0);
+    }
+    if rect != n0.rect {
+        tx.node_mut(id).unwrap().rect = rect;
+    }
+
+    let mut col_x = vec![0.0; cols];
+    let mut cx = pl;
+    for c in 0..cols {
+        col_x[c] = cx;
+        cx += col_w[c] + col_gap;
+    }
+    let mut row_y = vec![0.0; rows];
+    let mut ry = pt;
+    for r in 0..rows {
+        row_y[r] = ry;
+        ry += row_h[r] + row_gap;
+    }
+
+    for (idx, k) in kids.iter().enumerate() {
+        let c = idx % cols;
+        let r = idx / cols;
+        let kn = tx.doc().get(*k).unwrap();
+        let mut cr = kn.rect;
+        cr.x = col_x[c];
+        cr.y = row_y[r];
+        if kn.layout_child.sizing[0] == Sizing::Fill {
+            cr.w = col_w[c];
+        } else if kn.layout_child.sizing[0] == Sizing::Hug {
+            cr.w = hug_size(tx.doc(), *k, 0);
+        }
+        if kn.layout_child.sizing[1] == Sizing::Fill {
+            cr.h = row_h[r];
+        } else if kn.layout_child.sizing[1] == Sizing::Hug {
+            cr.h = hug_size(tx.doc(), *k, 1);
+        }
+        if cr != kn.rect {
+            let resized = (cr.w - kn.rect.w).abs() > 1e-9 || (cr.h - kn.rect.h).abs() > 1e-9;
+            let old = kn.rect;
+            let cn = tx.node_mut(*k).unwrap();
+            if resized {
+                cn.set_rect_scaling(cr);
+            } else {
+                cn.rect = cr;
+            }
+            if resized {
+                resize_children(tx, *k, old, cr);
+                fit_text_height(tx, *k);
+            }
+        }
+    }
+
+    let after: Vec<(NodeId, Rect)> = tx
+        .doc()
+        .subtree(id)
+        .iter()
+        .filter_map(|i| tx.doc().get(*i).map(|n| (*i, n.rect)))
+        .collect();
+    before != after
 }
 
 /// Re-measure a text node's height after its width changed.
@@ -639,5 +824,187 @@ mod tests {
         assert_eq!(r(2), Rect::new(20.0, 10.0, 240.0, 120.0));
         assert_eq!(r(3), Rect::new(120.0, 60.0, 40.0, 20.0));
         assert_eq!(r(4), Rect::new(40.0, 20.0, 80.0, 40.0));
+    }
+
+    #[test]
+    fn wrap_lines_cross_align_center_and_end() {
+        let base = AutoLayout {
+            wrap: true,
+            gap: 10.0,
+            cross_gap: 10.0,
+            padding: [0.0; 4],
+            align_cross: Align::Center,
+            ..Default::default()
+        };
+        // Frame 300x200: line 0 has 20 & 30 (lh=30), line 1 has 20 (lh=20).
+        // total_cross = 30 + 10 + 20 = 60, free_cross = 140.
+        let (doc_c, _, kc) = doc_with(
+            base,
+            FX,
+            &[(120.0, 20.0, FX), (120.0, 30.0, FX), (120.0, 20.0, FX)],
+        );
+        assert_eq!(
+            doc_c.get(kc[0]).unwrap().rect,
+            Rect::new(0.0, 75.0, 120.0, 20.0)
+        );
+        assert_eq!(
+            doc_c.get(kc[1]).unwrap().rect,
+            Rect::new(130.0, 70.0, 120.0, 30.0)
+        );
+        assert_eq!(
+            doc_c.get(kc[2]).unwrap().rect,
+            Rect::new(0.0, 110.0, 120.0, 20.0)
+        );
+
+        let end_l = AutoLayout {
+            align_cross: Align::End,
+            ..base
+        };
+        let (doc_e, _, ke) = doc_with(
+            end_l,
+            FX,
+            &[(120.0, 20.0, FX), (120.0, 30.0, FX), (120.0, 20.0, FX)],
+        );
+        assert_eq!(
+            doc_e.get(ke[0]).unwrap().rect,
+            Rect::new(0.0, 150.0, 120.0, 20.0)
+        );
+        assert_eq!(
+            doc_e.get(ke[1]).unwrap().rect,
+            Rect::new(130.0, 140.0, 120.0, 30.0)
+        );
+        assert_eq!(
+            doc_e.get(ke[2]).unwrap().rect,
+            Rect::new(0.0, 180.0, 120.0, 20.0)
+        );
+    }
+
+    #[test]
+    fn wrap_per_line_item_align_and_fill_stretch() {
+        let l = AutoLayout {
+            wrap: true,
+            gap: 10.0,
+            cross_gap: 10.0,
+            padding: [10.0; 4],
+            align_cross: Align::Center,
+            ..Default::default()
+        };
+        // Inner width = 300 - 20 = 280.
+        // Line 0: three 80w items (80*3 + 20 = 260 <= 280), heights: Fill, 20, 40 -> lh = 40.
+        // Line 1: two 120w items (120*2 + 10 = 250 <= 280), heights: 60, Fill -> lh = 60.
+        let (doc, f, k) = doc_with(
+            l,
+            [Sizing::Fixed, Sizing::Hug],
+            &[
+                (80.0, 5.0, [Sizing::Fixed, Sizing::Fill]),
+                (80.0, 20.0, FX),
+                (80.0, 40.0, FX),
+                (120.0, 60.0, FX),
+                (120.0, 5.0, [Sizing::Fixed, Sizing::Fill]),
+            ],
+        );
+        assert_eq!(doc.get(f).unwrap().rect.h, 10.0 + 40.0 + 10.0 + 60.0 + 10.0);
+        assert_eq!(
+            doc.get(k[0]).unwrap().rect,
+            Rect::new(10.0, 10.0, 80.0, 40.0)
+        );
+        assert_eq!(
+            doc.get(k[1]).unwrap().rect,
+            Rect::new(100.0, 20.0, 80.0, 20.0)
+        );
+        assert_eq!(
+            doc.get(k[2]).unwrap().rect,
+            Rect::new(190.0, 10.0, 80.0, 40.0)
+        );
+        assert_eq!(
+            doc.get(k[3]).unwrap().rect,
+            Rect::new(10.0, 60.0, 120.0, 60.0)
+        );
+        assert_eq!(
+            doc.get(k[4]).unwrap().rect,
+            Rect::new(140.0, 60.0, 120.0, 60.0)
+        );
+    }
+
+    #[test]
+    fn layout_grid_columns_fill_and_hug() {
+        // 2-column grid with Hug height and one Fill column.
+        let mut doc = Document::default();
+        let mut rec = Recording::new("t", &doc);
+        let mut tx = Tx::new(&mut doc, &mut rec);
+        let fid = tx.alloc_id();
+        let mut f = Node::new(
+            fid,
+            NodeKind::Frame { clip: true },
+            Rect::new(0.0, 0.0, 300.0, 50.0),
+        );
+        f.layout = Some(AutoLayout {
+            padding: [10.0, 10.0, 10.0, 10.0],
+            ..Default::default()
+        });
+        f.layout_child.sizing = [Sizing::Fixed, Sizing::Hug];
+        tx.insert(f, None, None);
+
+        let specs = [
+            (80.0, 30.0, FX),
+            (20.0, 40.0, [Sizing::Fill, Sizing::Fixed]),
+            (100.0, 50.0, FX),
+            (20.0, 10.0, [Sizing::Fill, Sizing::Fill]),
+        ];
+        let mut ids = Vec::new();
+        for (w, h, s) in specs {
+            let id = tx.alloc_id();
+            let mut n = Node::new(id, NodeKind::Rect, Rect::new(0.0, 0.0, w, h));
+            n.layout_child.sizing = s;
+            tx.insert(n, Some(fid), None);
+            ids.push(id);
+        }
+        assert!(layout_grid(&mut tx, fid, 2, 20.0, 15.0));
+        // Col 0 max fixed width = 100. Inner width = 280, col_gap = 20 -> Col 1 Fill width = 160.
+        // Row 0 height = max(30, 40) = 40; Row 1 height = max(50, 10) = 50.
+        // Hug height = 10 + 40 + 15 + 50 + 10 = 125.
+        assert_eq!(tx.doc().get(fid).unwrap().rect.h, 125.0);
+        assert_eq!(
+            tx.doc().get(ids[0]).unwrap().rect,
+            Rect::new(10.0, 10.0, 80.0, 30.0)
+        );
+        assert_eq!(
+            tx.doc().get(ids[1]).unwrap().rect,
+            Rect::new(130.0, 10.0, 160.0, 40.0)
+        );
+        assert_eq!(
+            tx.doc().get(ids[2]).unwrap().rect,
+            Rect::new(10.0, 65.0, 100.0, 50.0)
+        );
+        assert_eq!(
+            tx.doc().get(ids[3]).unwrap().rect,
+            Rect::new(130.0, 65.0, 160.0, 50.0)
+        );
+
+        // Re-layout as 3-column grid (col 0 has Fixed 80 & Fill -> Fill; col 1 has Fill -> Fill; col 2 has Fixed 100).
+        // Inner width = 280, gaps = 2 * 10 = 20, fixed col 2 = 100 -> remaining 160 shared by col 0 and col 1 (80 each).
+        assert!(layout_grid(&mut tx, fid, 3, 10.0, 10.0));
+        // Row 0: ids[0](30), ids[1](40), ids[2](50) -> row_h[0] = 50.
+        // Row 1: ids[3](50 from previous stretch) -> row_h[1] = 50.
+        assert_eq!(
+            tx.doc().get(fid).unwrap().rect.h,
+            10.0 + 50.0 + 10.0 + 50.0 + 10.0
+        );
+        assert_eq!(
+            tx.doc().get(ids[0]).unwrap().rect,
+            Rect::new(10.0, 10.0, 80.0, 30.0)
+        );
+        assert_eq!(
+            tx.doc().get(ids[1]).unwrap().rect,
+            Rect::new(100.0, 10.0, 80.0, 40.0)
+        );
+        assert_eq!(
+            tx.doc().get(ids[2]).unwrap().rect,
+            Rect::new(190.0, 10.0, 100.0, 50.0)
+        );
+        assert_eq!(
+            tx.doc().get(ids[3]).unwrap().rect,
+            Rect::new(10.0, 70.0, 80.0, 50.0)
+        );
     }
 }

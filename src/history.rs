@@ -160,10 +160,70 @@ impl<'a> Tx<'a> {
         }
     }
 
+    /// Rename a variable across all modes and update every fill linked to it.
+    pub fn rename_variable(&mut self, old: &str, new: &str) -> usize {
+        if old == new || new.is_empty() {
+            return 0;
+        }
+        self.snapshot_variables();
+        if let Some(c) = self.doc.variables.remove(old) {
+            self.doc.variables.insert(new.to_string(), c);
+        }
+        for m in self.doc.modes.values_mut() {
+            if let Some(c) = m.remove(old) {
+                m.insert(new.to_string(), c);
+            }
+        }
+        let users: Vec<NodeId> = self
+            .doc
+            .nodes
+            .values()
+            .filter(|n| n.style.fills.iter().any(|p| p.var() == Some(old)))
+            .map(|n| n.id)
+            .collect();
+        let mut count = 0;
+        for id in users {
+            if let Some(n) = self.node_mut(id) {
+                for p in &mut n.style.fills {
+                    if let crate::model::Paint::Solid { var: Some(v), .. } = p
+                        && v == old
+                    {
+                        *v = new.to_string();
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+
     /// Define or change a non-color design token.
     pub fn set_token(&mut self, name: &str, value: &str) {
         self.snapshot_variables();
         self.doc.tokens.insert(name.to_string(), value.to_string());
+    }
+
+    /// Delete a non-color design token.
+    pub fn remove_token(&mut self, name: &str) {
+        self.snapshot_variables();
+        self.doc.tokens.remove(name);
+    }
+
+    /// Remove a variable mode. If it was active, switch to the first remaining mode (or None).
+    pub fn remove_mode(&mut self, mode: &str) {
+        self.snapshot_variables();
+        self.doc.modes.remove(mode);
+        if self.doc.mode.as_deref() == Some(mode) {
+            let next = self.doc.modes.keys().next().cloned();
+            match next {
+                Some(m) => {
+                    self.set_mode(&m);
+                }
+                None => {
+                    self.doc.mode = None;
+                }
+            }
+        }
     }
 
     fn snapshot_variables(&mut self) {

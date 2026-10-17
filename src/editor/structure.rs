@@ -548,6 +548,20 @@ impl Editor {
         }
     }
 
+    /// Swap an instance root to point at `new_main` component, preserving overrides on children
+    /// matched by name and kind.
+    pub fn swap_instance(&mut self, inst: NodeId, new_main: NodeId) -> bool {
+        if !self.is_instance_root(inst)
+            || !self.doc.get(new_main).is_some_and(|m| m.component)
+            || inst == new_main
+            || self.doc.is_ancestor(inst, new_main)
+        {
+            return false;
+        }
+        self.edit("Swap instance", |tx| swap_instance_tx(tx, inst, new_main));
+        true
+    }
+
     // ---------------------------------------------------------------------- auto layout
 
     /// Add auto layout (Shift+A): converts a selected frame, or wraps the selection in a new
@@ -766,4 +780,53 @@ pub fn infer_layout(rects: &[Rect], fw: f64, fh: f64) -> AutoLayout {
         u.x.max(0.0).round(),
     ];
     l
+}
+
+/// Swap `inst` to `new_main` inside an open transaction, matching child overrides by name/kind.
+pub fn swap_instance_tx(tx: &mut Tx, inst: NodeId, new_main: NodeId) -> bool {
+    let Some(new_comp) = tx.doc().get(new_main).cloned() else {
+        return false;
+    };
+    if !new_comp.component {
+        return false;
+    }
+    let mut target_by_name: Vec<(String, &'static str, NodeId)> = Vec::new();
+    for cid in tx.doc().subtree(new_main).into_iter().skip(1) {
+        if let Some(cn) = tx.doc().get(cid) {
+            target_by_name.push((cn.name.clone(), cn.kind.type_name(), cid));
+        }
+    }
+    let mut used: HashSet<NodeId> = HashSet::new();
+    let inst_children: Vec<NodeId> = tx.doc().subtree(inst).into_iter().skip(1).collect();
+    for k in inst_children {
+        let Some(kn) = tx.doc().get(k).cloned() else {
+            continue;
+        };
+        let matched = target_by_name
+            .iter()
+            .find(|(name, kind, tid)| {
+                !used.contains(tid) && *name == kn.name && *kind == kn.kind.type_name()
+            })
+            .map(|(_, _, tid)| *tid);
+        if let Some(tid) = matched {
+            used.insert(tid);
+            if let Some(link) = tx.node_mut(k).and_then(|n| n.instance.as_mut()) {
+                link.main = tid;
+            }
+        }
+    }
+    if let Some(root) = tx.node_mut(inst) {
+        if let Some(link) = &mut root.instance {
+            link.main = new_main;
+        }
+        if root
+            .instance
+            .as_ref()
+            .is_none_or(|l| !l.overrides.iter().any(|o| o == "name"))
+        {
+            root.name = new_comp.name;
+        }
+    }
+    sync_node(tx, inst, true);
+    true
 }

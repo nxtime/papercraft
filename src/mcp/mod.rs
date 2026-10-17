@@ -12,7 +12,10 @@
 //! * [`relay_proto`]: JSON frames between the relay and a browser tab; [`relay`]: the
 //!   relay server itself (native only).
 
+pub mod codegen;
 pub mod css;
+pub mod diff;
+pub mod enforcer;
 pub mod exec;
 pub mod html;
 pub mod lint;

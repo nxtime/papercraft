@@ -194,13 +194,49 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "get_jsx",
-            "JSX for a node and its descendants with inline styles (frames become flex divs, text \
-             becomes spans, vectors become inline SVG). Use it to export a design to code.",
+            "Export a node and its descendants to code: \"inline\" (default, React JSX with inline \
+             styles), \"tailwind\" (React JSX with Tailwind CSS utility classes), \"react\" (React \
+             TSX component), \"angular\" (Angular v17+ standalone component), \"html\" \
+             (self-contained <style> + HTML markup), or \"egui\" (Rust egui 0.36 code with tokens).",
             json!({
                 "nodeId": node_id("The node to convert."),
-                "format": {"type": "string", "enum": ["inline-styles", "tailwind"], "description": "Only inline styles are produced; \"tailwind\" is accepted for compatibility."},
+                "format": {"type": "string", "enum": ["inline", "inline-styles", "tailwind", "react", "angular", "html", "egui"], "description": "Output format: \"inline\" (default), \"tailwind\", \"react\", \"angular\", \"html\", or \"egui\"."},
+                "pageId": page_id(),
             }),
             &["nodeId"],
+            true,
+        ),
+        tool(
+            "get_design_spec",
+            "Export a deterministic AI Design-to-Code specification for a frame or subtree. \
+             Includes all design tokens/variables, component instances, exact auto-layout tree \
+             (sizing, flex/grid/egui flow, gaps, paddings, bound `--var` colors), mandatory \
+             enforcement rules, and reference target code. Always call this before implementing \
+             a design in React, Tailwind, Angular, HTML/CSS, or Rust egui instead of guessing \
+             from a screenshot.",
+            json!({
+                "nodeId": node_id("Root frame or node id to export."),
+                "target": {"type": "string", "enum": ["react", "tailwind", "angular", "html", "egui"], "description": "Target UI framework (default \"react\")."},
+                "format": {"type": "string", "enum": ["markdown", "json"], "description": "Output format: \"markdown\" (default) or \"json\"."},
+                "pageId": page_id(),
+            }),
+            &["nodeId"],
+            true,
+        ),
+        tool(
+            "verify_code",
+            "Verify that AI-generated UI code (`react`, `tailwind`, `angular`, `html`, or `egui`) \
+             accurately implements a design subtree. Checks for missing text strings, hardcoded \
+             hex colors where `--var` or `tokens::*` must be used, forbidden `position: absolute` \
+             on auto-layout flow children, missing flex/grid/egui layout containers, unreferenced \
+             component instances, and spacing drift. Returns `{passed, score, errors, warnings, violations}`.",
+            json!({
+                "nodeId": node_id("Root frame or node id that the code implements."),
+                "target": {"type": "string", "enum": ["react", "tailwind", "angular", "html", "egui"], "description": "Target UI framework."},
+                "code": {"type": "string", "description": "The generated UI source code to verify against the design."},
+                "pageId": page_id(),
+            }),
+            &["nodeId", "target", "code"],
             true,
         ),
         tool(
@@ -440,10 +476,13 @@ pub fn definitions() -> Vec<Value> {
              contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type \
              scale, gap/padding off the 4px grid, buttons and tabs under 44px tall, default layer \
              names (Frame, Rectangle), and hard-coded colors that equal a variable. Run it before \
-             finish_working_on_nodes and fix errors and warnings; `info` items are suggestions.",
+             finish_working_on_nodes and fix errors and warnings; `info` items are suggestions. \
+             Pass `fix: true` to automatically snap spacing/padding to 4px, relink matching color \
+             variables, snap text sizes, and enlarge small touch targets.",
             json!({"nodeId": {"type": "string", "description": "Subtree to check; omit for the whole page."},
                    "scale": {"type": "array", "items": {"type": "number"},
                        "description": "Allowed font sizes. Default 12, 14, 16, 20, 24, 32, 40, 48, 64."},
+                   "fix": {"type": "boolean", "description": "Apply safe automatic fixes before reporting remaining issues."},
                    "pageId": page_id()}),
             &[],
             true,
@@ -452,9 +491,10 @@ pub fn definitions() -> Vec<Value> {
             "get_variables",
             "Color variables of the page's project (name -> hex). Fills that follow a variable \
              were written with `var(--name)`; set_variables moves all of them at once. \
-             `format` css returns a `:root { --name: #hex }` block, json a design-tokens object.",
+             `format` css returns a `:root { --name: #hex }` block (plus `[data-theme]` rules for modes), \
+             json a W3C DTCG design-tokens object, and tailwind a Tailwind v4 `@theme` block.",
             json!({"pageId": page_id(),
-                   "format": {"type": "string", "enum": ["css", "json"]}}),
+                   "format": {"type": "string", "enum": ["css", "json", "tailwind"]}}),
             &[],
             true,
         ),
@@ -540,6 +580,25 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "swap_instance",
+            "Swap an instance root to point at a different main component on the same page, \
+             preserving overrides on descendants matched by name and layer type.",
+            json!({"nodeId": node_id("The instance root node to swap."),
+                   "componentId": node_id("The new main component id."),
+                   "pageId": page_id()}),
+            &["nodeId", "componentId"],
+            false,
+        ),
+        tool(
+            "detach_instance",
+            "Detach one or more component instances into plain frames, breaking their link to \
+             the main component while keeping their current appearance and children.",
+            json!({"nodeIds": ids("Instance root nodes to detach."),
+                   "pageId": page_id()}),
+            &["nodeIds"],
+            false,
+        ),
+        tool(
             "search_icons",
             "Search installed open icon sets (Lucide, Tabler, Phosphor, Heroicons, Material). \
              Returns `set:name` references for <x-paper-icon name=\"lucide:check\" size=\"20\" \
@@ -609,6 +668,19 @@ pub fn definitions() -> Vec<Value> {
             json!({"pageId": page_id()}),
             &[],
             false,
+        ),
+        tool(
+            "diff_frames",
+            "Compare two frames or subtrees (`beforeId` and `afterId`) and report property-level \
+             differences (size, position, fills, stroke, corner radius, opacity, text, layout, \
+             added/removed children).",
+            json!({
+                "beforeId": node_id("First frame or node id (baseline)."),
+                "afterId": node_id("Second frame or node id (comparison)."),
+                "pageId": page_id(),
+            }),
+            &["beforeId", "afterId"],
+            true,
         ),
         tool(
             "finish_working_on_nodes",

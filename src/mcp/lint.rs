@@ -248,6 +248,120 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
     out
 }
 
+fn snap4(v: f64) -> f64 {
+    if v <= 0.0 {
+        0.0
+    } else {
+        ((v / 4.0).round() * 4.0).max(4.0)
+    }
+}
+
+/// Apply safe automatic fixes (`spacing-grid`, `hard-coded-color`, `text-size`, `type-scale`,
+/// `touch-target`) to `id` (or all non-instance visible descendants under `roots`).
+/// Returns the number of nodes modified.
+pub fn autofix(tx: &mut crate::history::Tx, roots: &[NodeId], scale: &[f64]) -> usize {
+    let mut ids: Vec<NodeId> = Vec::new();
+    for r in roots {
+        ids.extend(tx.doc().subtree(*r));
+    }
+    let mut fixed = 0;
+    for id in ids {
+        if autofix_node(tx, id, scale) {
+            fixed += 1;
+        }
+    }
+    fixed
+}
+
+/// Apply safe automatic fixes to a single node `id`. Returns true if anything changed.
+pub fn autofix_node(tx: &mut crate::history::Tx, id: NodeId, scale: &[f64]) -> bool {
+    let Some(n) = tx.doc().get(id).cloned() else {
+        return false;
+    };
+    if !n.visible || n.instance.is_some() {
+        return false;
+    }
+    let vars = tx.doc().variables.clone();
+    let mut changed = false;
+
+    // 1. Snap off-grid auto-layout spacing/padding to 4px multiples.
+    let mut new_layout = n.layout;
+    if let Some(l) = &mut new_layout {
+        if off_grid(l.gap) {
+            l.gap = snap4(l.gap);
+            changed = true;
+        }
+        if off_grid(l.cross_gap) {
+            l.cross_gap = snap4(l.cross_gap);
+            changed = true;
+        }
+        for p in &mut l.padding {
+            if off_grid(*p) {
+                *p = snap4(*p);
+                changed = true;
+            }
+        }
+    }
+
+    // 2. Relink hard-coded solid fills to matching document color variables.
+    let mut new_fills = n.style.fills.clone();
+    for fill in &mut new_fills {
+        if let Paint::Solid { color, var } = fill
+            && var.is_none()
+            && color.a == 255
+            && let Some((name, _)) = vars.iter().find(|(_, v)| **v == *color)
+        {
+            *var = Some(name.clone());
+            changed = true;
+        }
+    }
+
+    // 3. Snap text size to >= 12px and nearest type-scale value.
+    let mut new_kind = n.kind.clone();
+    if let crate::model::NodeKind::Text { font_size, .. } = &mut new_kind {
+        let target = if *font_size < 12.0 {
+            scale.iter().copied().find(|s| *s >= 12.0).unwrap_or(12.0)
+        } else if !scale.is_empty() && !scale.iter().any(|s| (s - *font_size).abs() < 0.01) {
+            scale
+                .iter()
+                .min_by(|a, b| (*a - *font_size).abs().total_cmp(&(*b - *font_size).abs()))
+                .copied()
+                .unwrap_or(*font_size)
+        } else {
+            *font_size
+        };
+        if (target - *font_size).abs() > 0.01 {
+            *font_size = target;
+            changed = true;
+        }
+    }
+
+    // 4. Touch target height >= 44px for buttons/tabs.
+    let lower = n.name.to_lowercase();
+    let tap =
+        lower.starts_with("button") || lower.starts_with("tab /") || lower.starts_with("tab bar /");
+    let mut new_h = n.rect.h;
+    if tap && n.is_frame() && n.rect.h < 44.0 && n.rect.h > 0.0 && !lower.contains("icon") {
+        let extra = ((44.0 - n.rect.h) / 2.0).ceil();
+        if let Some(l) = &mut new_layout
+            && n.layout_child.sizing[1] == crate::model::Sizing::Hug
+        {
+            l.padding[0] = snap4(l.padding[0] + extra);
+            l.padding[2] = snap4(l.padding[2] + extra);
+        }
+        new_h = 44.0;
+        changed = true;
+    }
+
+    if changed && let Some(m) = tx.node_mut(id) {
+        m.layout = new_layout;
+        m.style.fills = new_fills;
+        m.kind = new_kind;
+        m.rect.h = new_h;
+    }
+    changed
+}
+
 fn join(v: &[f64]) -> String {
     v.iter()
         .map(|s| format!("{s}"))
@@ -267,5 +381,38 @@ mod tests {
         );
         assert!(off_grid(13.0) && !off_grid(12.0) && !off_grid(0.0));
         assert!(is_default_name("Frame 12") && !is_default_name("Task Row"));
+    }
+
+    #[test]
+    fn autofix_snaps_grid_and_links_variables() {
+        let mut doc = Document::default();
+        let accent = Color::rgb(0x3b, 0x82, 0xf6);
+        doc.variables.insert("accent".into(), accent);
+        let id = doc.alloc_id();
+        let mut n = Node::new(
+            id,
+            crate::model::NodeKind::Frame { clip: false },
+            crate::geom::Rect::new(0.0, 0.0, 120.0, 36.0),
+        );
+        n.name = "Button / Primary".into();
+        n.style.fills = vec![Paint::solid(accent)];
+        n.layout = Some(crate::model::AutoLayout {
+            gap: 10.0,
+            padding: [6.0, 14.0, 6.0, 14.0],
+            ..Default::default()
+        });
+        doc.nodes.insert(id, n);
+        doc.root.push(id);
+
+        let mut rec = crate::history::Recording::new("autofix", &doc);
+        let mut tx = crate::history::Tx::new(&mut doc, &mut rec);
+        let count = autofix(&mut tx, &[id], &DEFAULT_SCALE);
+        assert_eq!(count, 1);
+        let fixed = doc.get(id).unwrap();
+        assert_eq!(fixed.style.fills[0].var(), Some("accent"));
+        let l = fixed.layout.unwrap();
+        assert_eq!(l.gap, 12.0);
+        assert_eq!(l.padding, [8.0, 16.0, 8.0, 16.0]);
+        assert_eq!(fixed.rect.h, 44.0);
     }
 }
