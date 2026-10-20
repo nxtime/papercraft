@@ -384,6 +384,28 @@ Switch the active variable mode (defined with set_variables {mode}): every varia
 | `mode` | string | yes |  |
 
 
+### `import_design_system`
+
+Import an OpenDesign design-system package: a folder with manifest.json, tokens.css and (optional) DESIGN.md. The colors of the `:root` block become variables, the colors of the `[data-theme="name"]` blocks become modes and every other value becomes a token. Replaces the variables, modes and tokens of every page in one undo step. Only hex colors become variables; oklch(), rgb() and sizes stay tokens.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `path` | string | yes | Folder of the package to import. |
+| `pageId` | string |  | The design system is project-wide, so it lands on every page. |
+
+
+### `export_design_system`
+
+Write the page's variables, modes and tokens as an OpenDesign design-system package (manifest.json, tokens.css and DESIGN.md) in `path`, so it can be read back with import_design_system or by other tools. Returns the files written.
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `path` | string | yes | Folder to write the package into. |
+| `pageId` | string |  | The page whose design system is written. |
+
+
 ### `get_components` (read-only)
 
 Main components on a page (id, name, size) with how many instances each has.

@@ -298,6 +298,8 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "set_variables" => set_variables(ed, &a),
                 "set_variable_mode" => set_variable_mode(ed, &a),
                 "set_tokens" => set_tokens(ed, &a),
+                "import_design_system" => import_design_system(host, &a),
+                "export_design_system" => export_design_system(host, &a),
                 "get_components" => get_components(ed, &a),
                 "import_components" => import_components(ed, &a),
                 "create_component" => create_component(ed, &a),
@@ -3817,6 +3819,79 @@ fn diff_frames(ed: &mut Editor, a: &Args) -> ToolResult {
     let doc_b = ed.page_doc(page_b);
     let diff = super::diff::diff_subtrees(doc_a, id_a, doc_b, id_b)?;
     text(super::diff::to_json(&diff))
+}
+
+// ------------------------------------------------------------------------------ design system packages
+
+/// Import an OpenDesign design-system package (a folder with `manifest.json` and
+/// `tokens.css`) into the project: the colors of `:root` become variables, the colors of the
+/// `[data-theme="name"]` blocks become modes and every other value becomes a token. The
+/// design system is project-wide, so every page gets it in one undo step.
+#[cfg(not(target_arch = "wasm32"))]
+fn import_design_system(host: &mut dyn Host, a: &Args) -> ToolResult {
+    let dir = PathBuf::from(a.req_str("path")?);
+    let pkg = crate::design_system::import_package(&dir)?;
+    let ed = host.editor();
+    // The page the caller names has to exist; the design system itself is project-wide.
+    if let Some(p) = a.str("pageId").filter(|p| !p.is_empty()) {
+        find_page(ed, p)?;
+    }
+    let mut fills = 0;
+    for page in 0..ed.pages.len() {
+        fills += ed.with_page(page, |ed| {
+            ed.edit("Import design system", |tx| {
+                tx.set_design_system(
+                    &pkg.tokens.variables,
+                    &pkg.tokens.modes,
+                    &pkg.tokens.tokens,
+                    None,
+                )
+            })
+        });
+    }
+    text(json!({
+        "package": {"id": pkg.manifest.id, "name": pkg.manifest.name,
+                    "category": pkg.manifest.category, "description": pkg.manifest.description},
+        "variables": pkg.tokens.variables.len(),
+        "modes": pkg.tokens.modes.len(),
+        "tokens": pkg.tokens.tokens.len(),
+        "pages": ed.pages.len(),
+        "fillsUpdated": fills,
+        "design": pkg.design.is_some(),
+    }))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn import_design_system(_: &mut dyn Host, _: &Args) -> ToolResult {
+    Err(NO_DISK.into())
+}
+
+/// Write the page's variables, modes and tokens as an OpenDesign design-system package
+/// (`manifest.json`, `tokens.css` and `DESIGN.md`) in `path`.
+#[cfg(not(target_arch = "wasm32"))]
+fn export_design_system(host: &mut dyn Host, a: &Args) -> ToolResult {
+    let dir = PathBuf::from(a.req_str("path")?);
+    let project = host.project().map(|p| p.manifest.name.clone());
+    let ed = host.editor();
+    let page = page_arg(ed, a)?;
+    let doc = ed.page_doc(page).clone();
+    let mut meta = crate::design_system::Meta::for_page(&dir, &doc);
+    if let Some(name) = project {
+        meta.name = name;
+    }
+    let written = crate::design_system::export_package_with(&dir, &doc, &meta)?;
+    text(json!({
+        "path": dir,
+        "files": written,
+        "variables": doc.variables.len(),
+        "modes": doc.modes.len(),
+        "tokens": doc.tokens.len(),
+    }))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn export_design_system(_: &mut dyn Host, _: &Args) -> ToolResult {
+    Err(NO_DISK.into())
 }
 
 // ------------------------------------------------------------------------------ icons

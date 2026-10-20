@@ -58,6 +58,14 @@ Fill-based sets (Phosphor, Material) follow variables; Lucide is stroke-based an
 
 Instances are skipped (their main component is linted). The rules are conventions, not law: pass `scale` to match your own type scale and ignore `info` items you disagree with. Lint does not judge taste; always look at `get_screenshot` too.
 
+## Packages
+
+A design system can travel as an **OpenDesign design-system package**: a folder with
+`manifest.json`, `tokens.css` and `DESIGN.md`. `import_design_system` reads one into the
+project (colors become variables, `[data-theme]` blocks become modes, everything else becomes
+a token) and `export_design_system` writes one back. The format, the rules and the tools are
+in [design-system-packages.md](design-system-packages.md).
+
 ## Worked example
 
 [`examples/taskflow.py`](../examples/taskflow.py) builds an 8-screen app: a Catppuccin theme as variables (the only place hex appears), components for buttons, fields, chips, task rows, toggles and tab bars, Phosphor icons, and a design-system page of swatches. Run it against the running app after `papercraft-cli icons add phosphor`.

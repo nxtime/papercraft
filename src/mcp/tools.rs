@@ -28,6 +28,9 @@ use var(--name). Build repeated parts (button, row, chip) once as components \
 (create_artboard + create_component) and place them with create_instance, overriding text \
 with set_text_content. Icons: search_icons, then <x-paper-icon name=\"phosphor:gear\"/> in \
 write_html. Name every layer (layer-name) like a real file.\n\
+- Design-system packages: import_design_system reads an OpenDesign package folder \
+(manifest.json + tokens.css) into the variables, modes and tokens of the project; \
+export_design_system writes one back.\n\
 - Check your work with get_screenshot. Artboard height is a starting point: when content \
 clips set height: \"fit-content\" with update_styles.
 - Call finish_working_on_nodes when done.";
@@ -534,6 +537,28 @@ pub fn definitions() -> Vec<Value> {
              turns a whole design from light to dark.",
             json!({"mode": {"type": "string"}}),
             &["mode"],
+            false,
+        ),
+        tool(
+            "import_design_system",
+            "Import an OpenDesign design-system package: a folder with manifest.json, tokens.css \
+             and (optional) DESIGN.md. The colors of the `:root` block become variables, the \
+             colors of the `[data-theme=\"name\"]` blocks become modes and every other value \
+             becomes a token. Replaces the variables, modes and tokens of every page in one undo \
+             step. Only hex colors become variables; oklch(), rgb() and sizes stay tokens.",
+            json!({"path": {"type": "string", "description": "Folder of the package to import."},
+                   "pageId": page_id()}),
+            &["path"],
+            false,
+        ),
+        tool(
+            "export_design_system",
+            "Write the page's variables, modes and tokens as an OpenDesign design-system package \
+             (manifest.json, tokens.css and DESIGN.md) in `path`, so it can be read back with \
+             import_design_system or by other tools. Returns the files written.",
+            json!({"path": {"type": "string", "description": "Folder to write the package into."},
+                   "pageId": page_id()}),
+            &["path"],
             false,
         ),
         tool(

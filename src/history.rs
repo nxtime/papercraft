@@ -6,7 +6,7 @@
 
 use crate::geom::V2;
 use crate::model::{Color, Document, Node, NodeId, VarState};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 const MAX_DEPTH: usize = 500;
 
@@ -201,6 +201,38 @@ impl<'a> Tx<'a> {
     pub fn set_token(&mut self, name: &str, value: &str) {
         self.snapshot_variables();
         self.doc.tokens.insert(name.to_string(), value.to_string());
+    }
+
+    /// Replace the whole design system: the variables, the modes and the tokens, in one step.
+    /// Fills that follow a variable move to its new value; a variable that is gone stops being
+    /// followed. `mode` is the mode that stays active (None leaves the base theme live).
+    /// Returns the number of fills updated.
+    pub fn set_design_system(
+        &mut self,
+        variables: &BTreeMap<String, Color>,
+        modes: &BTreeMap<String, BTreeMap<String, Color>>,
+        tokens: &BTreeMap<String, String>,
+        mode: Option<&str>,
+    ) -> usize {
+        self.snapshot_variables();
+        let before = self.doc.variables.clone();
+        // A variable the new system does not have goes away, links and all.
+        for name in before.keys() {
+            if !variables.contains_key(name) {
+                self.remove_variable(name);
+            }
+        }
+        self.doc.variables.clone_from(variables);
+        self.doc.modes.clone_from(modes);
+        self.doc.tokens.clone_from(tokens);
+        self.doc.mode = mode
+            .filter(|m| self.doc.modes.contains_key(*m))
+            .map(str::to_string);
+        let mut fills = 0;
+        for (name, color) in variables {
+            fills += self.apply_variable(name, *color);
+        }
+        fills
     }
 
     /// Delete a non-color design token.

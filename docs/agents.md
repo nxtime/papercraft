@@ -83,4 +83,5 @@ The server listens on loopback only, rejects requests that carry an `Origin` hea
 
 * [Tool reference](../skills/papercraft/references/tools.md), generated from `papercraft-cli schema`.
 * [Design systems](design-system.md): variables, components, icons, lint.
+* [Design-system packages](design-system-packages.md): importing and exporting an OpenDesign package.
 * `papercraft-cli --help`-style usage: run `papercraft-cli` with no arguments.

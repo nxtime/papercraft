@@ -17,6 +17,12 @@ assets from them are used.
 
 Each ported module starts with a comment naming its source.
 
+## Reimplemented formats
+
+| Project | License | What was reimplemented | Where |
+|---|---|---|---|
+| [OpenDesign](https://github.com/nexu-io/open-design) | Apache-2.0 | The design-system package format (`manifest.json` / `tokens.css` / `DESIGN.md`), written from the published format description; no file of that project is copied | `src/design_system.rs` |
+
 ## Dependencies
 
 Rust crates are pulled from crates.io under their own licenses (see `Cargo.lock`); notable ones
