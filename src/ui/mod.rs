@@ -88,6 +88,10 @@ pub struct UiState {
     pub present_index: usize,
     /// Inspector shows the Prototype tab instead of Design.
     pub proto_tab: bool,
+    /// Present mode's camera glide `(from, to, started)`, if one is running.
+    pub present_glide: Option<(crate::geom::Camera, crate::geom::Camera, web_time::Instant)>,
+    /// Present mode has shown a frame already, so the next one glides.
+    pub present_glide_ready: bool,
     /// Layer being dragged in the layers panel, and where it would drop.
     pub layer_drag: Option<(NodeId, Option<LayerDrop>)>,
     /// Row rects of the last layers-panel frame (for drop targeting).
@@ -362,20 +366,56 @@ pub fn start_present(ed: &mut Editor, st: &mut UiState) {
         .and_then(|s| frames.iter().position(|f| f == s))
         .unwrap_or(0);
     st.present = true;
+    st.present_glide = None;
+    st.present_glide_ready = false;
     show_present_frame(ed, st);
 }
 
-fn show_present_frame(ed: &mut Editor, st: &UiState) {
+/// How long the camera takes to glide from one presented frame to the next.
+const PRESENT_GLIDE_SECS: f32 = 0.45;
+
+fn show_present_frame(ed: &mut Editor, st: &mut UiState) {
     let frames = present_frames(ed);
-    if let Some(&id) = frames.get(st.present_index) {
-        ed.selection = vec![id];
-        ed.run(Action::ZoomSelection);
-        ed.selection.clear();
+    let Some(&id) = frames.get(st.present_index) else {
+        return;
+    };
+    let from = ed.camera;
+    ed.selection = vec![id];
+    ed.run(Action::ZoomSelection);
+    ed.selection.clear();
+    let to = ed.camera;
+    // Glide instead of cutting (the first frame of a presentation still snaps).
+    st.present_glide = (st.present_glide_ready && from != to).then(|| {
+        ed.camera = from;
+        (from, to, web_time::Instant::now())
+    });
+    st.present_glide_ready = true;
+}
+
+/// Moves the camera along the glide started by [`show_present_frame`].
+fn step_present_glide(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
+    let Some((from, to, start)) = st.present_glide else {
+        return;
+    };
+    let t = (start.elapsed().as_secs_f32() / PRESENT_GLIDE_SECS).min(1.0);
+    let e = f64::from(motion::ease_in_out_cubic(t));
+    if t >= 1.0 || !motion::enabled(ctx) {
+        ed.camera = to;
+        st.present_glide = None;
+        return;
     }
+    ed.camera.pan = crate::geom::v2(
+        from.pan.x + (to.pan.x - from.pan.x) * e,
+        from.pan.y + (to.pan.y - from.pan.y) * e,
+    );
+    // Zoom glides in log space so it feels even.
+    ed.camera.zoom = (from.zoom.ln() + (to.zoom.ln() - from.zoom.ln()) * e).exp();
+    ctx.request_repaint();
 }
 
 /// The presenter bar: previous and next frame, a counter and Exit; Esc and the arrow keys work too.
 fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect) {
+    step_present_glide(ctx, ed, st);
     let frames = present_frames(ed);
     let total = frames.len();
     let (left, right, esc) = ctx.input(|i| {
@@ -794,20 +834,13 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             let share = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::Export), "Share");
             egui::Popup::menu(&share).show(|ui| {
                 ui.set_min_width(190.0);
-                for (label, action) in [
-                    ("Export PNG…", Action::ExportPng),
-                    ("Export SVG…", Action::ExportSvg),
-                    ("Copy as PNG", Action::CopyAsPng),
-                    ("Copy as SVG", Action::CopyAsSvg),
+                for (icon, label, action) in [
+                    (Icon::Image, "Export PNG…", Action::ExportPng),
+                    (Icon::Pen, "Export SVG…", Action::ExportSvg),
+                    (Icon::Image, "Copy as PNG", Action::CopyAsPng),
+                    (Icon::Pen, "Copy as SVG", Action::CopyAsSvg),
                 ] {
-                    if ui
-                        .add(
-                            egui::Button::new(label)
-                                .frame(false)
-                                .min_size(egui::vec2(180.0, 30.0)),
-                        )
-                        .clicked()
-                    {
+                    if icon_menu_item(ui, icon, label).clicked() {
                         ed.run(action);
                         ui.close();
                     }
@@ -902,6 +935,36 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor, agent: &mut Option<agent::AgentUi>) {
         a.menu(ui);
     }
     theme_menu(ui);
+}
+
+/// Width of a popup menu row with an icon.
+const ICON_MENU_W: f32 = 200.0;
+
+/// A menu row with a leading icon, hover tint and the pointing-hand cursor.
+fn icon_menu_item(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
+    let p = theme::pal(ui);
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ICON_MENU_W, 32.0),
+        egui::Sense::click(),
+    );
+    let hover = motion::hover(ui.ctx(), resp.id.with("menu-item"), &resp);
+    if hover > 0.0 {
+        ui.painter()
+            .rect_filled(rect, theme::RADIUS_MD, p.hover.gamma_multiply(hover));
+    }
+    let at = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 18.0, rect.center().y),
+        egui::vec2(16.0, 16.0),
+    );
+    theme::paint_icon(ui.painter(), at, icon, p.secondary);
+    ui.painter().text(
+        egui::pos2(rect.left() + 34.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(theme::BODY),
+        p.text,
+    );
+    resp
 }
 
 /// Every menu in one popup, one after the other under its title: no submenus to open.
