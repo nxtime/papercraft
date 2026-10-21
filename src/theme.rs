@@ -456,6 +456,42 @@ const WEB_PATH: &str = "/config/theme";
 
 static CHOICE: AtomicU8 = AtomicU8::new(0);
 
+/// Interface scale steps offered in Settings (1.0 = the system's scale).
+pub const UI_SCALES: [f32; 6] = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5];
+
+/// The current interface scale, as `f32` bits.
+static UI_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000);
+
+pub fn ui_scale() -> f32 {
+    f32::from_bits(UI_SCALE.load(Ordering::Relaxed))
+}
+
+/// Where the interface scale is kept: next to the theme choice.
+fn scale_path() -> Option<std::path::PathBuf> {
+    Choice::path().map(|p| p.with_file_name("ui_scale"))
+}
+
+/// The saved interface scale, 1.0 when none (or an unsupported value) is stored.
+pub fn load_ui_scale() -> f32 {
+    scale_path()
+        .and_then(|p| crate::vfs::read_to_string(p).ok())
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .filter(|v| UI_SCALES.iter().any(|s| (s - v).abs() < 1e-3))
+        .unwrap_or(1.0)
+}
+
+/// Applies `scale` to the whole UI and remembers it.
+pub fn apply_ui_scale(ctx: &egui::Context, scale: f32, save: bool) {
+    UI_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+    ctx.set_zoom_factor(scale);
+    if save && let Some(p) = scale_path() {
+        if let Some(dir) = p.parent() {
+            let _ = crate::vfs::create_dir_all(dir);
+        }
+        let _ = crate::vfs::write(p, scale.to_string());
+    }
+}
+
 pub fn choice() -> Choice {
     Choice::ALL
         .get(CHOICE.load(Ordering::Relaxed) as usize)

@@ -77,6 +77,7 @@ impl App {
     pub fn new(start: Start, store: Store) -> App {
         let ctx = egui::Context::default();
         theme::apply_choice(&ctx, theme::Choice::load());
+        theme::apply_ui_scale(&ctx, theme::load_ui_scale(), false);
         let library = crate::library::Library::load(&crate::library::Library::path_in(&store.root));
         let mut app = App {
             gfx: None,
@@ -940,8 +941,13 @@ impl ApplicationHandler<UserEvent> for App {
         };
         #[cfg(windows)]
         let attrs = {
-            use winit::platform::windows::WindowAttributesExtWindows;
-            attrs.with_decorations(false).with_taskbar_icon(icon)
+            use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
+            // No native frame, but keep the system shadow and Windows 11's rounded corners.
+            attrs
+                .with_decorations(false)
+                .with_undecorated_shadow(true)
+                .with_corner_preference(CornerPreference::Round)
+                .with_taskbar_icon(icon)
         };
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.st.custom_titlebar = cfg!(windows);

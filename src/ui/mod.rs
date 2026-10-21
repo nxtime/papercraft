@@ -225,11 +225,103 @@ impl UiState {
     pub fn log_agent(&mut self, name: &str, error: Option<String>) {
         let at = web_time::Instant::now();
         self.agent = Some((name.to_owned(), at));
-        self.agent_log.push(AgentCall { name: name.to_owned(), at, error });
+        self.agent_log.push(AgentCall {
+            name: name.to_owned(),
+            at,
+            error,
+        });
         if self.agent_log.len() > AGENT_LOG_MAX {
             self.agent_log.remove(0);
         }
     }
+}
+
+/// How long after its last tool call an agent still counts as working.
+const AGENT_WORKING_SECS: u64 = 6;
+
+/// What an agent's tool call means in plain words, for the activity pill.
+fn agent_verb(tool: &str) -> &'static str {
+    match tool {
+        "write_html" | "create_artboard" | "create_shape" => "Drawing layout",
+        "update_styles" | "set_text_content" | "rename_nodes" => "Styling",
+        "get_screenshot" | "get_jsx" | "get_design_spec" | "get_computed_styles" => {
+            "Looking at the design"
+        }
+        "lint_design" | "verify_code" | "diff_frames" => "Checking the design",
+        "set_variables" | "set_tokens" | "set_variable_mode" | "import_design_system" => {
+            "Setting up tokens"
+        }
+        "create_component" | "create_instance" | "import_components" | "swap_instance" => {
+            "Using components"
+        }
+        "delete_nodes" | "move_nodes" | "duplicate_nodes" => "Rearranging",
+        "add_feedback" | "resolve_feedback" | "get_feedback" => "Reading notes",
+        _ => "Working",
+    }
+}
+
+impl UiState {
+    /// What the agent is doing right now, if it called a tool within [`AGENT_WORKING_SECS`].
+    pub fn agent_working(&self) -> Option<&'static str> {
+        self.agent
+            .as_ref()
+            .filter(|(_, at)| at.elapsed().as_secs() < AGENT_WORKING_SECS)
+            .map(|(tool, _)| agent_verb(tool))
+    }
+}
+
+/// A pill with three bouncing dots and what the agent is doing; nothing when it is idle.
+fn agent_pill(ui: &mut Ui, st: &UiState, with_text: bool) {
+    let Some(verb) = st.agent_working() else {
+        return;
+    };
+    ui.ctx().request_repaint();
+    let p = theme::pal(ui);
+    let t = ui.ctx().input(|i| i.time) as f32;
+    let accent = theme::accent();
+    egui::Frame::new()
+        .fill(accent.gamma_multiply(0.16))
+        .corner_radius(egui::CornerRadius::same(255))
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let (r, _) = ui.allocate_exact_size(egui::vec2(24.0, 14.0), egui::Sense::hover());
+                for i in 0..3 {
+                    let phase = t * 7.0 - i as f32 * 0.9;
+                    let hop = phase.sin().max(0.0) * 4.0;
+                    let x = r.left() + 4.0 + i as f32 * 8.0;
+                    ui.painter()
+                        .circle_filled(egui::pos2(x, r.center().y - hop), 2.5, accent);
+                }
+                if with_text {
+                    ui.label(
+                        RichText::new(format!("{verb}…"))
+                            .size(theme::SECONDARY)
+                            .color(p.text),
+                    );
+                }
+            });
+        });
+}
+
+/// A soft accent ring around the canvas while an agent works.
+fn agent_glow(ctx: &egui::Context, st: &UiState, canvas: egui::Rect) {
+    if st.agent_working().is_none() {
+        return;
+    }
+    let t = ctx.input(|i| i.time) as f32;
+    let pulse = 0.35 + 0.25 * (t * 3.0).sin();
+    ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        "agent-glow".into(),
+    ))
+    .rect_stroke(
+        canvas.shrink(1.5),
+        f32::from(theme::RADIUS_PANEL),
+        egui::Stroke::new(2.0, theme::accent().gamma_multiply(pulse)),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// Gap between the floating panels and around the canvas.
@@ -590,6 +682,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         );
     }
     toolbar(ui.ctx(), ed, canvas);
+    agent_glow(ui.ctx(), st, canvas);
     status(ui.ctx(), ed, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
     if st.show_help {
@@ -639,7 +732,8 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 // Not enough room for every menu: they fold into one.
                 ui.scope(|ui| {
                     flat_menus(ui);
-                    ui.menu_button("Menu", |ui| menu_bar(ui, ed, &mut st.agent_link));
+                    let menu = ui.menu_button("Menu", |ui| flat_menu(ui, ed));
+                    let _ = menu;
                 });
             } else {
                 ui.scope(|ui| menu_bar(ui, ed, &mut st.agent_link));
@@ -688,19 +782,13 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     kit::chip(ui, &state, state == "Saved");
                 }
             });
-            let mut sub = ed.page_name().to_string();
-            if let Some((tool, at)) = &st.agent
-                && at.elapsed() < std::time::Duration::from_secs(4)
-            {
-                sub += &format!("  ·  agent: {tool}");
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(500));
-            }
+            let sub = ed.page_name().to_string();
             ui.add(
                 egui::Label::new(RichText::new(sub).size(theme::SECONDARY).color(p.secondary))
                     .truncate(),
             );
         });
+        agent_pill(ui, st, !tight);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             let share = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::Export), "Share");
@@ -748,7 +836,10 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     ed.run(Action::Undo);
                 }
                 ui.add_space(6.0);
-                if kit::lottie_button(ui, "settings", "Settings", 26.0).clicked() {
+                // The floating layout has Settings in the sidebar footer already.
+                if !is_floating(st.translucent_sidebar)
+                    && kit::lottie_button(ui, "settings", "Settings", 26.0).clicked()
+                {
                     st.settings.open = true;
                 }
             }
@@ -811,6 +902,25 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor, agent: &mut Option<agent::AgentUi>) {
         a.menu(ui);
     }
     theme_menu(ui);
+}
+
+/// Every menu in one popup, one after the other under its title: no submenus to open.
+fn flat_menu(ui: &mut Ui, ed: &mut Editor) {
+    let p = theme::pal(ui);
+    ui.set_min_width(220.0);
+    egui::ScrollArea::vertical()
+        .max_height((ui.ctx().content_rect().height() - 120.0).max(160.0))
+        .show(ui, |ui| {
+            for (title, entries) in shortcuts::menus() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(title.to_uppercase())
+                        .font(theme::semibold(theme::SECONDARY))
+                        .color(p.tertiary),
+                );
+                menu_entries(ui, ed, &entries);
+            }
+        });
 }
 
 /// Menu titles read as plain text: no fill or border at rest, a tint on hover/press.
@@ -1108,7 +1218,10 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             }
             st.layer_rows.clear();
             for id in roots.iter().rev() {
-                layer_row(ui, ed, st, *id, 0);
+                let index = st.layer_rows.len();
+                motion::pop_in(ui, ("layer-pop", *id), index, |ui| {
+                    layer_row(ui, ed, st, *id, 0)
+                });
             }
             layer_drag(ui, ed, st);
         });
@@ -1420,7 +1533,10 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     }
     if !needle.is_empty() || !st.collapsed.contains(&id) {
         for c in n.children.iter().rev() {
-            layer_row(ui, ed, st, *c, depth + 1);
+            let index = st.layer_rows.len();
+            motion::pop_in(ui, ("layer-pop", *c), index, |ui| {
+                layer_row(ui, ed, st, *c, depth + 1)
+            });
         }
     }
 }
@@ -1449,6 +1565,7 @@ fn tool_icon(t: Tool) -> Icon {
 /// Floating tool palette at the bottom of the canvas, styled as a macOS popover.
 fn toolbar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
     egui::Area::new("toolbar".into())
+        .constrain_to(canvas)
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - 16.0))
         .show(ctx, |ui| {

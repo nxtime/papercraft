@@ -86,7 +86,7 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
         let (title, sub) = match st.settings.page {
-            Page::Appearance => ("Appearance", "Theme and motion."),
+            Page::Appearance => ("Appearance", "Theme, scale and motion."),
             Page::Canvas => ("Canvas", "How the canvas looks."),
             Page::Updates => ("Updates", "Keep PaperCraft current."),
         };
@@ -115,6 +115,23 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
                     }
                 }
             });
+            // In a browser the page zoom (Ctrl +/-) already does this.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.add_space(12.0);
+                kit::section_header(ui, "Interface scale", None);
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
+                    for scale in theme::UI_SCALES {
+                        let label = format!("{:.0}%", scale * 100.0);
+                        if kit::chip(ui, &label, (theme::ui_scale() - scale).abs() < 1e-3).clicked()
+                        {
+                            theme::apply_ui_scale(ctx, scale, true);
+                        }
+                    }
+                });
+            }
             ui.add_space(12.0);
             let mut animations = motion::enabled(ctx);
             kit::setting_row(

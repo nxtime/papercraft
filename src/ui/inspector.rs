@@ -740,7 +740,11 @@ const MAX_EXPORT_PRESETS: usize = 6;
 
 fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     use crate::io::export::{Format, Scope};
-    if super::kit::section_header(ui, "Export", Some((theme::Icon::Plus, "Keep these export settings as a preset"))) {
+    if super::kit::section_header(
+        ui,
+        "Export",
+        Some((theme::Icon::Plus, "Keep these export settings as a preset")),
+    ) {
         let spec = st.export;
         if !st.export_presets.contains(&spec) && st.export_presets.len() < MAX_EXPORT_PRESETS {
             st.export_presets.push(spec);
@@ -949,8 +953,8 @@ fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
             1 => "1 layer".to_string(),
             n => format!("{n} layers"),
         })
-            .size(theme::SECONDARY)
-            .color(theme::pal(ui).secondary),
+        .size(theme::SECONDARY)
+        .color(theme::pal(ui).secondary),
     );
 }
 

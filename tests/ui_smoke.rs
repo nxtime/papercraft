@@ -63,7 +63,10 @@ fn redesigned_surfaces_draw_in_every_theme() {
         }
         st.present = false;
         let mut hv = home::HomeView::default();
-        hv.dialog = Some(home::ShareDialog { dir: None, text: String::new() });
+        hv.dialog = Some(home::ShareDialog {
+            dir: None,
+            text: String::new(),
+        });
         frame(&ctx, |ui| home::draw(ui, &mut hv, false, false));
         hv.dialog = None;
         for trash in [false, true] {

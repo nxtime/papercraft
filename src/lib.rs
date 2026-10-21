@@ -18,6 +18,7 @@ pub mod lottie;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod mcp;
+pub mod merge;
 pub mod model;
 pub mod project;
 pub mod render;

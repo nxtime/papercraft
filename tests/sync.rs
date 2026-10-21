@@ -208,7 +208,10 @@ async fn stop_sharing_detaches_this_folder_but_leaves_the_relay_copy() {
         "127.0.0.1:0".parse().unwrap(),
         None,
         None,
-        Some(Data { dir: data, library: false }),
+        Some(Data {
+            dir: data,
+            library: false,
+        }),
     )
     .unwrap();
     let server = format!("http://127.0.0.1:{}", running.port());
@@ -225,10 +228,64 @@ async fn stop_sharing_detaches_this_folder_but_leaves_the_relay_copy() {
     assert!(Share::load(&a).is_none(), "the share marker is gone");
 
     // Later local edits never reach the relay...
-    std::fs::write(a.join("pages/p1.json"), r#"{"page":"edited after unsharing"}"#).unwrap();
+    std::fs::write(
+        a.join("pages/p1.json"),
+        r#"{"page":"edited after unsharing"}"#,
+    )
+    .unwrap();
     let b = temp("unshare-b");
     Share::from_link(&share.link()).unwrap().save(&b).unwrap();
     sync::sync_once(&b).await.unwrap();
     // ...and the copy already on the relay is still there for whoever holds the link.
-    assert_eq!(read(&b, "pages/p1.json").as_deref(), Some(r#"{"page":"one"}"#));
+    assert_eq!(
+        read(&b, "pages/p1.json").as_deref(),
+        Some(r#"{"page":"one"}"#)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_people_editing_one_page_keep_both_changes() {
+    let running = relay::spawn_with_data(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        None,
+        Some(Data {
+            dir: temp("merge-data"),
+            library: false,
+        }),
+    )
+    .unwrap();
+    let server = format!("http://127.0.0.1:{}", running.port());
+    let page = |a: i64, b: i64, extra: &str| {
+        format!(
+            r#"{{"next_id":3,"root":[1,2],"nodes":[{{"id":1,"x":{a}}},{{"id":2,"x":{b}}}{extra}]}}"#
+        )
+    };
+    let a = temp("merge-a");
+    std::fs::create_dir_all(a.join("pages")).unwrap();
+    std::fs::write(a.join("project.json"), r#"{"manifest":1}"#).unwrap();
+    std::fs::write(a.join("pages/p1.json"), page(0, 0, "")).unwrap();
+    let share = Share::new(&server);
+    share.save(&a).unwrap();
+    sync::sync_once(&a).await.unwrap();
+    let b = temp("merge-b");
+    Share::from_link(&share.link()).unwrap().save(&b).unwrap();
+    sync::sync_once(&b).await.unwrap();
+
+    // Both edit the same page at the same time: A moves node 1, B moves node 2.
+    std::fs::write(a.join("pages/p1.json"), page(10, 0, "")).unwrap();
+    std::fs::write(b.join("pages/p1.json"), page(0, 20, "")).unwrap();
+    sync::sync_once(&b).await.unwrap();
+    assert!(
+        sync::sync_once(&a).await.unwrap(),
+        "A applied B's change by merging"
+    );
+    sync::sync_once(&b).await.unwrap();
+
+    for dir in [&a, &b] {
+        let v: serde_json::Value =
+            serde_json::from_str(&read(dir, "pages/p1.json").unwrap()).unwrap();
+        assert_eq!(v["nodes"][0]["x"], 10, "A's edit survived in {dir:?}");
+        assert_eq!(v["nodes"][1]["x"], 20, "B's edit survived in {dir:?}");
+    }
 }

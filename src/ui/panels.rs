@@ -330,7 +330,11 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             ui,
             Icon::Question,
             theme::accent(),
-            if total == 0 { "No comments" } else { "Nothing here" },
+            if total == 0 {
+                "No comments"
+            } else {
+                "Nothing here"
+            },
             if total == 0 {
                 "Select a layer and add a note below."
             } else {
@@ -409,14 +413,21 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 }
             });
         if let Some((node, cid, done)) = resolve {
-            ed.edit(if done { "Resolve feedback" } else { "Reopen feedback" }, |tx| {
-                if let Some(x) = tx
-                    .node_mut(node)
-                    .and_then(|n| n.comments.iter_mut().find(|x| x.id == cid))
-                {
-                    x.resolved = done;
-                }
-            });
+            ed.edit(
+                if done {
+                    "Resolve feedback"
+                } else {
+                    "Reopen feedback"
+                },
+                |tx| {
+                    if let Some(x) = tx
+                        .node_mut(node)
+                        .and_then(|n| n.comments.iter_mut().find(|x| x.id == cid))
+                    {
+                        x.resolved = done;
+                    }
+                },
+            );
         }
         if let Some((node, cid)) = delete {
             ed.edit("Delete feedback", |tx| {

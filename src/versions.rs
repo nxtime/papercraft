@@ -109,9 +109,13 @@ pub fn load(project: &Path, id: &str) -> Option<Document> {
 /// Renames a saved version in place.
 pub fn rename(project: &Path, id: &str, name: &str) -> std::io::Result<()> {
     let path = file_of(project, id);
-    let mut f: File = serde_json::from_slice(&crate::vfs::read(&path)?).map_err(std::io::Error::other)?;
+    let mut f: File =
+        serde_json::from_slice(&crate::vfs::read(&path)?).map_err(std::io::Error::other)?;
     f.name = name.trim().to_string();
-    crate::vfs::write(&path, serde_json::to_vec(&f).map_err(std::io::Error::other)?)
+    crate::vfs::write(
+        &path,
+        serde_json::to_vec(&f).map_err(std::io::Error::other)?,
+    )
 }
 
 pub fn delete(project: &Path, id: &str) {
@@ -140,7 +144,10 @@ mod tests {
         assert!(listed[0].auto && !listed[1].auto);
         assert!(load(&dir, &a.id).is_some());
         rename(&dir, &a.id, "  Renamed ").unwrap();
-        assert_eq!(list(&dir, "p1").iter().find(|v| v.id == a.id).unwrap().name, "Renamed");
+        assert_eq!(
+            list(&dir, "p1").iter().find(|v| v.id == a.id).unwrap().name,
+            "Renamed"
+        );
         delete(&dir, &a.id);
         assert_eq!(list(&dir, "p1").len(), 1);
         std::fs::remove_dir_all(dir).ok();

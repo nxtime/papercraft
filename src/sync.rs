@@ -10,7 +10,9 @@
 //! * changed on the server only: download (or delete) it, and flag [`Status::take_changed`] so
 //!   the shell reloads the open project.
 //!
-//! Granularity is a whole file (one page), last write wins.
+//! Granularity is a whole file (one page). When both sides changed the same page, the page is
+//! merged ([`crate::merge`]) against the copy both last agreed on, kept in `.sync-base/`, so two
+//! people or agents editing one page keep each other's changes.
 //!
 //! A relay started with `--library` is a personal library: [`Sync::enable_library`] lists it
 //! every [`LIBRARY_POLL`], joins the projects this device does not have and shares the local
@@ -34,6 +36,8 @@ const POLL: Duration = Duration::from_secs(2);
 const LIBRARY_POLL: Duration = Duration::from_secs(5);
 /// Files that stay on this machine: the sync state and the home-screen preview.
 const LOCAL_ONLY: [&str; 2] = [SHARE_FILE, "thumbnail.png"];
+/// Folder holding the last synced copy of every file, the base of a merge.
+const BASE_DIR: &str = ".sync-base";
 
 /// What the last sync knew about one file.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -125,8 +129,34 @@ fn safe_path(rel: &str) -> Option<PathBuf> {
     let p = Path::new(rel);
     let ok = !rel.is_empty()
         && p.components().all(|c| matches!(c, Component::Normal(_)))
-        && !LOCAL_ONLY.contains(&rel);
+        && !LOCAL_ONLY.contains(&rel)
+        && !rel.starts_with(BASE_DIR);
     ok.then(|| p.to_path_buf())
+}
+
+fn base_file(dir: &Path, path: &str) -> PathBuf {
+    dir.join(BASE_DIR).join(path)
+}
+
+/// Remembers `bytes` as what the folder and the server agreed on for `path`.
+fn remember_base(dir: &Path, path: &str, bytes: &[u8]) {
+    let file = base_file(dir, path);
+    if let Some(parent) = file.parent() {
+        vfs::create_dir_all(parent).ok();
+    }
+    vfs::write(file, bytes).ok();
+}
+
+/// The merge of this folder's and the server's copy of a page, both edited from the last synced
+/// one; None when that copy or any of the three is not JSON (the folder's version then wins).
+fn merged_copy(dir: &Path, path: &str, local: &[u8], remote: &[u8]) -> Option<Vec<u8>> {
+    if !path.ends_with(".json") {
+        return None;
+    }
+    let parse = |b: &[u8]| serde_json::from_slice::<serde_json::Value>(b).ok();
+    let base = parse(&vfs::read(base_file(dir, path)).ok()?)?;
+    let merged = crate::merge::merge(&base, &parse(local)?, &parse(remote)?);
+    serde_json::to_vec(&merged).ok()
 }
 
 /// Every file under `dir` that syncs, as relative `/` paths with their fingerprints.
@@ -237,12 +267,25 @@ pub async fn sync_once(dir: &Path) -> Result<bool, SyncError> {
                 synced.remove(path);
                 continue;
             };
-            let bytes = vfs::read(&file).map_err(|e| format!("{path}: {e}"))?;
-            let (code, body) = net::request("PUT", &url, Some(bytes)).await?;
+            let mut bytes = vfs::read(&file).map_err(|e| format!("{path}: {e}"))?;
+            let mut hash = hash;
+            // The server's copy changed too since we last synced: merge instead of overwriting.
+            if let (Some(stamp), Some(was)) = (r, was)
+                && stamp != was.remote
+                && let (200, theirs) = net::request("GET", &url, None).await?
+                && let Some(merged) = merged_copy(dir, path, &bytes, &theirs)
+            {
+                vfs::write(&file, &merged).map_err(|e| format!("{path}: {e}"))?;
+                hash = fingerprint(&merged);
+                bytes = merged;
+                applied = true;
+            }
+            let (code, body) = net::request("PUT", &url, Some(bytes.clone())).await?;
             if code != 200 {
                 return Err(format!("could not upload {path}: server answered {code}").into());
             }
             let remote = String::from_utf8_lossy(&body).trim().parse().unwrap_or(0);
+            remember_base(dir, path, &bytes);
             synced.insert(
                 path.clone(),
                 Stamp {
@@ -265,6 +308,7 @@ pub async fn sync_once(dir: &Path) -> Result<bool, SyncError> {
                 vfs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
             vfs::write(&file, &bytes).map_err(|e| format!("{path}: {e}"))?;
+            remember_base(dir, path, &bytes);
             synced.insert(
                 path.clone(),
                 Stamp {
