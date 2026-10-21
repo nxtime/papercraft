@@ -11,6 +11,8 @@ Ranked by value for the effort. Done items say where.
 * Merge of concurrent edits to one shared page (`src/merge.rs`, `src/sync.rs`).
 * Interface scale in Settings and the command palette (native).
 * Export presets (inspector Export "+").
+* Shared libraries: publish a project as a library, enable and update it in others (`src/libraries.rs`, Libraries modal); cross-page components; number variables.
+* Design from the CLI with the app closed (`papercraft-cli --offline`, `shell`).
 * Auto versions before agent edits: each agent run snapshots edited pages and can be reviewed or reverted (`src/runs.rs`, Agent view).
 
 ## Next
@@ -22,4 +24,4 @@ Ranked by value for the effort. Done items say where.
 7. **Comment threads with replies from people, mentions, and a canvas pin that opens the thread**.
 8. **Flatten menus into icon toolbars**: the Share menu and the folded Menu are flat lists; next is an icon rail for the most used actions with labels on hover.
 9. **Window**: Windows asks the system for rounded corners and keeps the shadow. On Linux the window manager (or the Wayland client-side frame) draws the frame, and it is round on GNOME and KDE. A frame drawn by the app needs three things that cannot be checked without a Linux desktop: a transparent surface, a paint callback that clears the four corners with replace blending (egui cannot erase pixels it has already drawn), and its own edge resizing through `drag_resize_window`. Not built for that reason.
-10. **One design-system package per brand** imported by every app's design file, plus a token export that generates the theme code (see `docs/shared-libs.md`).
+10. **One design-system package per brand** imported by every app's design file, plus a token export that generates the theme code (see `docs/shared-libs.md`). Publishing the brand project as a library covers the sharing; the generated theme code is still todo.

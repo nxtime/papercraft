@@ -19,6 +19,7 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
 * Not running: ask the user to start PaperCraft and open a project (or `create_file` then `open_file`). `PAPERCRAFT_MCP_PORT` must match if the port was changed. Do not try to launch the GUI yourself unless asked.
 * Read `get_basic_info` (pages, artboards, sizes, fonts), then `get_selection` (what the user is looking at) and `get_variables` and `get_components`. Reuse what exists before creating anything.
 * `pageId` defaults to the page the user is viewing, which can change between calls: pass it explicitly. Node ids look like `3fa9c1:14`; never show them to the user.
+* App closed (server, CI)? `papercraft-cli call --offline ... --project <name>` runs the same tools on the project store and saves after every editing call; `papercraft-cli shell` keeps one session for many calls and reads scripts from stdin. It is refused while the app has that project open. See `docs/agents.md`.
 * With MCP tools you do not need the CLI; with a shell, `papercraft-cli list` and `papercraft-cli schema <tool>` give the schemas on demand. Pass big JSON on stdin: `... | papercraft-cli call write_html -`.
 
 ## 2. The loop: build, look, lint, fix
@@ -85,8 +86,9 @@ Full flows: [recipes.md](references/recipes.md).
 | Change styles or text | `update_styles`, `set_text_content`, `rename_nodes` |
 | Whiteboard shapes, sticky notes, arrows | `create_shape` |
 | Copy, move, delete | `duplicate_nodes`, `move_nodes`, `delete_nodes` |
-| Tokens | `get_variables` (`format` css or json), `set_variables` (`mode`), `set_variable_mode` |
-| Reuse | `create_component`, `create_instance`, `get_components`, `<x-paper-instance>` |
+| Tokens | `get_variables` (`format` css, json or tailwind), `set_variables` (`collection`, `type`, `mode`, `alias`), `create_collection`, `delete_variables`, `set_variable_mode`, `bind_variable` |
+| Reuse | `create_component`, `create_instance`, `swap_instance`, `get_components`, `<x-paper-instance>` |
+| Shared libraries | `publish_library`, `list_libraries`, `enable_library`, `update_library`, `disable_library` |
 | Icons | `search_icons`, `<x-paper-icon name="set:name">`; CLI: `papercraft-cli icons add\|list\|search` |
 | Check quality | `lint_design` |
 | Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf` |
@@ -97,11 +99,11 @@ Full flows: [recipes.md](references/recipes.md).
 ## 6. Known limits (design around them)
 
 * **Font is Inter only**, regular and bold plus italic. No other families, no weights between. Build hierarchy from size, weight, color and space.
-* **Variables are colors only**, for fills and text color. Strokes and gradients keep fixed colors. Spacing, radius and type sizes are plain numbers: keep them on the scale by discipline and `lint_design`.
+* **Variables** are typed (`color`, `number`, `string`, `boolean`), live in collections with modes, group with `/` (`space/md`, `color/brand/primary`) and can alias each other. Colors work as `var(--name)` on fills and text; every other field binds with `bind_variable` (stroke, text-color, width, height, gap, padding, radius, font-size, line-height, opacity, visible). Numbers bind as px; line-height below 4 is a multiplier. Gradients keep fixed colors.
 * **No margin, grid or tables; no shadows, filters or transforms** (reported under `ignoredStyles`). Fake elevation with a border or a lighter surface.
 * **No rotation.** Nodes are axis-aligned.
-* **Components and their instances live on one page.** Put shared components on the page where they are used, or duplicate the component per page.
-* **No variants or properties**: one component per variant (`Button / Primary`, `Button / Secondary`). No swap or detach tool.
+* **Components work across pages**: `create_instance` takes a main from any page or enabled library (`componentId` or `componentKey` from `get_components`) and follows later edits. To share with other projects, `publish_library` there and `enable_library` here; `update_library` pulls a newer publish.
+* **No variants or properties**: one component per variant (`Button / Primary`, `Button / Secondary`). `swap_instance` and `detach_instance` exist.
 * **Remote images are not fetched.** Use a local path or `data:` URI.
 * **One project open at a time**; moving layers between pages is not supported.
 * **Text boxes with fixed widths can wrap earlier than in a browser.** Check headlines in the screenshot and widen.

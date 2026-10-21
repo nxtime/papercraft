@@ -2,7 +2,7 @@
 
 PaperCraft is an early alpha: a local-first infinite-canvas design app that agents can drive. This
 file lists what is still missing, in priority order, with an honest status. Done items are checked
-against `src/mcp/tools.rs` and the UI code (2026-10-12); rows 15, 23, 25, 32, 34, 39, 40, 45 and section 6 were updated 2026-10-21. Milestone history is in
+against `src/mcp/tools.rs` and the UI code (2026-10-12); rows 7, 8, 12, 15, 23, 25, 32, 34, 39, 40, 45, 46 and section 6 were updated 2026-10-21. Milestone history is in
 [PROGRESS.md](PROGRESS.md); known rendering and import limits are in the README.
 
 Status: **done** (works today), **partial** (some of it works), **todo**.
@@ -19,12 +19,12 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 4 | Lint auto-fix | **done** | `lint_design {fix: true}` and UI `Fix` / `Fix all`: snaps spacing to 4px grid, snaps type scale, enforces 44px targets, links matching colors to variables. |
 | 5 | Lint in the UI | **done** | Live Lint section in Design tab; click issue to select & zoom, or click `Fix` / `Fix all`. |
 | 6 | Variable modes | **done** | Mode selector + create/delete modes in Design tab and via `set_variables {mode}` / `set_variable_mode`. |
-| 7 | Number variables (spacing, radius, font size) | partial | Non-color tokens (`--spacing-md`) editable in Design tab and substituted in CSS; typed per-field bindings todo. |
-| 8 | Stroke and gradient variables | todo | Strokes and gradients keep fixed colors. |
+| 7 | Number variables (spacing, radius, font size) | **done** | Typed number, string and boolean variables in collections with groups and aliases; fields bind (size, gap, padding, radius, font size, line height, opacity, visible) in the inspector and `bind_variable`. |
+| 8 | Stroke and gradient variables | partial | Strokes and text color bind to variables. Gradients keep fixed colors. |
 | 9 | Text styles | todo | Named type styles (Heading / L, Body / M) that update every text layer using them. |
 | 10 | Component variants and properties | todo | Variants are separate components named `Button / Primary`. No variant sets, boolean or text properties. |
 | 11 | Swap instance, detach by tool | **done** | `swap_instance` and `detach_instance` MCP tools + UI controls in Design tab and Inspector. |
-| 12 | Cross-page and shared libraries | todo | Components and instances must live on one page. |
+| 12 | Cross-page and shared libraries | **done** | Instances of a main on any page; publish a project as a library, enable, update and disable it in other projects (Libraries modal, `*_library` tools). |
 | 13 | Export design tokens | **done** | `get_variables` with `format: "css"`, `"json"` (W3C DTCG + modes), or `"tailwind"` (`@theme`), plus Copy CSS / Copy JSON in Design tab. |
 | 14 | Apply a design system to existing work | partial | `lint_design {fix: true}` links matching literal colors to variables and snaps spacing/type scale. |
 
@@ -32,7 +32,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 15 | MCP and CLI tool surface | **done** | 53 tools, one undo step per call, `papercraft-cli list / schema / call`. |
+| 15 | MCP and CLI tool surface | **done** | 61 tools, one undo step per call, `papercraft-cli list / schema / call`. |
 | 16 | Agent skills | **done** | `skills/papercraft` and `skills/papercraft-design`. |
 | 17 | Accessibility annotations | todo | Reading order, roles and alt text on layers, checked by the linter. |
 | 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |
@@ -40,6 +40,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 20 | Screenshot diffing | **done** | `diff_frames` tool (`src/mcp/diff.rs`) for structural/property frame diffing + `diff_rgba` pixel diffing with highlight PNG. |
 | 21 | Moving nodes between pages | todo | `move_nodes` stays on one page. |
 | 22 | Remote images in `write_html` | todo | Only local paths and `data:` URIs. |
+| 46 | Design from the CLI without the app | **done** | `papercraft-cli call --offline` and `shell` run the tools in-process on the project store; screenshots use a GPU or the software adapter. |
 
 ## 3. Design features
 

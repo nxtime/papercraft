@@ -5,11 +5,9 @@ Generated from `papercraft-cli schema <tool>`; run that command for the authorit
 
 ## Projects and pages
 
-
 ### `list_resources` (read-only)
 
 Lists the user's papercraft projects (local folders), most recently modified first. Each item has id, name, path, page count, updatedAt, and `open` for the project open in the app.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -25,7 +23,6 @@ Opens a project in the app (saving the current one) and returns a get_basic_info
 
 Creates a new empty project and returns its id. Call open_file with the id to work in it.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `name` | string |  | Optional project name. |
@@ -34,7 +31,6 @@ Creates a new empty project and returns its id. Call open_file with the id to wo
 ### `create_page`
 
 Creates a new page at the end of the page list and returns its id, without switching the user's page. Use the returned pageId in later calls.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -45,7 +41,6 @@ Creates a new page at the end of the page list and returns its id, without switc
 
 Rename one or more pages. Does not switch the user's page.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `updates` | array of object | yes | Page renames. |
@@ -55,15 +50,13 @@ Rename one or more pages. Does not switch the user's page.
 
 Delete one or more pages. The last page of a project cannot be deleted. A page that still has layers is only deleted with `confirm: true`; check what is on it first (get_basic_info lists node counts).
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `pageIds` | array of string | yes | Pages to delete. |
 | `confirm` | boolean |  | Required to delete a page that has layers. |
+| `pageIds` | array of string | yes | Pages to delete. |
 
 
 ## Read
-
 
 ### `get_basic_info` (read-only)
 
@@ -81,7 +74,6 @@ The selected layers on the page the user is viewing: ids, names, types, sizes, p
 
 Details of one node: type, name, size, visibility, lock state, parent, children ids, text content, x/y (relative to parent) and worldX/worldY. Errors if it doesn't exist.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `nodeId` | string | yes | The node to inspect. |
@@ -90,7 +82,6 @@ Details of one node: type, name, size, visibility, lock state, parent, children 
 ### `get_children` (read-only)
 
 Direct children of a node (or of the page root when nodeId is "root"), with ids, names, types, child counts and positions.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -101,7 +92,6 @@ Direct children of a node (or of the page root when nodeId is "root"), with ids,
 
 Compact indented text tree of a subtree: type, name, id and size per node. Much cheaper than get_jsx for orientation. nodeId "root" summarizes the whole page.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `depth` | number |  | Maximum depth (default 3, max 10). |
@@ -110,53 +100,49 @@ Compact indented text tree of a subtree: type, name, id and size per node. Much 
 
 ### `get_jsx` (read-only)
 
-Export a node and its descendants to code: `"inline"` (default, React JSX with inline styles), `"tailwind"` (React JSX with Tailwind CSS utility classes), `"react"` (typed React TSX component with Tailwind classes), `"angular"` (Angular standalone `@Component` with template and CSS), `"html"` (self-contained `<style>` + HTML markup), or `"egui"` (Rust `egui` layout code with a `tokens` module).
-
+Export a node and its descendants to code: "inline" (default, React JSX with inline styles), "tailwind" (React JSX with Tailwind CSS utility classes), "react" (React TSX component), "angular" (Angular v17+ standalone component), "html" (self-contained <style> + HTML markup), or "egui" (Rust egui 0.36 code with tokens).
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `format` | `inline` \| `inline-styles` \| `tailwind` \| `react` \| `angular` \| `html` \| `egui` |  | Output format: `"inline"` (default), `"tailwind"`, `"react"`, `"angular"`, `"html"`, or `"egui"`. |
+| `format` | `inline` \| `inline-styles` \| `tailwind` \| `react` \| `angular` \| `html` \| `egui` |  | Output format: "inline" (default), "tailwind", "react", "angular", "html", or "egui". |
 | `nodeId` | string | yes | The node to convert. |
 
 
 ### `get_design_spec` (read-only)
 
-Extract a comprehensive AI design-to-code specification (`ai_spec_markdown` and structured JSON `spec`) for a node and its descendants. Includes the hierarchy, exact auto-layout flow/sizing (`fixed`, `hug`, `fill`), bound design tokens (`--var`), component instances (`instanceOf` on each node plus `componentDefinitions`), icons (`kind:"icon"` with set, name, size and tint), vector SVG (`svg`, `svgBounds`), text metrics (weight, line height, letter spacing), min and max sizes, fills and gradients, token matches for spacing, radius and type, implementation rules, and reference code for the chosen `target`. Always call this before implementing a design in code.
-
+Export a deterministic AI Design-to-Code specification for a frame or subtree. Includes all design tokens/variables, component instances, exact auto-layout tree (sizing, flex/grid/egui flow, gaps, paddings, bound `--var` colors), mandatory enforcement rules, and reference target code. Always call this before implementing a design in React, Tailwind, Angular, HTML/CSS, or Rust egui instead of guessing from a screenshot.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `nodeId` | string | yes | The root frame or node to extract the spec for. |
-| `target` | `react` \| `tailwind` \| `angular` \| `html` \| `egui` |  | Target framework/format (defaults to `"react"`). |
+| `format` | `markdown` \| `json` |  | Output format: "markdown" (default) or "json". |
+| `nodeId` | string | yes | Root frame or node id to export. |
+| `target` | `react` \| `tailwind` \| `angular` \| `html` \| `egui` |  | Target UI framework (default "react"). |
 
 
 ### `verify_code` (read-only)
 
-Enforce design-to-code fidelity by checking written `code` against the source PaperCraft node (`nodeId`) for the given `target`. Reports a `score` (0–100), `passed` boolean, and structured violations (`missing-text`, `hardcoded-color`, `forbidden-absolute`, `missing-layout`, `missing-component`, `spacing-drift`) with actionable fixes.
-
+Verify that AI-generated UI code (`react`, `tailwind`, `angular`, `html`, or `egui`) accurately implements a design subtree. Checks for missing text strings, hardcoded hex colors where `--var` or `tokens::*` must be used, forbidden `position: absolute` on auto-layout flow children, missing flex/grid/egui layout containers, unreferenced component instances, and spacing drift. Returns `{passed, score, errors, warnings, violations}`.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `code` | string | yes | The generated or hand-written implementation code to verify. |
-| `nodeId` | string | yes | The PaperCraft node id the code implements. |
-| `target` | `react` \| `tailwind` \| `angular` \| `html` \| `egui` | yes | Target language/framework of `code`. |
+| `code` | string | yes | The generated UI source code to verify against the design. |
+| `nodeId` | string | yes | Root frame or node id that the code implements. |
+| `target` | `react` \| `tailwind` \| `angular` \| `html` \| `egui` | yes | Target UI framework. |
 
 
 ### `diff_frames` (read-only)
 
 Compare two frames or subtrees (`beforeId` and `afterId`) and report property-level differences (size, position, fills, stroke, corner radius, opacity, text, layout, added/removed children).
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `beforeId` | string | yes | First frame or node id (baseline). |
 | `afterId` | string | yes | Second frame or node id (comparison). |
+| `beforeId` | string | yes | First frame or node id (baseline). |
 
 
 ### `get_computed_styles` (read-only)
 
 CSS styles (camelCase) of one or more nodes, as {nodeId: styles}.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -166,7 +152,6 @@ CSS styles (camelCase) of one or more nodes, as {nodeId: styles}.
 ### `find_nodes` (read-only)
 
 Find nodes by text content and/or computed style. Searches the whole project by default; pass pageId for one page or nodeId for a subtree. `textValue` matches text case-insensitively with * wildcards anchored to the whole value. `filters` are {styleName, styleValue} pairs (AND), values may use * wildcards; colors match by value.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -179,7 +164,6 @@ Find nodes by text content and/or computed style. Searches the whole project by 
 
 The image used by a node's image fill, as image content.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `nodeId` | string | yes | A node with an image fill. |
@@ -188,7 +172,6 @@ The image used by a node's image fill, as image content.
 ### `get_font_family_info` (read-only)
 
 Whether font families are available and their weights/styles. papercraft renders text with Inter (400, 700, normal and italic); other families fall back to Inter.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -199,7 +182,6 @@ Whether font families are available and their weights/styles. papercraft renders
 
 Read a guide. Topics: "papercraft-mcp-instructions" (read first), "html" (what write_html supports), "whiteboard" (shapes, arrows, stickies, hand-drawn style).
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `topic` | string | yes |  |
@@ -207,23 +189,20 @@ Read a guide. Topics: "papercraft-mcp-instructions" (read first), "html" (what w
 
 ## See and export
 
-
 ### `get_screenshot` (read-only)
 
-Render a node (or the whole page when nodeId is omitted or "root") to a PNG and return it as an image. Scale 1 (default) is enough for layout checks; use 2 to read small text. Large images are scaled down to fit API limits. In `papercraft-cli`, pass `-o`/`--out FILE` or `{"out": "FILE"}` to choose the output file path.
-
+Render a node (or the whole page when nodeId is omitted or "root") to a PNG and return it as an image. Scale 1 (default) is enough for layout checks; use 2 to read small text. Large images are scaled down to fit API limits.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `nodeId` | string |  | The node to capture; omit for the whole page. |
-| `out` | string |  | Optional file path to save the PNG to (also used by `papercraft-cli`). |
+| `out` | string |  | Optional file path to save the PNG to (also used by papercraft-cli). |
 | `scale` | number |  | Render scale: 1 (default) or 2. |
 
 
 ### `export`
 
 Export nodes to files. `nodes` maps node ids to export settings ([{format: png|svg|pdf, scale: "2x" | "512w" | "512h" | "720p"}]; [] = 2x PNG). Files go to `directory` (default: the Downloads folder). Returns the paths written.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -235,7 +214,6 @@ Export nodes to files. `nodes` maps node ids to export settings ([{format: png|s
 
 Export several nodes into one PDF, one page per node, ordered top-to-bottom then left-to-right. Returns the file path.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `nodeIds` | array of string | yes | Nodes to put on the pages. |
@@ -244,11 +222,9 @@ Export several nodes into one PDF, one page per node, ordered top-to-bottom then
 
 ## Write
 
-
 ### `create_artboard`
 
 Creates an artboard (top-level frame) and returns its id; then add content with write_html({mode: "insert-children"}). `styles` are camelCase CSS; width and height are required (e.g. "1440px"). Artboards default to display:flex, flexDirection:column and a white background, and are placed in an empty spot unless left/top are given. Default sizes: desktop 1440×900, tablet 768×1024, mobile 390×844.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -261,25 +237,23 @@ Creates an artboard (top-level frame) and returns its id; then add content with 
 Parse HTML with inline styles into layers. Write incrementally: each call should add one visual group (a header, one list row, a card) so the user sees progress.
 - mode "insert-children" appends the HTML inside targetNodeId ("root" = the page); "replace" replaces targetNodeId with it.
 - Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, align-items, justify-content, align-self, flex-grow, flex-wrap) is the layout model; block elements stack vertically. position:absolute with left/top is supported. No margin, grid or tables.
-- Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, letter-spacing, text-align, text-decoration (including `wavy` and `text-decoration-color`); <b>/<i>/<u>/<s>/<span style> make rich text. Font family is always Inter.
+- Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, letter-spacing, text-align, text-decoration (including wavy and text-decoration-color); <b>/<i>/<u>/<s>/<span style> make rich text. Font family is always Inter.
 - Boxes: background(-color/-image: colors, linear/radial gradients, url()), border (and border-top/right/bottom/left), border-radius, opacity, overflow:hidden, mix-blend-mode, width/height (px, %, fit-content), min-width/max-width/min-height/max-height.
 - <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths or data: URIs. <svg> markup is imported as vector layers.
 - <x-paper-icon name="set:name" size="20" color="var(--accent)"/> places an installed icon (search_icons); <x-paper-instance component="Name" component-id="ID" layer-name="..."/> places a component instance; colors may be var(--name) of set_variables.
 - layer-name="..." names layers; <x-paper-clone node-id="ID" style="..."/> clones an existing node (supports cross-page `<page>:<id>`).
 Returns the ids of the created top-level layers and the styles that were ignored.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `html` | string | yes | HTML to parse into layers. |
-| `mode` | insert-children/replace | yes |  |
+| `mode` | `insert-children` \| `replace` | yes |  |
 | `targetNodeId` | string | yes | Target node id, or "root" for the page. |
 
 
 ### `update_styles`
 
 Update styles on one or more nodes (camelCase CSS, like React.CSSProperties). Setting left/top on an artboard moves it. Hand-drawn keys: sketch, roughness, fillStyle, strokeStyle, seed. Styles with no effect are returned under ignoredStyles.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -290,7 +264,6 @@ Update styles on one or more nodes (camelCase CSS, like React.CSSProperties). Se
 
 Set the text of one or more Text or Sticky nodes (batch).
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `updates` | array of object | yes |  |
@@ -299,7 +272,6 @@ Set the text of one or more Text or Sticky nodes (batch).
 ### `rename_nodes`
 
 Rename layers (batch). Names are truncated to 50 characters.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -310,7 +282,6 @@ Rename layers (batch). Names are truncated to 50 characters.
 
 Delete nodes and their descendants. Verify parents with get_node_info first when unsure.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `nodeIds` | array of string | yes | Nodes to delete. |
@@ -320,26 +291,23 @@ Delete nodes and their descendants. Verify parents with get_node_info first when
 
 Deep-clone nodes, including across pages (via `toPageId` or a cross-page `parentId`; `<x-paper-clone node-id="<page>:<id>"/>` also works across pages). Each copy goes under parentId when given, else next to its source; duplicated artboards are placed in an empty spot. Returns new ids and a descendantIdMap from every original descendant id to its copy.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `nodes` | array of object | yes | Items accept `{id, parentId?, toPageId?}`. |
+| `nodes` | array of object | yes |  |
 
 
 ### `move_nodes`
 
 Move nodes keeping their ids (or onto another page via `toPageId` or a cross-page `parentId` / `before` / `after`). Each move is {nodeId, before: siblingId}, {nodeId, after: siblingId} or {nodeId, parentId, toPageId?, index?} (parentId "root" = the page root). Moves apply in order. In auto-layout parents this changes the visual order; in free parents it changes stacking and keeps the world position.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `moves` | array of object | yes | Items accept `{nodeId, before?, after?, parentId?, toPageId?, index?}`. |
+| `moves` | array of object | yes |  |
 
 
 ### `create_shape`
 
 Create a whiteboard element: rectangle, ellipse, diamond, triangle, polygon, star, line, arrow, sticky (sticky note with text) or text. Coordinates are world units, or relative to parentId when given. Lines and arrows take `points` ([[x,y],...], at least two) and arrows may bind to layers with startNodeId/endNodeId (the arrow then follows them). `styles` takes the same CSS as update_styles plus the hand-drawn keys sketch, roughness (0 architect, 1 artist, 2 cartoonist), fillStyle (hachure, cross-hatch, solid, zigzag, dots), strokeStyle (solid, dashed, dotted). Arrows also take route (straight, curved, elbow) and startHead/endHead (none, arrow, triangle, dot, bar, diamond).
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -349,13 +317,13 @@ Create a whiteboard element: rectangle, ellipse, diamond, triangle, polygon, sta
 | `name` | string |  |  |
 | `parentId` | string |  | Frame to place the shape in. |
 | `points` | array of array |  |  |
-| `route` | straight/curved/elbow |  |  |
+| `route` | `straight` \| `curved` \| `elbow` |  |  |
 | `sides` | integer |  | Polygon sides / star points. |
 | `startHead` | string |  |  |
 | `startNodeId` | string |  |  |
 | `styles` | object |  | CSS and hand-drawn styles. |
 | `text` | string |  | Text for sticky and text. |
-| `type` | rectangle/ellipse/diamond/triangle/polygon/star/line/arrow/sticky/text | yes |  |
+| `type` | `rectangle` \| `ellipse` \| `diamond` \| `triangle` \| `polygon` \| `star` \| `line` \| `arrow` \| `sticky` \| `text` | yes |  |
 | `width` | number |  |  |
 | `x` | number |  |  |
 | `y` | number |  |  |
@@ -363,32 +331,70 @@ Create a whiteboard element: rectangle, ellipse, diamond, triangle, polygon, sta
 
 ## Design system
 
-
 ### `get_variables` (read-only)
 
-Color variables and design tokens of the page's project (name -> hex/value). Fills that follow a variable were written with `var(--name)`; set_variables moves all of them at once. `format` `css` returns a `:root { --name: #hex }` block (plus `[data-theme]` rules for modes), `json` returns a W3C DTCG design-tokens object, and `tailwind` returns a Tailwind v4 `@theme` block.
-
+Variables of the page's project. Default JSON: `variables` (name -> hex), `tokens`, and `collections` (id, name, modes, defaultMode, variables with id, name, cssName, group, type color|number|string|boolean, values per mode name, aliases as {"alias": name}, description, hidden) plus `pageModes` (active mode per collection on this page). Fills that follow a variable were written with `var(--name)`; set_variables moves all of them at once. `format` css returns a `:root { --name: #hex }` block (plus `[data-theme]` rules for modes), json a W3C DTCG object (groups nest on `/`, aliases are {group.name}), and tailwind a Tailwind v4 `@theme` block.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `format` | `css` \| `json` \| `tailwind` |  | Output format: `css`, `json` (W3C DTCG), or `tailwind` (`@theme`). |
+| `format` | `css` \| `json` \| `tailwind` |  |  |
 
 
 ### `set_variables`
 
-Define or change color variables (names like `surface`, `accent-text`), on every page. Use them as `var(--name)` in write_html / update_styles / create_artboard colors (backgroundColor, background, color) instead of hex literals, so a theme change is one call. Fills already following a changed variable are updated. Variables apply to fills and text color; strokes and gradients keep fixed colors.
-
+Define or change variables (names like `surface`, `accent-text`, or grouped `color/brand/primary`), on every page. Plain {"name": "#hex"} defines a color. An entry may be an object {value, type, collection, mode, alias, description, hidden}: `type` color|number|string|boolean (numbers bind as px), `collection` a name or id (created if missing), `alias` the name of another variable of the same type. Use them as `var(--name)` in write_html / update_styles / create_artboard colors (backgroundColor, background, color) instead of hex literals, so a theme change is one call. Fills already following a changed variable are updated. Variables apply to fills and text color; strokes and gradients keep fixed colors.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
+| `collection` | string |  | Default collection (name or id) for entries that name none. |
 | `mode` | string |  | Store the values for this mode (e.g. "Light", "Dark"); they apply when it is the active mode. The first mode you define becomes active. |
-| `variables` | object | yes | {"accent": "#cba6f7", "surface": "#313244"} |
+| `type` | `color` \| `number` \| `string` \| `boolean` |  | Default type for entries that name none. |
+| `variables` | object | yes | {"accent": "#cba6f7"} or {"space/md": {"value": 16, "type": "number"}, "accent-hover": {"alias": "accent"}} |
+
+
+### `create_collection`
+
+Create a variable collection (a set of variables with modes), e.g. `Brand` with modes ["Light", "Dark"]. Without `modes` it has one mode, `Default`. Then fill it with set_variables {collection}.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `modes` | array of string |  |  |
+| `name` | string | yes |  |
+
+
+### `delete_variables`
+
+Delete variables by name. A variable another one aliases is refused (the error names the dependents) unless `force` is true, which gives the dependents its resolved value.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `force` | boolean |  |  |
+| `names` | array of string | yes |  |
+
+
+### `set_tokens`
+
+Define non-color design tokens (spacing, radius, font size, shadows, widths), on every page: {"spacing-md": "16px", "radius-md": "8px", "shadow-md": "0 4px 12px rgba(0,0,0,0.08)"}. Use `var(--spacing-md)` in any style value (padding: var(--spacing-sm) var(--spacing-md), boxShadow: var(--shadow-md)); it is replaced by the value when written, so tokens are a shared vocabulary, not live links. Listed by get_variables.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `tokens` | object | yes |  |
+
+
+### `bind_variable`
+
+Bind a field of layers to a variable (or detach it). `field`: stroke, text-color, width, height, gap, padding, padding-top/right/bottom/left, radius, font-size, line-height, opacity, visible. `variable` is a name like color/brand/primary or its css name; null or omitted detaches (the current value stays). The value applies at once; on an instance the field becomes an override.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `field` | string | yes |  |
+| `nodeIds` | array of string | yes | Layers to bind. |
+| `variable` | string \| null |  |  |
 
 
 ### `set_variable_mode`
 
 Switch the active variable mode (defined with set_variables {mode}): every variable takes that mode's value and all fills following them change, on every page. One call turns a whole design from light to dark.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -399,44 +405,38 @@ Switch the active variable mode (defined with set_variables {mode}): every varia
 
 Import an OpenDesign design-system package: a folder with manifest.json, tokens.css and (optional) DESIGN.md. The colors of the `:root` block become variables, the colors of the `[data-theme="name"]` blocks become modes and every other value becomes a token. Replaces the variables, modes and tokens of every page in one undo step. Only hex colors become variables; oklch(), rgb() and sizes stay tokens.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `path` | string | yes | Folder of the package to import. |
-| `pageId` | string |  | The design system is project-wide, so it lands on every page. |
 
 
 ### `export_design_system`
 
 Write the page's variables, modes and tokens as an OpenDesign design-system package (manifest.json, tokens.css and DESIGN.md) in `path`, so it can be read back with import_design_system or by other tools. Returns the files written.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `path` | string | yes | Folder to write the package into. |
-| `pageId` | string |  | The page whose design system is written. |
 
 
 ### `get_components` (read-only)
 
-Main components on a page (id, name, size) with how many instances each has.
+Main components of every page (or one with `pageId`): id, name, `componentKey` (stable), `pageId`, `pageName`, size, and `uses` (instances across all pages).
 
 
 ### `import_components`
 
-Copy the main components anywhere on `fromPageId` (including inside artboards, typically on a `Design System` page) onto this one, so you can place instances here with `create_instance` or `<x-paper-instance component="Name" component-id="ID"/>`. Components with the same name already here are skipped. Copies are placed in rows (wrapping at 3200 px) to the right of the page content; shelf-pack them yourself using their real sizes if you want a tidy parking area. Variables and tokens are already shared by every page; components are copies, not live links.
-
+Copy the main components anywhere on `fromPageId` (including inside artboards, typically on a `Design System` page) onto this one, so you can place instances here with create_instance or <x-paper-instance component="Name"/> / component-id="ID". Components with the same name already here are skipped. Variables and tokens are already shared by every page; components are copies, not live links.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `fromPageId` | string | yes | Source page id. |
+| `fromPageId` | string | yes |  |
 | `names` | array of string |  | Only these components (default all). |
 
 
 ### `create_component`
 
-Turn a frame or artboard into a main component. Build reusable parts (button, row, chip, tab) once as components, then place them with create_instance or `<x-paper-instance component="Name" component-id="ID"/>`. Components and instances live on one page.
-
+Turn a frame or artboard into a main component. Build reusable parts (button, row, chip, tab) once as components, then place them with create_instance or <x-paper-instance>. Instances may live on any page and follow the main.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -448,10 +448,10 @@ Turn a frame or artboard into a main component. Build reusable parts (button, ro
 
 Place an instance of a component. Edit text and styles on the instance's descendants with set_text_content / update_styles (they become overrides); edits to the main component flow to every instance. Returns the instance id and its text layers.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `componentId` | string | yes |  |
+| `componentId` | string |  | A main on any page ("pageId:num"). |
+| `componentKey` | string |  | Instead of componentId: the key from get_components. |
 | `index` | number |  | Position among the parent's children. |
 | `name` | string |  |  |
 | `parentId` | string |  | Parent frame; omit or "root" for the page. |
@@ -461,19 +461,18 @@ Place an instance of a component. Edit text and styles on the instance's descend
 
 ### `swap_instance`
 
-Swap an instance root to point at a different main component on the same page, preserving overrides on descendants matched by name and layer type.
-
+Swap an instance root to point at a different main component (any page), preserving overrides on descendants matched by name and layer type.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `componentId` | string | yes | The new main component id. |
+| `componentId` | string |  | The new main component id. |
+| `componentKey` | string |  | Instead of componentId: a key from get_components, including a library component. |
 | `nodeId` | string | yes | The instance root node to swap. |
 
 
 ### `detach_instance`
 
 Detach one or more component instances into plain frames, breaking their link to the main component while keeping their current appearance and children.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -484,7 +483,6 @@ Detach one or more component instances into plain frames, breaking their link to
 
 Search installed open icon sets (Lucide, Tabler, Phosphor, Heroicons, Material). Returns `set:name` references for <x-paper-icon name="lucide:check" size="20" color="var(--text)"/> in write_html. Without a query it lists installed and installable sets; install with `papercraft-cli icons add lucide`.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `limit` | number |  | Default 20. |
@@ -492,10 +490,9 @@ Search installed open icon sets (Lucide, Tabler, Phosphor, Heroicons, Material).
 | `set` | string |  |  |
 
 
-### `lint_design` (read-only)
+### `lint_design`
 
 Check a page or subtree for common design mistakes and get a fix for each: text contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type scale, gap/padding off the 4px grid, buttons and tabs under 44px tall, default layer names (Frame, Rectangle), and hard-coded colors that equal a variable. Run it before finish_working_on_nodes and fix errors and warnings; `info` items are suggestions. Pass `fix: true` to automatically snap spacing/padding to 4px, relink matching color variables, snap text sizes, and enlarge small touch targets.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -504,37 +501,75 @@ Check a page or subtree for common design mistakes and get a fix for each: text 
 | `scale` | array of number |  | Allowed font sizes. Default 12, 14, 16, 20, 24, 32, 40, 48, 64. |
 
 
-## Session
+## Libraries
 
+### `publish_library`
 
-### `get_feedback` (read-only)
-
-Notes the user left on layers (the Feedback box in the inspector, shown as amber dots on the canvas): which layer, where it sits, what to change. Omitting `pageId` queries all pages across the project; `openCount` and `resolvedCount` are returned alongside per-page counts in `get_basic_info`. Call it at the start of a session and after each round of edits; fix every open note, then `resolve_feedback`. `get_selection` also includes the selected layers' notes.
-
+Publish this project's variables (not hidden) and components (not named with a leading `_` or `.`) as a library other projects can enable. Writes library.json with the next version and returns what changed since the last publish.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `includeResolved` | boolean |  | Include resolved notes. |
+| `description` | string |  | What the library is for (kept from the last publish when omitted). |
+
+
+### `list_libraries` (read-only)
+
+Libraries other projects published (`available`, with `enabled`) and the ones this project uses (`enabled`: version, sourceVersion, sourceFound, updateAvailable).
+
+
+### `enable_library`
+
+Use a published library: its variables become read-only, bindable and aliasable, and its components can be placed with create_instance componentKey. Refused when a CSS name is already defined here.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `libraryId` | string | yes | From list_libraries. |
+
+
+### `update_library`
+
+Apply the library's newest publish to this project: variables and components are replaced and every instance of it re-synced, overrides kept. Returns the changes.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `libraryId` | string | yes |  |
+
+
+### `disable_library`
+
+Stop using a library: bindings to its variables are detached (values kept), its instances become plain frames, its variables and components leave this project.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `libraryId` | string | yes |  |
+
+
+## Session
+
+### `get_feedback` (read-only)
+
+Notes the user left on layers (the Feedback box in the inspector, shown as amber dots on the canvas): which layer, where it sits, what to change. Omitting `pageId` queries all pages across the project; `openCount` and `resolvedCount` are returned alongside per-page counts in `get_basic_info`. Call it at the start of a session and after each round of edits; fix every open note, then resolve_feedback. `get_selection` also includes the selected layers' notes.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `includeResolved` | boolean |  |  |
 | `nodeId` | string |  | Only this layer. |
-| `pageId` | string |  | Omit to query all pages across the project. |
 
 
 ### `add_feedback`
 
 Leave a note on a layer (author `agent` by default), e.g. a question or a problem you could not fix. The user sees it in the inspector and as a dot on the canvas.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `author` | string |  | Defaults to `agent`. |
+| `author` | string |  |  |
 | `nodeId` | string | yes |  |
 | `text` | string | yes |  |
 
 
 ### `resolve_feedback`
 
-Mark notes on a layer resolved, with a short reply saying what you changed. Without `commentId` every open note on the layer is resolved. `delete` removes instead.
-
+Mark notes on a layer resolved, with a short reply saying what you changed. Without commentId every open note on the layer is resolved. `delete` removes instead.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -547,7 +582,6 @@ Mark notes on a layer resolved, with a short reply saying what you changed. With
 ### `select_nodes`
 
 Select nodes on the page the user is viewing so they can see what you mean; zoom: true also frames them in the viewport. An empty list clears the selection.
-
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -569,8 +603,6 @@ Redo the last undone change on a page.
 
 Call when done creating or editing. Saves the project.
 
-
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `nodeIds` | array of string |  | Optional nodes you worked on. |
-

@@ -34,7 +34,7 @@ are credited in `THIRD_PARTY.md`.
   to that page's own document and history (`Editor::with_page`) without switching the view.
 * **Bridge** (`paper-rs-mcp`): rmcp stdio server that lists tools offline and relays calls to
   the app over HTTP, reconnecting after app restarts.
-* **Tools** (`src/mcp/tools.rs`): 53 tools, using Paper's names and argument shapes where there is an
+* **Tools** (`src/mcp/tools.rs`): 53 tools at the time (61 now), using Paper's names and argument shapes where there is an
   equivalent (see README), plus `create_shape`, `select_nodes`, `undo`, `redo`.
   `write_html` (`src/mcp/{html,css}.rs`, `exec.rs` `Builder`) maps flex/block layout onto auto
   layout with CSS stretch semantics, text styles and rich-text runs, backgrounds, gradients,
@@ -81,6 +81,15 @@ are credited in `THIRD_PARTY.md`.
 * Agent editing calls group into runs, snapshot each edited page as `Before agent run N`, and end on 30 seconds idle, `finish_working_on_nodes`, or project switch. Runs persist under `runs/` and keep the newest 50.
 * Agent view lists runs and supports review, whole-run revert, per-change undo and accept all. Review adds canvas outlines and a finish toast; palette commands review or revert the last run.
 * Id-paired page diffs power review; History version compare UI remains todo. Completed with full restore (including variables, modes and tokens), tool edit classification, and wasm support.
+
+### 2026-10-21: Design libraries and offline CLI
+
+* Variables are now collections with modes, slash groups, four types and aliases, stored in `design.json` (project version 2; 0.4.0 refuses migrated projects). Each page keeps a derived cache; every edit is one undo step per page, and the page-only removals are gone. Per-page active mode per collection.
+* Fields bind to variables (stroke, text color, size, gap, padding, radius, font size, line height, opacity, visible) in the inspector and with `bind_variable`; gradients do not bind yet.
+* Instances work across pages (`component_key`, source page or library); deleting a main flags its instances.
+* Libraries: publish a snapshot (`library.json`), enable, update with review (overrides kept), disable, and keep working when the source is missing. Variables modal, Libraries modal and Assets view in the UI; `create_collection`, `delete_variables`, `bind_variable` and five `*_library` tools in MCP (61 tools).
+* `papercraft-cli call --offline` and `papercraft-cli shell` run the tools in-process on the project store, refuse a project the app has open, and fall back to the software adapter for screenshots. See `docs/agents.md`.
+* Evidence: `src/variables.rs`, `src/editor/design.rs`, `src/libraries.rs`, `src/cli.rs`, `tests/{libraries,cross_page_components,variables_ui,assets_panel,cli_offline}.rs`, specs in `specs/design-libraries/` and `specs/cli-offline/`.
 
 ### P6 notes
 

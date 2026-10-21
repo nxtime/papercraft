@@ -36,7 +36,7 @@ Allowed spacing values: **4, 8, 12, 16, 24, 32, 48, 64** (and 96 for page sectio
 * Define at least two modes if the product may be dark or light (`set_variables` with `mode`), and check both: lint contrast in each mode after `set_variable_mode`.
 * Semantic colors carry meaning only: red means error or destructive, green means success. Do not use them decoratively.
 * If a color you need is not a variable, add the variable, then use it. `lint_design` reports hard-coded colors that equal a variable.
-* Radii, spacing and type sizes cannot be variables yet, so keep them on the lists in this skill and define them once on the design-system page.
+* Spacing, radius and type sizes are number variables (`space/md`, `radius/sm`, `font/body`): define them once, in a collection of their own, and bind fields with `bind_variable`. Keep the values on the lists in this skill. Group names with `/` and alias semantic names to base ones (`color/button/bg` to `color/brand/primary`).
 
 ## 3. Type scale
 
