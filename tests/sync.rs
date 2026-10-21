@@ -200,3 +200,35 @@ async fn a_relay_without_library_says_so() {
     let projects = papercraft::project::Store::open(&a).unwrap().list();
     assert!(Share::load(&projects[0].dir).is_none());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_sharing_detaches_this_folder_but_leaves_the_relay_copy() {
+    let data = temp("unshare-data");
+    let running = relay::spawn_with_data(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        None,
+        Some(Data { dir: data, library: false }),
+    )
+    .unwrap();
+    let server = format!("http://127.0.0.1:{}", running.port());
+    let a = temp("unshare-a");
+    std::fs::create_dir_all(a.join("pages")).unwrap();
+    std::fs::write(a.join("project.json"), r#"{"manifest":1}"#).unwrap();
+    std::fs::write(a.join("pages/p1.json"), r#"{"page":"one"}"#).unwrap();
+    let share = Share::new(&server);
+    share.save(&a).unwrap();
+    sync::sync_once(&a).await.unwrap();
+
+    let mut engine = sync::Sync::default();
+    engine.unshare(&a);
+    assert!(Share::load(&a).is_none(), "the share marker is gone");
+
+    // Later local edits never reach the relay...
+    std::fs::write(a.join("pages/p1.json"), r#"{"page":"edited after unsharing"}"#).unwrap();
+    let b = temp("unshare-b");
+    Share::from_link(&share.link()).unwrap().save(&b).unwrap();
+    sync::sync_once(&b).await.unwrap();
+    // ...and the copy already on the relay is still there for whoever holds the link.
+    assert_eq!(read(&b, "pages/p1.json").as_deref(), Some(r#"{"page":"one"}"#));
+}
