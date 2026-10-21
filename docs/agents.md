@@ -1,6 +1,6 @@
 # Driving PaperCraft with agents
 
-PaperCraft exposes one set of tools (40 at the time of writing) three ways. They all run the same code inside the app, so an agent sees what you see and every call is one undo step.
+PaperCraft exposes one set of 53 tools three ways. They all run the same code inside the app, so an agent sees what you see and every call is one undo step.
 
 | Way | Use it when | Needs the app running |
 |---|---|---|
@@ -78,6 +78,12 @@ Pass JSON inline, or `-` to read it from stdin (best for HTML, which is full of 
 ## Safety
 
 The server listens on loopback only, rejects requests that carry an `Origin` header (browsers) and foreign `Host` headers. Anything on your machine that can reach `127.0.0.1:29980` can edit the open project, so do not forward the port. Undo (⌘Z, or the `undo` tool) reverts any agent edit.
+
+## Runs and review
+
+Editing calls are grouped into an agent run. A run ends after 30 seconds without an editing call, when the project changes, or when `finish_working_on_nodes` is called. Before each page's first edit in a run, PaperCraft saves an auto-version named `Before agent run N`. Call `finish_working_on_nodes` at the end of your work so the run gets a useful title and ends right away.
+
+The Agent view lists runs and lets you review changes, revert a whole run, undo one change, or accept all changes. Review also marks changes on the canvas; a toast offers Review and Revert when a run finishes. The command palette has `Review last agent run` and `Revert last agent run`. Run records live under `runs/` in the project folder; PaperCraft keeps the newest 50 runs.
 
 ## Reference
 

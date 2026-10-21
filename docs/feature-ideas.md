@@ -11,11 +11,11 @@ Ranked by value for the effort. Done items say where.
 * Merge of concurrent edits to one shared page (`src/merge.rs`, `src/sync.rs`).
 * Interface scale in Settings and the command palette (native).
 * Export presets (inspector Export "+").
+* Auto versions before agent edits: each agent run snapshots edited pages and can be reviewed or reverted (`src/runs.rs`, Agent view).
 
 ## Next
 1. **Presence on shared projects**: show who else is in the file (coloured cursors and selection outlines). NotesCraft `crates/collab` already has rooms and presence; reuse once it is a shared crate.
-2. **Version compare**: pick two saved versions, show a diff overlay (added, removed, moved layers) using `diff_frames` logic.
-3. **Auto versions**: snapshot on a timer or before an agent's batch of edits, so every agent run can be rolled back as one step.
+2. **Version compare**: pick two saved versions and show a diff overlay (added, changed, removed layers) using the id-paired `diff_pages` in `src/mcp/diff.rs`; compare UI is still todo.
 4. **Smart transitions in Present mode**: animate matching layers (same name) between frames instead of cutting.
 5. **Hover and pressed states for components**: variants (`Button / Primary / Hover`) switched in Present mode on pointer events.
 6. **Layer blur and background blur**: needs a renderer pass; unlocks glass effects and the Layer "+" in the design.

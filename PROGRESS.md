@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-10-11.
+Last updated: 2026-10-21.
 
 ## Phase 3: local-first design and whiteboard tool
 
@@ -34,7 +34,7 @@ are credited in `THIRD_PARTY.md`.
   to that page's own document and history (`Editor::with_page`) without switching the view.
 * **Bridge** (`paper-rs-mcp`): rmcp stdio server that lists tools offline and relays calls to
   the app over HTTP, reconnecting after app restarts.
-* **Tools** (`src/mcp/tools.rs`): Paper's names and argument shapes where there is an
+* **Tools** (`src/mcp/tools.rs`): 53 tools, using Paper's names and argument shapes where there is an
   equivalent (see README), plus `create_shape`, `select_nodes`, `undo`, `redo`.
   `write_html` (`src/mcp/{html,css}.rs`, `exec.rs` `Builder`) maps flex/block layout onto auto
   layout with CSS stretch semantics, text styles and rich-text runs, backgrounds, gradients,
@@ -75,6 +75,12 @@ are credited in `THIRD_PARTY.md`.
   heading (and the sticky note) visible, and ⌘Z removes each agent edit in one step.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
+
+### 2026-10-21: Agent runs and change review
+
+* Agent editing calls group into runs, snapshot each edited page as `Before agent run N`, and end on 30 seconds idle, `finish_working_on_nodes`, or project switch. Runs persist under `runs/` and keep the newest 50.
+* Agent view lists runs and supports review, whole-run revert, per-change undo and accept all. Review adds canvas outlines and a finish toast; palette commands review or revert the last run.
+* Id-paired page diffs power review; History version compare UI remains todo. Completed with full restore (including variables, modes and tokens), tool edit classification, and wasm support.
 
 ### P6 notes
 
