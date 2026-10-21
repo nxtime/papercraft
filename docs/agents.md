@@ -160,3 +160,15 @@ The Agent view lists runs and lets you review changes, revert a whole run, undo 
 * [Design systems](design-system.md): collections, variables and bindings, components, libraries, icons, lint.
 * [Design-system packages](design-system-packages.md): importing and exporting an OpenDesign package.
 * `papercraft-cli --help`-style usage: run `papercraft-cli` with no arguments.
+
+## Design reference for UI work
+
+`docs/design-playbook/` is a vendored snapshot of the design playbook: accessibility, interaction, motion and token rules with stable ids (for example `A11Y-10`), plus `platforms/native-egui.md` for the egui widgets in `src/ui/kit.rs`. Agents changing UI should look rules up instead of recalling them and cite the ids in commits:
+
+```sh
+export PLAYBOOK_DIR="$PWD/docs/design-playbook"
+python3 "$PLAYBOOK_DIR/scripts/search.py" "focus ring"
+python3 "$PLAYBOOK_DIR/scripts/contrast.py" '#0066cc' '#ffffff'
+```
+
+The skills in `docs/design-playbook/skills/` (`playbook-design`, `playbook-implement`, `playbook-audit`) can be linked into an agent's skill directory with `docs/design-playbook/scripts/install-skills.sh`. The folder is a snapshot: refresh it from the upstream playbook rather than editing it here.

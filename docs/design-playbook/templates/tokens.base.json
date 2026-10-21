@@ -1,0 +1,64 @@
+{
+  "$description": "Mode-independent tokens. Shape follows the W3C DTCG draft (2025.10); a preview draft, re-check before adopting tooling.",
+  "space": {
+    "$type": "dimension",
+    "1": { "$value": { "value": 4, "unit": "px" } },
+    "2": { "$value": { "value": 8, "unit": "px" } },
+    "3": { "$value": { "value": 12, "unit": "px" } },
+    "4": { "$value": { "value": 16, "unit": "px" } },
+    "6": { "$value": { "value": 24, "unit": "px" } },
+    "8": { "$value": { "value": 32, "unit": "px" } },
+    "12": { "$value": { "value": 48, "unit": "px" } },
+    "16": { "$value": { "value": 64, "unit": "px" } }
+  },
+  "radius": {
+    "$type": "dimension",
+    "control": { "$value": { "value": 8, "unit": "px" }, "$description": "Buttons, inputs. Child radius <= parent radius (VIS-12)." },
+    "surface": { "$value": { "value": 12, "unit": "px" }, "$description": "Cards, panels. Equals control radius + padding step for concentric curves." }
+  },
+  "size": {
+    "$type": "dimension",
+    "target-min": { "$value": { "value": 24, "unit": "px" }, "$description": "WCAG 2.5.8 AA floor (A11Y-09)" },
+    "target-touch": { "$value": { "value": 44, "unit": "px" }, "$description": "House default on touch (A11Y-09)" },
+    "focus-ring-width": { "$value": { "value": 2, "unit": "px" }, "$description": "A11Y-11" },
+    "focus-ring-offset": { "$value": { "value": 2, "unit": "px" } }
+  },
+  "font": {
+    "family": {
+      "body": { "$type": "fontFamily", "$value": ["system-ui", "sans-serif"], "$description": "Placeholder. Choose a deliberate pairing per product." },
+      "mono": { "$type": "fontFamily", "$value": ["ui-monospace", "monospace"] }
+    },
+    "weight": {
+      "$type": "fontWeight",
+      "regular": { "$value": 400 },
+      "medium": { "$value": 500 },
+      "strong": { "$value": 600 }
+    }
+  },
+  "motion": {
+    "duration": {
+      "$type": "duration",
+      "instant": { "$value": { "value": 80, "unit": "ms" } },
+      "fast": { "$value": { "value": 120, "unit": "ms" }, "$description": "hover, press, toggle (MOT-02)" },
+      "base": { "$value": { "value": 200, "unit": "ms" }, "$description": "popovers, small enters" },
+      "slow": { "$value": { "value": 320, "unit": "ms" }, "$description": "sheets, route-level; rarely" },
+      "reduced": { "$value": { "value": 1, "unit": "ms" }, "$description": "Value used under prefers-reduced-motion for view transitions (MOT-07). Never animation:none." }
+    },
+    "easing": {
+      "$type": "cubicBezier",
+      "out": { "$value": [0.23, 1, 0.32, 1], "$description": "Responses to input. Community curve, not from a standard." },
+      "in-out": { "$value": [0.77, 0, 0.175, 1], "$description": "On-screen moves between two positions." },
+      "standard": { "$value": [0.2, 0, 0, 1], "$description": "Material 3 standard (from memory; verify)." }
+    }
+  },
+  "elevation": {
+    "$type": "shadow",
+    "1": {
+      "$value": [
+        { "color": "#00000014", "offsetX": { "value": 0, "unit": "px" }, "offsetY": { "value": 1, "unit": "px" }, "blur": { "value": 2, "unit": "px" }, "spread": { "value": 0, "unit": "px" } },
+        { "color": "#0000000a", "offsetX": { "value": 0, "unit": "px" }, "offsetY": { "value": 4, "unit": "px" }, "blur": { "value": 12, "unit": "px" }, "spread": { "value": 0, "unit": "px" } }
+      ],
+      "$description": "Two layers: direct plus ambient (VIS-11). Exact composite-shadow field shapes differ between draft revisions; check before wiring a generator."
+    }
+  }
+}

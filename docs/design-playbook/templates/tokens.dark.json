@@ -1,0 +1,47 @@
+{
+  "$description": "Semantic color tokens, dark mode. Same names and meanings as tokens.light.json; values re-checked, not inverted (VIS-13).",
+  "color": {
+    "$type": "color",
+    "surface": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [0.071, 0.071, 0.078], "hex": "#121214" } },
+      "subtle": { "$value": { "colorSpace": "srgb", "components": [0.102, 0.102, 0.11], "hex": "#1a1a1c" } },
+      "raised": { "$value": { "colorSpace": "srgb", "components": [0.133, 0.133, 0.141], "hex": "#222224" }, "$description": "Higher elevation is lighter in dark mode" }
+    },
+    "text": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [0.925, 0.925, 0.929], "hex": "#ececed" } },
+      "muted": { "$value": { "colorSpace": "srgb", "components": [0.639, 0.639, 0.655], "hex": "#a3a3a7" } }
+    },
+    "border": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [0.525, 0.525, 0.541], "hex": "#86868a" } },
+      "subtle": { "$value": { "colorSpace": "srgb", "components": [0.2, 0.2, 0.212], "hex": "#333336" } }
+    },
+    "accent": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [0.431, 0.659, 1], "hex": "#6ea8ff" } },
+      "on": { "$value": { "colorSpace": "srgb", "components": [0.04, 0.04, 0.05], "hex": "#0a0a0d" } }
+    },
+    "danger": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [1, 0.541, 0.502], "hex": "#ff8a80" } },
+      "on": { "$value": { "colorSpace": "srgb", "components": [0.04, 0.04, 0.05], "hex": "#0a0a0d" } }
+    },
+    "focus": {
+      "ring": { "$value": "{color.accent.default}" }
+    }
+  },
+  "$extensions": {
+    "dev.playbook": {
+      "contrastPairs": [
+        ["color.text.default", "color.surface.default", 4.5, "body text"],
+        ["color.text.default", "color.surface.raised", 4.5, "body on raised"],
+        ["color.text.muted", "color.surface.default", 4.5, "secondary text"],
+        ["color.text.muted", "color.surface.raised", 4.5, "secondary on raised"],
+        ["color.accent.on", "color.accent.default", 4.5, "primary button label"],
+        ["color.accent.default", "color.surface.default", 4.5, "link / accent text"],
+        ["color.danger.on", "color.danger.default", 4.5, "destructive button label"],
+        ["color.danger.default", "color.surface.default", 4.5, "error text"],
+        ["color.border.default", "color.surface.default", 3, "input border (non-text)"],
+        ["color.focus.ring", "color.surface.default", 3, "focus indicator (non-text)"],
+        ["color.focus.ring", "color.surface.raised", 3, "focus indicator on raised"]
+      ]
+    }
+  }
+}

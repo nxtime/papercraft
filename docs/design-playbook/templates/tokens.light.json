@@ -1,0 +1,47 @@
+{
+  "$description": "Semantic color tokens, light mode. Components use these names only (SYS-02). Pairs below are enforced by scripts/contrast.py.",
+  "color": {
+    "$type": "color",
+    "surface": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [1, 1, 1], "hex": "#ffffff" } },
+      "subtle": { "$value": { "colorSpace": "srgb", "components": [0.961, 0.961, 0.965], "hex": "#f5f5f6" } },
+      "raised": { "$value": { "colorSpace": "srgb", "components": [1, 1, 1], "hex": "#ffffff" } }
+    },
+    "text": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [0.102, 0.102, 0.102], "hex": "#1a1a1a" } },
+      "muted": { "$value": { "colorSpace": "srgb", "components": [0.361, 0.361, 0.361], "hex": "#5c5c5c" } }
+    },
+    "border": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [0.463, 0.463, 0.463], "hex": "#767676" }, "$description": "Interactive control border: must be >= 3:1 (A11Y-02)" },
+      "subtle": { "$value": { "colorSpace": "srgb", "components": [0.878, 0.878, 0.89], "hex": "#e0e0e3" }, "$description": "Decorative divider only" }
+    },
+    "accent": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [0.043, 0.373, 1], "hex": "#0b5fff" } },
+      "on": { "$value": { "colorSpace": "srgb", "components": [1, 1, 1], "hex": "#ffffff" } }
+    },
+    "danger": {
+      "default": { "$value": { "colorSpace": "srgb", "components": [0.702, 0.149, 0.118], "hex": "#b3261e" } },
+      "on": { "$value": { "colorSpace": "srgb", "components": [1, 1, 1], "hex": "#ffffff" } }
+    },
+    "focus": {
+      "ring": { "$value": "{color.accent.default}" }
+    }
+  },
+  "$extensions": {
+    "dev.playbook": {
+      "contrastPairs": [
+        ["color.text.default", "color.surface.default", 4.5, "body text"],
+        ["color.text.default", "color.surface.subtle", 4.5, "body on subtle surface"],
+        ["color.text.muted", "color.surface.default", 4.5, "secondary text"],
+        ["color.text.muted", "color.surface.subtle", 4.5, "secondary text on subtle"],
+        ["color.accent.on", "color.accent.default", 4.5, "primary button label"],
+        ["color.accent.default", "color.surface.default", 4.5, "link / accent text"],
+        ["color.danger.on", "color.danger.default", 4.5, "destructive button label"],
+        ["color.danger.default", "color.surface.default", 4.5, "error text"],
+        ["color.border.default", "color.surface.default", 3, "input border (non-text)"],
+        ["color.focus.ring", "color.surface.default", 3, "focus indicator (non-text)"],
+        ["color.focus.ring", "color.surface.subtle", 3, "focus indicator on subtle"]
+      ]
+    }
+  }
+}
