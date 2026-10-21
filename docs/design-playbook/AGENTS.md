@@ -10,10 +10,10 @@ any user interface, and cite rule ids.
 | Plan a screen, flow or component | Skill `playbook-design`, or read `templates/screen-brief.md` |
 | Build or change UI code | Skill `playbook-implement`; read `platforms/web.md` or `platforms/native-egui.md` |
 | Review or audit UI | Skill `playbook-audit`; `checklists/design-review.md`, `checklists/a11y-audit.md` |
-| Answer a specific question | `python3 scripts/search.py "<question>"` or `--id <ID>` |
+| Answer a specific question | `playbook search "<question>"` or `playbook rule <ID>` |
 | CSS/animation/shadow detail | `principles/09-css-craft.md` |
 | Build tooltip, toast, toggle | `principles/10-component-patterns.md` |
-| Check colors | `python3 scripts/contrast.py FG BG` |
+| Check colors | `playbook contrast FG BG` |
 | Ship gate | `checklists/pre-ship.md` |
 
 ## Rules for using it
@@ -30,7 +30,7 @@ any user interface, and cite rule ids.
 ## Editing this repo
 
 - Rule headings `### ID Title`; ids unique and stable; every cited id must exist
-  (`python3 -I -m unittest discover -s tests` enforces this).
+  (`go test ./...` enforces this).
 - Keep videos as notes in our words; do not commit transcripts.
 - Keep files plain Markdown and JSON; scripts use only the Python standard library.
 

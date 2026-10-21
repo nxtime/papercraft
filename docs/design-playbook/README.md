@@ -15,23 +15,28 @@ improving a UI library, on the web (HTML, CSS, React) or native (Rust, egui).
 | `templates/` | Screen brief, component spec, DTCG-shaped token files (light, dark, base) with enforced contrast pairs |
 | `sources/` | Source registry with trust levels, per-video notes, a reading list of blogs/magazines/design systems with read status, a list of unverified claims, and a research protocol |
 | `skills/` | `playbook-design`, `playbook-implement`, `playbook-audit` |
-| `scripts/` | `search.py` (find rules), `contrast.py` (WCAG ratios and token-pair CI), `install-skills.sh` |
+| `cmd/playbook`, `internal/` | The `playbook` CLI (Go, standard library only): rule search, WCAG contrast and token-pair checks, skill installer. The corpus is embedded in the binary |
 | `llms.txt` | Index for agents that fetch over HTTP |
 
 ## Using it
 
 ```bash
-python3 scripts/search.py "confirm vs undo delete"   # ranked sections
-python3 scripts/search.py --id A11Y-09               # one rule in full
-python3 scripts/search.py --list                     # every rule id
-python3 scripts/contrast.py '#767676' '#ffffff'      # 4.54:1
-python3 scripts/contrast.py --tokens templates/tokens.light.json templates/tokens.dark.json
-python3 -I -m unittest discover -s tests             # keep it honest
-export PLAYBOOK_DIR="$PWD"                           # the skills read this variable
-scripts/install-skills.sh                            # link skills into ~/.claude and ~/.agents
+go build -o ~/.local/bin/playbook ./cmd/playbook   # one static binary, corpus embedded
+
+playbook search "confirm vs undo delete"   # ranked sections
+playbook rule A11Y-09                      # one rule in full (a prefix like MOT works)
+playbook list                              # every rule id
+playbook doc platforms/native-egui.md      # print a whole document (no PATH lists them)
+playbook contrast '#767676' '#ffffff'      # 4.54:1, exit 1 below 4.5
+playbook tokens                            # check the shipped light and dark token files
+playbook tokens my.tokens.json             # check your own contrastPairs
+playbook skills install                    # copy the skills into ~/.claude and ~/.agents
+go test ./...                              # keep it honest
 ```
 
-No dependencies beyond Python 3.
+No dependencies beyond the Go toolchain to build. The binary reads its embedded
+copy of the rules; set `PLAYBOOK_DIR` to a checkout to read live files instead
+(useful while editing rules).
 
 ## How agents should reach it
 
@@ -40,8 +45,8 @@ Ordered by reliability. Details in `AGENTS.md`.
 1. **Skills** (primary). `playbook-design`, `playbook-implement`, `playbook-audit`
    trigger on UI work and tell the agent to look rules up here. Procedural,
    exact thresholds, no retrieval noise.
-2. **Local files and `search.py`**. Any agent with a shell can search the corpus
-   by keyword or rule id with no index to maintain.
+2. **The `playbook` CLI**. Any agent with a shell can search the corpus by
+   keyword or rule id with no index to maintain and no checkout to locate.
 3. **`llms.txt` over HTTP** from the raw file URL of wherever this repo is hosted,
    for agents without filesystem access.
 4. **RAG pointer only**, if you run a RAG. A short note tells agents this repo
@@ -53,7 +58,7 @@ Ordered by reliability. Details in `AGENTS.md`.
 ## Rule conventions
 
 - Rule heading: `### A11Y-10 Title`. Ids never change meaning; deprecated rules
-  stay with a note. Cross-references are tested (`tests/test_search.py`).
+  stay with a note. Cross-references are tested (`playbook_test.go`).
 - A rule cites sources (`S..` standards and articles, `V..` videos). A rule with no
   citation is general knowledge (`GK`): a default to test, not a requirement.
   See `sources/UNVERIFIED.md` for claims that could not be confirmed.
@@ -73,7 +78,7 @@ your own library with `playbook-audit`.
 
 1. Fetch a primary source. 2. Add the rule to the right `principles/` file with
 the next free id. 3. Add the source row. 4. If numeric and testable, put it in
-tokens or a script. 5. `python3 -I -m unittest discover -s tests`.
+tokens or a script. 5. `go test ./...`.
 
 ## License
 

@@ -117,6 +117,6 @@ Generate real values with Utopia (utopia.fyi); keep `rem` terms so zoom works.
 
 ## Testing on web
 1. Tab through the whole page, no mouse. 2. 200% zoom and 320 px width.
-3. OS reduce-motion on. 4. Contrast via `scripts/contrast.py` or devtools.
+3. OS reduce-motion on. 4. Contrast via `playbook contrast` or devtools.
 5. axe/Lighthouse as a floor, not proof. 6. Screen reader pass on the main flow.
 7. Throttled CPU/network. 8. Filmstrip (CDP screencast) for transitions.

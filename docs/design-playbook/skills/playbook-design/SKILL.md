@@ -5,16 +5,16 @@ description: Design a UI screen, flow, component or interaction using the person
 
 # Design with the playbook
 
-The playbook lives at `$PLAYBOOK_DIR` (the root of your design-playbook clone). Rules have stable ids (`A11Y-10`, `INT-06`);
+The playbook is the `playbook` CLI (build it from the repo with
+`go build -o ~/.local/bin/playbook ./cmd/playbook`; the rules are embedded). Rules have stable ids (`A11Y-10`, `INT-06`);
 cite ids in your output so choices are auditable.
 
 ## Look things up, do not recall them
 
 ```bash
-cd "$PLAYBOOK_DIR"
-python3 scripts/search.py "undo vs confirm delete"     # ranked sections
-python3 scripts/search.py --id A11Y-09                 # one rule, full text
-python3 scripts/search.py --list                       # every rule id
+playbook search "undo vs confirm delete"     # ranked sections
+playbook rule A11Y-09                 # one rule, full text
+playbook list                       # every rule id
 ```
 Thresholds (contrast 4.5:1, targets 24/44 px, durations) must come from the
 playbook or a fetched primary source, never from memory. A rule tagged GK or
@@ -43,7 +43,7 @@ listed in `sources/UNVERIFIED.md` is a default to test, not a requirement.
 6. **Tokens first.** Reuse the product's existing tokens (web: the project's
    token files; native: its palette module). Propose new
    tokens by role name only when needed (SYS-02, SYS-03). Check any new color
-   pair with `python3 scripts/contrast.py FG BG`.
+   pair with `playbook contrast FG BG`.
 7. **Accessibility plan** (brief section 8): keyboard map, names/roles, live
    announcements, target sizes, contrast pairs, reduced-motion variant,
    cognitive load. Use `checklists/a11y-audit.md` as the source of items.

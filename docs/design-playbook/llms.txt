@@ -1,6 +1,6 @@
 # design-playbook
 
-> Design reference for building accessible, non-generic user interfaces. About 150 rules with stable ids (INT, PSY, VIS, MOT, A11Y, FBK, SYS, BAD), each traced to a source; WCAG 2.2 AA oriented. Web and native egui. Search with scripts/search.py or follow the links below. Rules without a cited source are general knowledge defaults.
+> Design reference for building accessible, non-generic user interfaces. About 150 rules with stable ids (INT, PSY, VIS, MOT, A11Y, FBK, SYS, BAD), each traced to a source; WCAG 2.2 AA oriented. Web and native egui. Search with the `playbook` CLI (`playbook search QUERY`) or follow the links below. Rules without a cited source are general knowledge defaults.
 
 Rule id prefixes: INT interaction intent, PSY perception and timing, VIS visual design, MOT motion, A11Y accessibility, FBK feedback states forms, SYS design systems tokens, BAD anti-patterns, CSS CSS craft, PAT component patterns.
 
@@ -38,5 +38,4 @@ Rule id prefixes: INT interaction intent, PSY perception and timing, VIS visual 
 ## Optional
 - [Unverified claims](sources/UNVERIFIED.md)
 - [Agent guide](AGENTS.md)
-- [Search tool](scripts/search.py)
-- [Contrast tool](scripts/contrast.py)
+- [CLI source](cmd/playbook/main.go): `playbook search|rule|list|doc|contrast|tokens|skills`

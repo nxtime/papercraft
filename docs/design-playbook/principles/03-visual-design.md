@@ -79,7 +79,7 @@ mint, lime, yellow, amber (dark text).
 White text on orange often fails contrast; darkening it turns brown. Use a
 lighter, more saturated fill with dark text, and tint the dark text toward the
 fill's hue instead of neutral gray (V02). Always verify numerically
-(`scripts/contrast.py`).
+(`playbook contrast`).
 
 ### VIS-10 Never rely on color alone
 Pair color with text, icon, shape or border thickness. Karen Hawkins (V06):

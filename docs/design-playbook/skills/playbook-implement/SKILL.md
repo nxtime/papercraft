@@ -5,13 +5,12 @@ description: Implement or modify UI code (web HTML/CSS/React/Tailwind or native 
 
 # Implement with the playbook
 
-Playbook path: `$PLAYBOOK_DIR` (the root of your design-playbook clone). Look rules up instead of
+Use the `playbook` CLI (rules are embedded in the binary). Look rules up instead of
 recalling them:
 
 ```bash
-cd "$PLAYBOOK_DIR"
-python3 scripts/search.py "focus trap dialog"
-python3 scripts/search.py --id MOT-07
+playbook search "focus trap dialog"
+playbook rule MOT-07
 ```
 
 ## Before writing code
@@ -52,8 +51,8 @@ python3 scripts/search.py --id MOT-07
 ## Verify before saying done
 
 - Run the checks that exist: project tests, type check, lint.
-- New or changed color pairs: `python3 scripts/contrast.py FG BG`, or add them to
-  the product's `contrastPairs` and run `python3 scripts/contrast.py --tokens <files>`.
+- New or changed color pairs: `playbook contrast FG BG`, or add them to
+  the product's `contrastPairs` and run `playbook tokens <files>`.
 - Keyboard-only run of the changed flow. 200% zoom and 320 px width for web.
 - Turn on the OS reduced-motion setting and re-run the flow.
 - Actually look at the rendering (screenshot; filmstrip via CDP
@@ -71,4 +70,4 @@ python3 scripts/search.py --id MOT-07
 
 If the task reveals a missing rule or a wrong one, fix the playbook in the same
 sitting (`principles/`, a source row in `sources/SOURCES.md`, then
-`python3 -I -m unittest discover -s tests`).
+`go test ./...`).

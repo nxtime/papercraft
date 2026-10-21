@@ -5,7 +5,7 @@ description: Audit an existing UI, component library or screenshot against the p
 
 # Audit with the playbook
 
-Playbook path: `$PLAYBOOK_DIR` (the root of your design-playbook clone). This skill is for review;
+Use the `playbook` CLI (rules are embedded in the binary). This skill is for review;
 use `playbook-design` to plan and `playbook-implement` to fix.
 
 ## Inputs to establish first
@@ -22,7 +22,7 @@ use `playbook-design` to plan and `playbook-implement` to fix.
    component contract in `principles/07-design-systems-tokens.md` (SYS-07).
 2. Gather evidence, in this order of reliability: run it and use the keyboard;
    inspect the accessibility tree; measure contrast
-   (`python3 scripts/contrast.py FG BG`, or `--tokens` on token files); read the
+   (`playbook contrast FG BG`, or `--tokens` on token files); read the
    code for semantics (div buttons, outline none, positive tabindex, transition
    all, hover-only); look at screenshots.
 3. For web, an automated pass (axe, Lighthouse) is a floor; never report
