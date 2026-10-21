@@ -14,7 +14,15 @@ pub static INTER_MEDIUM: &[u8] = include_bytes!("../assets/fonts/Inter-Medium.tt
 pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
 
 /// macOS system blue, used when the system accent can't be read.
-pub const MAC_BLUE: Color32 = Color32::from_rgb(0x00, 0x7a, 0xff);
+///
+/// Darkened from Apple's `#007aff` to `#0066cc`: white text on the old blue
+/// measured 4.02:1 (WCAG AA wants 4.5) and the blue as text on the light
+/// sidebar 3.6:1. The new blue reads 5.57:1 under white and 4.80:1 as text
+/// on the light sidebar.
+pub const MAC_BLUE: Color32 = Color32::from_rgb(0x00, 0x66, 0xcc);
+
+/// The dark ink of the design language: the text colour on light fills.
+pub const DARK_INK: Color32 = Color32::from_rgb(0x18, 0x18, 0x25);
 
 /// Body text (13pt) and secondary text (11pt), as in AppKit.
 pub const BODY: f32 = 13.0;
@@ -28,7 +36,7 @@ pub const TRAFFIC_LIGHTS: (f64, f64) = (14.0, TOOLBAR_H as f64);
 /// Horizontal room the traffic lights need from the window's left edge.
 pub const TRAFFIC_LIGHTS_W: f32 = 76.0;
 
-static ACCENT: AtomicU32 = AtomicU32::new(u32::from_be_bytes([0x00, 0x7a, 0xff, 0xff]));
+static ACCENT: AtomicU32 = AtomicU32::new(u32::from_be_bytes([0x00, 0x66, 0xcc, 0xff]));
 
 pub fn accent() -> Color32 {
     let [r, g, b, _] = ACCENT.load(Ordering::Relaxed).to_be_bytes();
@@ -78,6 +86,9 @@ pub struct Palette {
     pub inspector: Color32,
     pub control: Color32,
     pub control_border: Color32,
+    /// The 1 px outline that separates a control from the surface behind it.
+    /// It carries at least 3:1 against the palette's field, sidebar and window.
+    pub outline: Color32,
     pub field: Color32,
     pub text: Color32,
     pub secondary: Color32,
@@ -103,9 +114,10 @@ pub fn palette(dark: bool) -> Palette {
             inspector: Color32::from_rgb(0x25, 0x25, 0x27),
             control: Color32::from_rgb(0x3a, 0x3a, 0x3c),
             control_border: Color32::from_white_alpha(22),
+            outline: Color32::from_rgb(0x7d, 0x7d, 0x82),
             field: Color32::from_rgb(0x1f, 0x1f, 0x21),
             text: Color32::from_rgb(0xec, 0xec, 0xee),
-            secondary: Color32::from_rgb(0x98, 0x98, 0x9d),
+            secondary: Color32::from_rgb(0x9b, 0x9b, 0xa0),
             tertiary: Color32::from_rgb(0x63, 0x63, 0x66),
             separator: Color32::from_rgb(0x3a, 0x3a, 0x3c),
             hover: Color32::from_white_alpha(16),
@@ -123,15 +135,16 @@ pub fn palette(dark: bool) -> Palette {
             inspector: Color32::from_rgb(0xf6, 0xf6, 0xf6),
             control: Color32::WHITE,
             control_border: Color32::from_black_alpha(30),
+            outline: Color32::from_rgb(0x84, 0x84, 0x89),
             field: Color32::WHITE,
             text: Color32::from_rgb(0x1d, 0x1d, 0x1f),
-            secondary: Color32::from_rgb(0x86, 0x86, 0x8b),
+            secondary: Color32::from_rgb(0x6a, 0x6a, 0x70),
             tertiary: Color32::from_rgb(0xb8, 0xb8, 0xbc),
             separator: Color32::from_rgb(0xdc, 0xdc, 0xde),
             hover: Color32::from_black_alpha(12),
             pressed: Color32::from_black_alpha(24),
             popover: Color32::from_rgb(0xfc, 0xfc, 0xfc),
-            danger: Color32::from_rgb(0xd1, 0x4a, 0x5c),
+            danger: Color32::from_rgb(0xc2, 0x3a, 0x4b),
             success: Color32::from_rgb(0x2e, 0xa0, 0x5a),
             warning: Color32::from_rgb(0xc9, 0x91, 0x10),
         }
@@ -559,6 +572,9 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     v.collapsing_header_frame = false;
 
     let r6 = CornerRadius::same(radius_md());
+    // The 1 px control outline: the boundary that tells a field or a button
+    // apart from the surface behind it (3:1, the WCAG floor for UI parts).
+    let outline = Stroke::new(1.0, p.outline);
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.inspector;
     w.noninteractive.weak_bg_fill = p.inspector;
@@ -567,19 +583,19 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     w.noninteractive.corner_radius = r6;
     w.inactive.bg_fill = p.control;
     w.inactive.weak_bg_fill = p.control;
-    w.inactive.bg_stroke = Stroke::NONE;
+    w.inactive.bg_stroke = outline;
     w.inactive.fg_stroke = Stroke::new(1.0, p.text);
     w.inactive.corner_radius = r6;
     w.inactive.expansion = 0.0;
     w.hovered.bg_fill = p.control;
     w.hovered.weak_bg_fill = blend(p.control, p.hover);
-    w.hovered.bg_stroke = Stroke::NONE;
+    w.hovered.bg_stroke = outline;
     w.hovered.fg_stroke = Stroke::new(1.0, p.text);
     w.hovered.corner_radius = r6;
     w.hovered.expansion = 0.0;
     w.active.bg_fill = blend(p.control, p.pressed);
     w.active.weak_bg_fill = blend(p.control, p.pressed);
-    w.active.bg_stroke = Stroke::NONE;
+    w.active.bg_stroke = outline;
     w.active.fg_stroke = Stroke::new(1.0, p.text);
     w.active.corner_radius = r6;
     w.active.expansion = 0.0;
@@ -596,6 +612,45 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
 /// `over` composited on `base`.
 pub fn blend(base: Color32, over: Color32) -> Color32 {
     craft_ui::material::blend(base, over)
+}
+
+/// WCAG 2.x relative luminance of an opaque colour, 0..=1.
+fn relative_luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// WCAG 2.x contrast ratio between two colours, 1..=21.
+///
+/// A translucent colour is composited over the other one first, which is
+/// treated as its backdrop; two translucent colours are composited over white.
+pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    let (a, b) = match (a.a() == 255, b.a() == 255) {
+        (true, true) => (a, b),
+        (false, true) => (blend(b, a), b),
+        (true, false) => (a, blend(a, b)),
+        (false, false) => (blend(Color32::WHITE, a), blend(Color32::WHITE, b)),
+    };
+    let (la, lb) = (relative_luminance(a), relative_luminance(b));
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// The ink that reads on `fill`: white or the dark ink, whichever has the
+/// higher contrast ratio against it.
+pub fn readable_ink(fill: Color32) -> Color32 {
+    if contrast_ratio(Color32::WHITE, fill) >= contrast_ratio(DARK_INK, fill) {
+        Color32::WHITE
+    } else {
+        DARK_INK
+    }
 }
 
 /// The appearance setting: follow the system, force light or dark, or a Catppuccin flavour.
@@ -747,6 +802,7 @@ pub fn catppuccin_palette(f: Flavor) -> Palette {
         inspector: p.mantle,
         control: p.surface0,
         control_border: p.surface1,
+        outline: p.overlay1,
         field: p.surface0,
         text: p.text,
         secondary: p.subtext0,
@@ -1931,5 +1987,115 @@ mod font_tests {
             }
         }
         super::set_ui_font(0);
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    /// The surfaces text sits on, in the order the audit lists them.
+    fn text_surfaces(p: &Palette) -> [(Color32, &'static str); 4] {
+        [
+            (p.window, "window"),
+            (p.sidebar, "sidebar"),
+            (p.field, "field"),
+            (p.popover, "popover"),
+        ]
+    }
+
+    /// WCAG 2.2 AA: 4.5:1 for body text on every surface it can land on.
+    #[test]
+    fn body_and_secondary_text_pass_aa_on_every_surface() {
+        for (dark, p) in [(false, palette(false)), (true, palette(true))] {
+            let theme = if dark { "dark" } else { "light" };
+            for (bg, name) in text_surfaces(&p) {
+                let t = contrast_ratio(p.text, bg);
+                assert!(t >= 4.5, "{theme}: text on {name} is {t:.2}:1, needs 4.5");
+                let s = contrast_ratio(p.secondary, bg);
+                assert!(
+                    s >= 4.5,
+                    "{theme}: secondary on {name} is {s:.2}:1, needs 4.5"
+                );
+            }
+        }
+    }
+
+    /// WCAG 1.4.11: a control boundary needs 3:1 against what is behind it.
+    #[test]
+    fn the_control_outline_clears_the_ui_boundary_floor() {
+        for (dark, p) in [(false, palette(false)), (true, palette(true))] {
+            let theme = if dark { "dark" } else { "light" };
+            for (bg, name) in [
+                (p.field, "field"),
+                (p.sidebar, "sidebar"),
+                (p.window, "window"),
+            ] {
+                let r = contrast_ratio(p.outline, bg);
+                assert!(
+                    r >= 3.0,
+                    "{theme}: outline on {name} is {r:.2}:1, needs 3.0"
+                );
+            }
+        }
+    }
+
+    /// A filled accent or danger colour has to carry text of its own.
+    #[test]
+    fn the_accent_and_danger_carry_readable_ink() {
+        for (dark, p) in [(false, palette(false)), (true, palette(true))] {
+            let theme = if dark { "dark" } else { "light" };
+            // The default accent constant, not the global: another test swaps
+            // the global accent while this one runs.
+            let ink = readable_ink(MAC_BLUE);
+            let r = contrast_ratio(ink, MAC_BLUE);
+            assert!(
+                r >= 4.5,
+                "{theme}: readable ink on the accent is {r:.2}:1, needs 4.5"
+            );
+            let ink = readable_ink(p.danger);
+            let r = contrast_ratio(ink, p.danger);
+            assert!(
+                r >= 4.5,
+                "{theme}: readable ink on danger is {r:.2}:1, needs 4.5"
+            );
+        }
+    }
+
+    /// The other system accents are not a gate: this only lists what fails.
+    #[test]
+    fn the_other_system_accents_are_reported() {
+        let light = palette(false);
+        let dark = palette(true);
+        let accents = [
+            ("graphite", Color32::from_rgb(0x8c, 0x8c, 0x8c)),
+            ("red", Color32::from_rgb(0xff, 0x3b, 0x30)),
+            ("orange", Color32::from_rgb(0xff, 0x95, 0x00)),
+            ("yellow", Color32::from_rgb(0xff, 0xcc, 0x00)),
+            ("green", Color32::from_rgb(0x28, 0xcd, 0x41)),
+            ("purple", Color32::from_rgb(0xaf, 0x52, 0xde)),
+            ("pink", Color32::from_rgb(0xff, 0x2d, 0x55)),
+        ];
+        for (name, c) in accents {
+            let ink = readable_ink(c);
+            let on_fill = contrast_ratio(ink, c);
+            let on_light = contrast_ratio(c, light.sidebar);
+            let on_dark = contrast_ratio(c, dark.sidebar);
+            let ink_name = if ink == Color32::WHITE {
+                "white"
+            } else {
+                "dark ink"
+            };
+            eprintln!(
+                "{name:8} #{:02x}{:02x}{:02x}  {ink_name} on the fill: {on_fill:.2}:1{}  \
+                 as text on the light sidebar: {on_light:.2}:1{}  on the dark sidebar: {on_dark:.2}:1{}",
+                c.r(),
+                c.g(),
+                c.b(),
+                if on_fill < 4.5 { "  FAIL" } else { "" },
+                if on_light < 4.5 { "  FAIL" } else { "" },
+                if on_dark < 4.5 { "  FAIL" } else { "" },
+            );
+        }
     }
 }
