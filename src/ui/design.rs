@@ -112,7 +112,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                             });
                         }
                         chip.context_menu(|ui| {
-                            if ui.button("Delete mode").clicked() {
+                            if super::icon_menu_item(ui, crate::theme::Icon::Trash, "Delete mode").clicked() {
                                 super::confirm::request(st, ed, super::confirm::Removal::Mode(m.clone()));
                                 ui.close();
                             }

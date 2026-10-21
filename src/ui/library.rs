@@ -159,16 +159,26 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                                 ed.insert_library_item(it, at);
                             }
                             resp.on_hover_text("Click to insert").context_menu(|ui| {
-                                if ui.button("Insert").clicked() {
+                                if super::icon_menu_item(ui, crate::theme::Icon::Plus, "Insert")
+                                    .clicked()
+                                {
                                     let at = ed.camera.screen_to_world(ed.viewport * 0.5);
                                     ed.insert_library_item(it, at);
                                     ui.close();
                                 }
-                                if ui.button("Rename").clicked() {
+                                if super::icon_menu_item(ui, crate::theme::Icon::Text, "Rename")
+                                    .clicked()
+                                {
                                     lib.renaming = Some((it.id.clone(), it.name.clone()));
                                     ui.close();
                                 }
-                                if ui.button("Remove from library").clicked() {
+                                if super::icon_menu_item(
+                                    ui,
+                                    crate::theme::Icon::Trash,
+                                    "Remove from library",
+                                )
+                                .clicked()
+                                {
                                     remove = Some(it.id.clone());
                                     ui.close();
                                 }

@@ -228,15 +228,17 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     restore = Some(v.id.clone());
                 }
                 resp.context_menu(|ui| {
-                    if ui.button("Restore").clicked() {
+                    if super::icon_menu_item(ui, crate::theme::Icon::Restore, "Restore").clicked() {
                         restore = Some(v.id.clone());
                         ui.close();
                     }
-                    if ui.button("Rename").clicked() {
+                    if super::icon_menu_item(ui, crate::theme::Icon::Text, "Rename").clicked() {
                         st.version_renaming = Some((v.id.clone(), v.name.clone()));
                         ui.close();
                     }
-                    if ui.button("Delete version").clicked() {
+                    if super::icon_menu_item(ui, crate::theme::Icon::Trash, "Delete version")
+                        .clicked()
+                    {
                         delete = Some(v.id.clone());
                         ui.close();
                     }

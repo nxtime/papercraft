@@ -59,7 +59,7 @@ impl AgentUi {
     /// The top-level "Agent" menu.
     pub fn menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Agent", |ui| {
-            if ui.button("Connect…").clicked() {
+            if super::icon_menu_item(ui, crate::theme::Icon::Export, "Connect…").clicked() {
                 self.open = true;
                 ui.close();
             }
@@ -117,7 +117,7 @@ impl AgentUi {
         self.copy_row(ui, "Claude Code", &claude_command(&self.url), false);
         self.copy_row(ui, "MCP config (JSON)", &json_config(&self.url), true);
         ui.add_space(6.0);
-        if ui.button("Regenerate link").clicked() {
+        if super::icon_menu_item(ui, crate::theme::Icon::Restore, "Regenerate link").clicked() {
             self.actions.push(AgentAction::Regenerate);
         }
     }

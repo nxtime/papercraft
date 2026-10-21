@@ -764,7 +764,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 st.export = *preset;
             }
             chip.context_menu(|ui| {
-                if ui.button("Remove preset").clicked() {
+                if super::icon_menu_item(ui, crate::theme::Icon::Trash, "Remove preset").clicked() {
                     remove = Some(i);
                     ui.close();
                 }
@@ -1640,7 +1640,13 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
                             if !vars.is_empty() {
                                 ui.separator();
                             }
-                            if ui.button("Unlink variable").clicked() {
+                            if super::icon_menu_item(
+                                ui,
+                                crate::theme::Icon::Minus,
+                                "Unlink variable",
+                            )
+                            .clicked()
+                            {
                                 let mut unlinked = p.clone();
                                 unlinked.unlink_var();
                                 set(ed, unlinked);

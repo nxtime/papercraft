@@ -187,7 +187,8 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     .inner;
                 response.context_menu(|ui| {
                     ui.set_width(MENU_WIDTH);
-                    if ui.button("Rename group").clicked() {
+                    if super::icon_menu_item(ui, crate::theme::Icon::Text, "Rename group").clicked()
+                    {
                         st.pages.group_dialog = Some(GroupDialog {
                             project_stamp: ed.project_stamp,
                             old_name: Some(name.clone()),
@@ -197,7 +198,9 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Remove group").clicked() {
+                    if super::icon_menu_item(ui, crate::theme::Icon::Trash, "Remove group")
+                        .clicked()
+                    {
                         confirm::request(st, ed, Removal::Group(name.clone()));
                         ui.close();
                     }
@@ -386,11 +389,11 @@ fn page_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, i: usize) {
     }
     resp.context_menu(|ui| {
         ui.set_width(MENU_WIDTH);
-        if ui.button("Rename").clicked() {
+        if super::icon_menu_item(ui, crate::theme::Icon::Text, "Rename").clicked() {
             st.pages.renaming = Some((i, ed.pages[i].name.clone()));
             ui.close();
         }
-        if ui.button("Duplicate").clicked() {
+        if super::icon_menu_item(ui, crate::theme::Icon::Group, "Duplicate").clicked() {
             st.pages.duplicate = Some(page_id.clone());
             ui.close();
         }
@@ -414,7 +417,7 @@ fn page_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, i: usize) {
                 }
             }
             ui.separator();
-            if ui.button("New group…").clicked() {
+            if super::icon_menu_item(ui, crate::theme::Icon::Plus, "New group…").clicked() {
                 st.pages.group_dialog = Some(GroupDialog {
                     project_stamp: ed.project_stamp,
                     old_name: None,

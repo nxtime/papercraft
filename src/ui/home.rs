@@ -699,11 +699,19 @@ fn trash_grid(ui: &mut Ui, hv: &mut HomeView) {
                     let thumb = crate::vfs::is_file(&thumb).then_some(thumb);
                     let resp = card_frame(ui, hv, thumb.as_deref(), egui::Id::new(&e.dir));
                     resp.context_menu(|ui| {
-                        if ui.button("Restore").clicked() {
+                        if super::icon_menu_item(ui, crate::theme::Icon::Restore, "Restore")
+                            .clicked()
+                        {
                             hv.actions.push(HomeAction::Restore(e.dir.clone()));
                             ui.close();
                         }
-                        if ui.button("Delete Permanently").clicked() {
+                        if super::icon_menu_item(
+                            ui,
+                            crate::theme::Icon::Trash,
+                            "Delete Permanently",
+                        )
+                        .clicked()
+                        {
                             hv.pending_removal = Some(HomeAction::DeleteForever(e.dir.clone()));
                             ui.close();
                         }
