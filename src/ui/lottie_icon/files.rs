@@ -1,0 +1,216 @@
+//! The embedded animated icon files (`assets/icons-anim`). A test checks the list covers the folder.
+
+/// `(name, Lottie JSON)` of every shipped animation.
+pub(super) static FILES: &[(&str, &str)] = &[
+    (
+        "arrow-down",
+        include_str!("../../../assets/icons-anim/arrow-down.json"),
+    ),
+    (
+        "arrow-up",
+        include_str!("../../../assets/icons-anim/arrow-up.json"),
+    ),
+    ("bold", include_str!("../../../assets/icons-anim/bold.json")),
+    (
+        "bookmark",
+        include_str!("../../../assets/icons-anim/bookmark.json"),
+    ),
+    ("bug", include_str!("../../../assets/icons-anim/bug.json")),
+    (
+        "calendar",
+        include_str!("../../../assets/icons-anim/calendar.json"),
+    ),
+    (
+        "check",
+        include_str!("../../../assets/icons-anim/check.json"),
+    ),
+    (
+        "chevron-down",
+        include_str!("../../../assets/icons-anim/chevron-down.json"),
+    ),
+    (
+        "chevron-left",
+        include_str!("../../../assets/icons-anim/chevron-left.json"),
+    ),
+    (
+        "chevron-right",
+        include_str!("../../../assets/icons-anim/chevron-right.json"),
+    ),
+    (
+        "chevron-up",
+        include_str!("../../../assets/icons-anim/chevron-up.json"),
+    ),
+    (
+        "circle",
+        include_str!("../../../assets/icons-anim/circle.json"),
+    ),
+    (
+        "circle-check",
+        include_str!("../../../assets/icons-anim/circle-check.json"),
+    ),
+    (
+        "circle-question-mark",
+        include_str!("../../../assets/icons-anim/circle-question-mark.json"),
+    ),
+    (
+        "clipboard",
+        include_str!("../../../assets/icons-anim/clipboard.json"),
+    ),
+    ("copy", include_str!("../../../assets/icons-anim/copy.json")),
+    (
+        "diamond",
+        include_str!("../../../assets/icons-anim/diamond.json"),
+    ),
+    (
+        "download",
+        include_str!("../../../assets/icons-anim/download.json"),
+    ),
+    (
+        "eraser",
+        include_str!("../../../assets/icons-anim/eraser.json"),
+    ),
+    (
+        "file-text",
+        include_str!("../../../assets/icons-anim/file-text.json"),
+    ),
+    (
+        "flame",
+        include_str!("../../../assets/icons-anim/flame.json"),
+    ),
+    (
+        "folder",
+        include_str!("../../../assets/icons-anim/folder.json"),
+    ),
+    (
+        "git-branch",
+        include_str!("../../../assets/icons-anim/git-branch.json"),
+    ),
+    (
+        "git-commit-horizontal",
+        include_str!("../../../assets/icons-anim/git-commit-horizontal.json"),
+    ),
+    (
+        "git-fork",
+        include_str!("../../../assets/icons-anim/git-fork.json"),
+    ),
+    (
+        "grid-3x3",
+        include_str!("../../../assets/icons-anim/grid-3x3.json"),
+    ),
+    ("hand", include_str!("../../../assets/icons-anim/hand.json")),
+    (
+        "highlighter",
+        include_str!("../../../assets/icons-anim/highlighter.json"),
+    ),
+    (
+        "image",
+        include_str!("../../../assets/icons-anim/image.json"),
+    ),
+    ("info", include_str!("../../../assets/icons-anim/info.json")),
+    (
+        "italic",
+        include_str!("../../../assets/icons-anim/italic.json"),
+    ),
+    (
+        "layers",
+        include_str!("../../../assets/icons-anim/layers.json"),
+    ),
+    (
+        "layout-dashboard",
+        include_str!("../../../assets/icons-anim/layout-dashboard.json"),
+    ),
+    ("link", include_str!("../../../assets/icons-anim/link.json")),
+    ("list", include_str!("../../../assets/icons-anim/list.json")),
+    ("lock", include_str!("../../../assets/icons-anim/lock.json")),
+    (
+        "maximize",
+        include_str!("../../../assets/icons-anim/maximize.json"),
+    ),
+    (
+        "message-square-quote",
+        include_str!("../../../assets/icons-anim/message-square-quote.json"),
+    ),
+    (
+        "mouse-pointer-2",
+        include_str!("../../../assets/icons-anim/mouse-pointer-2.json"),
+    ),
+    (
+        "move-up-right",
+        include_str!("../../../assets/icons-anim/move-up-right.json"),
+    ),
+    (
+        "notebook-pen",
+        include_str!("../../../assets/icons-anim/notebook-pen.json"),
+    ),
+    (
+        "panel-left",
+        include_str!("../../../assets/icons-anim/panel-left.json"),
+    ),
+    (
+        "panel-right",
+        include_str!("../../../assets/icons-anim/panel-right.json"),
+    ),
+    ("pen", include_str!("../../../assets/icons-anim/pen.json")),
+    (
+        "pencil",
+        include_str!("../../../assets/icons-anim/pencil.json"),
+    ),
+    ("plus", include_str!("../../../assets/icons-anim/plus.json")),
+    (
+        "quote",
+        include_str!("../../../assets/icons-anim/quote.json"),
+    ),
+    (
+        "refresh-cw",
+        include_str!("../../../assets/icons-anim/refresh-cw.json"),
+    ),
+    (
+        "scissors",
+        include_str!("../../../assets/icons-anim/scissors.json"),
+    ),
+    (
+        "search",
+        include_str!("../../../assets/icons-anim/search.json"),
+    ),
+    (
+        "settings",
+        include_str!("../../../assets/icons-anim/settings.json"),
+    ),
+    (
+        "slash",
+        include_str!("../../../assets/icons-anim/slash.json"),
+    ),
+    (
+        "sparkles",
+        include_str!("../../../assets/icons-anim/sparkles.json"),
+    ),
+    (
+        "square",
+        include_str!("../../../assets/icons-anim/square.json"),
+    ),
+    ("star", include_str!("../../../assets/icons-anim/star.json")),
+    (
+        "strikethrough",
+        include_str!("../../../assets/icons-anim/strikethrough.json"),
+    ),
+    ("tag", include_str!("../../../assets/icons-anim/tag.json")),
+    (
+        "trash-2",
+        include_str!("../../../assets/icons-anim/trash-2.json"),
+    ),
+    (
+        "triangle-alert",
+        include_str!("../../../assets/icons-anim/triangle-alert.json"),
+    ),
+    ("type", include_str!("../../../assets/icons-anim/type.json")),
+    (
+        "undo-2",
+        include_str!("../../../assets/icons-anim/undo-2.json"),
+    ),
+    (
+        "upload",
+        include_str!("../../../assets/icons-anim/upload.json"),
+    ),
+    ("x", include_str!("../../../assets/icons-anim/x.json")),
+    ("zap", include_str!("../../../assets/icons-anim/zap.json")),
+];

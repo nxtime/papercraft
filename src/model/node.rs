@@ -417,6 +417,9 @@ pub struct Node {
     /// Feedback left on this layer by the user or an agent (see `get_feedback`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
+    /// Prototype link: clicking this layer in Present mode jumps to this frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<NodeId>,
 }
 
 /// A note attached to a layer: what to change, from the user to an agent or back.
@@ -518,6 +521,7 @@ impl Node {
             component: false,
             instance: None,
             comments: Vec::new(),
+            link: None,
         }
     }
 

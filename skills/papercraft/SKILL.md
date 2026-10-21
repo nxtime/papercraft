@@ -15,6 +15,7 @@ References: [tools.md](references/tools.md) (every tool and argument), [html-sub
 papercraft-cli call get_basic_info      # fails with exit 1 if the app is not running
 ```
 
+* **Check the project is the right one.** `get_basic_info` returns `fileName` and `path`. Build only in a project that belongs to the work (a NotesCraft design file is for NotesCraft screens, not for redesigning PaperCraft). For a different product: `create_file {name}`, then `open_file {fileId}`, and say so. `open_file` swaps the project the user is looking at, so tell them. Pass `fileId` on later calls when more than one project is in play.
 * Not running: ask the user to start PaperCraft and open a project (or `create_file` then `open_file`). `PAPERCRAFT_MCP_PORT` must match if the port was changed. Do not try to launch the GUI yourself unless asked.
 * Read `get_basic_info` (pages, artboards, sizes, fonts), then `get_selection` (what the user is looking at) and `get_variables` and `get_components`. Reuse what exists before creating anything.
 * `pageId` defaults to the page the user is viewing, which can change between calls: pass it explicitly. Node ids look like `3fa9c1:14`; never show them to the user.
@@ -39,6 +40,15 @@ Lint passes are necessary, not sufficient: contrast and grids say nothing about 
 * Variables: roles, not hues (`surface`, `text-muted`, `on-accent`), kebab-case.
 * Lint flags default names (`Frame`, `Rectangle`, `Group`) on layers that have children.
 
+## 3b. Scripting big builds
+
+For a screen with dozens of parts, drive the CLI from a short Python helper (`call(tool, **args)` that pipes JSON to `papercraft-cli call <tool> -` and parses stdout). Rules that saved time:
+* One helper builds components from a list `[(name, html)]`: write them into a scratch row, `create_component` each, `move_nodes {moves:[{nodeId, parentId:"root"}]}`, then lay them out with real sizes (shelf packing, a 28px gap, 44px between rows) and delete the scratch row. Never space rows by a guessed height: tall components (a 250px card) overlap the next row.
+* Generate variants in a loop (states, icons) instead of copying HTML by hand.
+* Override text by walking the instance subtree and matching the nearest named ancestor, then batch one `set_text_content`.
+* `update_styles` takes `updates:[{nodeIds:[...], styles:{...}}]`; `move_nodes` takes `moves:[...]`; `create_artboard` takes `name` and `styles:{width,height,left,top,...}`.
+* Look at one artboard per screenshot, scale 1 for layout, 2 for small text. Crop with ImageMagick for details.
+
 ## 4. Layout recipes (flexbox is the only layout)
 
 ```html
@@ -56,7 +66,8 @@ Lint passes are necessary, not sufficient: contrast and grids say nothing about 
 <div layer-name="Nav / Home" style="display:flex;align-items:center;gap:12px"><x-paper-icon name="phosphor:house" size="20" color="var(--text-muted)"/><div layer-name="Label" style="font-size:16px;color:var(--text-muted)">Home</div></div>
 ```
 
-Artboards: mobile 390×844, tablet 768×1024, desktop 1440×900. Create with `height:"fit-content"` when the content decides the height. Replace margin with `gap` and `padding`. `min-width`, `max-width`, `min-height`, `max-height`, `align-self` (`start`, `center`, `end`, `stretch`), per-side borders (`border-top`, `border-right`, `border-bottom`, `border-left`), and `text-decoration-color` / `wavy` (`text-decoration: underline wavy var(--warning)`) are also supported.
+Artboards: mobile 390×844, tablet 768×1024, desktop 1440×900, large desktop 2560×1440 (a 1440p display; ask which the user uses and design that first). A narrow window (1280×800) is its own artboard: collapse the sidebar to an icon rail, make secondary actions icon-only with a tooltip, keep one labelled primary action.
+Dot-grid canvas (no pattern fill exists): one `<svg>` with a single path of tiny round-capped dashes, absolute at 0,0 inside the canvas frame: `<svg style="position:absolute;left:0px;top:0px" width="W" height="H" viewBox="0 0 W H"><path d="M16 16h0.01M48 16h0.01..." stroke="var(--surface-2)" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>`. One vector layer, about 3,000 dots at a 32px step. Its colour is frozen at write time. Create with `height:"fit-content"` when the content decides the height. Replace margin with `gap` and `padding`. `min-width`, `max-width`, `min-height`, `max-height`, `align-self` (`start`, `center`, `end`, `stretch`), per-side borders (`border-top`, `border-right`, `border-bottom`, `border-left`), and `text-decoration-color` / `wavy` (`text-decoration: underline wavy var(--warning)`) are also supported.
 
 Full flows: [recipes.md](references/recipes.md).
 
@@ -106,6 +117,13 @@ When implementing a PaperCraft design in production code (React/TSX, Tailwind JS
 * **One project open at a time**; copying and moving layers between pages is supported via `duplicate_nodes` / `move_nodes` (`toPageId`) and cross-page `<x-paper-clone node-id="<page>:<id>"/>`.
 * **Text boxes with fixed widths can wrap earlier than in a browser.** Check headlines in the screenshot and widen.
 * **Instances are skipped by lint**; lint the main component.
+* **Icons inside an instance cannot be swapped**, only text can (`swap_instance` swaps to another main). Need the same button with a different glyph? Generate one component per icon in a loop (`Icon button / undo-2`, `Icon button / redo-2`...), not one generic button.
+* **An instance keeps the size of its main.** Overriding text with a longer string clips it (a `Saved` chip made from a `Chip` main loses its right padding; a `Share` button from a wider/narrower main sits off-centre). After `set_text_content` on instance text, `update_styles {width:"fit-content"}` on the instance root and on its text layers, or pass `style="width:fit-content;justify-content:center"` on `<x-paper-instance>`.
+* **Text inside nested frames**: `set_text_content` needs the Text node id. Walk `get_children` down from the instance; instances copy the main's structure (`Meta > Label`, not a flat list).
+* **No icon-colour follow for stroke sets** (Lucide, Tabler): the colour is frozen at write time, so a mode switch (Mocha to Latte) leaves icons as they were. Use a fill set (Phosphor, Material) when a design must switch modes.
+* **Pages**: `create_page`, `rename_pages`, `delete_pages` (needs `confirm: true` when the page has layers; the last page stays). `move_nodes` accepts `toPageId` to copy between pages.
+* **`get_screenshot` of `root` on a wide page** is scaled to fit and unreadable. Screenshot one artboard at a time. Hoisted components are not inside an artboard screenshot.
+* **CLI saves images to the cwd** as `<tool>.png`; newer builds take `-o FILE`. Run the CLI from a scratch directory, or pass `-o`, and rename after.
 
 ## 7. Troubleshooting
 

@@ -14,6 +14,7 @@ pub mod ink;
 pub mod io;
 pub mod layout;
 pub mod library;
+pub mod lottie;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod mcp;
@@ -25,7 +26,11 @@ pub mod sync;
 pub mod text;
 pub mod theme;
 pub mod ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod update;
 pub mod vector;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod versions;
 pub mod vfs;
 #[cfg(target_arch = "wasm32")]
 pub mod web;

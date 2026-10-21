@@ -51,6 +51,17 @@ Rename one or more pages. Does not switch the user's page.
 | `updates` | array of object | yes | Page renames. |
 
 
+### `delete_pages`
+
+Delete one or more pages. The last page of a project cannot be deleted. A page that still has layers is only deleted with `confirm: true`; check what is on it first (get_basic_info lists node counts).
+
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `pageIds` | array of string | yes | Pages to delete. |
+| `confirm` | boolean |  | Required to delete a page that has layers. |
+
+
 ## Read
 
 
@@ -110,7 +121,7 @@ Export a node and its descendants to code: `"inline"` (default, React JSX with i
 
 ### `get_design_spec` (read-only)
 
-Extract a comprehensive AI design-to-code specification (`ai_spec_markdown` and structured JSON `spec`) for a node and its descendants. Includes the hierarchy, exact auto-layout flow/sizing (`fixed`, `hug`, `fill`), bound design tokens (`--var`), component instances, text content, implementation rules, and reference code for the chosen `target`. Always call this before implementing a design in code.
+Extract a comprehensive AI design-to-code specification (`ai_spec_markdown` and structured JSON `spec`) for a node and its descendants. Includes the hierarchy, exact auto-layout flow/sizing (`fixed`, `hug`, `fill`), bound design tokens (`--var`), component instances (`instanceOf` on each node plus `componentDefinitions`), icons (`kind:"icon"` with set, name, size and tint), vector SVG (`svg`, `svgBounds`), text metrics (weight, line height, letter spacing), min and max sizes, fills and gradients, token matches for spacing, radius and type, implementation rules, and reference code for the chosen `target`. Always call this before implementing a design in code.
 
 
 | Argument | Type | Required | Notes |
@@ -413,7 +424,7 @@ Main components on a page (id, name, size) with how many instances each has.
 
 ### `import_components`
 
-Copy the main components anywhere on `fromPageId` (including inside artboards, typically on a `Design System` page) onto this one, so you can place instances here with `create_instance` or `<x-paper-instance component="Name" component-id="ID"/>`. Components with the same name already here are skipped. Variables and tokens are already shared by every page; components are copies, not live links.
+Copy the main components anywhere on `fromPageId` (including inside artboards, typically on a `Design System` page) onto this one, so you can place instances here with `create_instance` or `<x-paper-instance component="Name" component-id="ID"/>`. Components with the same name already here are skipped. Copies are placed in rows (wrapping at 3200 px) to the right of the page content; shelf-pack them yourself using their real sizes if you want a tidy parking area. Variables and tokens are already shared by every page; components are copies, not live links.
 
 
 | Argument | Type | Required | Notes |

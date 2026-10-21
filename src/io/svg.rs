@@ -50,6 +50,10 @@ pub fn export_bounds(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
         if !doc.get(*r).is_some_and(|n| n.visible) {
             continue;
         }
+        // A clipping frame *above* the exported root does not clip this export: the root
+        // is exported on its own, with its own geometry. Clipping frames inside the
+        // root's subtree still clip their children.
+        let above: Vec<NodeId> = doc.ancestors(*r);
         for id in doc.subtree(*r) {
             let (Some(nd), Some(wr)) = (doc.get(id), doc.world_rect(id)) else {
                 continue;
@@ -59,10 +63,11 @@ pub fn export_bounds(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
             }
             // Children of clipping frames can't draw outside them.
             if doc.ancestors(id).iter().any(|a| {
-                matches!(
-                    doc.get(*a).map(|x| &x.kind),
-                    Some(NodeKind::Frame { clip: true })
-                )
+                !above.contains(a)
+                    && matches!(
+                        doc.get(*a).map(|x| &x.kind),
+                        Some(NodeKind::Frame { clip: true })
+                    )
             }) {
                 continue;
             }
@@ -445,6 +450,35 @@ mod tests {
         ed.add_node(n, None);
         let svg = export(&ed.doc, None, None).unwrap();
         assert!(svg.contains("&lt;a &amp; &quot;b&quot;&gt;"));
+    }
+
+    #[test]
+    fn export_of_a_node_inside_a_clipping_artboard_is_not_empty() {
+        let mut ed = crate::editor::Editor::default();
+        // An artboard is a clipping frame; the icon sits inside it.
+        let mut art = crate::model::Node::new(
+            NodeId(0),
+            NodeKind::Frame { clip: true },
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+        );
+        art.name = "Artboard".into();
+        let art_id = ed.add_node(art, None);
+        let mut inner =
+            crate::model::Node::new(NodeId(0), NodeKind::Rect, Rect::new(10.0, 10.0, 20.0, 20.0));
+        inner.name = "Icon".into();
+        let inner_id = ed.add_node(inner, Some(art_id));
+
+        // The child alone exports its own geometry, not an empty file.
+        let b = export_bounds(&ed.doc, &[inner_id]).expect("the child has bounds");
+        assert_eq!((b.x, b.y, b.w, b.h), (10.0, 10.0, 20.0, 20.0));
+        let svg = export(&ed.doc, Some(&[inner_id]), None).expect("the child exports");
+        assert!(svg.contains("<path"), "{svg}");
+        assert!(svg.contains(r#"viewBox="10 10 20 20""#), "{svg}");
+
+        // The artboard on its own still clips its children.
+        let whole = export(&ed.doc, Some(&[art_id]), None).expect("the artboard exports");
+        assert!(whole.contains("clipPath"), "{whole}");
+        assert!(whole.contains(r#"viewBox="0 0 100 100""#), "{whole}");
     }
 
     #[test]

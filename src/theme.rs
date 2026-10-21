@@ -72,6 +72,8 @@ pub fn system_accent() -> Color32 {
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub window: Color32,
+    /// Colour of the gaps around the floating panels.
+    pub backdrop: Color32,
     pub sidebar: Color32,
     pub inspector: Color32,
     pub control: Color32,
@@ -84,12 +86,15 @@ pub struct Palette {
     pub hover: Color32,
     pub pressed: Color32,
     pub popover: Color32,
+    /// Destructive actions and errors: a soft red, not pure red.
+    pub danger: Color32,
 }
 
 pub fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
             window: Color32::from_rgb(0x2b, 0x2b, 0x2d),
+            backdrop: Color32::from_rgb(0x1b, 0x1b, 0x1d),
             sidebar: Color32::from_rgb(0x26, 0x26, 0x28),
             inspector: Color32::from_rgb(0x25, 0x25, 0x27),
             control: Color32::from_rgb(0x3a, 0x3a, 0x3c),
@@ -102,10 +107,12 @@ pub fn palette(dark: bool) -> Palette {
             hover: Color32::from_white_alpha(16),
             pressed: Color32::from_white_alpha(30),
             popover: Color32::from_rgb(0x32, 0x32, 0x34),
+            danger: Color32::from_rgb(0xf2, 0x8b, 0x9a),
         }
     } else {
         Palette {
             window: Color32::from_rgb(0xf6, 0xf6, 0xf6),
+            backdrop: Color32::from_rgb(0xe4, 0xe4, 0xe7),
             sidebar: Color32::from_rgb(0xee, 0xee, 0xf0),
             inspector: Color32::from_rgb(0xf6, 0xf6, 0xf6),
             control: Color32::WHITE,
@@ -118,7 +125,16 @@ pub fn palette(dark: bool) -> Palette {
             hover: Color32::from_black_alpha(12),
             pressed: Color32::from_black_alpha(24),
             popover: Color32::from_rgb(0xfc, 0xfc, 0xfc),
+            danger: Color32::from_rgb(0xd1, 0x4a, 0x5c),
         }
+    }
+}
+
+/// The palette for a context (no `Ui` at hand): same rule as [`pal`].
+pub fn pal_from_ctx(ctx: &egui::Context) -> Palette {
+    match choice() {
+        Choice::Catppuccin(f) => catppuccin_palette(f),
+        _ => palette(ctx.global_style().visuals.dark_mode),
     }
 }
 
@@ -210,7 +226,7 @@ pub fn figma_fields(ui: &mut egui::Ui) {
     let v = ui.visuals_mut();
     v.text_edit_bg_color = Some(rest);
     v.extreme_bg_color = rest;
-    let r5 = CornerRadius::same(5);
+    let r5 = CornerRadius::same(RADIUS_MD);
     let w = &mut v.widgets;
     for (s, fill) in [
         (&mut w.inactive, rest),
@@ -226,7 +242,13 @@ pub fn figma_fields(ui: &mut egui::Ui) {
 }
 
 /// Height of an inspector field row.
-pub const FIELD_H: f32 = 28.0;
+pub const FIELD_H: f32 = 32.0;
+
+/// Corner radii of the rounded design language (tokens `radius-md`, `radius-lg`, `radius-xl` of the design system).
+pub const RADIUS_MD: u8 = 8;
+pub const RADIUS_LG: u8 = 12;
+pub const RADIUS_PANEL: u8 = 16;
+pub const RADIUS_XL: u8 = 16;
 
 /// egui's `small_button` zeroes the padding; this keeps the theme's but stays compact.
 pub fn small_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
@@ -269,6 +291,7 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     v.override_text_color = None;
     v.weak_text_color = Some(p.secondary);
     v.hyperlink_color = acc;
+    v.error_fg_color = p.danger;
     v.panel_fill = p.inspector;
     v.window_fill = p.popover;
     v.faint_bg_color = if dark {
@@ -278,9 +301,9 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     };
     v.extreme_bg_color = p.field;
     v.text_edit_bg_color = Some(p.field);
-    v.window_stroke = Stroke::new(1.0, p.control_border);
-    v.window_corner_radius = CornerRadius::same(10);
-    v.menu_corner_radius = CornerRadius::same(10);
+    v.window_stroke = Stroke::NONE;
+    v.window_corner_radius = CornerRadius::same(RADIUS_XL);
+    v.menu_corner_radius = CornerRadius::same(RADIUS_LG);
     v.window_shadow = Shadow {
         offset: [0, 8],
         blur: 28,
@@ -302,28 +325,28 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     v.interact_cursor = None;
     v.collapsing_header_frame = false;
 
-    let r6 = CornerRadius::same(6);
+    let r6 = CornerRadius::same(RADIUS_MD);
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.inspector;
     w.noninteractive.weak_bg_fill = p.inspector;
-    w.noninteractive.bg_stroke = Stroke::new(1.0, p.separator);
+    w.noninteractive.bg_stroke = Stroke::NONE;
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
     w.noninteractive.corner_radius = r6;
     w.inactive.bg_fill = p.control;
     w.inactive.weak_bg_fill = p.control;
-    w.inactive.bg_stroke = Stroke::new(1.0, p.control_border);
+    w.inactive.bg_stroke = Stroke::NONE;
     w.inactive.fg_stroke = Stroke::new(1.0, p.text);
     w.inactive.corner_radius = r6;
     w.inactive.expansion = 0.0;
     w.hovered.bg_fill = p.control;
     w.hovered.weak_bg_fill = blend(p.control, p.hover);
-    w.hovered.bg_stroke = Stroke::new(1.0, p.control_border);
+    w.hovered.bg_stroke = Stroke::NONE;
     w.hovered.fg_stroke = Stroke::new(1.0, p.text);
     w.hovered.corner_radius = r6;
     w.hovered.expansion = 0.0;
     w.active.bg_fill = blend(p.control, p.pressed);
     w.active.weak_bg_fill = blend(p.control, p.pressed);
-    w.active.bg_stroke = Stroke::new(1.0, p.control_border);
+    w.active.bg_stroke = Stroke::NONE;
     w.active.fg_stroke = Stroke::new(1.0, p.text);
     w.active.corner_radius = r6;
     w.active.expansion = 0.0;
@@ -446,11 +469,12 @@ pub fn catppuccin_palette(f: Flavor) -> Palette {
     let veil = |c: Color32, a| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a);
     Palette {
         window: p.base,
+        backdrop: p.crust,
         sidebar: p.mantle,
         inspector: p.mantle,
         control: p.surface0,
         control_border: p.surface1,
-        field: p.crust,
+        field: p.surface0,
         text: p.text,
         secondary: p.subtext0,
         tertiary: p.overlay0,
@@ -458,6 +482,7 @@ pub fn catppuccin_palette(f: Flavor) -> Palette {
         hover: veil(p.overlay0, 50),
         pressed: veil(p.overlay0, 90),
         popover: p.surface0,
+        danger: p.red,
     }
 }
 
@@ -1029,22 +1054,25 @@ fn arc(c: Pos2, r: f32, a0: f32, a1: f32, n: usize) -> Vec<Pos2> {
         .collect()
 }
 
-/// A borderless icon button: subtle hover/pressed fill, accent fill when `selected`.
+/// A borderless icon button: eased hover/pressed fill, accent fill when `selected`. Icons that
+/// have a Lottie animation play it once when the pointer enters the button.
 pub fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, selected: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let p = pal(ui);
         let enabled = ui.is_enabled();
+        let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("hover"), &resp);
         let fill = if selected {
             accent()
         } else if resp.is_pointer_button_down_on() {
             p.pressed
-        } else if resp.hovered() && enabled {
-            p.hover
+        } else if enabled {
+            p.hover.gamma_multiply(hover)
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, 6.0, fill);
+        ui.painter()
+            .rect_filled(rect, (size * 0.3).clamp(6.0, 12.0), fill);
         let color = if selected {
             Color32::WHITE
         } else if !enabled {
@@ -1053,7 +1081,20 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, selected: bool) -> 
             p.text
         };
         let inset = (size * 0.22).round();
-        paint_icon(ui.painter(), rect.shrink(inset), icon, color);
+        let at = rect.shrink(inset);
+        match crate::ui::lottie_icon::lucide_name(icon) {
+            Some(name) if crate::ui::lottie_icon::has(name) => {
+                crate::ui::lottie_icon::paint_hover(
+                    ui,
+                    resp.id,
+                    name,
+                    at,
+                    color,
+                    resp.hovered() && enabled,
+                );
+            }
+            _ => paint_icon(ui.painter(), at, icon, color),
+        }
     }
     resp
 }

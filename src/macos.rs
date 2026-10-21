@@ -63,6 +63,24 @@ pub fn apply_vibrancy(window: &Window) -> bool {
     true
 }
 
+/// Hides the close, minimise and zoom buttons: the app draws its own chrome and the menu bar
+/// (⌘W, ⌘M) covers the actions. AppKit shows them again on layout changes, so this is re-applied
+/// from redraw; hiding an already hidden button is a no-op.
+pub fn hide_traffic_lights(window: &Window) {
+    let Some(win) = ns_window(window) else { return };
+    for kind in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        if let Some(b) = win.standardWindowButton(kind)
+            && !b.isHidden()
+        {
+            b.setHidden(true);
+        }
+    }
+}
+
 /// Move the close/minimise/zoom buttons so they start `x` points from the left and are
 /// vertically centred in a titlebar area `bar_h` points tall (our toolbar). AppKit lays the
 /// titlebar out again on show, resize and fullscreen changes, so this is re-applied from
@@ -112,6 +130,7 @@ pub enum MenuCmd {
     Quit,
     ToggleGrid,
     ToggleHelp,
+    CheckUpdates,
     Theme(crate::theme::Choice),
 }
 
@@ -266,12 +285,15 @@ pub fn install_menu() -> NativeMenu {
         .collect();
     let theme_menu = Submenu::with_items("Theme", true, &theme_items).expect("theme menu");
 
+    let updates = MenuItem::new("Check for Updates…", true, None);
+    cmds.insert(updates.id().clone(), MenuCmd::CheckUpdates);
     let sep = PredefinedMenuItem::separator;
     let app_menu = Submenu::with_items(
         "PaperCraft",
         true,
         &[
             &PredefinedMenuItem::about(Some("About PaperCraft"), None),
+            &updates,
             &sep(),
             &PredefinedMenuItem::services(None),
             &sep(),

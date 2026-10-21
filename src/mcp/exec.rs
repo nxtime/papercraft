@@ -271,6 +271,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
             let r = match name {
                 "create_page" => create_page(ed, &a),
                 "rename_pages" => rename_pages(ed, &a),
+                "delete_pages" => delete_pages(ed, &a),
                 "get_basic_info" => basic_info(host, &a),
                 "get_selection" => selection(ed),
                 "get_node_info" => node_info(ed, &a),
@@ -458,6 +459,39 @@ fn rename_pages(ed: &mut Editor, a: &Args) -> ToolResult {
         done.push(json!({"pageId": ed.pages[i].id, "name": ed.pages[i].name}));
     }
     text(json!({"renamed": done}))
+}
+
+fn delete_pages(ed: &mut Editor, a: &Args) -> ToolResult {
+    let confirm = a.bool("confirm").unwrap_or(false);
+    let mut idx = Vec::new();
+    for v in a.arr("pageIds")? {
+        let i = find_page(ed, v.as_str().ok_or("pageIds must be strings")?)?;
+        if !idx.contains(&i) {
+            idx.push(i);
+        }
+    }
+    if idx.len() >= ed.pages.len() {
+        return Err("a project keeps at least one page".into());
+    }
+    if let Some(i) = idx
+        .iter()
+        .find(|i| !confirm && !ed.page_doc(**i).nodes.is_empty())
+    {
+        return Err(format!(
+            "page `{}` has layers; pass confirm: true to delete it",
+            ed.pages[*i].name
+        ));
+    }
+    // Highest index first, so earlier indices stay valid.
+    idx.sort_unstable_by(|a, b| b.cmp(a));
+    let deleted: Vec<String> = idx
+        .into_iter()
+        .filter_map(|i| {
+            let name = ed.pages[i].name.clone();
+            ed.delete_page(i).map(|_| name)
+        })
+        .collect();
+    text(json!({"deleted": deleted}))
 }
 
 // ------------------------------------------------------------------------------ reading
@@ -2520,13 +2554,32 @@ impl Builder<'_, '_> {
             .or_else(|| el.attr("width"))
             .and_then(|s| css::length(s, 16.0))
             .unwrap_or(24.0);
+        // The color can be a `var(--x)` that does not exist. Report it and use the
+        // inherited color, so the icon stays visible instead of turning black.
         let color_src = el
             .attr("color")
             .or_else(|| get(own, "color"))
             .or_else(|| get(inherited, "color"));
-        let (color, var) = color_src
-            .and_then(css::resolve_color_value)
-            .unwrap_or((Color::BLACK, None));
+        let (color, var) = match color_src.and_then(css::resolve_color_value) {
+            Some(cv) => cv,
+            None => {
+                let fallback = get(inherited, "color").and_then(css::resolve_color_value);
+                if let Some((name, _)) = color_src.and_then(|v| css::var_name(v)) {
+                    self.warnings.push(format!(
+                        "x-paper-icon: no variable `--{name}`; {}",
+                        if fallback.is_some() {
+                            "using the inherited color"
+                        } else {
+                            "using black"
+                        }
+                    ));
+                }
+                match fallback {
+                    Some((c, v)) => (c, v),
+                    None => (Color::BLACK, None),
+                }
+            }
+        };
         svg_el
             .attrs
             .retain(|(k, _)| !matches!(k.as_str(), "width" | "height" | "class"));
@@ -3347,7 +3400,7 @@ fn set_variables(ed: &mut Editor, a: &Args) -> ToolResult {
     let mut updated: Map<String, Value> = Map::new();
     for page in 0..ed.pages.len() {
         let counts = ed.with_page(page, |ed| {
-            ed.edit("Set variables", |tx| {
+            ed.edit_variables("Set variables", |tx| {
                 parsed
                     .iter()
                     .map(|(n, c)| match mode {
@@ -3443,7 +3496,7 @@ fn set_tokens(ed: &mut Editor, a: &Args) -> ToolResult {
     }
     for page in 0..ed.pages.len() {
         ed.with_page(page, |ed| {
-            ed.edit("Set tokens", |tx| {
+            ed.edit_variables("Set tokens", |tx| {
                 for (n, v) in &parsed {
                     tx.set_token(n, v);
                 }
@@ -3467,7 +3520,7 @@ fn set_variable_mode(ed: &mut Editor, a: &Args) -> ToolResult {
     let mut fills = 0;
     for page in 0..ed.pages.len() {
         fills += ed.with_page(page, |ed| {
-            ed.edit("Set variable mode", |tx| tx.set_mode(&mode))
+            ed.edit_variables("Set variable mode", |tx| tx.set_mode(&mode))
         });
     }
     text(json!({"mode": mode, "fillsUpdated": fills}))
@@ -3603,6 +3656,9 @@ fn import_components(ed: &mut Editor, a: &Args) -> ToolResult {
                 .map(|r| r.right())
                 .fold(f64::MIN, f64::max);
             x = if x == f64::MIN { 0.0 } else { x + 160.0 };
+            // Wrap into rows so a big library does not become one endless strip.
+            let (x0, mut y, mut row_h) = (x, 0.0_f64, 0.0_f64);
+            const ROW_W: f64 = 3200.0;
             let (mut imported, mut skipped) = (Vec::new(), Vec::new());
             for (name, nodes) in found.drain(..) {
                 if have.contains(&name.to_lowercase()) {
@@ -3629,8 +3685,14 @@ fn import_components(ed: &mut Editor, a: &Args) -> ToolResult {
                         }
                     }
                     if n.id == root {
+                        if x > x0 && x + c.rect.w > x0 + ROW_W {
+                            x = x0;
+                            y += row_h + 96.0;
+                            row_h = 0.0;
+                        }
                         c.rect.x = x;
-                        c.rect.y = 0.0;
+                        c.rect.y = y;
+                        row_h = row_h.max(c.rect.h);
                         x += c.rect.w + 80.0;
                         new_root = Some(tx.insert(c, None, None));
                     } else {
@@ -3839,7 +3901,7 @@ fn import_design_system(host: &mut dyn Host, a: &Args) -> ToolResult {
     let mut fills = 0;
     for page in 0..ed.pages.len() {
         fills += ed.with_page(page, |ed| {
-            ed.edit("Import design system", |tx| {
+            ed.edit_variables("Import design system", |tx| {
                 tx.set_design_system(
                     &pkg.tokens.variables,
                     &pkg.tokens.modes,

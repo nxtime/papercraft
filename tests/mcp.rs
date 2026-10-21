@@ -743,3 +743,37 @@ fn cli_drives_the_running_app() {
     running.stop();
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn delete_pages_guards_layers_and_the_last_page() {
+    let mut h = host();
+    let empty = call(&mut h, "create_page", json!({"name": "Scratch"}))["pageId"].clone();
+    let full = call(&mut h, "create_page", json!({"name": "Work"}))["pageId"].clone();
+    call(
+        &mut h,
+        "create_artboard",
+        json!({"pageId": full, "name": "A", "styles": {"width": "100px", "height": "100px"}}),
+    );
+    // A page with layers needs `confirm`.
+    let err = exec::call(&mut h, "delete_pages", &json!({"pageIds": [full]})).unwrap_err();
+    assert!(err.contains("confirm"), "{err}");
+    assert_eq!(h.ed.pages.len(), 3);
+    // An empty page goes without it; with confirm the other follows.
+    let done = call(&mut h, "delete_pages", json!({"pageIds": [empty]}));
+    assert_eq!(done["deleted"], json!(["Scratch"]));
+    call(
+        &mut h,
+        "delete_pages",
+        json!({"pageIds": [full], "confirm": true}),
+    );
+    assert_eq!(h.ed.pages.len(), 1);
+    // The last page stays.
+    let last = h.ed.pages[0].id.clone();
+    let err = exec::call(
+        &mut h,
+        "delete_pages",
+        &json!({"pageIds": [last], "confirm": true}),
+    )
+    .unwrap_err();
+    assert!(err.contains("at least one"), "{err}");
+}

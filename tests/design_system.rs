@@ -683,3 +683,45 @@ fn shorthand_vars_text_transform_svg_vars_and_icon_recolor() {
         (Color::rgb(0xf3, 0x8b, 0xa8), Some("danger"))
     );
 }
+
+#[test]
+fn changing_variable_modes_preserves_existing_frame_geometry() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_variables",
+        json!({"mode":"Mocha", "variables":{"accent":"#cba6f7"}}),
+    );
+    call(
+        &mut h,
+        "set_variables",
+        json!({"mode":"Latte", "variables":{"accent":"#8839ef"}}),
+    );
+    let frame = call(
+        &mut h,
+        "create_artboard",
+        json!({"name":"Existing layout", "styles":{"width":"200px", "height":"100px", "display":"flex", "flexDirection":"row"}}),
+    );
+    let added = call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId":frame["id"], "mode":"insert-children", "html":"<div style=\"width:30px;height:40px;background:var(--accent)\"></div>"}),
+    );
+    let id = node(&added["createdNodeIds"][0]);
+    // A saved/imported layout may have positions established outside today's layout engine.
+    h.ed.doc.nodes.get_mut(&id).unwrap().rect.x = 70.0;
+    h.ed.doc.nodes.get_mut(&id).unwrap().rect.y = 25.0;
+    let before = h.ed.doc.get(id).unwrap().rect;
+    call(&mut h, "set_variable_mode", json!({"mode":"Latte"}));
+    assert_eq!(h.ed.doc.get(id).unwrap().rect, before);
+    assert_eq!(
+        fill(&h, &added["createdNodeIds"][0]).0,
+        Color::rgb(0x88, 0x39, 0xef)
+    );
+    call(&mut h, "undo", json!({}));
+    assert_eq!(h.ed.doc.get(id).unwrap().rect, before);
+    assert_eq!(
+        fill(&h, &added["createdNodeIds"][0]).0,
+        Color::rgb(0xcb, 0xa6, 0xf7)
+    );
+}

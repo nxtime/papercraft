@@ -554,7 +554,7 @@ fn app_full_ui_screenshot() {
     // Chrome present: left panel background and canvas background both visible.
     assert!(
         close(
-            img.get_pixel(20, 600).0,
+            img.get_pixel(30, 100).0,
             {
                 let c = papercraft::theme::palette(false).sidebar;
                 Color::rgb(c.r(), c.g(), c.b())
@@ -654,4 +654,43 @@ fn skipped_first_frame_keeps_egui_textures_in_sync() {
         });
         painter.paint(&g.device, &g.queue, &view, size, &ctx, l, &e, true);
     }
+}
+
+#[test]
+fn drop_shadow_is_drawn_below_the_box() {
+    use papercraft::model::Shadow;
+    let Some(g) = gpu() else { return };
+    let mut e = Editor::default();
+    let f = e.add_node(
+        Node::new(
+            NodeId(0),
+            NodeKind::Frame { clip: true },
+            Rect::new(0.0, 0.0, 200.0, 200.0),
+        ),
+        None,
+    );
+    let r = e.add_node(
+        Node::new(
+            NodeId(0),
+            NodeKind::Rect,
+            Rect::new(50.0, 50.0, 100.0, 60.0),
+        ),
+        Some(f),
+    );
+    let render = |e: &Editor| png::render(g, &e.doc, Some(&[f]), 1.0, Some(Color::WHITE)).unwrap();
+    let plain = render(&e);
+    e.doc.nodes.get_mut(&r).unwrap().style.shadow = Some(Shadow {
+        x: 0.0,
+        y: 12.0,
+        blur: 16.0,
+        spread: 0.0,
+        color: Color::rgba(0, 0, 0, 200),
+    });
+    let shadowed = render(&e);
+    // Just below the box's bottom edge (y = 110): white before, darkened after.
+    assert_eq!(plain.get_pixel(100, 118).0[0], 255);
+    assert!(
+        shadowed.get_pixel(100, 118).0[0] < 200,
+        "shadow darkens the area under the box"
+    );
 }

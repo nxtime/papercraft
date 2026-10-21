@@ -14,7 +14,7 @@ fn c32(c: Color) -> egui::Color32 {
 /// Run `f` as one undoable edit on every page, so variables stay in step across the project.
 fn on_every_page(ed: &mut Editor, label: &str, f: impl Fn(&mut crate::history::Tx)) {
     for page in 0..ed.pages.len() {
-        ed.with_page(page, |ed| ed.edit(label, |tx| f(tx)));
+        ed.with_page(page, |ed| ed.edit_variables(label, |tx| f(tx)));
     }
 }
 
@@ -38,8 +38,8 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         ui.add_space(6.0);
         ui.label(
             RichText::new(t.to_uppercase())
-                .font(theme::semibold(theme::SECONDARY - 1.0))
-                .color(p.secondary),
+                .font(theme::semibold(theme::SECONDARY))
+                .color(p.tertiary),
         );
         ui.add_space(2.0);
     };
@@ -104,21 +104,19 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 ui.horizontal_wrapped(|ui| {
                     for m in &modes {
                         let on = active.as_deref() == Some(m);
-                        if ui.selectable_label(on, m).clicked() && !on {
+                        let chip = super::kit::chip(ui, m, on).on_hover_text("Right-click to delete");
+                        if chip.clicked() && !on {
                             let m = m.clone();
                             on_every_page(ed, "Set variable mode", |tx| {
                                 tx.set_mode(&m);
                             });
                         }
-                        if crate::theme::small_button(ui, "✕")
-                            .on_hover_text("Delete mode")
-                            .clicked()
-                        {
-                            let m = m.clone();
-                            on_every_page(ed, "Remove variable mode", |tx| {
-                                tx.remove_mode(&m);
-                            });
-                        }
+                        chip.context_menu(|ui| {
+                            if ui.button("Delete mode").clicked() {
+                                super::confirm::request(st, ed, super::confirm::Removal::Mode(m.clone()));
+                                ui.close();
+                            }
+                        });
                     }
                 });
             }
@@ -220,12 +218,11 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::theme::small_button(ui, "✕")
+                        if crate::theme::icon_button(ui, theme::Icon::Trash, 20.0, false)
                             .on_hover_text("Delete (fills keep their color)")
                             .clicked()
                         {
-                            let n = name.clone();
-                            on_every_page(ed, "Delete variable", |tx| tx.remove_variable(&n));
+                            super::confirm::request(st, ed, super::confirm::Removal::Variable(name.clone()));
                         }
                         ui.label(RichText::new(color.to_hex()).monospace().weak());
                     });
@@ -311,11 +308,11 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("--{k}")).monospace().size(theme::SECONDARY));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::theme::small_button(ui, "✕")
+                        if crate::theme::icon_button(ui, theme::Icon::Trash, 20.0, false)
                             .on_hover_text("Delete token")
                             .clicked()
                         {
-                            on_every_page(ed, "Delete token", |tx| tx.remove_token(&k));
+                            super::confirm::request(st, ed, super::confirm::Removal::Token(k.clone()));
                         }
                         ui.label(RichText::new(&v).monospace().weak().size(theme::SECONDARY));
                     });
@@ -389,28 +386,19 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 .filter(|id| ed.is_instance_root(*id))
             {
                 let cur_main = ed.instance_main_root(inst_id);
-                let cur_name = cur_main
-                    .and_then(|m| ed.doc.get(m))
-                    .map(|n| n.name.clone())
-                    .unwrap_or_else(|| "Instance".into());
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new("Instance")
                             .size(theme::SECONDARY)
                             .color(p.secondary),
                     );
-                    egui::ComboBox::from_id_salt("design_swap_instance")
-                        .selected_text(cur_name)
-                        .width(100.0)
-                        .show_ui(ui, |ui| {
-                            for (cid, cname, _, _, _) in &comps {
-                                if ui.selectable_label(cur_main == Some(*cid), cname).clicked()
-                                    && cur_main != Some(*cid)
-                                {
-                                    ed.swap_instance(inst_id, *cid);
-                                }
-                            }
-                        });
+                    let opts: Vec<(Option<NodeId>, &str)> = comps
+                        .iter()
+                        .map(|(cid, cname, _, _, _)| (Some(*cid), cname.as_str()))
+                        .collect();
+                    if let Some(Some(cid)) = super::kit::select(ui, cur_main, &opts, 120.0) {
+                        ed.swap_instance(inst_id, cid);
+                    }
                     if crate::theme::small_button(ui, "Reset").clicked() {
                         ed.reset_overrides();
                     }

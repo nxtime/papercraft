@@ -72,6 +72,10 @@ pub struct Manifest {
     pub pages: Vec<PageRef>,
     #[serde(default)]
     pub active_page: Option<String>,
+    /// Page groups (folders): group name -> page ids, in page order.
+    /// Old manifests have no groups and load with none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub page_groups: BTreeMap<String, Vec<String>>,
 }
 
 impl Manifest {
@@ -90,6 +94,7 @@ impl Manifest {
             modified: now,
             active_page: Some(page.id.clone()),
             pages: vec![page],
+            page_groups: BTreeMap::new(),
         }
     }
 

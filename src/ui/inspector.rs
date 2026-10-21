@@ -137,12 +137,9 @@ fn color_field(
     );
     let mut out = None;
     let mut c2 = c32(c);
-    let r = ui
-        .scope_builder(egui::UiBuilder::new().max_rect(sw), |ui| {
-            ui.spacing_mut().interact_size = egui::Vec2::splat(18.0);
-            ui.color_edit_button_srgba(&mut c2)
-        })
-        .inner;
+    let mut swatch_ui = ui.new_child(egui::UiBuilder::new().max_rect(sw));
+    swatch_ui.spacing_mut().interact_size = egui::Vec2::splat(18.0);
+    let r = swatch_ui.color_edit_button_srgba(&mut c2);
     seal_on_release(ed, &r);
     if r.changed() && from32(c2) != c {
         out = Some(from32(c2));
@@ -152,13 +149,19 @@ fn color_field(
         egui::pos2(rect.right() - 8.0, rect.bottom()),
     );
     if let Some(v) = bound {
-        ui.painter().text(
-            egui::pos2(text_rect.left(), rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            format!("--{v}"),
-            egui::FontId::proportional(theme::SECONDARY + 1.0),
-            theme::pal(ui).secondary,
-        );
+        let mut label_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect));
+        label_ui.set_clip_rect(text_rect.intersect(ui.clip_rect()));
+        label_ui
+            .add_sized(
+                text_rect.size(),
+                egui::Label::new(
+                    RichText::new(format!("--{v}"))
+                        .size(theme::SECONDARY + 1.0)
+                        .color(theme::pal(ui).secondary),
+                )
+                .truncate(),
+            )
+            .on_hover_text(format!("--{v}"));
         return out;
     }
     let id = ui.id().with("hex");
@@ -168,7 +171,9 @@ fn color_field(
     } else {
         shown
     };
-    let r = ui.put(
+    let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect));
+    text_ui.set_clip_rect(text_rect.intersect(ui.clip_rect()));
+    let r = text_ui.put(
         text_rect,
         egui::TextEdit::singleline(&mut text)
             .id(id)
@@ -341,31 +346,13 @@ fn combo<T: PartialEq + Copy>(
     options: &[(T, &str)],
     width: f32,
 ) -> Option<T> {
-    let mut v = current;
-    let label = options
-        .iter()
-        .find(|(o, _)| *o == current)
-        .map_or("—", |(_, l)| *l);
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(label)
-        .width(width)
-        .show_ui(ui, |ui| {
-            for (o, l) in options {
-                ui.selectable_value(&mut v, *o, *l);
-            }
-        });
-    (v != current).then_some(v)
+    let _ = id;
+    super::kit::select(ui, current, options, width)
 }
 
+/// Sections are separated by space, not lines.
 fn separator(ui: &mut Ui) {
-    ui.add_space(6.0);
-    let r = ui.available_rect_before_wrap();
-    ui.painter().hline(
-        r.x_range(),
-        r.top(),
-        egui::Stroke::new(1.0, theme::pal(ui).separator),
-    );
-    ui.add_space(8.0);
+    ui.add_space(14.0);
 }
 
 fn icon_btn(ui: &mut Ui, icon: theme::Icon, on: bool, tip: &str) -> bool {
@@ -379,9 +366,20 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         .auto_shrink(false)
         .show(ui, |ui| {
             theme::figma_fields(ui);
-            section(ui, "Design");
-            ui.add_space(2.0);
             let ids = ed.top_selection();
+            ui.horizontal(|ui| {
+                if super::kit::chip(ui, "Design", !st.proto_tab).clicked() {
+                    st.proto_tab = false;
+                }
+                if super::kit::chip(ui, "Prototype", st.proto_tab).clicked() {
+                    st.proto_tab = true;
+                }
+            });
+            ui.add_space(2.0);
+            if st.proto_tab {
+                prototype_tab(ui, ed, &ids);
+                return;
+            }
             if ids.is_empty() {
                 nothing_selected(ui, ed);
                 separator(ui);
@@ -424,6 +422,10 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 separator(ui);
                 sticky_section(ui, ed, &ids, &first);
             }
+            if first.is_frame() || crate::render::draw::is_area(&first) {
+                separator(ui);
+                effects(ui, ed, &ids, &first);
+            }
             separator(ui);
             layer(ui, ed, &ids, &first);
             if !matches!(
@@ -441,6 +443,30 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         });
 }
 
+/// Prototype tab: which top-level frame a click on the selected layer opens in Present mode.
+fn prototype_tab(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId]) {
+    let Some(first) = ids.first().and_then(|id| ed.doc.get(*id)).cloned() else {
+        ui.label(
+            RichText::new("Select a layer to link it to a frame.").color(theme::pal(ui).secondary),
+        );
+        return;
+    };
+    let first = &first;
+    section(ui, "Interaction");
+    let frames: Vec<(Option<NodeId>, String)> = std::iter::once((None, "None".to_string()))
+        .chain(ed.doc.root.iter().filter_map(|id| {
+            let n = ed.doc.get(*id)?;
+            (n.is_frame() && !n.component && *id != first.id).then(|| (Some(*id), n.name.clone()))
+        }))
+        .collect();
+    let opts: Vec<(Option<NodeId>, &str)> = frames.iter().map(|(i, n)| (*i, n.as_str())).collect();
+    row(ui, "On click", |ui| {
+        if let Some(v) = combo(ui, "link", first.link, &opts, 140.0) {
+            apply(ed, "link", ids, |n| n.link = v);
+        }
+    });
+}
+
 /// Notes on the selected layer: type one for an agent (it reads them with `get_feedback`), or
 /// resolve the ones already there.
 fn feedback_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, ids: &[NodeId], first: &Node) {
@@ -450,13 +476,13 @@ fn feedback_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, ids: &[NodeI
     let id = ids[0];
     let p = theme::pal(ui);
     let open = first.open_comments();
-    ui.label(
-        RichText::new(if open > 0 {
+    section(
+        ui,
+        &if open > 0 {
             format!("Feedback · {open} open")
         } else {
             "Feedback".to_string()
-        })
-        .font(theme::semibold(theme::BODY)),
+        },
     );
     for c in first.comments.clone() {
         ui.horizontal(|ui| {
@@ -568,7 +594,7 @@ fn swatches(ui: &mut Ui, current: Color) -> Option<Color> {
 }
 
 fn sticky_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
-    ui.label(title_text("Sticky note"));
+    section(ui, "Sticky note");
     let cur = first.style.fill().unwrap_or(STICKY_COLORS[0]);
     if let Some(c) = swatches(ui, cur) {
         apply(ed, "fill", ids, |n| n.style.set_fill(Some(c)));
@@ -600,7 +626,7 @@ fn arrow_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     else {
         return;
     };
-    ui.label(title_text("Arrow"));
+    section(ui, "Arrow");
     let routes = [
         (Route::Straight, "Straight"),
         (Route::Curved, "Curved"),
@@ -660,11 +686,10 @@ fn arrow_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
 fn sketch_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     use crate::model::rough::{FillStyle, Rough};
     ui.horizontal(|ui| {
-        ui.label(title_text("Hand-drawn"));
+        section(ui, "Hand-drawn");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut on = first.style.rough.is_some();
-            if ui
-                .checkbox(&mut on, "")
+            if super::kit::toggle(ui, &mut on)
                 .on_hover_text("Sketchy rough.js-style lines (⌘⌥H)")
                 .changed()
             {
@@ -712,7 +737,7 @@ fn sketch_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
 /// Export settings and button, like Figma's Export section.
 fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     use crate::io::export::{Format, Scope};
-    ui.label(title_text("Export"));
+    section(ui, "Export");
     let spec = &mut st.export;
     ui.horizontal(|ui| {
         let w = half(ui);
@@ -746,7 +771,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         }
     });
     if spec.format != Format::Svg || spec.transparent {
-        ui.checkbox(&mut spec.transparent, "Transparent background");
+        super::kit::checkbox(ui, &mut spec.transparent, "Transparent background");
     }
     let what = match (spec.scope, ed.top_selection().len()) {
         (Scope::Selection, 0) => format!("page “{}”", ed.page_name()),
@@ -790,7 +815,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         .or_else(|| ed.doc.root.first().copied());
     if let Some(root_id) = root_id {
         ui.add_space(6.0);
-        ui.label(title_text("Code & AI Handoff"));
+        section(ui, "Code & AI Handoff");
         if st.code_target.is_empty() {
             st.code_target = "react".into();
         }
@@ -835,9 +860,9 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 }
 
 fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
-    ui.label(title_text("New shapes"));
+    section(ui, "New shapes");
     let mut sketch = ed.sketch.is_some();
-    if ui.checkbox(&mut sketch, "Hand-drawn style").changed() {
+    if super::kit::checkbox(ui, &mut sketch, "Hand-drawn style").changed() {
         ed.toggle_sketch();
     }
     let routes = [
@@ -856,12 +881,16 @@ fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     separator(ui);
-    ui.label(title_text("Pencil"));
+    section(ui, "Pencil");
     row(ui, "Width", |ui| {
-        ui.add(egui::Slider::new(&mut ed.ink_width, 0.5..=24.0))
+        let r = super::kit::slider(ui, &mut ed.ink_width, 0.5..=24.0);
+        ui.label(format!("{:.1}", ed.ink_width));
+        r
     });
     row(ui, "Smoothing", |ui| {
-        ui.add(egui::Slider::new(&mut ed.ink_smoothing, 0.0..=1.0))
+        let r = super::kit::slider(ui, &mut ed.ink_smoothing, 0.0..=1.0);
+        ui.label(format!("{:.2}", ed.ink_smoothing));
+        r
     });
     row(ui, "Color", |ui| {
         let mut c = c32(ed.ink_color);
@@ -870,7 +899,7 @@ fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     separator(ui);
-    ui.label(title_text("Page"));
+    section(ui, "Page");
     let mut name = ed.page_name().to_string();
     if ui
         .add(
@@ -1121,6 +1150,9 @@ fn geometry(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     ) {
         let per_corner = first.style.radii.is_some();
         ui.horizontal(|ui| {
+            // The field(s) take the row, the corners button keeps its square.
+            let sp = ui.spacing().item_spacing.x;
+            let room = ui.available_width() - 32.0;
             if !per_corner {
                 if let Some(v) = num_field(
                     ui,
@@ -1129,15 +1161,15 @@ fn geometry(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
                     first.style.corner_radius,
                     0.5,
                     0.0..=1e4,
-                    92.0,
+                    room.max(60.0),
                 ) {
                     apply(ed, "radius", ids, |n| n.style.corner_radius = v);
                 }
             } else {
                 let rr = first.style.corner_radii();
+                let cw = ((room - 3.0 * sp) / 4.0).max(36.0);
                 for (i, p) in ["TL", "TR", "BR", "BL"].iter().enumerate() {
-                    if let Some(v) =
-                        num_field(ui, ed, &format!("{p} "), rr[i], 0.5, 0.0..=1e4, 46.0)
+                    if let Some(v) = num_field(ui, ed, &format!("{p} "), rr[i], 0.5, 0.0..=1e4, cw)
                     {
                         apply(ed, "radius", ids, |n| {
                             let mut r = n.style.corner_radii();
@@ -1162,7 +1194,7 @@ fn geometry(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     }
     if let NodeKind::Frame { clip } = first.kind {
         let mut c = clip;
-        if ui.checkbox(&mut c, "Clip content").changed() {
+        if super::kit::checkbox(ui, &mut c, "Clip content").changed() {
             apply(ed, "clip", ids, |n| n.kind = NodeKind::Frame { clip: c });
         }
     }
@@ -1209,6 +1241,7 @@ fn child_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     let show_sizing = first.layout.is_some() || (in_auto && !first.layout_child.absolute);
     if show_sizing {
         ui.horizontal(|ui| {
+            let cell = half(ui);
             for (axis, label) in [(0usize, "W"), (1, "H")] {
                 ui.label(RichText::new(label).color(theme::pal(ui).secondary));
                 let opts = sizing_opts_for(axis);
@@ -1217,7 +1250,7 @@ fn child_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
                     &format!("sizing{axis}"),
                     first.layout_child.sizing[axis],
                     &opts,
-                    66.0,
+                    (cell - 24.0).max(50.0),
                 ) {
                     apply(ed, "layout", ids, |n| {
                         n.layout_child.sizing[axis] = v;
@@ -1233,7 +1266,7 @@ fn child_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     }
     if in_auto {
         let mut abs = first.layout_child.absolute;
-        if ui.checkbox(&mut abs, "Ignore auto layout").changed() {
+        if super::kit::checkbox(ui, &mut abs, "Ignore auto layout").changed() {
             apply(ed, "layout", ids, |n| n.layout_child.absolute = abs);
         }
     }
@@ -1268,7 +1301,7 @@ fn child_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
 fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     separator(ui);
     ui.horizontal(|ui| {
-        ui.label(title_text("Auto layout"));
+        section(ui, "Auto layout");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if first.layout.is_some() {
                 if crate::theme::icon_button(ui, crate::theme::Icon::Minus, 24.0, false)
@@ -1315,7 +1348,8 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         }
         ui.add_space(6.0);
         ui.add_enabled_ui(!l.gap_auto, |ui| {
-            if let Some(v) = num_field(ui, ed, "Gap ", l.gap, 0.5, -1e4..=1e4, 70.0) {
+            let room = (ui.available_width() - 34.0).max(60.0);
+            if let Some(v) = num_field(ui, ed, "Gap ", l.gap, 0.5, -1e4..=1e4, room) {
                 set(ed, &|l| l.gap = v);
             }
         });
@@ -1324,8 +1358,9 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         }
     });
     ui.horizontal(|ui| {
+        let cw = ((ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / 4.0).max(36.0);
         for (i, p) in ["T ", "R ", "B ", "L "].iter().enumerate() {
-            if let Some(v) = num_field(ui, ed, p, l.padding[i], 0.5, 0.0..=1e4, 44.0) {
+            if let Some(v) = num_field(ui, ed, p, l.padding[i], 0.5, 0.0..=1e4, cw) {
                 set(ed, &|l| l.padding[i] = v);
             }
         }
@@ -1336,10 +1371,11 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         (Align::End, "End"),
     ];
     row(ui, "Align", |ui| {
-        if let Some(v) = combo(ui, "al-main", l.align_main, &opts, 64.0) {
+        let cw = half(ui).max(60.0);
+        if let Some(v) = combo(ui, "al-main", l.align_main, &opts, cw) {
             set(ed, &|l| l.align_main = v);
         }
-        if let Some(v) = combo(ui, "al-cross", l.align_cross, &opts, 64.0) {
+        if let Some(v) = combo(ui, "al-cross", l.align_cross, &opts, cw) {
             set(ed, &|l| l.align_cross = v);
         }
     });
@@ -1354,7 +1390,7 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     };
     let editing_range = ed.text_selection().is_some();
     ui.horizontal(|ui| {
-        ui.label(title_text("Text"));
+        section(ui, "Text");
         if editing_range {
             ui.label(
                 RichText::new("selection")
@@ -1469,7 +1505,7 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
 fn fills(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     let fills = first.style.fills.clone();
     ui.horizontal(|ui| {
-        ui.label(title_text("Fill"));
+        section(ui, "Fill");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if crate::theme::icon_button(ui, crate::theme::Icon::Plus, 24.0, false)
                 .on_hover_text("Add fill")
@@ -1523,8 +1559,24 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
         match p {
             Paint::Solid { color, var } => {
                 let has_vars = !ed.doc.variables.is_empty() || var.is_some();
-                let w = ui.available_width() - if has_vars { 68.0 } else { 32.0 };
-                if let Some(c) = color_field(ui, ed, *color, var.as_deref(), w.max(60.0)) {
+                let btn_label = if var.is_some() { "var" } else { "--" };
+                let spacing = ui.spacing().item_spacing.x;
+                let variable_width = if has_vars {
+                    ui.painter()
+                        .layout_no_wrap(
+                            btn_label.into(),
+                            egui::TextStyle::Button.resolve(ui.style()),
+                            ui.visuals().text_color(),
+                        )
+                        .size()
+                        .x
+                        + 2.0 * ui.spacing().button_padding.x
+                        + spacing
+                } else {
+                    0.0
+                };
+                let w = ui.available_width() - variable_width - 24.0 - spacing;
+                if let Some(c) = color_field(ui, ed, *color, var.as_deref(), w.max(40.0)) {
                     set(ed, Paint::solid(c));
                 }
                 if has_vars {
@@ -1534,7 +1586,6 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
                         .iter()
                         .map(|(k, v)| (k.clone(), *v))
                         .collect();
-                    let btn_label = if var.is_some() { "var" } else { "--" };
                     ui.menu_button(btn_label, |ui| {
                         for (vname, vcol) in &vars {
                             let active = var.as_deref() == Some(vname.as_str());
@@ -1676,7 +1727,7 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
 fn stroke(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     let s = &first.style;
     ui.horizontal(|ui| {
-        ui.label(title_text("Stroke"));
+        section(ui, "Stroke");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if s.stroke.is_some() {
                 if crate::theme::icon_button(ui, crate::theme::Icon::Minus, 24.0, false).clicked() {
@@ -1747,8 +1798,60 @@ fn stroke(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     });
 }
 
+/// Drop shadow: one effect, as the model keeps a single `shadow` per box.
+fn effects(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
+    let shadow = first.style.shadow;
+    ui.horizontal(|ui| {
+        section(ui, "Effects");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (icon, tip) = match shadow {
+                Some(_) => (crate::theme::Icon::Minus, "Remove drop shadow"),
+                None => (crate::theme::Icon::Plus, "Add drop shadow"),
+            };
+            if crate::theme::icon_button(ui, icon, 24.0, false)
+                .on_hover_text(tip)
+                .clicked()
+            {
+                let next = shadow.is_none().then_some(crate::model::Shadow {
+                    x: 0.0,
+                    y: 4.0,
+                    blur: 24.0,
+                    spread: 0.0,
+                    color: Color::rgba(0, 0, 0, 102),
+                });
+                apply(ed, "shadow", ids, |n| n.style.shadow = next);
+            }
+        });
+    });
+    let Some(sh) = shadow else { return };
+    let w = half(ui);
+    let set = |ed: &mut Editor, f: fn(&mut crate::model::Shadow, f64), v: f64| {
+        apply(ed, "shadow", ids, |n| {
+            if let Some(s) = &mut n.style.shadow {
+                f(s, v);
+            }
+        });
+    };
+    ui.horizontal(|ui| {
+        if let Some(v) = num_field(ui, ed, "X", sh.x, 0.5, -500.0..=500.0, w) {
+            set(ed, |s, v| s.x = v, v);
+        }
+        if let Some(v) = num_field(ui, ed, "Y", sh.y, 0.5, -500.0..=500.0, w) {
+            set(ed, |s, v| s.y = v, v);
+        }
+    });
+    ui.horizontal(|ui| {
+        if let Some(v) = num_field(ui, ed, "Blur", sh.blur, 0.5, 0.0..=500.0, w) {
+            set(ed, |s, v| s.blur = v, v);
+        }
+        if let Some(v) = num_field(ui, ed, "Spread", sh.spread, 0.5, -500.0..=500.0, w) {
+            set(ed, |s, v| s.spread = v, v);
+        }
+    });
+}
+
 fn layer(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
-    ui.label(title_text("Layer"));
+    section(ui, "Layer");
     ui.horizontal(|ui| {
         let w = half(ui);
         let opts: Vec<(BlendMode, &str)> = BlendMode::ALL.iter().map(|b| (*b, b.label())).collect();
@@ -1760,4 +1863,78 @@ fn layer(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             apply(ed, "opacity", ids, |n| n.style.opacity = v / 100.0);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bound_color_field_keeps_following_control_outside_field() {
+        let ctx = egui::Context::default();
+        super::super::setup_style(&ctx);
+        let mut ed = Editor::default();
+        let mut next = egui::Rect::NOTHING;
+        let mut field_left = 0.0;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            theme::figma_fields(ui);
+            ui.horizontal(|ui| {
+                field_left = ui.next_widget_position().x;
+                color_field(ui, &mut ed, Color::BLACK, Some("surface-2"), 100.0);
+                next = ui.menu_button("var", |_| {}).response.rect;
+            });
+        });
+        output.textures_delta.clear();
+        assert!(
+            next.left() >= field_left + 100.0,
+            "next control overlaps color field: {next:?}"
+        );
+        let label = output.shapes.iter().find(|shape| {
+            matches!(&shape.shape, egui::epaint::Shape::Text(t) if t.galley.text().starts_with("--surface"))
+        }).expect("bound color label");
+        assert!(
+            label.clip_rect.right() <= field_left + 100.0,
+            "bound label paints beyond field"
+        );
+    }
+    #[test]
+    fn bound_fill_row_fits_narrow_inspector() {
+        for width in [192.0, 232.0, 392.0] {
+            let ctx = egui::Context::default();
+            super::super::setup_style(&ctx);
+            let mut ed = Editor::default();
+            let mut row_width = 0.0;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                ui.set_width(width);
+                theme::figma_fields(ui);
+                let before = ui.min_rect().left();
+                fill_row(
+                    ui,
+                    &mut ed,
+                    &[],
+                    0,
+                    &Paint::solid_var(Color::BLACK, "surface-2-with-a-long-name"),
+                );
+                row_width = ui.min_rect().right() - before;
+            });
+            output.textures_delta.clear();
+            assert!(
+                row_width <= width + 0.1,
+                "fill row {row_width} overflows inspector {width}"
+            );
+            let mut variable = None;
+            let mut binding = None;
+            for shape in &output.shapes {
+                if let egui::epaint::Shape::Text(t) = &shape.shape {
+                    if t.galley.text() == "var" {
+                        variable = Some(t.galley.rect.translate(t.pos.to_vec2()));
+                    }
+                    if t.galley.text().starts_with("--surface") {
+                        binding = Some(shape.clip_rect);
+                    }
+                }
+            }
+            assert!(binding.unwrap().right() < variable.unwrap().left());
+        }
+    }
 }

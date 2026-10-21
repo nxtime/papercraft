@@ -406,7 +406,16 @@ async fn serve_static(State(relay): State<Arc<Relay>>, uri: Uri) -> Response {
     // Read whole: the files are a wasm bundle, and a streaming body would need another
     // dependency for no benefit here.
     match tokio::fs::read(&path).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, mime_of(&path))], bytes).into_response(),
+        // `no-cache` revalidates instead of storing: the web app is replaced under the same
+        // URL, and a stale bundle in the browser is worse than a round trip.
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, mime_of(&path)),
+                (header::CACHE_CONTROL, "no-cache"),
+            ],
+            bytes,
+        )
+            .into_response(),
         Err(_) => not_found(NOT_FOUND),
     }
 }

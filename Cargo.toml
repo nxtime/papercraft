@@ -34,6 +34,7 @@ lyon = "1"
 ttf-parser = "0.25"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+semver = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pollster = "0.4"
 web-time = "1"
@@ -47,6 +48,7 @@ craft-ui = { version = "0.1.0", git = "https://git.marcospaulo.dev.br/masi/craft
 i_overlay = "9.0.1"
 miniz_oxide = "0.9.1"
 usvg = "0.48"
+resvg = "0.48"
 tokio = { version = "1", features = ["sync"] }
 base64 = "0.23"
 
@@ -68,7 +70,6 @@ opt-level = "z"
 opt-level = 2
 
 [dev-dependencies]
-resvg = "0.48"
 rmcp = { version = "3.5.1", default-features = false, features = ["transport-child-process"] }
 reqwest = { version = "0.13", default-features = false }
 # The relay test drives a fake tab over a real WebSocket; same version axum's `ws` uses.

@@ -88,8 +88,11 @@ impl Default for MeshBuilder {
     }
 }
 
+/// A point for lyon. A NaN or infinite coordinate (a layer with broken geometry) would trip lyon's
+/// debug assertions and draw garbage in release, so it becomes 0.
 pub fn p(v: V2) -> lyon::math::Point {
-    point(v.x as f32, v.y as f32)
+    let finite = |c: f64| if c.is_finite() { c as f32 } else { 0.0 };
+    point(finite(v.x), finite(v.y))
 }
 
 impl MeshBuilder {

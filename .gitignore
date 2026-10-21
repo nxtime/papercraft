@@ -5,3 +5,4 @@ dist/
 app.asar.unpacked/
 web/pkg/
 .worktrees/
+.oc-agents/

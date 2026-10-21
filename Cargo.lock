@@ -2740,6 +2740,7 @@ dependencies = [
  "resvg",
  "rfd",
  "rmcp",
+ "semver",
  "serde",
  "serde_json",
  "tokio",

@@ -6,6 +6,7 @@ use crate::geom::Camera;
 use crate::history::History;
 use crate::model::{Document, NodeId};
 use crate::project::{PageData, new_id};
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct PageStash {
@@ -80,6 +81,8 @@ impl Editor {
             .collect();
         self.active_page = active_i;
         self.meta_dirty = false;
+        // The groups of the previous project are gone; the session sets the new ones.
+        self.page_groups.clear();
     }
 
     pub fn active_page_id(&self) -> &str {
@@ -156,6 +159,8 @@ impl Editor {
     }
 
     fn insert_empty_page(&mut self, at: usize, name: Option<&str>) {
+        // A new page joins the group of the page that is active.
+        let group = self.page_group(self.active_page_id()).map(str::to_string);
         let base = name
             .map(str::trim)
             .filter(|n| !n.is_empty())
@@ -175,11 +180,15 @@ impl Editor {
         }));
         // Never saved: force the first autosave.
         slot.saved_gen = u64::MAX;
+        let id = slot.id.clone();
         self.pages.insert(at, slot);
         if self.active_page >= at {
             self.active_page += 1;
         }
         self.meta_dirty = true;
+        if let Some(g) = group {
+            self.assign_page_group(&id, Some(&g));
+        }
     }
 
     pub fn duplicate_page(&mut self, i: usize) -> usize {
@@ -188,6 +197,8 @@ impl Editor {
         }
         self.commit();
         let src = self.page_data(i);
+        // A copy joins the group of the page it was made from.
+        let group = self.page_group(&self.pages[i].id).map(str::to_string);
         let name = self.unique_page_name(&format!("{} copy", src.name));
         let mut slot = PageSlot::new(&name);
         slot.saved_gen = u64::MAX;
@@ -201,11 +212,15 @@ impl Editor {
             selection: Vec::new(),
             needs_fit: src.camera.is_none(),
         }));
+        let id = slot.id.clone();
         self.pages.insert(i + 1, slot);
         if self.active_page > i {
             self.active_page += 1;
         }
         self.meta_dirty = true;
+        if let Some(g) = group {
+            self.assign_page_group(&id, Some(&g));
+        }
         self.switch_page(i + 1);
         i + 1
     }
@@ -239,6 +254,12 @@ impl Editor {
             });
         }
         let removed = self.pages.remove(i);
+        // The page leaves its group; the group itself stays (it may be empty now).
+        if let Some(group) = self.page_group(&removed.id).map(str::to_owned)
+            && let Some(members) = self.page_groups.get_mut(&group)
+        {
+            members.retain(|id| id != &removed.id);
+        }
         if self.active_page > i {
             self.active_page -= 1;
         }
@@ -246,6 +267,28 @@ impl Editor {
         self.revision += 1;
         self.status = format!("Deleted {}", removed.name);
         Some(removed.id)
+    }
+
+    /// Replaces the active page's content with a saved snapshot, as one undoable change.
+    pub fn restore_snapshot(&mut self, snap: &crate::model::Document) {
+        self.edit("Restore version", |tx| {
+            for root in tx.doc().root.clone() {
+                tx.remove(root);
+            }
+            for root in snap.root.clone() {
+                for (i, id) in snap.subtree(root).into_iter().enumerate() {
+                    let Some(node) = snap.get(id).cloned() else {
+                        continue;
+                    };
+                    if i == 0 {
+                        tx.insert(node, None, None);
+                    } else {
+                        tx.put(node);
+                    }
+                }
+            }
+        });
+        self.selection.clear();
     }
 
     /// Move page `from` to position `to`.
@@ -257,6 +300,7 @@ impl Editor {
         let p = self.pages.remove(from);
         self.pages.insert(to, p);
         self.active_page = self.pages.iter().position(|p| p.id == active_id).unwrap();
+        self.sync_page_group_order();
         self.meta_dirty = true;
         self.revision += 1;
     }
@@ -346,6 +390,117 @@ impl Editor {
             &self.doc
         } else {
             &self.pages[i].stash.as_ref().unwrap().doc
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------- groups
+
+/// Page groups (folders). Groups are single level: a page belongs to at most one group,
+/// and a group keeps its pages in the order of the page list.
+impl Editor {
+    /// Create an empty group. Fails on an empty or already used name.
+    pub fn create_page_group(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() || self.page_groups.contains_key(name) {
+            return false;
+        }
+        self.page_groups.insert(name.to_string(), Vec::new());
+        self.meta_dirty = true;
+        self.revision += 1;
+        true
+    }
+
+    /// Rename a group, keeping its pages. Fails when the old name is unknown, the new one
+    /// is empty or already taken, or the name stays the same.
+    pub fn rename_page_group(&mut self, old: &str, new: &str) -> bool {
+        let old = old.trim();
+        let new = new.trim();
+        if old.is_empty() || new.is_empty() || old == new {
+            return false;
+        }
+        if !self.page_groups.contains_key(old) || self.page_groups.contains_key(new) {
+            return false;
+        }
+        let members = self.page_groups.remove(old).expect("group exists");
+        self.page_groups.insert(new.to_string(), members);
+        self.meta_dirty = true;
+        self.revision += 1;
+        true
+    }
+
+    /// Move a page into a group, or out of every group when `group` is `None`.
+    /// Fails when the page or the group is unknown, or when nothing changes.
+    pub fn assign_page_group(&mut self, page_id: &str, group: Option<&str>) -> bool {
+        if !self.pages.iter().any(|p| p.id == page_id) {
+            return false;
+        }
+        let current = self.page_group(page_id).map(str::to_owned);
+        let Some(name) = group else {
+            let Some(cur) = current else {
+                return false;
+            };
+            self.page_groups
+                .get_mut(&cur)
+                .expect("group exists")
+                .retain(|id| id != page_id);
+            self.meta_dirty = true;
+            self.revision += 1;
+            return true;
+        };
+        let name = name.trim();
+        if name.is_empty() || !self.page_groups.contains_key(name) {
+            return false;
+        }
+        if current.as_deref() == Some(name) {
+            return false;
+        }
+        if let Some(cur) = current {
+            self.page_groups
+                .get_mut(&cur)
+                .expect("group exists")
+                .retain(|id| id != page_id);
+        }
+        self.page_groups
+            .get_mut(name)
+            .expect("group exists")
+            .push(page_id.to_string());
+        self.sync_page_group_order();
+        self.meta_dirty = true;
+        self.revision += 1;
+        true
+    }
+
+    /// Drop a group; its pages stay in the project, only without a group.
+    pub fn remove_page_group(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        if self.page_groups.remove(name).is_none() {
+            return false;
+        }
+        self.meta_dirty = true;
+        self.revision += 1;
+        true
+    }
+
+    /// The group a page belongs to, if any.
+    pub fn page_group(&self, page_id: &str) -> Option<&str> {
+        self.page_groups
+            .iter()
+            .find(|(_, members)| members.iter().any(|id| id == page_id))
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Drop page ids that no longer exist and order every group like the page list.
+    pub fn sync_page_group_order(&mut self) {
+        let order: HashMap<&str, usize> = self
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.id.as_str(), i))
+            .collect();
+        for members in self.page_groups.values_mut() {
+            members.retain(|id| order.contains_key(id.as_str()));
+            members.sort_by_key(|id| order.get(id.as_str()).copied().unwrap_or(usize::MAX));
         }
     }
 }

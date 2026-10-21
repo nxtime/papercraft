@@ -21,6 +21,7 @@ use crate::text;
 pub use input::{Button, InputEvent, Key, Modifiers};
 pub use pages::{PageSlot, PageStash};
 use snap::Guide;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -245,11 +246,14 @@ pub struct Editor {
     /// Process-unique stamp of the document content: changes whenever the document may
     /// have changed (edits, undo, page switch, load). Renderers reuse work while it holds.
     pub doc_stamp: u64,
+    pub project_stamp: u64,
     /// Fit the camera to the content once the real viewport size is known.
     pub pending_fit: bool,
     /// Pages of the open project; the active one's content is `doc`/`history`/`camera`.
     pub pages: Vec<PageSlot>,
     pub active_page: usize,
+    /// Page groups (folders): group name -> page ids, in page order.
+    pub page_groups: BTreeMap<String, Vec<String>>,
     /// Page list or names changed (not tracked by undo history).
     pub meta_dirty: bool,
     /// Auto-layout frames not re-laid out while a child is being dragged inside them.
@@ -323,9 +327,11 @@ impl Editor {
             last_click: None,
             revision: 0,
             doc_stamp: next_stamp(),
+            project_stamp: next_stamp(),
             pending_fit: false,
             pages: vec![PageSlot::new(&name)],
             active_page: 0,
+            page_groups: BTreeMap::new(),
             meta_dirty: false,
             layout_suspended: Vec::new(),
             pen: None,
@@ -382,6 +388,18 @@ impl Editor {
         let r = f(&mut self.tx());
         self.commit();
         r
+    }
+
+    /// Variables and linked fill colors do not change layout or component structure.
+    pub fn edit_variables<R>(&mut self, label: &str, f: impl FnOnce(&mut Tx) -> R) -> R {
+        self.begin(label);
+        let result = f(&mut self.tx());
+        if let Some((rec, key)) = self.rec.take()
+            && self.history.commit(&self.doc, rec, key)
+        {
+            self.revision += 1;
+        }
+        result
     }
 
     pub fn edit_coalescing<R>(

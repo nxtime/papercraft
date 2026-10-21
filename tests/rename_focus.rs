@@ -22,13 +22,14 @@ fn run(ctx: &egui::Context, events: Vec<egui::Event>, e: &mut Editor, st: &mut U
 #[test]
 fn clicking_another_input_ends_a_page_rename_and_takes_focus() {
     let mut hit = None;
-    for y in (150..420).step_by(6) {
+    for y in (150..740).step_by(6) {
         let ctx = egui::Context::default();
         papercraft::ui::setup_style(&ctx);
         let mut e = demo::showcase();
         let first = e.doc.children(None).first().copied().unwrap();
         e.select(vec![first]);
         let mut st = UiState::default();
+        st.pages.collapsed = false;
         st.pages.renaming = Some((0, "Renamed".into()));
         for _ in 0..4 {
             run(&ctx, vec![], &mut e, &mut st);

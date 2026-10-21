@@ -49,9 +49,12 @@ pub struct HomeView {
     pub entries: Vec<Entry>,
     pub trash: Vec<TrashEntry>,
     pub show_trash: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub show_updates: bool,
     pub renaming: Option<(PathBuf, String)>,
     /// Requests for the app, drained after each frame.
     pub actions: Vec<HomeAction>,
+    pending_removal: Option<HomeAction>,
     /// "Now" for relative timestamps (unix ms); fixed in screenshots.
     pub now_ms: u64,
     pub root: PathBuf,
@@ -128,117 +131,221 @@ fn plural(n: u64, unit: &str) -> String {
     }
 }
 
-pub fn draw(ui: &mut Ui, hv: &mut HomeView, native_chrome: bool, translucent: bool) {
+pub fn draw(ui: &mut Ui, hv: &mut HomeView, _native_chrome: bool, translucent: bool) {
     let p = theme::pal(ui);
+    let floating = super::is_floating(translucent);
+    let gap = super::PANEL_GAP;
+    let backdrop = |l: i8, r: i8, t: i8, b: i8| {
+        egui::Frame::NONE
+            .fill(p.backdrop)
+            .inner_margin(egui::Margin {
+                left: l,
+                right: r,
+                top: t,
+                bottom: b,
+            })
+    };
     egui::Panel::left("home-sidebar")
         .resizable(false)
-        .exact_size(200.0)
-        .frame(
+        .exact_size(252.0 + 2.0 * gap)
+        .frame(if floating {
+            backdrop(gap as i8, gap as i8, gap as i8, gap as i8)
+        } else {
             egui::Frame::NONE
                 .fill(theme::sidebar_fill(translucent, p))
-                .inner_margin(egui::Margin::symmetric(10, 8)),
-        )
+                .inner_margin(egui::Margin::symmetric(10, 8))
+        })
         .show(ui, |ui| {
-            if native_chrome {
-                ui.add_space(theme::TOOLBAR_H - 8.0);
-            }
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("PaperCraft")
-                    .font(theme::semibold(theme::SECONDARY))
-                    .color(p.secondary),
-            );
-            ui.add_space(4.0);
-            if sidebar_item(ui, Icon::Grid, "Recents", None, !hv.show_trash) {
-                hv.show_trash = false;
-            }
-            let n = hv.trash.len();
-            if sidebar_item(
-                ui,
-                Icon::Trash,
-                "Trash",
-                (n > 0).then(|| n.to_string()),
-                hv.show_trash,
-            ) {
-                hv.show_trash = true;
-            }
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                ui.add_space(4.0);
-                let path = RichText::new(hv.root.display().to_string())
-                    .size(theme::SECONDARY - 1.0)
-                    .color(p.secondary);
-                ui.label(path).on_hover_text("Projects folder");
-                if sidebar_item(ui, Icon::Page, REVEAL_LABEL, None, false) {
-                    hv.actions.push(HomeAction::RevealRoot);
+            let body = |ui: &mut Ui| {
+                ui.horizontal(|ui| {
+                    super::kit::badge(ui, Icon::Pen, theme::accent(), 30.0);
+                    ui.label(RichText::new("PaperCraft").font(theme::semibold(17.0)));
+                });
+                ui.add_space(14.0);
+                if super::kit::button_wide(
+                    ui,
+                    super::kit::ButtonKind::Primary,
+                    Some(Icon::Plus),
+                    "New design",
+                )
+                .clicked()
+                {
+                    hv.actions.push(HomeAction::New);
                 }
-            });
-        });
-    egui::Panel::top("home-toolbar")
-        .exact_size(theme::TOOLBAR_H + 8.0)
-        .frame(
-            egui::Frame::NONE
-                .fill(p.window)
-                .inner_margin(egui::Margin::symmetric(20, 0)),
-        )
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.label(
-                    RichText::new(if hv.show_trash { "Trash" } else { "Recents" })
-                        .font(theme::semibold(17.0)),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if hv.show_trash {
-                        if ui
-                            .add_enabled(!hv.trash.is_empty(), egui::Button::new("Empty Trash"))
-                            .clicked()
-                        {
-                            hv.actions.push(HomeAction::EmptyTrash);
-                        }
-                    } else {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("New Project").color(Color32::WHITE),
-                                )
-                                .fill(theme::accent()),
-                            )
-                            .clicked()
-                        {
-                            hv.actions.push(HomeAction::New);
-                        }
-                        if ui.button("Import…").clicked() {
-                            hv.actions.push(HomeAction::Import);
-                        }
-                        if !hv.library && ui.button("Join shared…").clicked() {
-                            hv.dialog = Some(ShareDialog {
-                                dir: None,
-                                text: String::new(),
-                            });
-                        }
+                ui.add_space(10.0);
+                if sidebar_item(ui, Icon::Grid, "Recents", None, !hv.show_trash) {
+                    hv.show_trash = false;
+                }
+                let n = hv.trash.len();
+                if sidebar_item(
+                    ui,
+                    Icon::Trash,
+                    "Trash",
+                    (n > 0).then(|| n.to_string()),
+                    hv.show_trash,
+                ) {
+                    hv.show_trash = true;
+                }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    ui.add_space(4.0);
+                    let path = RichText::new(hv.root.display().to_string())
+                        .size(theme::SECONDARY - 1.0)
+                        .color(p.tertiary);
+                    ui.label(path).on_hover_text("Projects folder");
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if sidebar_item(ui, Icon::Restore, "Check for updates", None, false) {
+                        hv.show_updates = true;
+                    }
+                    if sidebar_item(ui, Icon::Page, REVEAL_LABEL, None, false) {
+                        hv.actions.push(HomeAction::RevealRoot);
                     }
                 });
-            });
-            let r = ui.max_rect();
-            ui.painter().hline(
-                r.x_range(),
-                r.bottom() - 0.5,
-                egui::Stroke::new(1.0, p.separator),
-            );
+            };
+            if floating {
+                super::floating_panel(ui, p.sidebar, egui::Margin::symmetric(14, 14), body);
+            } else {
+                let mut body = body;
+                body(ui);
+            }
         });
     egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.fill(p.window).inner_margin(20))
+        .frame(if floating {
+            backdrop(0, gap as i8, gap as i8, gap as i8)
+        } else {
+            egui::Frame::NONE.fill(p.window).inner_margin(20)
+        })
         .show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink(false)
-                .show(ui, |ui| {
-                    if hv.show_trash {
-                        trash_grid(ui, hv);
-                    } else {
-                        recents_grid(ui, hv);
-                    }
+            let body = |ui: &mut Ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.label(
+                            RichText::new(if hv.show_trash {
+                                "Trash"
+                            } else {
+                                "Recent designs"
+                            })
+                            .font(theme::semibold(26.0)),
+                        );
+                        ui.label(
+                            RichText::new(if hv.show_trash {
+                                "Deleted projects stay here until you empty the trash."
+                            } else {
+                                "Pick up where you left off."
+                            })
+                            .color(p.secondary),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if hv.show_trash {
+                            ui.add_enabled_ui(!hv.trash.is_empty(), |ui| {
+                                if super::kit::button(
+                                    ui,
+                                    super::kit::ButtonKind::Danger,
+                                    Some(Icon::Trash),
+                                    "Empty Trash",
+                                )
+                                .clicked()
+                                {
+                                    hv.pending_removal = Some(HomeAction::EmptyTrash);
+                                }
+                            });
+                        } else {
+                            if !hv.library
+                                && super::kit::button(
+                                    ui,
+                                    super::kit::ButtonKind::Secondary,
+                                    None,
+                                    "Join shared…",
+                                )
+                                .clicked()
+                            {
+                                hv.dialog = Some(ShareDialog {
+                                    dir: None,
+                                    text: String::new(),
+                                });
+                            }
+                            if super::kit::button(
+                                ui,
+                                super::kit::ButtonKind::Secondary,
+                                None,
+                                "Import…",
+                            )
+                            .clicked()
+                            {
+                                hv.actions.push(HomeAction::Import);
+                            }
+                        }
+                    });
                 });
+                ui.add_space(18.0);
+                egui::ScrollArea::vertical()
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        if hv.show_trash {
+                            trash_grid(ui, hv);
+                        } else {
+                            recents_grid(ui, hv);
+                        }
+                    });
+            };
+            if floating {
+                super::floating_panel(ui, p.sidebar, egui::Margin::symmetric(28, 24), body);
+            } else {
+                let mut body = body;
+                body(ui);
+            }
         });
     share_dialog(ui, hv);
+    removal_dialog(ui.ctx(), hv);
+}
+
+fn removal_dialog(ctx: &egui::Context, hv: &mut HomeView) {
+    let Some(action) = hv.pending_removal.take() else {
+        return;
+    };
+    let (title, message, button) = match &action {
+        HomeAction::Trash(path) => {
+            let Some(entry) = hv.entries.iter().find(|e| e.dir == *path) else {
+                return;
+            };
+            (
+                "Move project to Trash?",
+                format!(
+                    "Move “{}” to Trash? You can restore it later.",
+                    entry.manifest.name
+                ),
+                "Move to Trash",
+            )
+        }
+        HomeAction::DeleteForever(path) => {
+            let Some(entry) = hv.trash.iter().find(|e| e.dir == *path) else {
+                return;
+            };
+            (
+                "Delete project permanently?",
+                format!(
+                    "Permanently delete “{}” and all its pages? This cannot be undone.",
+                    entry.manifest.name
+                ),
+                "Delete permanently",
+            )
+        }
+        HomeAction::EmptyTrash => (
+            "Empty Trash?",
+            format!(
+                "Permanently delete all {} projects in Trash? This cannot be undone.",
+                hv.trash.len()
+            ),
+            "Empty Trash",
+        ),
+        _ => unreachable!(),
+    };
+    match super::confirm::dialog(ctx, "home-removal", title, &message, button) {
+        Some(true) => hv.actions.push(action),
+        Some(false) => {}
+        None => hv.pending_removal = Some(action),
+    }
 }
 
 fn share_dialog(ui: &mut Ui, hv: &mut HomeView) {
@@ -298,27 +405,42 @@ fn sidebar_item(
 ) -> bool {
     let p = theme::pal(ui);
     let (row, resp) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+    let hover = super::motion::hover(ui.ctx(), resp.id.with("nav"), &resp);
     if selected {
-        ui.painter().rect_filled(row, 6.0, p.pressed);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(row, 6.0, p.hover);
+        ui.painter().rect_filled(row, theme::RADIUS_LG, p.field);
+    } else if hover > 0.0 {
+        ui.painter()
+            .rect_filled(row, theme::RADIUS_LG, p.hover.gamma_multiply(hover));
     }
     let ir = egui::Rect::from_center_size(
-        egui::pos2(row.left() + 16.0, row.center().y),
-        egui::vec2(15.0, 15.0),
+        egui::pos2(row.left() + 20.0, row.center().y),
+        egui::vec2(18.0, 18.0),
     );
-    theme::paint_icon(ui.painter(), ir, icon, theme::accent());
+    theme::paint_icon(
+        ui.painter(),
+        ir,
+        icon,
+        if selected {
+            theme::accent()
+        } else {
+            p.secondary
+        },
+    );
     ui.painter().text(
-        egui::pos2(row.left() + 32.0, row.center().y),
+        egui::pos2(row.left() + 40.0, row.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(theme::BODY),
+        if selected {
+            theme::semibold(theme::BODY + 1.0)
+        } else {
+            egui::FontId::proportional(theme::BODY + 1.0)
+        },
         p.text,
     );
     if let Some(b) = badge {
         ui.painter().text(
-            egui::pos2(row.right() - 8.0, row.center().y),
+            egui::pos2(row.right() - 12.0, row.center().y),
             egui::Align2::RIGHT_CENTER,
             b,
             egui::FontId::proportional(theme::SECONDARY),
@@ -335,27 +457,28 @@ fn columns(ui: &Ui) -> usize {
 }
 
 fn recents_grid(ui: &mut Ui, hv: &mut HomeView) {
-    let p = theme::pal(ui);
     if hv.entries.is_empty() {
-        ui.add_space(80.0);
-        ui.vertical_centered(|ui| {
-            ui.label(RichText::new("No projects yet").font(theme::semibold(17.0)));
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("Projects are folders in your Documents, saved as you work.")
-                    .color(p.secondary),
-            );
-            ui.add_space(12.0);
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("New Project").color(Color32::WHITE))
-                        .fill(theme::accent()),
+        ui.add_space(60.0);
+        let mut new = false;
+        super::kit::empty_state(
+            ui,
+            Icon::Page,
+            theme::accent(),
+            "No designs yet",
+            "Projects are folders in your Documents, saved as you work.",
+            |ui| {
+                new = super::kit::button(
+                    ui,
+                    super::kit::ButtonKind::Primary,
+                    Some(Icon::Plus),
+                    "New design",
                 )
-                .clicked()
-            {
-                hv.actions.push(HomeAction::New);
-            }
-        });
+                .clicked();
+            },
+        );
+        if new {
+            hv.actions.push(HomeAction::New);
+        }
         return;
     }
     let cols = columns(ui);
@@ -379,16 +502,11 @@ fn card_frame(
 ) -> egui::Response {
     let p = theme::pal(ui);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(CARD_W, THUMB_H), egui::Sense::click());
-    let hovered = resp.hovered();
-    let painter = ui.painter();
-    painter.rect_filled(
+    let hover = super::motion::hover(ui.ctx(), resp.id.with("card"), &resp);
+    ui.painter().rect_filled(
         rect,
-        8.0,
-        if ui.visuals().dark_mode {
-            Color32::from_rgb(0x1f, 0x1f, 0x21)
-        } else {
-            Color32::from_rgb(0xee, 0xee, 0xf0)
-        },
+        theme::RADIUS_PANEL,
+        theme::blend(p.field, theme::accent().gamma_multiply(0.12 * hover)),
     );
     if let Some(t) = thumb.and_then(|t| hv.thumb(ui.ctx(), t)) {
         // Fit the thumbnail inside the card, centered.
@@ -412,19 +530,6 @@ fn card_frame(
             p.tertiary,
         );
     }
-    ui.painter().rect_stroke(
-        rect,
-        8.0,
-        egui::Stroke::new(
-            if hovered { 2.0 } else { 1.0 },
-            if hovered {
-                theme::accent()
-            } else {
-                p.separator
-            },
-        ),
-        egui::StrokeKind::Inside,
-    );
     let _ = id;
     resp
 }
@@ -538,7 +643,7 @@ fn card_menu(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
     }
     ui.separator();
     if ui.button("Move to Trash").clicked() {
-        hv.actions.push(HomeAction::Trash(e.dir.clone()));
+        hv.pending_removal = Some(HomeAction::Trash(e.dir.clone()));
         ui.close();
     }
 }
@@ -546,14 +651,15 @@ fn card_menu(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
 fn trash_grid(ui: &mut Ui, hv: &mut HomeView) {
     let p = theme::pal(ui);
     if hv.trash.is_empty() {
-        ui.add_space(80.0);
-        ui.vertical_centered(|ui| {
-            ui.label(RichText::new("Trash is empty").font(theme::semibold(17.0)));
-            ui.label(
-                RichText::new("Deleted projects stay here until you empty the trash.")
-                    .color(p.secondary),
-            );
-        });
+        ui.add_space(60.0);
+        super::kit::empty_state(
+            ui,
+            Icon::Trash,
+            p.secondary,
+            "Trash is empty",
+            "Deleted projects stay here until you empty the trash.",
+            |_| {},
+        );
         return;
     }
     let cols = columns(ui);
@@ -573,7 +679,7 @@ fn trash_grid(ui: &mut Ui, hv: &mut HomeView) {
                             ui.close();
                         }
                         if ui.button("Delete Permanently").clicked() {
-                            hv.actions.push(HomeAction::DeleteForever(e.dir.clone()));
+                            hv.pending_removal = Some(HomeAction::DeleteForever(e.dir.clone()));
                             ui.close();
                         }
                     });

@@ -5,6 +5,7 @@
 //! GET    /p/{token}/files        [{"path","size","mtime"}]
 //! GET    /p/{token}/f/{path}     file bytes
 //! PUT    /p/{token}/f/{path}     write (creates the project); answers the file's mtime
+//!                                 (`*.json` bodies must parse as JSON, else 422)
 //! DELETE /p/{token}/f/{path}     remove
 //! GET    /p/{token}/ws?client=<id>   pushes {"op","path","rev","client"} for other clients' changes
 //! ```
@@ -258,6 +259,13 @@ async fn write(
         Ok(t) => t,
         Err(r) => return r,
     };
+    // A `.json` file that does not parse is a broken upload, not a project file: refuse it
+    // before it reaches the disk, so a bug cannot corrupt a good project.
+    if rel.to_string_lossy().ends_with(".json")
+        && serde_json::from_slice::<serde::de::IgnoredAny>(&body).is_err()
+    {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "not valid JSON").into_response();
+    }
     if let Some(parent) = file.parent()
         && tokio::fs::create_dir_all(parent).await.is_err()
     {

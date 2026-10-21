@@ -56,6 +56,9 @@ impl Session {
         crate::assets::load_dir(&dir.join(crate::project::ASSETS_DIR));
         let pages = p.load_pages()?;
         ed.open_pages(pages, p.manifest.active_page.as_deref());
+        // The groups of the opened project (an old project has none).
+        ed.page_groups = p.manifest.page_groups.clone();
+        ed.sync_page_group_order();
         // Freshly loaded pages are saved by definition.
         for i in 0..ed.pages.len() {
             ed.mark_page_saved(i);
@@ -219,6 +222,7 @@ impl Session {
         }
         let wrote = !dirty.is_empty() || ed.meta_dirty;
         p.manifest.pages = pages;
+        p.manifest.page_groups = ed.page_groups.clone();
         p.manifest.active_page = Some(ed.active_page_id().to_string());
         if wrote {
             p.manifest.modified = now_ms();

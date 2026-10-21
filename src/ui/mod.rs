@@ -2,12 +2,20 @@
 //! projects home screen.
 
 pub mod agent;
+pub mod confirm;
 pub mod design;
 pub mod home;
 pub mod inspector;
+pub mod kit;
 pub mod library;
+pub mod lottie_icon;
+pub mod motion;
 pub mod pages;
 pub mod palette;
+pub mod panels;
+pub mod settings;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod update;
 
 use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
@@ -46,17 +54,36 @@ pub struct UiState {
     pub home: Option<home::HomeView>,
     /// Name of the open project (shown in the toolbar).
     pub project_name: String,
+    /// Folder of the open project (saved versions live under it).
+    pub project_dir: Option<std::path::PathBuf>,
+    /// Name typed into the History view's "Save version" box.
+    pub version_draft: String,
+    /// Saved versions of the current page, refreshed when the page or project changes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub versions: Vec<crate::versions::Version>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub versions_key: Option<(std::path::PathBuf, String)>,
     /// Autosave state for the toolbar subtitle, e.g. "Saved" or "Saving…".
     pub save_state: String,
     pub pages: pages::PagesUi,
+    pub pending_removal: Option<confirm::PendingRemoval>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub updater: update::UpdaterUi,
     pub library: library::LibraryUi,
     /// Left sidebar shows the library instead of the layers.
     pub show_library: bool,
     /// ...or the design tab (variables, modes, components).
     pub show_design: bool,
     pub palette: palette::PaletteUi,
+    pub settings: settings::SettingsUi,
     /// All panels hidden (⌘\\): just the canvas.
     pub hide_ui: bool,
+    /// Present mode: only the canvas, with a presenter bar to step through the page's frames.
+    pub present: bool,
+    /// Frame shown by the presenter (index into the page's top-level frames).
+    pub present_index: usize,
+    /// Inspector shows the Prototype tab instead of Design.
+    pub proto_tab: bool,
     /// Layer being dragged in the layers panel, and where it would drop.
     pub layer_drag: Option<(NodeId, Option<LayerDrop>)>,
     /// Row rects of the last layers-panel frame (for drop targeting).
@@ -83,6 +110,10 @@ pub struct UiState {
     pub var_renaming: Option<(String, String)>,
     /// The last tool an agent ran and when, for the toolbar's activity hint.
     pub agent: Option<(String, std::time::Instant)>,
+    /// Recent agent tool calls, oldest first (the Agent view).
+    pub agent_log: Vec<(String, std::time::Instant)>,
+    /// An extra sidebar view: history, comments or the agent log. None shows layers, library or design.
+    pub side_extra: Option<panels::SideView>,
     /// The browser's remote-agent link (Agent menu); None everywhere but the web shell.
     pub agent_link: Option<agent::AgentUi>,
     /// A message shown over the home screen and the canvas (text, is_error); the shell that
@@ -116,15 +147,249 @@ pub(crate) fn from32(c: Color32) -> Color {
 
 /// Section header, as in a macOS sidebar or inspector: 11pt semibold, secondary colour.
 pub(crate) fn section(ui: &mut Ui, title: &str) {
+    ui.add_space(2.0);
     ui.label(
-        RichText::new(title)
+        RichText::new(title.to_uppercase())
             .font(theme::semibold(theme::SECONDARY))
-            .color(theme::pal(ui).secondary),
+            .color(theme::pal(ui).tertiary),
     );
 }
 
 pub(crate) fn title_text(text: impl Into<String>) -> RichText {
     RichText::new(text).font(theme::semibold(theme::BODY))
+}
+
+/// The sidebar footer: the project, its save state, and the settings button.
+fn account_footer(ui: &mut Ui, st: &mut UiState) {
+    let p = theme::pal(ui);
+    let name = if st.project_name.is_empty() {
+        "Untitled".to_string()
+    } else {
+        st.project_name.clone()
+    };
+    let initial: String = name
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_default();
+    ui.horizontal_centered(|ui| {
+        let (r, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+        ui.painter().circle_filled(r.center(), 15.0, p.field);
+        ui.painter().text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            initial,
+            theme::semibold(theme::SECONDARY + 1.0),
+            theme::accent(),
+        );
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.set_max_width((ui.available_width() - 44.0).max(40.0));
+            ui.add(
+                egui::Label::new(RichText::new(name).font(theme::semibold(theme::BODY))).truncate(),
+            );
+            let sub = if st.save_state.is_empty() {
+                "Local project".to_string()
+            } else {
+                st.save_state.clone()
+            };
+            ui.label(RichText::new(sub).size(theme::SECONDARY).color(p.secondary));
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if kit::lottie_button(ui, "settings", "Settings", 28.0).clicked() {
+                st.settings.open = true;
+            }
+        });
+    });
+}
+
+/// Gap between the floating panels and around the canvas.
+pub(crate) const PANEL_GAP: f32 = 12.0;
+
+/// Canvas width under which the top bar drops the zoom pill (it is also on the keyboard).
+const TIGHT_BAR_W: f32 = 520.0;
+
+/// Largest share of the window one side panel may take.
+const SIDE_MAX_SHARE: f32 = 0.3;
+
+/// Bottom strip of the canvas taken by the presenter bar; clicks there never follow links.
+const PRESENT_BAR_H: f32 = 80.0;
+
+/// The page's top-level frames, in layer order: what Present mode steps through.
+fn present_frames(ed: &Editor) -> Vec<NodeId> {
+    ed.doc
+        .root
+        .iter()
+        .copied()
+        .filter(|id| {
+            ed.doc
+                .get(*id)
+                .is_some_and(|n| n.is_frame() && n.visible && !n.component)
+        })
+        .collect()
+}
+
+/// Starts Present mode on the first frame (or the selected one).
+pub fn start_present(ed: &mut Editor, st: &mut UiState) {
+    let frames = present_frames(ed);
+    st.present_index = ed
+        .selection
+        .first()
+        .and_then(|s| frames.iter().position(|f| f == s))
+        .unwrap_or(0);
+    st.present = true;
+    show_present_frame(ed, st);
+}
+
+fn show_present_frame(ed: &mut Editor, st: &UiState) {
+    let frames = present_frames(ed);
+    if let Some(&id) = frames.get(st.present_index) {
+        ed.selection = vec![id];
+        ed.run(Action::ZoomSelection);
+        ed.selection.clear();
+    }
+}
+
+/// The presenter bar: previous and next frame, a counter and Exit; Esc and the arrow keys work too.
+fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect) {
+    let frames = present_frames(ed);
+    let total = frames.len();
+    let (left, right, esc) = ctx.input(|i| {
+        (
+            i.key_pressed(egui::Key::ArrowLeft),
+            i.key_pressed(egui::Key::ArrowRight),
+            i.key_pressed(egui::Key::Escape),
+        )
+    });
+    let mut step: i32 = i32::from(right) - i32::from(left);
+    let mut exit = esc;
+    // A click on a layer with a prototype link jumps to its frame.
+    let clicked = ctx.input(|i| i.pointer.primary_clicked())
+        && ctx
+            .pointer_interact_pos()
+            .is_some_and(|p| canvas.contains(p) && p.y < canvas.bottom() - PRESENT_BAR_H);
+    if clicked {
+        let at = ed.screen_to_world(ed.pointer);
+        let hit = crate::editor::hit::hit_test(&ed.doc, at, ed.camera.zoom);
+        let target = hit.and_then(|h| {
+            std::iter::once(h)
+                .chain(ed.doc.ancestors(h))
+                .find_map(|id| ed.doc.get(id).and_then(|n| n.link))
+        });
+        if let Some(i) = target.and_then(|t| frames.iter().position(|f| *f == t)) {
+            st.present_index = i;
+            show_present_frame(ed, st);
+        }
+    }
+    let p = theme::pal_from_ctx(ctx);
+    egui::Area::new("presenter".into())
+        .order(egui::Order::Foreground)
+        .pivot(Align2::CENTER_BOTTOM)
+        .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - 24.0))
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(p.sidebar)
+                .corner_radius(egui::CornerRadius::same(255))
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if kit::lottie_button(ui, "chevron-left", "Previous frame (←)", 32.0)
+                            .clicked()
+                        {
+                            step = -1;
+                        }
+                        ui.label(
+                            RichText::new(format!(
+                                "{} / {}",
+                                (st.present_index + 1).min(total.max(1)),
+                                total.max(1)
+                            ))
+                            .font(theme::semibold(theme::BODY)),
+                        );
+                        if kit::lottie_button(ui, "chevron-right", "Next frame (→)", 32.0).clicked()
+                        {
+                            step = 1;
+                        }
+                        if kit::button(ui, kit::ButtonKind::Primary, None, "Exit").clicked() {
+                            exit = true;
+                        }
+                    });
+                });
+        });
+    egui::Area::new("presenting".into())
+        .order(egui::Order::Foreground)
+        .anchor(
+            Align2::LEFT_TOP,
+            egui::vec2(canvas.left() + 24.0, canvas.top() + 24.0),
+        )
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(p.sidebar)
+                .corner_radius(egui::CornerRadius::same(255))
+                .inner_margin(egui::Margin::symmetric(14, 6))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(format!("Presenting · {}", ed.page_name()))
+                            .size(theme::SECONDARY)
+                            .color(p.secondary),
+                    );
+                });
+        });
+    if step != 0 && total > 0 {
+        st.present_index = (st.present_index as i32 + step).rem_euclid(total as i32) as usize;
+        show_present_frame(ed, st);
+    }
+    if exit {
+        st.present = false;
+    }
+}
+
+/// Whether the chrome uses the floating rounded look (everything except the macOS translucent sidebar).
+pub(crate) fn is_floating(translucent: bool) -> bool {
+    !translucent || matches!(theme::choice(), theme::Choice::Catppuccin(_))
+}
+
+/// A rounded panel that floats on the backdrop and fills the space it is given.
+fn floating_panel(ui: &mut Ui, fill: Color32, margin: egui::Margin, add: impl FnOnce(&mut Ui)) {
+    egui::Frame::new()
+        .fill(fill)
+        .corner_radius(theme::RADIUS_PANEL)
+        .inner_margin(margin)
+        .show(ui, |ui| {
+            ui.set_min_height(ui.available_height());
+            ui.set_width(ui.available_width());
+            add(ui);
+        });
+}
+
+/// Paints the four corners of `rect` outside a rounded rectangle of radius `r`, so the canvas
+/// (drawn by the renderer underneath the UI) shows with rounded corners.
+fn round_corners(painter: &egui::Painter, rect: egui::Rect, r: f32, colour: Color32) {
+    const SEGMENTS: usize = 10;
+    let mut mesh = egui::Mesh::default();
+    let corners = [
+        (rect.left_top(), egui::vec2(1.0, 1.0)),
+        (rect.right_top(), egui::vec2(-1.0, 1.0)),
+        (rect.right_bottom(), egui::vec2(-1.0, -1.0)),
+        (rect.left_bottom(), egui::vec2(1.0, -1.0)),
+    ];
+    for (corner, dir) in corners {
+        let centre = corner + dir * r;
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(corner, colour);
+        for i in 0..=SEGMENTS {
+            let a = std::f32::consts::FRAC_PI_2 * i as f32 / SEGMENTS as f32;
+            // From the point on one edge to the point on the other edge, around `centre`.
+            let v = egui::vec2(-dir.x * a.cos(), -dir.y * a.sin());
+            mesh.colored_vertex(centre + v * r, colour);
+        }
+        for i in 0..SEGMENTS as u32 {
+            mesh.add_triangle(base, base + 1 + i, base + 2 + i);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// Lay out the chrome and return the remaining canvas rectangle (logical px).
@@ -144,6 +409,11 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     }
     if let Some(hv) = &mut st.home {
         home::draw(ui, hv, st.native_chrome, st.translucent_sidebar);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            st.updater.open |= std::mem::take(&mut hv.show_updates);
+            st.updater.show(ui.ctx());
+        }
         return egui::Rect::NOTHING;
     }
     for ev in std::mem::take(&mut ed.ui_events) {
@@ -163,58 +433,140 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             UiEvent::ToggleGrid => st.show_grid_off = !st.show_grid_off,
         }
     }
-    if st.hide_ui {
+    if st.hide_ui || st.present {
+        #[cfg(not(target_arch = "wasm32"))]
+        st.updater.show(ui.ctx());
+        confirm::show(ui.ctx(), ed, st);
         let canvas = ui.available_rect_before_wrap();
+        if st.present {
+            presenter(ui.ctx(), ed, st, canvas);
+        }
         palette::draw(ui.ctx(), ed, st, canvas);
         return canvas;
     }
     let p = theme::pal(ui);
     let sidebar_fill = theme::sidebar_fill(st.translucent_sidebar, p);
+    let floating = is_floating(st.translucent_sidebar);
+    let gap = PANEL_GAP;
+    let side_frame = |left: i8, right: i8, top: i8, bottom: i8| {
+        if floating {
+            egui::Frame::NONE
+                .fill(p.backdrop)
+                .inner_margin(egui::Margin {
+                    left,
+                    right,
+                    top,
+                    bottom,
+                })
+        } else {
+            egui::Frame::NONE
+        }
+    };
+    // Narrow windows keep the canvas usable: the side panels never take more than 30% each.
+    let window_w = ui.max_rect().width();
+    let side_max = |min: f32| (window_w * SIDE_MAX_SHARE).clamp(min, 430.0);
     egui::Panel::left("layers")
         .resizable(true)
-        .default_size(240.0)
-        .size_range(180.0..=420.0)
-        .frame(
+        .default_size(252.0 + 2.0 * gap)
+        .size_range(190.0..=side_max(190.0))
+        .frame(if floating {
+            side_frame(gap as i8, gap as i8, gap as i8, gap as i8)
+        } else {
             egui::Frame::NONE
                 .fill(sidebar_fill)
-                .inner_margin(egui::Margin::symmetric(10, 8)),
-        )
+                .inner_margin(egui::Margin::symmetric(10, 8))
+        })
         .show(ui, |ui| {
-            if st.native_chrome {
-                // Room for the traffic lights, which sit over the top of the sidebar.
-                ui.add_space(theme::TOOLBAR_H - 8.0);
+            let mut body = |ui: &mut Ui| {
+                if floating {
+                    egui::Panel::bottom("side-footer")
+                        .exact_size(48.0)
+                        .frame(egui::Frame::NONE)
+                        .show(ui, |ui| account_footer(ui, st));
+                    ui.horizontal(|ui| {
+                        kit::badge(ui, Icon::Pen, theme::accent(), 28.0);
+                        ui.label(RichText::new("PaperCraft").font(theme::semibold(16.0)));
+                    });
+                    ui.add_space(10.0);
+                }
+                layers(ui, ed, st)
+            };
+            if floating {
+                floating_panel(ui, sidebar_fill, egui::Margin::symmetric(14, 12), body);
+            } else {
+                body(ui);
             }
-            layers(ui, ed, st)
+        });
+    egui::Panel::right("design")
+        .resizable(true)
+        .default_size(272.0 + 2.0 * gap)
+        .size_range(230.0..=side_max(230.0))
+        .frame(if floating {
+            side_frame(gap as i8, gap as i8, gap as i8, gap as i8)
+        } else {
+            egui::Frame::NONE
+                .fill(p.inspector)
+                .inner_margin(egui::Margin::symmetric(14, 10))
+        })
+        .show(ui, |ui| {
+            if floating {
+                floating_panel(ui, p.inspector, egui::Margin::symmetric(14, 12), |ui| {
+                    inspector::panel(ui, ed, st)
+                });
+            } else {
+                inspector::panel(ui, ed, st)
+            }
         });
     egui::Panel::top("toolbar")
-        .exact_size(if st.native_chrome {
+        .exact_size(if floating {
+            theme::TOOLBAR_H + gap * 2.0
+        } else if st.native_chrome {
             theme::TOOLBAR_H
         } else {
             34.0
         })
-        .frame(
+        .frame(if floating {
+            side_frame(0, 0, gap as i8, gap as i8)
+        } else {
             egui::Frame::NONE
                 .fill(p.window)
-                .inner_margin(egui::Margin::symmetric(12, 0)),
-        )
-        .show(ui, |ui| top_bar(ui, ed, st));
-    egui::Panel::right("design")
-        .resizable(true)
-        .default_size(260.0)
-        .size_range(220.0..=420.0)
-        .frame(
-            egui::Frame::NONE
-                .fill(p.inspector)
-                .inner_margin(egui::Margin::symmetric(14, 10)),
-        )
-        .show(ui, |ui| inspector::panel(ui, ed, st));
+                .inner_margin(egui::Margin::symmetric(12, 0))
+        })
+        .show(ui, |ui| {
+            if floating {
+                floating_panel(ui, p.sidebar, egui::Margin::symmetric(14, 0), |ui| {
+                    ui.set_height(theme::TOOLBAR_H);
+                    top_bar(ui, ed, st)
+                });
+            } else {
+                top_bar(ui, ed, st)
+            }
+        });
+    if floating {
+        egui::Panel::bottom("canvas-gap")
+            .exact_size(gap)
+            .frame(egui::Frame::NONE.fill(p.backdrop))
+            .show(ui, |_| {});
+    }
     let canvas = ui.available_rect_before_wrap();
+    if floating {
+        round_corners(
+            ui.painter(),
+            canvas,
+            f32::from(theme::RADIUS_PANEL),
+            p.backdrop,
+        );
+    }
     toolbar(ui.ctx(), ed, canvas);
     status(ui.ctx(), ed, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
     if st.show_help {
         help(ui.ctx(), st, canvas);
     }
+    settings::show(ui.ctx(), st);
+    #[cfg(not(target_arch = "wasm32"))]
+    st.updater.show(ui.ctx());
+    confirm::show(ui.ctx(), ed, st);
     canvas
 }
 
@@ -246,6 +598,9 @@ fn menu_entries(ui: &mut Ui, ed: &mut Editor, entries: &[shortcuts::MenuEntry]) 
 /// chrome (Linux) it also carries an egui menu bar.
 fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
+    // In a narrow window only the essentials stay: zoom, present and share.
+    let compact = ui.max_rect().width() < 720.0;
+    let tight = ui.max_rect().width() < TIGHT_BAR_W;
     ui.horizontal_centered(|ui| {
         if !st.native_chrome && !st.custom_titlebar {
             ui.scope(|ui| menu_bar(ui, ed, &mut st.agent_link));
@@ -266,9 +621,20 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             st.project_name.clone()
         };
         ui.vertical(|ui| {
+            // Leave room for the zoom pill and icons on the right; long titles truncate.
+            ui.set_max_width(
+                (ui.available_width()
+                    - if tight {
+                        150.0
+                    } else if compact {
+                        300.0
+                    } else {
+                        420.0
+                    })
+                .max(40.0),
+            );
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.add_space(if st.native_chrome { 6.0 } else { 1.0 });
-            ui.label(title_text(title));
             let state = if !st.save_state.is_empty() {
                 st.save_state.clone()
             } else if ed.is_dirty() {
@@ -276,11 +642,13 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             } else {
                 String::new()
             };
-            let mut sub = if state.is_empty() {
-                ed.page_name().to_string()
-            } else {
-                format!("{} — {state}", ed.page_name())
-            };
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(title_text(title)).truncate());
+                if !state.is_empty() {
+                    kit::chip(ui, &state, state == "Saved");
+                }
+            });
+            let mut sub = ed.page_name().to_string();
             if let Some((tool, at)) = &st.agent
                 && at.elapsed() < std::time::Duration::from_secs(4)
             {
@@ -288,52 +656,106 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(500));
             }
-            ui.label(RichText::new(sub).size(theme::SECONDARY).color(p.secondary));
+            ui.add(
+                egui::Label::new(RichText::new(sub).size(theme::SECONDARY).color(p.secondary))
+                    .truncate(),
+            );
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
+            let share = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::Export), "Share");
+            egui::Popup::menu(&share).show(|ui| {
+                ui.set_min_width(190.0);
+                for (label, action) in [
+                    ("Export PNG…", Action::ExportPng),
+                    ("Export SVG…", Action::ExportSvg),
+                    ("Copy as PNG", Action::CopyAsPng),
+                    ("Copy as SVG", Action::CopyAsSvg),
+                ] {
+                    if ui
+                        .add(
+                            egui::Button::new(label)
+                                .frame(false)
+                                .min_size(egui::vec2(180.0, 30.0)),
+                        )
+                        .clicked()
+                    {
+                        ed.run(action);
+                        ui.close();
+                    }
+                }
+            });
+            ui.add_space(6.0);
             if let Some(a) = &st.agent_link {
                 a.dot(ui);
             }
-            if theme::icon_button(ui, theme::Icon::Question, 26.0, st.show_help)
-                .on_hover_text("Keyboard shortcuts")
-                .clicked()
+            #[cfg(not(target_arch = "wasm32"))]
+            if !compact
+                && theme::icon_button(ui, theme::Icon::Restore, 26.0, st.updater.open)
+                    .on_hover_text("Check for updates")
+                    .clicked()
+            {
+                st.updater.open = true;
+            }
+            if kit::play_button(ui, "Present").clicked() {
+                start_present(ed, st);
+            }
+            if !compact {
+                if kit::history_button(ui, true, ed.history.redo_len() > 0).clicked() {
+                    ed.run(Action::Redo);
+                }
+                if kit::history_button(ui, false, ed.history.can_undo()).clicked() {
+                    ed.run(Action::Undo);
+                }
+                ui.add_space(6.0);
+                if kit::lottie_button(ui, "settings", "Settings", 26.0).clicked() {
+                    st.settings.open = true;
+                }
+            }
+            if !compact
+                && theme::icon_button(ui, theme::Icon::Question, 26.0, st.show_help)
+                    .on_hover_text("Keyboard shortcuts")
+                    .clicked()
             {
                 st.show_help = !st.show_help;
             }
             ui.add_space(8.0);
-            if theme::icon_button(ui, theme::Icon::Plus, 26.0, false)
-                .on_hover_text("Zoom in")
-                .clicked()
-            {
-                ed.run(Action::ZoomIn);
-            }
-            let z = ui.add(
-                egui::Button::new(
-                    RichText::new(format!("{:.0}%", ed.camera.zoom * 100.0))
-                        .font(theme::medium(theme::SECONDARY + 1.0)),
-                )
-                .frame(false)
-                .min_size(egui::vec2(44.0, 22.0)),
-            );
-            if z.on_hover_text("Zoom to fit").clicked() {
-                ed.run(Action::ZoomFit);
-            }
-            if theme::icon_button(ui, theme::Icon::Minus, 26.0, false)
-                .on_hover_text("Zoom out")
-                .clicked()
-            {
-                ed.run(Action::ZoomOut);
+            if !tight {
+                egui::Frame::new()
+                    .fill(p.field)
+                    .corner_radius(egui::CornerRadius::same(255))
+                    .inner_margin(egui::Margin::symmetric(6, 2))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.horizontal(|ui| {
+                            if theme::icon_button(ui, theme::Icon::Minus, 26.0, false)
+                                .on_hover_text("Zoom out")
+                                .clicked()
+                            {
+                                ed.run(Action::ZoomOut);
+                            }
+                            let z = ui.add(
+                                egui::Button::new(
+                                    RichText::new(format!("{:.0}%", ed.camera.zoom * 100.0))
+                                        .font(theme::semibold(theme::SECONDARY + 1.0)),
+                                )
+                                .frame(false)
+                                .min_size(egui::vec2(48.0, 22.0)),
+                            );
+                            if z.on_hover_text("Zoom to fit").clicked() {
+                                ed.run(Action::ZoomFit);
+                            }
+                            if theme::icon_button(ui, theme::Icon::Plus, 26.0, false)
+                                .on_hover_text("Zoom in")
+                                .clicked()
+                            {
+                                ed.run(Action::ZoomIn);
+                            }
+                        });
+                    });
             }
         });
     });
-    // 1px separator under the toolbar.
-    let r = ui.max_rect();
-    ui.painter().hline(
-        r.x_range(),
-        r.bottom() - 0.5,
-        egui::Stroke::new(1.0, p.separator),
-    );
 }
 
 /// egui menus for platforms without a native menu bar (inline, so the toolbar row keeps
@@ -378,6 +800,11 @@ fn theme_menu(ui: &mut Ui) {
                 c.save();
                 ui.close();
             }
+        }
+        ui.separator();
+        let mut animations = motion::enabled(ui.ctx());
+        if kit::checkbox(ui, &mut animations, "Animations").changed() {
+            motion::set_enabled(ui.ctx(), animations);
         }
     });
 }
@@ -450,62 +877,156 @@ fn title_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     });
 }
 
-fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
-    theme::figma_fields(ui);
-    pages::panel(ui, ed, st);
-    ui.add_space(4.0);
-    let r = ui.available_rect_before_wrap();
-    ui.painter().hline(
-        r.x_range(),
-        r.top(),
-        egui::Stroke::new(1.0, theme::pal(ui).separator),
-    );
-    ui.add_space(6.0);
+/// The sidebar views as a strip that fills the sidebar: layers, library, design (variables, modes,
+/// components), history, comments and the agent log. Each tab grows with the width; when there is
+/// room it also shows its name.
+fn side_tabs(ui: &mut Ui, st: &mut UiState) {
+    const TABS: [(i32, &str); 6] = [
+        (0, "Layers"),
+        (1, "Library"),
+        (2, "Design"),
+        (3, "History"),
+        (4, "Notes"),
+        (5, "Agent"),
+    ];
     let p = theme::pal(ui);
-    ui.horizontal(|ui| {
-        for (tab, label) in [(0, "Layers"), (1, "Library"), (2, "Design")] {
-            let current = if st.show_design {
-                2
-            } else {
-                st.show_library as i32
-            };
-            let on = current == tab;
-            let r = ui.add(
-                egui::Label::new(
-                    RichText::new(label)
-                        .font(theme::semibold(theme::SECONDARY))
-                        .color(if on { p.text } else { p.secondary }),
-                )
-                .sense(egui::Sense::click()),
-            );
-            if r.clicked() {
-                st.show_library = tab == 1;
-                st.show_design = tab == 2;
-            }
-        }
-        if st.show_library || st.show_design {
-            return;
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            let some = !ed.selection.is_empty();
-            ui.add_enabled_ui(some, |ui| {
-                if theme::icon_button(ui, Icon::ChevronDown, 20.0, false)
-                    .on_hover_text("Send backward")
-                    .clicked()
-                {
-                    ed.run(Action::Backward);
-                }
-                if theme::icon_button(ui, Icon::ChevronUp, 20.0, false)
-                    .on_hover_text("Bring forward")
-                    .clicked()
-                {
-                    ed.run(Action::Forward);
+    let current = match st.side_extra {
+        Some(panels::SideView::History) => 3,
+        Some(panels::SideView::Comments) => 4,
+        Some(panels::SideView::Agent) => 5,
+        None if st.show_design => 2,
+        None => i32::from(st.show_library),
+    };
+    let pad = 3.0;
+    let gap = 2.0;
+    egui::Frame::new()
+        .fill(p.field)
+        .corner_radius(theme::RADIUS_LG)
+        .inner_margin(pad as i8)
+        .show(ui, |ui| {
+            let total = ui.available_width();
+            let w = ((total - gap * (TABS.len() as f32 - 1.0)) / TABS.len() as f32).floor();
+            // With room for it, the active tab shows its name and takes the extra width.
+            let wide = w >= 62.0;
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.horizontal(|ui| {
+                for (tab, tip) in TABS {
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
+                    let on = current == tab;
+                    let hover = motion::hover(ui.ctx(), resp.id.with("side-tab"), &resp);
+                    let fill = if on {
+                        p.sidebar
+                    } else {
+                        p.hover.gamma_multiply(hover)
+                    };
+                    ui.painter().rect_filled(rect, 9.0, fill);
+                    let tint = if on { theme::accent() } else { p.secondary };
+                    let hovered = resp.hovered();
+                    let icon_box = if wide {
+                        egui::Rect::from_center_size(
+                            egui::pos2(rect.left() + 18.0, rect.center().y),
+                            egui::vec2(16.0, 16.0),
+                        )
+                    } else {
+                        egui::Rect::from_center_size(rect.center(), egui::vec2(16.0, 16.0))
+                    };
+                    match tab {
+                        0 => {
+                            lottie_icon::paint_hover(ui, resp.id, "layers", icon_box, tint, hovered)
+                        }
+                        1 => theme::paint_icon(ui.painter(), icon_box, Icon::Library, tint),
+                        2 => lottie_icon::paint_hover(
+                            ui,
+                            resp.id,
+                            "layout-dashboard",
+                            icon_box,
+                            tint,
+                            hovered,
+                        ),
+                        3 => theme::paint_icon(ui.painter(), icon_box, Icon::Restore, tint),
+                        4 => lottie_icon::paint_hover(
+                            ui,
+                            resp.id,
+                            "message-square-quote",
+                            icon_box,
+                            tint,
+                            hovered,
+                        ),
+                        _ => lottie_icon::paint_hover(
+                            ui, resp.id, "sparkles", icon_box, tint, hovered,
+                        ),
+                    }
+                    if wide {
+                        ui.painter().with_clip_rect(rect).text(
+                            egui::pos2(rect.left() + 32.0, rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            tip,
+                            if on {
+                                theme::semibold(theme::SECONDARY + 1.0)
+                            } else {
+                                egui::FontId::proportional(theme::SECONDARY + 1.0)
+                            },
+                            if on { p.text } else { p.secondary },
+                        );
+                    }
+                    let tooltip = match tab {
+                        4 => "Comments",
+                        _ => tip,
+                    };
+                    if resp.on_hover_text(tooltip).clicked() {
+                        st.show_library = tab == 1;
+                        st.show_design = tab == 2;
+                        st.side_extra = match tab {
+                            3 => Some(panels::SideView::History),
+                            4 => Some(panels::SideView::Comments),
+                            5 => Some(panels::SideView::Agent),
+                            _ => None,
+                        };
+                    }
                 }
             });
         });
-    });
+}
+
+fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    theme::figma_fields(ui);
+    pages::panel(ui, ed, st);
+    ui.add_space(8.0);
+    side_tabs(ui, st);
+    if !(st.show_library || st.show_design || st.side_extra.is_some()) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            section(ui, "Layers");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let some = !ed.selection.is_empty();
+                ui.add_enabled_ui(some, |ui| {
+                    if theme::icon_button(ui, Icon::ChevronDown, 20.0, false)
+                        .on_hover_text("Send backward")
+                        .clicked()
+                    {
+                        ed.run(Action::Backward);
+                    }
+                    if theme::icon_button(ui, Icon::ChevronUp, 20.0, false)
+                        .on_hover_text("Bring forward")
+                        .clicked()
+                    {
+                        ed.run(Action::Forward);
+                    }
+                });
+            });
+        });
+    }
     ui.add_space(2.0);
+    if let Some(view) = st.side_extra {
+        match view {
+            panels::SideView::History => panels::history(ui, ed, st),
+            panels::SideView::Comments => panels::comments(ui, ed, st),
+            panels::SideView::Agent => panels::agent(ui, st),
+        }
+        return;
+    }
     if st.show_library {
         library::panel(ui, ed, st);
         return;
@@ -709,7 +1230,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     let selected = ed.selection.contains(&id);
     let width = ui.available_width();
     let (row, resp) =
-        ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click_and_drag());
+        ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click_and_drag());
     st.layer_rows.push((id, row, depth));
     if st.reveal == Some(id) {
         ui.scroll_to_rect(row, None);
@@ -720,22 +1241,12 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     }
     let hovered = ui.rect_contains_pointer(row);
     if selected {
-        ui.painter().rect_filled(row, 6.0, theme::accent());
+        ui.painter().rect_filled(row, 10.0, p.field);
     } else if hovered {
-        ui.painter().rect_filled(row, 6.0, p.hover);
+        ui.painter().rect_filled(row, 10.0, p.hover);
     }
-    let fg = if selected {
-        Color32::WHITE
-    } else if n.visible {
-        p.text
-    } else {
-        p.secondary
-    };
-    let fg2 = if selected {
-        Color32::from_white_alpha(200)
-    } else {
-        p.secondary
-    };
+    let fg = if n.visible { p.text } else { p.secondary };
+    let fg2 = p.secondary;
     let mut x = row.left() + 4.0 + depth as f32 * 14.0;
     let cy = row.center().y;
     let sq = |x: f32, s: f32| {
@@ -751,15 +1262,13 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
             ui.id().with(("disclose", id)),
             egui::Sense::click(),
         );
-        theme::paint_icon(
-            ui.painter(),
+        lottie_icon::toggle(
+            ui,
+            ("disclose-icon", id),
+            "chevron-right",
             r.shrink(2.0),
-            if open {
-                Icon::ChevronDown
-            } else {
-                Icon::ChevronRight
-            },
             fg2,
+            open,
         );
         if cr.clicked() {
             if open {
@@ -770,16 +1279,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
         }
     }
     x += 16.0;
-    theme::paint_icon(
-        ui.painter(),
-        sq(x, 14.0),
-        node_icon(&n),
-        if selected {
-            Color32::WHITE
-        } else {
-            theme::accent()
-        },
-    );
+    theme::paint_icon(ui.painter(), sq(x, 14.0), node_icon(&n), theme::accent());
     if n.open_comments() > 0 {
         let at = egui::pos2(x + 14.0, cy - 6.0);
         ui.painter().circle_filled(at, 4.5, Color32::WHITE);
@@ -790,31 +1290,27 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
 
     // Trailing eye / lock buttons: always shown when hidden or locked, otherwise on hover.
     let mut right = row.right() - 4.0;
-    let mut trailing = |ui: &mut Ui, icon: Icon, tip: &str, show: bool| -> bool {
-        let r = egui::Rect::from_center_size(egui::pos2(right - 9.0, cy), egui::vec2(18.0, 18.0));
-        right -= 20.0;
-        if !show {
-            return false;
-        }
-        let b = ui.interact(r, ui.id().with((tip, id)), egui::Sense::click());
-        if b.hovered() {
-            ui.painter().rect_filled(
-                r,
-                5.0,
-                if selected {
-                    Color32::from_white_alpha(40)
-                } else {
-                    p.hover
-                },
-            );
-        }
-        theme::paint_icon(ui.painter(), r.shrink(3.0), icon, fg2);
-        b.on_hover_text(tip).clicked()
-    };
+    let mut trailing =
+        |ui: &mut Ui, paint: &dyn Fn(&Ui, egui::Rect), tip: &str, show: bool| -> bool {
+            let r =
+                egui::Rect::from_center_size(egui::pos2(right - 9.0, cy), egui::vec2(18.0, 18.0));
+            right -= 20.0;
+            if !show {
+                return false;
+            }
+            let b = ui.interact(r, ui.id().with((tip, id)), egui::Sense::click());
+            let t = motion::hover(ui.ctx(), ui.id().with(("trail-hover", tip, id)), &b);
+            if t > 0.0 {
+                let tint = p.hover;
+                ui.painter().rect_filled(r, 5.0, tint.gamma_multiply(t));
+            }
+            paint(ui, r.shrink(3.0));
+            b.on_hover_text(tip).clicked()
+        };
     let eye = if n.visible { Icon::Eye } else { Icon::EyeSlash };
     if trailing(
         ui,
-        eye,
+        &|ui, r| theme::paint_icon(ui.painter(), r, eye, fg2),
         if n.visible { "Hide" } else { "Show" },
         hovered || !n.visible,
     ) {
@@ -822,10 +1318,9 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
             tx.node_mut(id).unwrap().visible = !n.visible
         });
     }
-    let lock = if n.locked { Icon::Lock } else { Icon::LockOpen };
     if trailing(
         ui,
-        lock,
+        &|ui, r| lottie_icon::toggle(ui, ("lock-icon", id), "lock", r, fg2, n.locked),
         if n.locked { "Unlock" } else { "Lock" },
         hovered || n.locked,
     ) {
@@ -920,24 +1415,17 @@ fn toolbar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
             let p = theme::pal(ui);
             egui::Frame::popup(ui.style())
                 .fill(p.popover)
-                .corner_radius(10.0)
-                .inner_margin(5.0)
+                .corner_radius(theme::RADIUS_PANEL)
+                .inner_margin(4.0)
+                .stroke(egui::Stroke::NONE)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.spacing_mut().item_spacing.x = 4.0;
                         for t in Tool::ALL {
                             if matches!(t, Tool::Frame | Tool::Line | Tool::Text | Tool::Pencil) {
-                                let (r, _) = ui.allocate_exact_size(
-                                    egui::vec2(9.0, 28.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().vline(
-                                    r.center().x,
-                                    r.y_range().shrink(6.0),
-                                    egui::Stroke::new(1.0, p.separator),
-                                );
+                                ui.add_space(6.0);
                             }
-                            if theme::icon_button(ui, tool_icon(t), 30.0, ed.tool == t)
+                            if theme::icon_button(ui, tool_icon(t), 34.0, ed.tool == t)
                                 .on_hover_text(format!("{} ({})", t.label(), t.shortcut()))
                                 .clicked()
                             {
@@ -958,6 +1446,12 @@ fn toast(ctx: &egui::Context, text: &str, error: bool) {
         .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 44.0))
         .interactable(false)
         .show(ctx, |ui| {
+            ui.multiply_opacity(motion::appear(
+                ctx,
+                "toast-appear",
+                motion::MEDIUM,
+                motion::ease_out_cubic,
+            ));
             let p = theme::pal(ui);
             let (fill, ink) = if error {
                 (TOAST_ERROR, Color32::WHITE)
@@ -966,8 +1460,8 @@ fn toast(ctx: &egui::Context, text: &str, error: bool) {
             };
             egui::Frame::popup(ui.style())
                 .fill(fill)
-                .corner_radius(8.0)
-                .inner_margin(egui::Margin::symmetric(14, 8))
+                .corner_radius(16.0)
+                .inner_margin(egui::Margin::symmetric(16, 10))
                 .show(ui, |ui| {
                     ui.set_max_width(520.0);
                     ui.label(RichText::new(text).color(ink));
@@ -984,7 +1478,18 @@ fn status(ctx: &egui::Context, ed: &Editor, canvas: egui::Rect) {
         .fixed_pos(egui::pos2(canvas.left() + 12.0, canvas.bottom() - 12.0))
         .interactable(false)
         .show(ctx, |ui| {
-            ui.label(RichText::new(&ed.status).weak().small());
+            let p = theme::pal(ui);
+            egui::Frame::new()
+                .fill(p.sidebar)
+                .corner_radius(egui::CornerRadius::same(255))
+                .inner_margin(egui::Margin::symmetric(14, 6))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(&ed.status)
+                            .color(p.secondary)
+                            .size(theme::SECONDARY),
+                    );
+                });
         });
 }
 
@@ -998,20 +1503,28 @@ fn help(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
         .show(ctx, |ui| {
             let p = theme::pal(ui);
             egui::Frame::popup(ui.style())
-                .fill(p.popover)
-                .corner_radius(12.0)
-                .inner_margin(16.0)
+                .fill(p.sidebar)
+                .corner_radius(24.0)
+                .inner_margin(24.0)
+                .stroke(egui::Stroke::NONE)
                 .show(ui, |ui| {
                     ui.set_width(width);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Keyboard shortcuts").font(theme::semibold(15.0)));
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(RichText::new("Keyboard shortcuts").font(theme::semibold(20.0)));
+                            ui.label(RichText::new("Press ? anytime to open this sheet.").color(p.secondary));
+                        });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Done").on_hover_text("Close (Esc)").clicked() {
+                            if kit::button(ui, kit::ButtonKind::Secondary, None, "Done")
+                                .on_hover_text("Close (Esc)")
+                                .clicked()
+                            {
                                 st.show_help = false;
                             }
                         });
                     });
-                    ui.add_space(6.0);
+                    ui.add_space(12.0);
                     let sections = shortcuts::help_sections();
                     egui::ScrollArea::vertical()
                         .max_height((canvas.height() - 160.0).max(200.0))
@@ -1020,23 +1533,23 @@ fn help(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
                                 // Balance columns by row count.
                                 let total: usize = sections.iter().map(|(_, r)| r.len() + 2).sum();
                                 let mut acc = 0;
-                                for (i, (title, rows)) in sections.iter().enumerate() {
+                                for (title, rows) in sections.iter() {
                                     let col = (acc * 3 / total.max(1)).min(2);
                                     acc += rows.len() + 2;
                                     let ui = &mut cols[col];
-                                    ui.label(title_text(*title));
-                                    egui::Grid::new(("keys", i)).num_columns(2).spacing([10.0, 3.0]).show(ui, |ui| {
-                                        for (k, d) in rows {
-                                            ui.label(
-                                                RichText::new(k)
-                                                    .font(theme::medium(11.5))
-                                                    .color(p.secondary),
-                                            );
-                                            ui.label(RichText::new(*d).size(12.0));
-                                            ui.end_row();
-                                        }
-                                    });
-                                    ui.add_space(10.0);
+                                    kit::section_header(ui, title, None);
+                                    ui.add_space(4.0);
+                                    for (k, d) in rows {
+                                        ui.horizontal(|ui| {
+                                            ui.set_height(30.0);
+                                            ui.label(RichText::new(*d).size(theme::BODY));
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                ui.spacing_mut().item_spacing.x = 4.0;
+                                                kit::key_caps_rtl(ui, k);
+                                            });
+                                        });
+                                    }
+                                    ui.add_space(14.0);
                                 }
                             });
                         });

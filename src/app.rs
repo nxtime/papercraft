@@ -105,6 +105,7 @@ impl App {
                     app.show_home();
                 } else {
                     app.st.project_name = app.session.project_name();
+                    app.st.project_dir = app.session.project.as_ref().map(|p| p.dir.clone());
                 }
             }
             Start::Scratch(ed) => app.ed = *ed,
@@ -254,6 +255,7 @@ impl App {
             Ok(()) => {
                 self.st.home = None;
                 self.st.project_name = self.session.project_name();
+                self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
                 self.st.save_state.clear();
                 self.ed.status.clear();
             }
@@ -269,6 +271,7 @@ impl App {
             Ok(()) => {
                 self.st.home = None;
                 self.st.project_name = self.session.project_name();
+                self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
                 self.st.save_state.clear();
             }
             Err(e) => self.error(format!("Could not create a project: {e}")),
@@ -729,8 +732,7 @@ impl App {
         // traffic lights back; re-inset them (a no-op when already in place).
         #[cfg(target_os = "macos")]
         {
-            let (x, y) = theme::TRAFFIC_LIGHTS;
-            crate::macos::inset_traffic_lights(&g.window, x, y);
+            crate::macos::hide_traffic_lights(&g.window);
         }
         let view = frame.texture.create_view(&Default::default());
         let size = [g.config.width, g.config.height];
@@ -830,6 +832,10 @@ impl App {
             }
             MenuCmd::ToggleGrid => self.st.show_grid_off = !self.st.show_grid_off,
             MenuCmd::ToggleHelp => self.st.show_help = !self.st.show_help,
+            MenuCmd::CheckUpdates => {
+                self.st.updater.open = true;
+                self.st.updater.check();
+            }
             MenuCmd::Theme(c) => {
                 theme::apply_choice(&self.ctx, c);
                 c.save();
@@ -944,8 +950,7 @@ impl ApplicationHandler<UserEvent> for App {
         {
             self.st.translucent_sidebar = translucent && crate::macos::apply_vibrancy(&window);
             self.st.native_chrome = true;
-            let (x, y) = theme::TRAFFIC_LIGHTS;
-            crate::macos::inset_traffic_lights(&window, x, y);
+            crate::macos::hide_traffic_lights(&window);
             self.menu = Some(crate::macos::install_menu());
         }
         let instance =
@@ -1029,8 +1034,7 @@ impl ApplicationHandler<UserEvent> for App {
                 g.surface.configure(&g.device, &g.config);
                 #[cfg(target_os = "macos")]
                 {
-                    let (x, y) = theme::TRAFFIC_LIGHTS;
-                    crate::macos::inset_traffic_lights(&g.window, x, y);
+                    crate::macos::hide_traffic_lights(&g.window);
                 }
                 redraw = true;
             }
@@ -1417,6 +1421,12 @@ impl App {
         }
         for c in calls {
             self.st.agent = Some((c.name.clone(), std::time::Instant::now()));
+            self.st
+                .agent_log
+                .push((c.name.clone(), std::time::Instant::now()));
+            if self.st.agent_log.len() > 60 {
+                self.st.agent_log.remove(0);
+            }
             let r = crate::mcp::exec::call(self, &c.name, &c.args);
             if let Err(e) = &r {
                 log::info!("mcp {}: {e}", c.name);
@@ -1424,6 +1434,7 @@ impl App {
             let _ = c.reply.send(r);
         }
         self.st.project_name = self.session.project_name();
+        self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
         self.ed.revision += 1;
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
@@ -1459,6 +1470,7 @@ impl crate::mcp::exec::Host for App {
             .map_err(|e| format!("could not open {}: {e}", dir.display()))?;
         self.st.home = None;
         self.st.project_name = self.session.project_name();
+        self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
         self.st.save_state.clear();
         self.ed.status.clear();
         Ok(())
@@ -1504,10 +1516,26 @@ fn start_mcp(
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn prefer_x11(kernel_release: &str, display: Option<&std::ffi::OsStr>) -> bool {
+    kernel_release.to_ascii_lowercase().contains("microsoft")
+        && display.is_some_and(|value| !value.is_empty())
+}
+
 pub fn run(start: Start) -> Result<(), String> {
     let store = Store::open(Store::default_root())
         .map_err(|e| format!("cannot create the projects folder: {e}"))?;
-    let event_loop = EventLoop::<UserEvent>::with_user_event()
+    let mut builder = EventLoop::<UserEvent>::with_user_event();
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+        // WSLg retains Wayland decoration shadows after resize (microsoft/wslg#914).
+        if prefer_x11(&kernel, std::env::var_os("DISPLAY").as_deref()) {
+            builder.with_x11();
+        }
+    }
+    let event_loop = builder
         .build()
         .map_err(|e| format!("cannot open a window: {e}"))?;
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -1521,4 +1549,31 @@ pub fn run(start: Start) -> Result<(), String> {
     let mut app = App::new(start, store);
     app.mcp = start_mcp(event_loop.create_proxy());
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefer_x11;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn wsl_prefers_x11_when_a_display_is_available() {
+        for kernel in ["6.6.87.2-microsoft-standard-WSL2", "4.4.0-19041-Microsoft"] {
+            assert!(prefer_x11(kernel, Some(OsStr::new(":0"))));
+        }
+    }
+
+    #[test]
+    fn native_linux_keeps_default_backend_selection() {
+        assert!(!prefer_x11("6.8.0-ubuntu", Some(OsStr::new(":0"))));
+    }
+
+    #[test]
+    fn wsl_without_x11_keeps_default_backend_selection() {
+        assert!(!prefer_x11("6.6.87.2-microsoft-standard-WSL2", None));
+        assert!(!prefer_x11(
+            "6.6.87.2-microsoft-standard-WSL2",
+            Some(OsStr::new(""))
+        ));
+    }
 }

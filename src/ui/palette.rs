@@ -5,7 +5,6 @@ use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
 use crate::model::NodeId;
 use crate::theme;
-use egui::{Color32, RichText};
 
 #[derive(Default)]
 pub struct PaletteUi {
@@ -33,6 +32,16 @@ pub enum Command {
     Library(String),
     ToggleLibrary,
     Theme(theme::Choice),
+    /// Open the settings dialog.
+    Settings,
+    /// Back to the projects home screen.
+    Home,
+    /// Check for a newer PaperCraft.
+    Updates,
+    /// Step through the page's frames full screen.
+    Present,
+    /// Show a sidebar view.
+    Side(super::panels::SideView),
 }
 
 pub struct Entry {
@@ -131,6 +140,34 @@ pub fn entries(ed: &Editor, st: &UiState) -> Vec<Entry> {
         detail: String::new(),
         cmd: Command::ToggleLibrary,
     });
+    for (label, cmd) in [
+        ("Go to projects home", Command::Home),
+        ("Check for updates", Command::Updates),
+        ("Present this page", Command::Present),
+        (
+            "Show history",
+            Command::Side(super::panels::SideView::History),
+        ),
+        (
+            "Show comments",
+            Command::Side(super::panels::SideView::Comments),
+        ),
+        (
+            "Show agent activity",
+            Command::Side(super::panels::SideView::Agent),
+        ),
+    ] {
+        out.push(Entry {
+            label: label.into(),
+            detail: String::new(),
+            cmd,
+        });
+    }
+    out.push(Entry {
+        label: "Settings…".into(),
+        detail: "Preferences".into(),
+        cmd: Command::Settings,
+    });
     for c in theme::Choice::ALL {
         out.push(Entry {
             label: format!("Theme: {}", c.label()),
@@ -197,24 +234,51 @@ pub fn run(ed: &mut Editor, st: &mut UiState, cmd: Command) {
                 ed.insert_library_item(&item, at);
             }
         }
-        Command::ToggleLibrary => st.show_library = !st.show_library,
+        Command::ToggleLibrary => {
+            st.show_library = !st.show_library;
+            st.show_design = false;
+            st.side_extra = None;
+        }
+        Command::Home => ed.requests.push(crate::editor::AppRequest::Home),
+        Command::Updates => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                st.updater.open = true;
+            }
+        }
+        Command::Present => super::start_present(ed, st),
+        Command::Side(v) => {
+            st.side_extra = Some(v);
+            st.show_library = false;
+            st.show_design = false;
+        }
+        Command::Settings => st.settings.open = true,
         // Needs the egui context; handled where the palette is drawn.
         Command::Theme(_) => {}
     }
 }
 
 pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect) {
-    if !st.palette.open {
+    // Open and close both animate: the palette keeps drawing, inert and fading, for a beat after it closes.
+    let t = super::motion::progress(
+        ctx,
+        "palette-open",
+        st.palette.open,
+        super::motion::FAST,
+        super::motion::ease_out_cubic,
+    );
+    if !st.palette.open && t <= 0.0 {
         return;
     }
+    let live = st.palette.open;
     let results = search(ed, st, &st.palette.query.clone());
     let n = results.len();
     let (up, down, enter, esc) = ctx.input(|i| {
         (
-            i.key_pressed(egui::Key::ArrowUp),
-            i.key_pressed(egui::Key::ArrowDown),
-            i.key_pressed(egui::Key::Enter),
-            i.key_pressed(egui::Key::Escape),
+            live && i.key_pressed(egui::Key::ArrowUp),
+            live && i.key_pressed(egui::Key::ArrowDown),
+            live && i.key_pressed(egui::Key::Enter),
+            live && i.key_pressed(egui::Key::Escape),
         )
     });
     if down && n > 0 {
@@ -227,33 +291,62 @@ pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui
     let mut chosen: Option<Command> = None;
     if esc {
         st.palette.open = false;
+        ctx.request_repaint();
         return;
     }
     if enter && n > 0 {
         chosen = Some(results[st.palette.selected].cmd.clone());
     }
-    let width = 520.0f32.min(canvas.width() - 40.0);
+    let width = 640.0f32.min(canvas.width() - 40.0);
     egui::Area::new("palette".into())
         .order(egui::Order::Foreground)
         .fade_in(false)
         .pivot(egui::Align2::CENTER_TOP)
-        .fixed_pos(egui::pos2(canvas.center().x, canvas.top() + 70.0))
+        .fixed_pos(egui::pos2(
+            canvas.center().x,
+            canvas.top() + 70.0 + (1.0 - super::motion::ease_out_back(t)) * -10.0,
+        ))
+        .interactable(live)
         .show(ctx, |ui| {
+            ui.multiply_opacity(t);
             let p = theme::pal(ui);
             egui::Frame::popup(ui.style())
-                .fill(p.popover)
-                .corner_radius(12.0)
-                .inner_margin(8.0)
+                .fill(p.sidebar)
+                .corner_radius(24.0)
+                .inner_margin(16.0)
+                .stroke(egui::Stroke::NONE)
                 .show(ui, |ui| {
                     ui.set_width(width);
-                    let r = ui.add(
-                        egui::TextEdit::singleline(&mut st.palette.query)
-                            .margin(crate::theme::INPUT_MARGIN)
-                            .hint_text("Search actions, tools, pages, layers…")
-                            .font(egui::FontId::proportional(15.0))
-                            .frame(egui::Frame::NONE)
-                            .desired_width(f32::INFINITY),
-                    );
+                    let r = egui::Frame::new()
+                        .fill(p.field)
+                        .corner_radius(16.0)
+                        .inner_margin(egui::Margin::symmetric(14, 6))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let (ir, _) = ui.allocate_exact_size(
+                                    egui::vec2(18.0, 18.0),
+                                    egui::Sense::hover(),
+                                );
+                                theme::paint_icon(
+                                    ui.painter(),
+                                    ir,
+                                    theme::Icon::Pointer,
+                                    p.secondary,
+                                );
+                                let r = ui.add(
+                                    egui::TextEdit::singleline(&mut st.palette.query)
+                                        .margin(crate::theme::INPUT_MARGIN)
+                                        .hint_text("Search actions, tools, pages, layers…")
+                                        .font(egui::FontId::proportional(15.0))
+                                        .frame(egui::Frame::NONE)
+                                        .desired_width(ui.available_width() - 44.0),
+                                );
+                                super::kit::key_cap(ui, "Esc");
+                                r
+                            })
+                            .inner
+                        })
+                        .inner;
                     if st.palette.focus {
                         r.request_focus();
                         st.palette.focus = false;
@@ -261,47 +354,55 @@ pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui
                     if r.changed() {
                         st.palette.selected = 0;
                     }
-                    ui.separator();
+                    ui.add_space(8.0);
                     egui::ScrollArea::vertical()
                         .max_height(340.0)
                         .show(ui, |ui| {
                             for (i, e) in results.iter().enumerate().take(60) {
                                 let sel = i == st.palette.selected;
                                 let (row, resp) = ui.allocate_exact_size(
-                                    egui::vec2(ui.available_width(), 26.0),
+                                    egui::vec2(ui.available_width(), 40.0),
                                     egui::Sense::click(),
                                 );
                                 if sel {
-                                    ui.painter().rect_filled(row, 6.0, theme::accent());
+                                    ui.painter().rect_filled(row, 12.0, p.field);
                                     ui.scroll_to_rect(row, None);
                                 } else if resp.hovered() {
-                                    ui.painter().rect_filled(row, 6.0, p.hover);
+                                    ui.painter().rect_filled(row, 12.0, p.hover);
                                 }
-                                let fg = if sel { Color32::WHITE } else { p.text };
                                 ui.painter().text(
-                                    egui::pos2(row.left() + 10.0, row.center().y),
+                                    egui::pos2(row.left() + 14.0, row.center().y),
                                     egui::Align2::LEFT_CENTER,
                                     &e.label,
-                                    egui::FontId::proportional(theme::BODY),
-                                    fg,
+                                    if sel {
+                                        theme::semibold(theme::BODY + 1.0)
+                                    } else {
+                                        egui::FontId::proportional(theme::BODY + 1.0)
+                                    },
+                                    if sel { p.text } else { p.text },
                                 );
                                 ui.painter().text(
-                                    egui::pos2(row.right() - 10.0, row.center().y),
+                                    egui::pos2(row.right() - 14.0, row.center().y),
                                     egui::Align2::RIGHT_CENTER,
                                     &e.detail,
                                     egui::FontId::proportional(theme::SECONDARY),
-                                    if sel {
-                                        Color32::from_white_alpha(200)
-                                    } else {
-                                        p.secondary
-                                    },
+                                    p.secondary,
                                 );
                                 if resp.clicked() {
                                     chosen = Some(e.cmd.clone());
                                 }
                             }
                             if results.is_empty() {
-                                ui.label(RichText::new("No matches").color(p.secondary));
+                                ui.add_space(12.0);
+                                super::kit::empty_state(
+                                    ui,
+                                    theme::Icon::Question,
+                                    p.secondary,
+                                    "No matches",
+                                    "Try a different word, or search layers, pages and commands.",
+                                    |_| {},
+                                );
+                                ui.add_space(12.0);
                             }
                         });
                 });

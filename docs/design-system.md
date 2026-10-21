@@ -42,6 +42,13 @@ papercraft-cli call set_text_content '{"updates":[{"nodeId":"<label layer id fro
 
 Fill-based sets (Phosphor, Material) follow variables; Lucide is stroke-based and keeps a fixed color.
 
+> **Known limitation.** An icon's *stroke* color is frozen at import time: the value of the
+> variable is baked into the stroke, so a stroke-based icon (Lucide, Tabler, Heroicons) does
+> not follow the variable when it changes later — only fills keep the link. Letting strokes
+> follow a variable needs a `stroke_var` field on the style, which changes the saved page
+> format, so it is on the backlog. A `var(--x)` that does not exist is reported as a warning
+> and the icon keeps the color it inherits.
+
 ## Lint
 
 `lint_design` checks a subtree or the page and returns issues with a rule, a severity and a fix:

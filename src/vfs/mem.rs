@@ -32,6 +32,8 @@ export async function idb_load_all() {
   });
 }
 export async function idb_put(key, bytes) {
+  // `bytes` views wasm memory, which Rust reuses once this call returns: copy before awaiting.
+  bytes = bytes.slice();
   const d = await db();
   return new Promise((res, rej) => {
     const rq = store(d, 'readwrite').put(bytes, key);

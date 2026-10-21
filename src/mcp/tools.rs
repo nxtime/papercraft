@@ -134,6 +134,18 @@ pub fn definitions() -> Vec<Value> {
             &["updates"],
             false,
         ),
+        tool(
+            "delete_pages",
+            "Delete one or more pages. The last page of a project cannot be deleted. A page that \
+             still has layers is only deleted with `confirm: true`; check what is on it first \
+             (get_basic_info lists node counts).",
+            json!({
+                "pageIds": {"type": "array", "items": {"type": "string"}, "description": "Pages to delete."},
+                "confirm": {"type": "boolean", "description": "Required to delete a page that has layers."},
+            }),
+            &["pageIds"],
+            false,
+        ),
         // ------------------------------------------------------------ reading
         tool(
             "get_basic_info",

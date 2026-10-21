@@ -38,8 +38,8 @@ async fn two_folders_follow_each_other_through_the_relay() {
     // A shares a project with two pages.
     let a = temp("a");
     std::fs::create_dir_all(a.join("pages")).unwrap();
-    std::fs::write(a.join("project.json"), "manifest v1").unwrap();
-    std::fs::write(a.join("pages/p1.json"), "page one").unwrap();
+    std::fs::write(a.join("project.json"), r#"{"manifest":1}"#).unwrap();
+    std::fs::write(a.join("pages/p1.json"), r#"{"page":"one"}"#).unwrap();
     let share = Share::new(&server);
     share.save(&a).unwrap();
     assert!(
@@ -52,22 +52,31 @@ async fn two_folders_follow_each_other_through_the_relay() {
     let joined = Share::from_link(&share.link()).unwrap();
     joined.save(&b).unwrap();
     assert!(sync::sync_once(&b).await.unwrap());
-    assert_eq!(read(&b, "project.json").as_deref(), Some("manifest v1"));
-    assert_eq!(read(&b, "pages/p1.json").as_deref(), Some("page one"));
+    assert_eq!(
+        read(&b, "project.json").as_deref(),
+        Some(r#"{"manifest":1}"#)
+    );
+    assert_eq!(
+        read(&b, "pages/p1.json").as_deref(),
+        Some(r#"{"page":"one"}"#)
+    );
     // Nothing changed: both sides settle.
     assert!(!sync::sync_once(&b).await.unwrap());
     assert!(!sync::sync_once(&a).await.unwrap());
 
     // B edits one page and adds another; A receives both.
-    std::fs::write(b.join("pages/p1.json"), "page one, edited in B").unwrap();
-    std::fs::write(b.join("pages/p2.json"), "page two").unwrap();
+    std::fs::write(b.join("pages/p1.json"), r#"{"page":"one, edited in B"}"#).unwrap();
+    std::fs::write(b.join("pages/p2.json"), r#"{"page":"two"}"#).unwrap();
     sync::sync_once(&b).await.unwrap();
     assert!(sync::sync_once(&a).await.unwrap());
     assert_eq!(
         read(&a, "pages/p1.json").as_deref(),
-        Some("page one, edited in B")
+        Some(r#"{"page":"one, edited in B"}"#)
     );
-    assert_eq!(read(&a, "pages/p2.json").as_deref(), Some("page two"));
+    assert_eq!(
+        read(&a, "pages/p2.json").as_deref(),
+        Some(r#"{"page":"two"}"#)
+    );
 
     // A deletes a page; B loses it too.
     std::fs::remove_file(a.join("pages/p2.json")).unwrap();
@@ -76,8 +85,8 @@ async fn two_folders_follow_each_other_through_the_relay() {
     assert!(read(&b, "pages/p2.json").is_none());
 
     // Both edit the same file before syncing: the one that syncs last (the folder) wins.
-    std::fs::write(a.join("pages/p1.json"), "from A").unwrap();
-    std::fs::write(b.join("pages/p1.json"), "from B").unwrap();
+    std::fs::write(a.join("pages/p1.json"), r#"{"from":"A"}"#).unwrap();
+    std::fs::write(b.join("pages/p1.json"), r#"{"from":"B"}"#).unwrap();
     sync::sync_once(&a).await.unwrap();
     sync::sync_once(&b).await.unwrap();
     sync::sync_once(&a).await.unwrap();

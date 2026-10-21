@@ -504,6 +504,13 @@ impl History {
     pub fn undo_labels(&self) -> impl Iterator<Item = &str> {
         self.undo.iter().map(|c| c.label.as_str())
     }
+    pub fn redo_len(&self) -> usize {
+        self.redo.len()
+    }
+    /// Labels of the undone steps, next-to-redo first.
+    pub fn redo_labels(&self) -> impl Iterator<Item = &str> {
+        self.redo.iter().rev().map(|c| c.label.as_str())
+    }
     /// Stop coalescing into the current top entry (e.g. on focus change).
     pub fn seal(&mut self) {
         if let Some(top) = self.undo.last_mut() {

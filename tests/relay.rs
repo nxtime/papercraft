@@ -287,6 +287,7 @@ async fn static_files_are_served_with_their_type() {
     let r = http.get(&base).send().await.unwrap();
     assert_eq!(r.status(), 200);
     assert_eq!(r.headers().get("content-type").unwrap(), "text/html");
+    assert_eq!(r.headers().get("cache-control").unwrap(), "no-cache");
     assert_eq!(r.text().await.unwrap(), "<html>paper</html>");
 
     let r = http
@@ -348,13 +349,13 @@ async fn shared_projects_store_files_and_tell_the_other_tabs() {
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let put = |path: &str, client: &str| {
+    let put = |path: &str, client: &str, body: &'static str| {
         http.put(format!("{base}/p/{t}/f/{path}"))
             .header("x-client", client)
-            .body("hello")
+            .body(body)
             .send()
     };
-    assert_eq!(put("pages/p1.json", "a").await.unwrap().status(), 200);
+    assert_eq!(put("pages/p1.json", "a", "{}").await.unwrap().status(), 200);
     let ev: Value = serde_json::from_str(&rx.recv_timeout(CONNECT_WAIT).unwrap()).unwrap();
     assert_eq!(
         (ev["op"].as_str(), ev["path"].as_str()),
@@ -362,7 +363,7 @@ async fn shared_projects_store_files_and_tell_the_other_tabs() {
     );
 
     // B's own writes are not echoed back to B.
-    assert_eq!(put("project.json", "b").await.unwrap().status(), 200);
+    assert_eq!(put("project.json", "b", "{}").await.unwrap().status(), 200);
     assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
 
     let r = http
@@ -370,7 +371,7 @@ async fn shared_projects_store_files_and_tell_the_other_tabs() {
         .send()
         .await
         .unwrap();
-    assert_eq!(r.text().await.unwrap(), "hello");
+    assert_eq!(r.text().await.unwrap(), "{}");
     let files: Value = http
         .get(format!("{base}/p/{t}/files"))
         .send()
@@ -380,6 +381,20 @@ async fn shared_projects_store_files_and_tell_the_other_tabs() {
         .await
         .unwrap();
     assert_eq!(files.as_array().unwrap().len(), 2);
+
+    // A `.json` body that does not parse is refused, and nothing is written.
+    let r = put("pages/p2.json", "b", "not json").await.unwrap();
+    assert_eq!(r.status(), 422);
+    let r = http
+        .get(format!("{base}/p/{t}/f/pages/p2.json"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "the refused file was never written");
+
+    // Other file types are unchanged.
+    let r = put("assets/a.bin", "b", "hello").await.unwrap();
+    assert_eq!(r.status(), 200);
 
     let r = http
         .delete(format!("{base}/p/{t}/f/pages/p1.json"))

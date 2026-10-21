@@ -10,6 +10,118 @@ fn parent_layout(doc: &Document, n: &Node) -> Option<AutoLayout> {
     n.parent.and_then(|p| doc.get(p)).and_then(|p| p.layout)
 }
 
+/// `(set, name)` of an icon frame: a frame called `Icon / <set>:<name>` whose children are all vector
+/// geometry (what `<x-paper-icon>` and the icon tools create).
+fn icon_of(doc: &Document, n: &Node) -> Option<(String, String)> {
+    if !matches!(n.kind, NodeKind::Frame { .. }) || n.children.is_empty() {
+        return None;
+    }
+    let (set, name) = n.name.strip_prefix("Icon / ")?.split_once(':')?;
+    fn only_geometry(doc: &Document, id: NodeId) -> bool {
+        doc.get(id).is_some_and(|c| match c.kind {
+            NodeKind::Text { .. } | NodeKind::Sticky { .. } => false,
+            NodeKind::Frame { .. } | NodeKind::Group => {
+                !c.children.is_empty() && c.children.iter().all(|k| only_geometry(doc, *k))
+            }
+            _ => true,
+        })
+    }
+    let geometry = n.children.iter().all(|c| only_geometry(doc, *c));
+    geometry.then(|| (set.to_string(), name.to_string()))
+}
+
+/// The tint of an icon: the stroke (or solid fill) of its first path, and the document variable that has
+/// the same value, if any (icon strokes do not follow variables, so the match is a best guess).
+fn icon_tint(doc: &Document, n: &Node) -> (Option<String>, Option<String>) {
+    fn first_geometry<'a>(doc: &'a Document, n: &'a Node) -> Option<&'a Node> {
+        n.children.iter().filter_map(|c| doc.get(*c)).find_map(|c| {
+            if matches!(c.kind, NodeKind::Frame { .. } | NodeKind::Group) {
+                first_geometry(doc, c)
+            } else {
+                Some(c)
+            }
+        })
+    }
+    let first = first_geometry(doc, n);
+    let hex = first.and_then(|c| {
+        c.style
+            .stroke
+            .filter(|_| c.style.stroke_width > 0.0)
+            .map(|s| s.to_hex())
+            .or_else(|| match c.style.fills.last() {
+                Some(Paint::Solid { color, .. }) => Some(color.to_hex()),
+                _ => None,
+            })
+    });
+    let var = hex.as_ref().and_then(|h| {
+        doc.variables
+            .iter()
+            .find(|(_, c)| &c.to_hex() == h)
+            .map(|(k, _)| format!("--{k}"))
+    });
+    (hex, var)
+}
+
+/// Inline SVG of exactly this node (and its descendants), without the XML prolog. The export is in
+/// world coordinates; the result is shifted so its `viewBox` starts at 0 0 and can be placed anywhere.
+fn inline_svg(doc: &Document, id: NodeId) -> String {
+    let svg = crate::io::svg::export(doc, Some(&[id]), None)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.starts_with("<?xml"))
+        .collect::<Vec<_>>()
+        .join("");
+    normalize_svg_origin(&svg)
+}
+
+fn normalize_svg_origin(svg: &str) -> String {
+    let Some(vb) = svg.find("viewBox=\"") else {
+        return svg.to_string();
+    };
+    let start = vb + "viewBox=\"".len();
+    let Some(len) = svg[start..].find('"') else {
+        return svg.to_string();
+    };
+    let nums: Vec<f64> = svg[start..start + len]
+        .split_whitespace()
+        .filter_map(|v| v.parse().ok())
+        .collect();
+    let [x, y, w, h] = nums[..] else {
+        return svg.to_string();
+    };
+    if x == 0.0 && y == 0.0 {
+        return svg.to_string();
+    }
+    let Some(open_end) = svg.find('>') else {
+        return svg.to_string();
+    };
+    let Some(close) = svg.rfind("</svg>") else {
+        return svg.to_string();
+    };
+    let head = format!(
+        "{}viewBox=\"0 0 {} {}\"{}",
+        &svg[..vb],
+        px_num(w),
+        px_num(h),
+        &svg[start + len + 1..=open_end]
+    );
+    format!(
+        "{head}<g transform=\"translate({} {})\">{}</g></svg>",
+        px_num(-x),
+        px_num(-y),
+        &svg[open_end + 1..close]
+    )
+}
+
+/// The `--token` whose value is `px` pixels, among tokens whose name starts with one of `prefixes`.
+fn token_for(doc: &Document, px: f64, prefixes: &[&str]) -> Option<String> {
+    let want = format!("{}px", px_num(px));
+    doc.tokens
+        .iter()
+        .find(|(k, v)| v.trim() == want && prefixes.iter().any(|p| k.starts_with(p)))
+        .map(|(k, _)| format!("--{k}"))
+}
+
 fn px_num(v: f64) -> String {
     let r = (v * 100.0).round() / 100.0;
     if (r - r.trunc()).abs() < 1e-9 {
@@ -290,6 +402,13 @@ fn tailwind_node(doc: &Document, id: NodeId, depth: usize, is_root: bool, out: &
     let cls = tw_classes(doc, n, is_root);
     let name = n.name.replace('"', "'");
     let comp_attr = instance_comp_attr(doc, n);
+    if let Some((set, icon)) = icon_of(doc, n) {
+        out.push_str(&format!(
+            "{ind}<div data-name=\"{name}\" data-icon=\"{set}:{icon}\"{comp_attr} className=\"{cls}\">{}</div>\n",
+            inline_svg(doc, id)
+        ));
+        return;
+    }
     match &n.kind {
         NodeKind::Frame { .. } | NodeKind::Group => {
             if n.children.is_empty() {
@@ -336,12 +455,7 @@ fn tailwind_node(doc: &Document, id: NodeId, depth: usize, is_root: bool, out: &
             ));
         }
         _ => {
-            let svg = crate::io::svg::export(doc, Some(&[id]), None).unwrap_or_default();
-            let svg = svg
-                .lines()
-                .filter(|l| !l.starts_with("<?xml"))
-                .collect::<Vec<_>>()
-                .join("");
+            let svg = inline_svg(doc, id);
             out.push_str(&format!(
                 "{ind}<div data-name=\"{name}\"{comp_attr} className=\"{cls}\">{svg}</div>\n"
             ));
@@ -405,6 +519,13 @@ fn html_node(
     let ind = "  ".repeat(depth);
     let name = n.name.replace('"', "'");
     let comp_attr = instance_comp_attr(doc, n);
+    if let Some((set, icon)) = icon_of(doc, n) {
+        markup.push_str(&format!(
+            "{ind}<div class=\"{cls}\" data-name=\"{name}\" data-icon=\"{set}:{icon}\"{comp_attr}>{}</div>\n",
+            inline_svg(doc, id)
+        ));
+        return;
+    }
     match &n.kind {
         NodeKind::Frame { .. } | NodeKind::Group => {
             if n.children.is_empty() {
@@ -435,7 +556,8 @@ fn html_node(
         }
         _ => {
             markup.push_str(&format!(
-                "{ind}<div class=\"{cls}\" data-name=\"{name}\"{comp_attr}></div>\n"
+                "{ind}<div class=\"{cls}\" data-name=\"{name}\"{comp_attr}>{}</div>\n",
+                inline_svg(doc, id)
             ));
         }
     }
@@ -660,6 +782,13 @@ fn angular_node(
         "class=\"{cls}\" data-node=\"{}\" data-name=\"{name}\"{comp_attr}",
         id.0
     );
+    if let Some((set, icon)) = icon_of(doc, n) {
+        markup.push_str(&format!(
+            "{ind}<div {attrs} data-icon=\"{set}:{icon}\">{}</div>\n",
+            escape_ng_template(&inline_svg(doc, id))
+        ));
+        return;
+    }
     match &n.kind {
         NodeKind::Frame { .. } | NodeKind::Group => {
             if n.children.is_empty() {
@@ -685,7 +814,10 @@ fn angular_node(
             ));
         }
         _ => {
-            markup.push_str(&format!("{ind}<div {attrs}></div>\n"));
+            markup.push_str(&format!(
+                "{ind}<div {attrs}>{}</div>\n",
+                escape_ng_template(&inline_svg(doc, id))
+            ));
         }
     }
 }
@@ -772,6 +904,30 @@ fn egui_node(doc: &Document, id: NodeId, depth: usize, is_root: bool, out: &mut 
         return;
     }
     let ind = "    ".repeat(depth);
+    if let Some((set, icon)) = icon_of(doc, n) {
+        let (hex, var) = icon_tint(doc, n);
+        let tint = hex
+            .as_deref()
+            .and_then(|h| crate::model::Color::from_hex(h))
+            .map_or_else(
+                || "egui::Color32::WHITE".to_string(),
+                |c| egui_color_expr(doc, c, var.as_deref().map(|v| v.trim_start_matches("--"))),
+            );
+        out.push_str(&format!(
+            "{ind}// icon `{set}:{icon}` (stroke icon, {w}x{h}); paint it with your icon renderer, tinted by the colour below\n",
+            w = f32_lit(n.rect.w),
+            h = f32_lit(n.rect.h)
+        ));
+        out.push_str(&format!(
+            "{ind}let (rect, _) = ui.allocate_exact_size(egui::vec2({} as f32, {} as f32), egui::Sense::hover());\n",
+            f32_lit(n.rect.w),
+            f32_lit(n.rect.h)
+        ));
+        out.push_str(&format!(
+            "{ind}let _icon_tint = {tint}; let _icon_rect = rect;\n"
+        ));
+        return;
+    }
     match &n.kind {
         NodeKind::Frame { .. } | NodeKind::Group => {
             let mut frame_chain = String::from("egui::Frame::new()");
@@ -954,6 +1110,35 @@ fn text_align_name(a: TextAlign) -> &'static str {
     }
 }
 
+/// One fill layer as JSON: solid colours keep their variable, gradients keep their stops, images their asset.
+fn paint_json(doc: &Document, p: &Paint) -> Value {
+    let _ = doc;
+    match p {
+        Paint::Solid { color, var } => {
+            json!({"type": "solid", "color": color.to_hex(), "var": var.as_ref().map(|v| format!("--{v}"))})
+        }
+        Paint::Linear { stops, from, to } => json!({
+            "type": "linear",
+            "from": [from.x, from.y],
+            "to": [to.x, to.y],
+            "stops": stops.iter().map(|s| json!({"pos": s.pos, "color": s.color.to_hex()})).collect::<Vec<_>>(),
+        }),
+        Paint::Radial {
+            stops,
+            center,
+            radius,
+        } => json!({
+            "type": "radial",
+            "center": [center.x, center.y],
+            "radius": [radius.x, radius.y],
+            "stops": stops.iter().map(|s| json!({"pos": s.pos, "color": s.color.to_hex()})).collect::<Vec<_>>(),
+        }),
+        Paint::Image { asset, opacity, .. } => {
+            json!({"type": "image", "asset": asset, "opacity": opacity})
+        }
+    }
+}
+
 fn build_spec_tree(
     doc: &Document,
     id: NodeId,
@@ -972,10 +1157,14 @@ fn build_spec_tree(
         *flow_count += 1;
     }
 
+    let mut instance_of: Option<Value> = None;
     if let Some(link) = &n.instance
         && let Some(main) = doc.get(link.main)
         && main.component
     {
+        instance_of = Some(
+            json!({"component": main.name, "componentId": main.id.0, "overrides": link.overrides}),
+        );
         components.push(json!({
             "nodeId": n.id.0,
             "instanceName": n.name,
@@ -1024,10 +1213,26 @@ fn build_spec_tree(
             px_num(l.padding[2]),
             px_num(l.padding[3])
         ));
+        if let Some(t) = token_for(doc, l.gap, &["space"]).filter(|_| l.gap > 0.0) {
+            rules.push(format!(
+                "SHOULD use spacing token `{t}` for the {}px gap on `{}` (#{})",
+                px_num(l.gap),
+                n.name,
+                n.id.0
+            ));
+        }
+        let pad_tokens: Vec<Value> = l
+            .padding
+            .iter()
+            .map(|p| json!(token_for(doc, *p, &["space"])))
+            .collect();
         json!({
             "direction": dir,
             "wrap": l.wrap,
             "gap": l.gap,
+            "gapToken": token_for(doc, l.gap, &["space"]),
+            "crossGap": l.cross_gap,
+            "paddingTokens": pad_tokens,
             "padding": l.padding,
             "alignMain": if l.gap_auto { "space-between" } else { align_name(l.align_main) },
             "alignCross": align_name(l.align_cross),
@@ -1050,9 +1255,15 @@ fn build_spec_tree(
             Some(json!({
                 "content": text,
                 "fontSize": font_size,
+                "fontFamily": "Inter",
+                "fontWeight": if n.text_style.bold { 700 } else { 400 },
+                "lineHeight": n.text_style.line_height.map(|m| m * font_size),
+                "letterSpacing": n.text_style.letter_spacing,
+                "autoWidth": matches!(n.kind, NodeKind::Text { auto_width: true, .. }),
                 "bold": n.text_style.bold,
                 "italic": n.text_style.italic,
                 "align": text_align_name(*align),
+                "fontSizeToken": token_for(doc, *font_size, &["text"]),
             }))
         }
         NodeKind::Sticky { text, font_size } => {
@@ -1073,19 +1284,79 @@ fn build_spec_tree(
         _ => None,
     };
 
-    let children: Vec<Value> = n
-        .children
-        .iter()
-        .filter_map(|c| build_spec_tree(doc, *c, false, components, rules, flow_count))
-        .collect();
+    let icon = icon_of(doc, n);
+    let children: Vec<Value> = if icon.is_some() {
+        Vec::new()
+    } else {
+        n.children
+            .iter()
+            .filter_map(|c| build_spec_tree(doc, *c, false, components, rules, flow_count))
+            .collect()
+    };
 
     let mut obj = Map::new();
     obj.insert("id".into(), json!(n.id.0));
     obj.insert("name".into(), json!(n.name));
     obj.insert(
         "kind".into(),
-        json!(n.kind.type_name().to_ascii_lowercase()),
+        json!(if icon.is_some() {
+            "icon".to_string()
+        } else {
+            n.kind.type_name().to_ascii_lowercase()
+        }),
     );
+    if let Some((set, name)) = &icon {
+        let (hex, var) = icon_tint(doc, n);
+        rules.push(format!(
+            "MUST render icon `{set}:{name}` at {}x{}px on `{}` (#{}) as a stroke icon tinted {}",
+            px_num(n.rect.w),
+            px_num(n.rect.h),
+            n.name,
+            n.id.0,
+            var.as_deref()
+                .map(|v| format!("`var({v})`"))
+                .or_else(|| hex.clone())
+                .unwrap_or_else(|| "the surrounding text colour".into()),
+        ));
+        obj.insert(
+            "icon".into(),
+            json!({
+                "set": set,
+                "name": name,
+                "size": [n.rect.w, n.rect.h],
+                "color": hex,
+                "colorVar": var,
+                "note": "Icon strokes are not bound to variables; colorVar is the variable with the same value.",
+            }),
+        );
+    }
+    if let Some(io) = instance_of {
+        obj.insert("instanceOf".into(), io);
+    }
+    if matches!(
+        n.kind,
+        NodeKind::Path { .. } | NodeKind::Line { .. } | NodeKind::Connector { .. }
+    ) {
+        let svg = inline_svg(doc, n.id);
+        // The SVG is a little larger than the node's box (stroke caps, rounding); report where it sits.
+        let attr = |name: &str| {
+            let key = format!("{name}=\"");
+            let at = svg.find(&key)? + key.len();
+            svg[at..at + svg[at..].find('"')?].parse::<f64>().ok()
+        };
+        if let (Some(w), Some(h)) = (attr("width"), attr("height")) {
+            obj.insert(
+                "svgBounds".into(),
+                json!({
+                    "x": n.rect.x - (w - n.rect.w) / 2.0,
+                    "y": n.rect.y - (h - n.rect.h) / 2.0,
+                    "width": w,
+                    "height": h,
+                }),
+            );
+        }
+        obj.insert("svg".into(), json!(svg));
+    }
     obj.insert(
         "bounds".into(),
         json!({
@@ -1095,27 +1366,88 @@ fn build_spec_tree(
             "height": n.rect.h,
         }),
     );
-    obj.insert(
-        "sizing".into(),
-        json!({
-            "horizontal": sizing_name(n.layout_child.sizing[0]),
-            "vertical": sizing_name(n.layout_child.sizing[1]),
-            "inFlow": in_flow,
-        }),
-    );
+    // Text boxes size themselves: an auto-width text hugs its content on both axes, a wrapping text
+    // hugs its height. The layout `sizing` of a text node only says how it sits in its parent.
+    let (h_sizing, v_sizing) = match n.kind {
+        NodeKind::Text {
+            auto_width: true, ..
+        } => ("hug", "hug"),
+        NodeKind::Text { .. } => (sizing_name(n.layout_child.sizing[0]), "hug"),
+        _ => (
+            sizing_name(n.layout_child.sizing[0]),
+            sizing_name(n.layout_child.sizing[1]),
+        ),
+    };
+    let mut sizing = json!({
+        "horizontal": h_sizing,
+        "vertical": v_sizing,
+        "inFlow": in_flow,
+    });
+    if let Some(m) = sizing.as_object_mut() {
+        let lc = n.layout_child;
+        for (key, v) in [
+            ("minWidth", lc.min_size[0]),
+            ("minHeight", lc.min_size[1]),
+            ("maxWidth", lc.max_size[0]),
+            ("maxHeight", lc.max_size[1]),
+        ] {
+            if let Some(v) = v {
+                m.insert(key.into(), json!(v));
+            }
+        }
+        if let Some(a) = lc.align_self {
+            m.insert("alignSelf".into(), json!(align_name(a)));
+        }
+    }
+    obj.insert("sizing".into(), sizing);
     if let Some(al) = auto_layout {
         obj.insert("autoLayout".into(), al);
     }
-    obj.insert(
-        "style".into(),
-        json!({
-            "fill": fill_hex,
-            "fillVar": fill_var,
-            "stroke": n.style.stroke.filter(|_| n.style.stroke_width > 0.0).map(|c| c.to_hex()),
-            "cornerRadius": n.style.corner_radius,
-            "opacity": n.style.opacity,
-        }),
-    );
+    let stroke = n.style.stroke.filter(|_| n.style.stroke_width > 0.0);
+    let mut style = json!({
+        "fill": fill_hex,
+        "fillVar": fill_var,
+        "fills": n.style.fills.iter().map(|f| paint_json(doc, f)).collect::<Vec<_>>(),
+        "stroke": stroke.map(|c| c.to_hex()),
+        "strokeWidth": stroke.map(|_| n.style.stroke_width),
+        "cornerRadius": n.style.corner_radius,
+        "cornerRadiusToken": token_for(doc, n.style.corner_radius, &["radius"]),
+        "opacity": n.style.opacity,
+    });
+    if let Some(m) = style.as_object_mut() {
+        if let Some(r) = n.style.radii {
+            m.insert("radii".into(), json!(r));
+        }
+        if let Some(sd) = n.style.stroke_sides {
+            m.insert("strokeSides".into(), json!(sd));
+        }
+        if stroke.is_some() {
+            m.insert(
+                "strokeCap".into(),
+                json!(format!("{:?}", n.style.cap).to_lowercase()),
+            );
+            m.insert(
+                "strokeJoin".into(),
+                json!(format!("{:?}", n.style.join).to_lowercase()),
+            );
+        }
+        if let NodeKind::Frame { clip } = n.kind {
+            m.insert("clip".into(), json!(clip));
+        }
+        if let Some(sh) = n.style.shadow {
+            m.insert(
+                "shadow".into(),
+                json!({"x": sh.x, "y": sh.y, "blur": sh.blur, "spread": sh.spread}),
+            );
+        }
+        if n.style.blend != Default::default() {
+            m.insert(
+                "blend".into(),
+                json!(format!("{:?}", n.style.blend).to_lowercase()),
+            );
+        }
+    }
+    obj.insert("style".into(), style);
     if let Some(ti) = text_info {
         obj.insert("text".into(), ti);
     }
@@ -1157,6 +1489,36 @@ pub fn to_ai_spec(doc: &Document, root: NodeId, target: &str) -> Result<Value, S
         .collect();
     let modes: Vec<String> = doc.modes.keys().cloned().collect();
 
+    let mut definitions: Vec<Value> = Vec::new();
+    let mut seen: Vec<NodeId> = Vec::new();
+    for c in components.clone() {
+        let Some(inst) = c["nodeId"]
+            .as_u64()
+            .map(|i| NodeId(i as _))
+            .and_then(|i| doc.get(i))
+        else {
+            continue;
+        };
+        let Some(main) = inst.instance.as_ref().map(|l| l.main) else {
+            continue;
+        };
+        if seen.contains(&main) {
+            continue;
+        }
+        seen.push(main);
+        let (mut nested, mut nested_rules, mut nested_flow) = (Vec::new(), Vec::new(), 0usize);
+        if let Some(tree) = build_spec_tree(
+            doc,
+            main,
+            true,
+            &mut nested,
+            &mut nested_rules,
+            &mut nested_flow,
+        ) {
+            definitions.push(json!({"name": doc.get(main).map(|m| m.name.clone()), "nodeId": main.0, "layoutTree": tree}));
+        }
+    }
+
     Ok(json!({
         "target": target,
         "rootId": root.0,
@@ -1167,6 +1529,7 @@ pub fn to_ai_spec(doc: &Document, root: NodeId, target: &str) -> Result<Value, S
             "dimensions": doc.tokens,
         },
         "components": components,
+        "componentDefinitions": definitions,
         "layoutTree": layout_tree,
         "enforcementRules": rules,
         "referenceCode": reference_code,
@@ -1214,6 +1577,23 @@ fn format_hierarchy_md(node: &Value, depth: usize, out: &mut String) {
         && let Some(content) = txt["content"].as_str()
     {
         details.push(format!("text={content:?}"));
+        if let Some(w) = txt["fontWeight"].as_u64() {
+            details.push(format!("weight={w}"));
+        }
+        if let Some(lh) = txt["lineHeight"].as_f64() {
+            details.push(format!("line-height={}px", px_num(lh)));
+        }
+    }
+    if let Some(ic) = node.get("icon") {
+        details.push(format!(
+            "icon={}:{} tint={}",
+            ic["set"].as_str().unwrap_or(""),
+            ic["name"].as_str().unwrap_or(""),
+            ic["colorVar"]
+                .as_str()
+                .or(ic["color"].as_str())
+                .unwrap_or("currentColor")
+        ));
     }
 
     out.push_str(&format!(
