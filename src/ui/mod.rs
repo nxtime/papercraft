@@ -40,6 +40,8 @@ pub struct UiState {
     pub show_grid_off: bool,
     /// Export settings (inspector Export section).
     pub export: crate::io::export::Spec,
+    /// Export settings the user kept with "+", applied with one click (right-click removes).
+    pub export_presets: Vec<crate::io::export::Spec>,
     /// The window has native chrome: a system menu bar (so no egui menu) and traffic lights
     /// inset into the toolbar / sidebar.
     pub native_chrome: bool,
@@ -56,12 +58,14 @@ pub struct UiState {
     pub project_name: String,
     /// Folder of the open project (saved versions live under it).
     pub project_dir: Option<std::path::PathBuf>,
+    /// Version being renamed in the History view `(id, draft name)`.
+    pub version_renaming: Option<(String, String)>,
+    /// Which comments the Comments view lists.
+    pub comment_filter: panels::CommentFilter,
     /// Name typed into the History view's "Save version" box.
     pub version_draft: String,
     /// Saved versions of the current page, refreshed when the page or project changes.
-    #[cfg(not(target_arch = "wasm32"))]
     pub versions: Vec<crate::versions::Version>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub versions_key: Option<(std::path::PathBuf, String)>,
     /// Autosave state for the toolbar subtitle, e.g. "Saved" or "Saving…".
     pub save_state: String,
@@ -109,9 +113,11 @@ pub struct UiState {
     /// Variable currently being renamed inline `(old_name, draft_new_name)`.
     pub var_renaming: Option<(String, String)>,
     /// The last tool an agent ran and when, for the toolbar's activity hint.
-    pub agent: Option<(String, std::time::Instant)>,
+    pub agent: Option<(String, web_time::Instant)>,
     /// Recent agent tool calls, oldest first (the Agent view).
-    pub agent_log: Vec<(String, std::time::Instant)>,
+    pub agent_log: Vec<AgentCall>,
+    /// Where an agent connects (MCP URL natively, the relay URL in the browser); empty until known.
+    pub agent_endpoint: String,
     /// An extra sidebar view: history, comments or the agent log. None shows layers, library or design.
     pub side_extra: Option<panels::SideView>,
     /// The browser's remote-agent link (Agent menu); None everywhere but the web shell.
@@ -203,11 +209,37 @@ fn account_footer(ui: &mut Ui, st: &mut UiState) {
     });
 }
 
+/// Most calls the Agent view keeps.
+const AGENT_LOG_MAX: usize = 60;
+
+/// One tool call an agent made.
+pub struct AgentCall {
+    pub name: String,
+    pub at: web_time::Instant,
+    /// The error text when the call failed.
+    pub error: Option<String>,
+}
+
+impl UiState {
+    /// Records an agent's tool call for the toolbar hint and the Agent view.
+    pub fn log_agent(&mut self, name: &str, error: Option<String>) {
+        let at = web_time::Instant::now();
+        self.agent = Some((name.to_owned(), at));
+        self.agent_log.push(AgentCall { name: name.to_owned(), at, error });
+        if self.agent_log.len() > AGENT_LOG_MAX {
+            self.agent_log.remove(0);
+        }
+    }
+}
+
 /// Gap between the floating panels and around the canvas.
 pub(crate) const PANEL_GAP: f32 = 12.0;
 
 /// Canvas width under which the top bar drops the zoom pill (it is also on the keyboard).
 const TIGHT_BAR_W: f32 = 520.0;
+
+/// Canvas width under which the egui menu bar folds into a single "Menu" button.
+const MENU_BAR_W: f32 = 1100.0;
 
 /// Largest share of the window one side panel may take.
 const SIDE_MAX_SHARE: f32 = 0.3;
@@ -603,7 +635,15 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let tight = ui.max_rect().width() < TIGHT_BAR_W;
     ui.horizontal_centered(|ui| {
         if !st.native_chrome && !st.custom_titlebar {
-            ui.scope(|ui| menu_bar(ui, ed, &mut st.agent_link));
+            if ui.max_rect().width() < MENU_BAR_W {
+                // Not enough room for every menu: they fold into one.
+                ui.scope(|ui| {
+                    flat_menus(ui);
+                    ui.menu_button("Menu", |ui| menu_bar(ui, ed, &mut st.agent_link));
+                });
+            } else {
+                ui.scope(|ui| menu_bar(ui, ed, &mut st.agent_link));
+            }
             ui.add_space(6.0);
             ui.separator();
             ui.add_space(6.0);

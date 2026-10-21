@@ -1420,14 +1420,8 @@ impl App {
             return;
         }
         for c in calls {
-            self.st.agent = Some((c.name.clone(), std::time::Instant::now()));
-            self.st
-                .agent_log
-                .push((c.name.clone(), std::time::Instant::now()));
-            if self.st.agent_log.len() > 60 {
-                self.st.agent_log.remove(0);
-            }
             let r = crate::mcp::exec::call(self, &c.name, &c.args);
+            self.st.log_agent(&c.name, r.as_ref().err().cloned());
             if let Err(e) = &r {
                 log::info!("mcp {}: {e}", c.name);
             }
@@ -1548,6 +1542,7 @@ pub fn run(start: Start) -> Result<(), String> {
     }
     let mut app = App::new(start, store);
     app.mcp = start_mcp(event_loop.create_proxy());
+    app.st.agent_endpoint = app.mcp.as_ref().map(|(_, r)| r.url()).unwrap_or_default();
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }
 

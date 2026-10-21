@@ -161,6 +161,8 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
                         st.settings.open = false;
                         st.updater.open = true;
                     }
+                    #[cfg(target_arch = "wasm32")]
+                    ui.label("Reload the page to get the latest version.");
                 },
             );
         }

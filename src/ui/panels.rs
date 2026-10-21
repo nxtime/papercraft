@@ -13,6 +13,15 @@ pub enum SideView {
     Agent,
 }
 
+/// Which comments the Comments view shows.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum CommentFilter {
+    #[default]
+    Open,
+    Resolved,
+    All,
+}
+
 fn title(ui: &mut Ui, text: &str, sub: &str) {
     let p = theme::pal(ui);
     ui.add_space(6.0);
@@ -70,10 +79,7 @@ fn row(
 
 /// "5 minutes ago" for a saved version.
 fn ago(then_ms: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64);
-    super::home::relative_time(then_ms, now)
+    super::home::relative_time(then_ms, crate::project::format::now_ms())
 }
 
 /// Saved versions of the page (named snapshots kept in the project folder) and, below them, the
@@ -85,7 +91,6 @@ pub fn history(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         "History",
         "Save versions of this page and go back to them.",
     );
-    #[cfg(not(target_arch = "wasm32"))]
     versions_section(ui, ed, st);
     ui.add_space(10.0);
     kit::section_header(ui, "Recent changes", None);
@@ -138,7 +143,6 @@ pub fn history(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     let Some(dir) = st.project_dir.clone() else {
@@ -187,6 +191,7 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     }
     let mut restore: Option<String> = None;
     let mut delete: Option<String> = None;
+    let mut rename: Option<(String, String)> = None;
     egui::ScrollArea::vertical()
         .id_salt("versions")
         .max_height(220.0)
@@ -200,6 +205,23 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     ago(v.saved)
                 );
                 let dot = if v.auto { p.tertiary } else { theme::accent() };
+                if let Some((id, draft)) = &mut st.version_renaming
+                    && *id == v.id
+                {
+                    let r = ui.add(
+                        egui::TextEdit::singleline(draft)
+                            .desired_width(f32::INFINITY)
+                            .margin(theme::INPUT_MARGIN),
+                    );
+                    r.request_focus();
+                    if r.lost_focus() {
+                        if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            rename = Some((id.clone(), draft.clone()));
+                        }
+                        st.version_renaming = None;
+                    }
+                    continue;
+                }
                 let resp = row(ui, dot, &v.name, &sub, false, v.auto)
                     .on_hover_text("Click to restore this version");
                 if resp.clicked() {
@@ -208,6 +230,10 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 resp.context_menu(|ui| {
                     if ui.button("Restore").clicked() {
                         restore = Some(v.id.clone());
+                        ui.close();
+                    }
+                    if ui.button("Rename").clicked() {
+                        st.version_renaming = Some((v.id.clone(), v.name.clone()));
                         ui.close();
                     }
                     if ui.button("Delete version").clicked() {
@@ -235,6 +261,12 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     }
     if let Some(id) = delete {
         crate::versions::delete(&dir, &id);
+        st.versions_key = None;
+    }
+    if let Some((id, name)) = rename
+        && !name.trim().is_empty()
+    {
+        let _ = crate::versions::rename(&dir, &id, &name);
         st.versions_key = None;
     }
 }
@@ -268,11 +300,29 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     }
     items.sort_by_key(|i| (i.resolved, i.node, i.cid));
     let open = items.iter().filter(|i| !i.resolved).count();
+    let total = items.len();
+    items.retain(|i| match st.comment_filter {
+        CommentFilter::Open => !i.resolved,
+        CommentFilter::Resolved => i.resolved,
+        CommentFilter::All => true,
+    });
     title(
         ui,
         &format!("Comments · {open} open"),
         "Notes for the agent, and its replies.",
     );
+    ui.horizontal(|ui| {
+        for (f, label) in [
+            (CommentFilter::Open, "Open"),
+            (CommentFilter::Resolved, "Resolved"),
+            (CommentFilter::All, "All"),
+        ] {
+            if kit::chip(ui, label, st.comment_filter == f).clicked() {
+                st.comment_filter = f;
+            }
+        }
+    });
+    ui.add_space(6.0);
     let reserve = 96.0;
     if items.is_empty() {
         ui.add_space(12.0);
@@ -280,12 +330,17 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             ui,
             Icon::Question,
             theme::accent(),
-            "No comments",
-            "Select a layer and add a note below.",
+            if total == 0 { "No comments" } else { "Nothing here" },
+            if total == 0 {
+                "Select a layer and add a note below."
+            } else {
+                "No comments match this filter."
+            },
             |_| {},
         );
     } else {
-        let mut resolve: Option<(NodeId, u32)> = None;
+        let mut resolve: Option<(NodeId, u32, bool)> = None;
+        let mut delete: Option<(NodeId, u32)> = None;
         egui::ScrollArea::vertical()
             .id_salt("comments")
             .max_height((ui.available_height() - reserve).max(80.0))
@@ -312,13 +367,24 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
+                                        if kit::chip(ui, "Delete", false)
+                                            .on_hover_text("Delete this comment")
+                                            .clicked()
+                                        {
+                                            delete = Some((it.node, it.cid));
+                                        }
                                         if it.resolved {
-                                            kit::chip(ui, "Resolved", false);
+                                            if kit::chip(ui, "Reopen", false)
+                                                .on_hover_text("Mark as open again")
+                                                .clicked()
+                                            {
+                                                resolve = Some((it.node, it.cid, false));
+                                            }
                                         } else if kit::chip(ui, "Resolve", true)
                                             .on_hover_text("Mark as resolved")
                                             .clicked()
                                         {
-                                            resolve = Some((it.node, it.cid));
+                                            resolve = Some((it.node, it.cid, true));
                                         }
                                     },
                                 );
@@ -342,13 +408,20 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     ui.add_space(6.0);
                 }
             });
-        if let Some((node, cid)) = resolve {
-            ed.edit("Resolve feedback", |tx| {
+        if let Some((node, cid, done)) = resolve {
+            ed.edit(if done { "Resolve feedback" } else { "Reopen feedback" }, |tx| {
                 if let Some(x) = tx
                     .node_mut(node)
                     .and_then(|n| n.comments.iter_mut().find(|x| x.id == cid))
                 {
-                    x.resolved = true;
+                    x.resolved = done;
+                }
+            });
+        }
+        if let Some((node, cid)) = delete {
+            ed.edit("Delete feedback", |tx| {
+                if let Some(n) = tx.node_mut(node) {
+                    n.comments.retain(|x| x.id != cid);
                 }
             });
         }
@@ -388,7 +461,7 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     });
 }
 
-/// Recent agent tool calls: name and how long ago.
+/// Where an agent connects, and the tool calls it ran: name, outcome and how long ago.
 pub fn agent(ui: &mut Ui, st: &mut UiState) {
     let p = theme::pal(ui);
     title(ui, "Agent", "Tools an agent ran on this project.");
@@ -398,12 +471,25 @@ pub fn agent(ui: &mut Ui, st: &mut UiState) {
         .is_some_and(|(_, at)| at.elapsed().as_secs() < 8);
     ui.horizontal(|ui| {
         kit::chip(ui, if live { "Working" } else { "Idle" }, live);
+        if !st.agent_log.is_empty() && kit::chip(ui, "Clear log", false).clicked() {
+            st.agent_log.clear();
+        }
+    });
+    if st.agent_endpoint.is_empty() {
         ui.label(
-            RichText::new("MCP · 127.0.0.1:29980")
+            RichText::new("Agent connection is off.")
                 .size(theme::SECONDARY)
                 .color(p.secondary),
         );
-    });
+    } else {
+        ui.add_space(6.0);
+        if kit::button_wide(ui, kit::ButtonKind::Secondary, None, "Copy agent URL")
+            .on_hover_text(&st.agent_endpoint)
+            .clicked()
+        {
+            ui.ctx().copy_text(st.agent_endpoint.clone());
+        }
+    }
     ui.add_space(10.0);
     kit::section_header(ui, "Recent activity", None);
     if st.agent_log.is_empty() {
@@ -423,15 +509,20 @@ pub fn agent(ui: &mut Ui, st: &mut UiState) {
         .auto_shrink(false)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for (name, at) in st.agent_log.iter().rev() {
-                let secs = at.elapsed().as_secs();
+            for call in st.agent_log.iter().rev() {
+                let secs = call.at.elapsed().as_secs();
                 let ago = match secs {
                     0..=4 => "just now".to_string(),
                     5..=59 => format!("{secs}s ago"),
                     60..=3599 => format!("{}m ago", secs / 60),
                     _ => format!("{}h ago", secs / 3600),
                 };
-                row(ui, theme::accent(), name, &ago, false, false);
+                let (dot, sub) = match &call.error {
+                    Some(e) => (p.danger, format!("Failed · {ago} · {e}")),
+                    None => (theme::accent(), ago),
+                };
+                row(ui, dot, &call.name, &sub, false, false)
+                    .on_hover_text(call.error.as_deref().unwrap_or(""));
             }
         });
     ui.ctx()

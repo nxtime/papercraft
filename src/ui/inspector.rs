@@ -735,9 +735,41 @@ fn sketch_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
 }
 
 /// Export settings and button, like Figma's Export section.
+/// Most export presets the inspector keeps.
+const MAX_EXPORT_PRESETS: usize = 6;
+
 fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     use crate::io::export::{Format, Scope};
-    section(ui, "Export");
+    if super::kit::section_header(ui, "Export", Some((theme::Icon::Plus, "Keep these export settings as a preset"))) {
+        let spec = st.export;
+        if !st.export_presets.contains(&spec) && st.export_presets.len() < MAX_EXPORT_PRESETS {
+            st.export_presets.push(spec);
+        }
+    }
+    let mut remove = None;
+    ui.horizontal_wrapped(|ui| {
+        for (i, preset) in st.export_presets.iter().enumerate() {
+            let label = match preset.format {
+                Format::Png => format!("PNG {}x", preset.scale),
+                Format::Svg => "SVG".into(),
+                Format::Pdf => "PDF".into(),
+            };
+            let chip = super::kit::chip(ui, &label, *preset == st.export)
+                .on_hover_text(format!("{} · right-click to remove", preset.scope.label()));
+            if chip.clicked() {
+                st.export = *preset;
+            }
+            chip.context_menu(|ui| {
+                if ui.button("Remove preset").clicked() {
+                    remove = Some(i);
+                    ui.close();
+                }
+            });
+        }
+    });
+    if let Some(i) = remove {
+        st.export_presets.remove(i);
+    }
     let spec = &mut st.export;
     ui.horizontal(|ui| {
         let w = half(ui);
@@ -913,7 +945,10 @@ fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
         ed.rename_page(i, &name);
     }
     ui.label(
-        RichText::new(format!("{} layers", ed.doc.nodes.len()))
+        RichText::new(match ed.doc.nodes.len() {
+            1 => "1 layer".to_string(),
+            n => format!("{n} layers"),
+        })
             .size(theme::SECONDARY)
             .color(theme::pal(ui).secondary),
     );

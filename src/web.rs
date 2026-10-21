@@ -416,7 +416,14 @@ impl Web {
     fn pump_calls(&mut self) {
         while let Some(call) = self.relay.next_call() {
             self.dirty = true;
-            match exec::call(self, &call.name, &call.args) {
+            let result = exec::call(self, &call.name, &call.args);
+            let failed = result
+                .as_ref()
+                .err()
+                .filter(|e| ShotRequest::from_marker(e).is_none())
+                .cloned();
+            self.st.log_agent(&call.name, failed);
+            match result {
                 Err(e) => match ShotRequest::from_marker(&e) {
                     Some(req) => self.start_screenshot(call.id, req),
                     None => self.relay.send(&Reply::err(call.id, e)),
@@ -716,6 +723,15 @@ impl Web {
             }),
             ..Default::default()
         };
+        self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
+        self.st.agent_endpoint = self.relay.agent_url();
+        // The library probe answers after the home screen first shows; keep its controls in step.
+        let library = self.session.sync.library_active();
+        let server = self.default_server();
+        if let Some(h) = &mut self.st.home {
+            h.library = library;
+            h.default_server = server;
+        }
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
         self.canvas_rect = l.canvas;
         let busy = !self.ed.requests.is_empty()

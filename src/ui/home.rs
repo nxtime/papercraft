@@ -348,6 +348,9 @@ fn removal_dialog(ctx: &egui::Context, hv: &mut HomeView) {
     }
 }
 
+/// Width of the share / join dialog.
+const SHARE_DIALOG_W: f32 = 380.0;
+
 fn share_dialog(ui: &mut Ui, hv: &mut HomeView) {
     let Some(mut d) = hv.dialog.take() else {
         return;
@@ -361,17 +364,22 @@ fn share_dialog(ui: &mut Ui, hv: &mut HomeView) {
         ),
         None => ("Join shared project", "Paste the share link", "Join"),
     };
-    egui::Window::new(title)
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .open(&mut keep)
+    let frame = egui::Frame::new()
+        .fill(theme::pal_from_ctx(ui.ctx()).sidebar)
+        .corner_radius(24.0)
+        .inner_margin(24.0);
+    let response = egui::Modal::new(egui::Id::new("share-dialog"))
+        .frame(frame)
         .show(ui.ctx(), |ui| {
-            ui.set_width(380.0);
+            ui.set_width(SHARE_DIALOG_W.min(ui.ctx().content_rect().width() - 48.0));
+            ui.spacing_mut().item_spacing.y = 10.0;
+            super::kit::badge(ui, Icon::Export, theme::accent(), 48.0);
+            ui.label(RichText::new(title).font(theme::semibold(18.0)));
             let r = ui.add(
                 egui::TextEdit::singleline(&mut d.text)
                     .hint_text(hint)
-                    .desired_width(f32::INFINITY),
+                    .desired_width(f32::INFINITY)
+                    .margin(theme::INPUT_MARGIN),
             );
             if d.dir.is_some() {
                 ui.label(
@@ -381,10 +389,23 @@ fn share_dialog(ui: &mut Ui, hv: &mut HomeView) {
                 );
             }
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if ui.button(button).clicked() || enter {
-                submit = true;
-            }
+            ui.add_space(6.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if super::kit::button(ui, super::kit::ButtonKind::Primary, None, button).clicked()
+                    || enter
+                {
+                    submit = true;
+                }
+                if super::kit::button(ui, super::kit::ButtonKind::Secondary, None, "Cancel")
+                    .clicked()
+                {
+                    keep = false;
+                }
+            });
         });
+    if response.should_close() {
+        keep = false;
+    }
     if submit && !d.text.trim().is_empty() {
         let text = d.text.trim().to_string();
         hv.actions.push(match d.dir {
@@ -465,7 +486,11 @@ fn recents_grid(ui: &mut Ui, hv: &mut HomeView) {
             Icon::Page,
             theme::accent(),
             "No designs yet",
-            "Projects are folders in your Documents, saved as you work.",
+            if cfg!(target_arch = "wasm32") {
+                "Projects are kept in this browser, saved as you work."
+            } else {
+                "Projects are folders in your Documents, saved as you work."
+            },
             |ui| {
                 new = super::kit::button(
                     ui,

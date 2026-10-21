@@ -37,9 +37,7 @@ fn file_of(project: &Path, id: &str) -> PathBuf {
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+    crate::project::format::now_ms()
 }
 
 /// Saves `doc` as a version of page `page_id`. Returns the new version.
@@ -50,7 +48,7 @@ pub fn save(
     auto: bool,
     doc: &Document,
 ) -> std::io::Result<Version> {
-    std::fs::create_dir_all(dir(project))?;
+    crate::vfs::create_dir_all(dir(project))?;
     let saved = now_ms();
     let id = format!("{page_id}__{saved}");
     let name = name.trim();
@@ -66,7 +64,7 @@ pub fn save(
         doc: doc.clone(),
     };
     let bytes = serde_json::to_vec(&file).map_err(std::io::Error::other)?;
-    std::fs::write(file_of(project, &id), bytes)?;
+    crate::vfs::write(file_of(project, &id), bytes)?;
     Ok(Version {
         id,
         name,
@@ -77,7 +75,7 @@ pub fn save(
 
 /// The saved versions of page `page_id`, newest first.
 pub fn list(project: &Path, page_id: &str) -> Vec<Version> {
-    let Ok(entries) = std::fs::read_dir(dir(project)) else {
+    let Ok(entries) = crate::vfs::read_dir(dir(project)) else {
         return Vec::new();
     };
     let prefix = format!("{page_id}__");
@@ -89,7 +87,7 @@ pub fn list(project: &Path, page_id: &str) -> Vec<Version> {
             if !id.starts_with(&prefix) || path.extension()? != "json" {
                 return None;
             }
-            let f: File = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+            let f: File = serde_json::from_slice(&crate::vfs::read(&path).ok()?).ok()?;
             Some(Version {
                 id,
                 name: f.name,
@@ -104,12 +102,20 @@ pub fn list(project: &Path, page_id: &str) -> Vec<Version> {
 
 /// The document of a saved version.
 pub fn load(project: &Path, id: &str) -> Option<Document> {
-    let f: File = serde_json::from_slice(&std::fs::read(file_of(project, id)).ok()?).ok()?;
+    let f: File = serde_json::from_slice(&crate::vfs::read(file_of(project, id)).ok()?).ok()?;
     Some(f.doc)
 }
 
+/// Renames a saved version in place.
+pub fn rename(project: &Path, id: &str, name: &str) -> std::io::Result<()> {
+    let path = file_of(project, id);
+    let mut f: File = serde_json::from_slice(&crate::vfs::read(&path)?).map_err(std::io::Error::other)?;
+    f.name = name.trim().to_string();
+    crate::vfs::write(&path, serde_json::to_vec(&f).map_err(std::io::Error::other)?)
+}
+
 pub fn delete(project: &Path, id: &str) {
-    let _ = std::fs::remove_file(file_of(project, id));
+    let _ = crate::vfs::remove_file(file_of(project, id));
 }
 
 #[cfg(test)]
@@ -133,6 +139,8 @@ mod tests {
         assert_eq!(listed[0].name, "Untitled version");
         assert!(listed[0].auto && !listed[1].auto);
         assert!(load(&dir, &a.id).is_some());
+        rename(&dir, &a.id, "  Renamed ").unwrap();
+        assert_eq!(list(&dir, "p1").iter().find(|v| v.id == a.id).unwrap().name, "Renamed");
         delete(&dir, &a.id);
         assert_eq!(list(&dir, "p1").len(), 1);
         std::fs::remove_dir_all(dir).ok();

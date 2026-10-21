@@ -28,6 +28,9 @@ fn redesigned_surfaces_draw_in_every_theme() {
         theme::apply_choice(&ctx, choice);
         let mut ed = Editor::default();
         let mut st = UiState::default();
+        st.log_agent("get_basic_info", None);
+        st.log_agent("write_html", Some("bad html".into()));
+        st.agent_endpoint = "http://127.0.0.1:29980/mcp".into();
         st.settings.open = true;
         st.show_help = true;
         st.palette.open = true;
@@ -60,6 +63,9 @@ fn redesigned_surfaces_draw_in_every_theme() {
         }
         st.present = false;
         let mut hv = home::HomeView::default();
+        hv.dialog = Some(home::ShareDialog { dir: None, text: String::new() });
+        frame(&ctx, |ui| home::draw(ui, &mut hv, false, false));
+        hv.dialog = None;
         for trash in [false, true] {
             hv.show_trash = trash;
             for _ in 0..2 {
