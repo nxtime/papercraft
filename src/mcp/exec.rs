@@ -178,7 +178,7 @@ pub fn node_key(ed: &Editor, page: usize, id: NodeId) -> String {
     format!("{}:{}", page_prefix(ed, page), id.0)
 }
 
-fn find_page(ed: &Editor, key: &str) -> Result<usize, String> {
+pub(crate) fn find_page(ed: &Editor, key: &str) -> Result<usize, String> {
     let key = key.trim();
     ed.pages
         .iter()

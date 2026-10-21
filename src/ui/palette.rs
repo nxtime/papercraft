@@ -44,6 +44,10 @@ pub enum Command {
     Present,
     /// Show a sidebar view.
     Side(super::panels::SideView),
+    /// Review a saved agent run.
+    ReviewRun(String),
+    /// Revert a saved agent run.
+    RevertRun(String),
 }
 
 pub struct Entry {
@@ -165,6 +169,24 @@ pub fn entries(ed: &Editor, st: &UiState) -> Vec<Entry> {
             cmd,
         });
     }
+    if let Some(run) = st
+        .runs
+        .iter()
+        .find(|run| run.state != crate::runs::RunState::Running)
+    {
+        out.push(Entry {
+            label: "Review last agent run".into(),
+            detail: String::new(),
+            cmd: Command::ReviewRun(run.id.clone()),
+        });
+        if run.state != crate::runs::RunState::Reverted {
+            out.push(Entry {
+                label: "Revert last agent run".into(),
+                detail: String::new(),
+                cmd: Command::RevertRun(run.id.clone()),
+            });
+        }
+    }
     out.push(Entry {
         label: "Settings…".into(),
         detail: "Preferences".into(),
@@ -259,6 +281,18 @@ pub fn run(ed: &mut Editor, st: &mut UiState, cmd: Command) {
         Command::Present => super::start_present(ed, st),
         Command::Side(v) => {
             st.side_extra = Some(v);
+            st.show_library = false;
+            st.show_design = false;
+        }
+        Command::ReviewRun(id) => {
+            st.review_run = Some(id);
+            st.side_extra = Some(super::panels::SideView::Agent);
+            st.show_library = false;
+            st.show_design = false;
+        }
+        Command::RevertRun(id) => {
+            st.pending_run_revert = Some(id);
+            st.side_extra = Some(super::panels::SideView::Agent);
             st.show_library = false;
             st.show_design = false;
         }

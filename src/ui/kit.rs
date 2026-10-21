@@ -121,6 +121,11 @@ pub fn on_accent(p: theme::Palette) -> Color32 {
 
 /// A small pill label. `active` uses the accent text, like Chip / Accent.
 pub fn chip(ui: &mut Ui, label: &str, active: bool) -> Response {
+    chip_ink(ui, label, active.then(theme::accent))
+}
+
+/// A chip with its own ink (for example `p.success` for Accepted); None is the idle grey.
+pub fn chip_ink(ui: &mut Ui, label: &str, ink: Option<Color32>) -> Response {
     let p = theme::pal(ui);
     let font = theme::semibold(theme::SECONDARY);
     let w = galley_width(ui, label, font.clone()) + 20.0;
@@ -131,7 +136,7 @@ pub fn chip(ui: &mut Ui, label: &str, active: bool) -> Response {
         CornerRadius::same(PILL),
         theme::blend(p.field, p.hover.gamma_multiply(hover)),
     );
-    let ink = if active { theme::accent() } else { p.secondary };
+    let ink = ink.unwrap_or(p.secondary);
     ui.painter()
         .text(rect.center(), Align2::CENTER_CENTER, label, font, ink);
     resp

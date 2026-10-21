@@ -502,7 +502,7 @@ pub fn definitions() -> Vec<Value> {
                    "fix": {"type": "boolean", "description": "Apply safe automatic fixes before reporting remaining issues."},
                    "pageId": page_id()}),
             &[],
-            true,
+            false,
         ),
         tool(
             "get_variables",
@@ -801,3 +801,72 @@ points can be omitted: the arrow is routed between the shapes and follows them w
 Hand-drawn style (Excalidraw-like): styles {sketch: true, roughness: 0|1|2,
 fillStyle: hachure|cross-hatch|solid|zigzag|dots, strokeStyle: solid|dashed|dotted, seed}.
 Colors: backgroundColor (fill), borderColor/stroke, borderWidth/strokeWidth.";
+
+/// Whether a tool call edits a page document, so it counts towards an agent run.
+pub fn edits_doc(name: &str, args: &Value) -> bool {
+    classify(name, args).unwrap_or(false)
+}
+
+/// `None` for a tool with no class, so a tool added without one fails the test below.
+fn classify(name: &str, args: &Value) -> Option<bool> {
+    Some(match name {
+        "list_resources" | "get_basic_info" | "get_selection" | "get_node_info" | "get_children"
+        | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
+        | "get_computed_styles" | "get_fill_image" | "find_nodes" | "get_font_family_info"
+        | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
+        | "diff_frames" => false,
+        "select_nodes" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"
+        | "create_file" | "finish_working_on_nodes" => false,
+        "lint_design" => args["fix"] == true,
+        "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html"
+        | "create_shape" | "update_styles" | "set_text_content" | "rename_nodes"
+        | "add_feedback" | "resolve_feedback" | "set_variables" | "set_tokens"
+        | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
+        | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes"
+        | "duplicate_nodes" | "move_nodes" | "undo" | "redo" => true,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tool_names() -> Vec<String> {
+        definitions()
+            .iter()
+            .map(|def| def["name"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn every_tool_has_an_explicit_class() {
+        for name in tool_names() {
+            assert!(classify(&name, &json!({})).is_some(), "unclassified tool: {name}");
+        }
+    }
+
+    #[test]
+    fn read_only_tools_never_edit() {
+        for def in definitions() {
+            if def["annotations"]["readOnlyHint"] != true {
+                continue;
+            }
+            let name = def["name"].as_str().unwrap_or_default();
+            assert!(!edits_doc(name, &json!({})), "read-only tool edits: {name}");
+        }
+    }
+
+    #[test]
+    fn lint_design_edits_only_with_fix() {
+        assert!(!edits_doc("lint_design", &json!({})));
+        assert!(!edits_doc("lint_design", &json!({"fix": false})));
+        assert!(edits_doc("lint_design", &json!({"fix": true})));
+    }
+
+    #[test]
+    fn unknown_tool_does_not_edit() {
+        assert!(!edits_doc("no_such_tool", &json!({})));
+    }
+}

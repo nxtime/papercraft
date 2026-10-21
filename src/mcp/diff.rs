@@ -380,6 +380,277 @@ pub fn diff_subtrees(
     Ok(diff)
 }
 
+/// Rows for one top-level frame in a [`PageDiff`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FrameGroup {
+    pub frame: NodeId,
+    pub name: String,
+    pub nodes: Vec<NodeDiff>,
+}
+
+/// Id-paired diff of two versions of one page.
+///
+/// A subtree that was added or removed is one row (its top node); new descendants are not rows and
+/// not counted. Each entry of `variables` counts once in `modified`, so
+/// `added + removed + modified` equals node rows plus `variables.len()`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PageDiff {
+    pub added: usize,
+    pub removed: usize,
+    pub modified: usize,
+    /// By top-level frame: its id in `after` (removed nodes: their frame in `before`), root order.
+    pub groups: Vec<FrameGroup>,
+    /// Variable, mode, active-mode and token changes, as `name: value` pairs.
+    pub variables: Vec<PropChange>,
+}
+
+impl PageDiff {
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty() && self.variables.is_empty()
+    }
+}
+
+fn top_frame(doc: &Document, mut id: NodeId) -> NodeId {
+    while let Some(p) = doc.get(id).and_then(|n| n.parent) {
+        id = p;
+    }
+    id
+}
+
+fn node_path(doc: &Document, id: NodeId) -> String {
+    let mut names = Vec::new();
+    let mut cur = Some(id);
+    while let Some(n) = cur.and_then(|c| doc.get(c)) {
+        names.push(n.name.as_str());
+        cur = n.parent;
+    }
+    names.reverse();
+    names.join(" > ")
+}
+
+fn siblings(doc: &Document, parent: Option<NodeId>) -> &[NodeId] {
+    match parent.and_then(|p| doc.get(p)) {
+        Some(p) => &p.children,
+        None => &doc.root,
+    }
+}
+
+/// Index among the siblings present in both docs, so adding or removing a sibling is not a move.
+fn common_index(doc: &Document, other: &Document, id: NodeId, parent: Option<NodeId>) -> usize {
+    siblings(doc, parent)
+        .iter()
+        .filter(|s| other.get(**s).is_some())
+        .position(|s| *s == id)
+        .unwrap_or(0)
+}
+
+fn parent_label(doc: &Document, parent: Option<NodeId>) -> String {
+    match parent.and_then(|p| doc.get(p)) {
+        Some(p) => p.name.clone(),
+        None => "page".into(),
+    }
+}
+
+fn push_group(groups: &mut Vec<FrameGroup>, doc: &Document, id: NodeId, nd: NodeDiff) {
+    let frame = top_frame(doc, id);
+    if let Some(g) = groups.iter_mut().find(|g| g.frame == frame) {
+        g.nodes.push(nd);
+        return;
+    }
+    groups.push(FrameGroup {
+        frame,
+        name: doc.get(frame).map(|n| n.name.clone()).unwrap_or_default(),
+        nodes: vec![nd],
+    });
+}
+
+fn walk_page(before: &Document, after: &Document, id: NodeId, diff: &mut PageDiff) {
+    let Some(nb) = after.get(id) else { return };
+    match before.get(id) {
+        None => {
+            // one row per added subtree; keep walking for old-id descendants moved under it
+            if nb.parent.is_none_or(|p| before.get(p).is_some()) {
+                diff.added += 1;
+                let nd = NodeDiff {
+                    id_a: None,
+                    id_b: Some(id),
+                    path: node_path(after, id),
+                    name: nb.name.clone(),
+                    kind: nb.kind.type_name(),
+                    status: "added",
+                    changes: Vec::new(),
+                };
+                push_group(&mut diff.groups, after, id, nd);
+            }
+        }
+        Some(na) => {
+            let mut changes = Vec::new();
+            if na.name != nb.name {
+                changes.push(PropChange {
+                    field: "name",
+                    before: na.name.clone(),
+                    after: nb.name.clone(),
+                });
+            }
+            changes.extend(compare_node_props(na, nb, false));
+            if na.comments != nb.comments {
+                let show = |n: &Node| format!("{} ({} open)", n.comments.len(), n.open_comments());
+                changes.push(PropChange {
+                    field: "comments",
+                    before: show(na),
+                    after: show(nb),
+                });
+            }
+            if na.parent != nb.parent {
+                changes.push(PropChange {
+                    field: "parent",
+                    before: parent_label(before, na.parent),
+                    after: parent_label(after, nb.parent),
+                });
+            } else {
+                let (ia, ib) = (
+                    common_index(before, after, id, na.parent),
+                    common_index(after, before, id, nb.parent),
+                );
+                if ia != ib {
+                    changes.push(PropChange {
+                        field: "order",
+                        before: ia.to_string(),
+                        after: ib.to_string(),
+                    });
+                }
+            }
+            if !changes.is_empty() {
+                diff.modified += 1;
+                let nd = NodeDiff {
+                    id_a: Some(id),
+                    id_b: Some(id),
+                    path: node_path(after, id),
+                    name: nb.name.clone(),
+                    kind: nb.kind.type_name(),
+                    status: "modified",
+                    changes,
+                };
+                push_group(&mut diff.groups, after, id, nd);
+            }
+        }
+    }
+    for &c in &nb.children {
+        walk_page(before, after, c, diff);
+    }
+}
+
+fn walk_removed(before: &Document, after: &Document, id: NodeId, diff: &mut PageDiff) {
+    let Some(na) = before.get(id) else { return };
+    if after.get(id).is_some() {
+        for &c in &na.children {
+            walk_removed(before, after, c, diff);
+        }
+        return;
+    }
+    diff.removed += 1;
+    let nd = NodeDiff {
+        id_a: Some(id),
+        id_b: None,
+        path: node_path(before, id),
+        name: na.name.clone(),
+        kind: na.kind.type_name(),
+        status: "removed",
+        changes: Vec::new(),
+    };
+    push_group(&mut diff.groups, before, id, nd);
+}
+
+fn diff_maps<V: PartialEq>(
+    field: &'static str,
+    prefix: &str,
+    a: &std::collections::BTreeMap<String, V>,
+    b: &std::collections::BTreeMap<String, V>,
+    show: impl Fn(&V) -> String,
+    out: &mut Vec<PropChange>,
+) {
+    let keys: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    for k in keys {
+        let (va, vb) = (a.get(k), b.get(k));
+        if va == vb {
+            continue;
+        }
+        let side = |v: Option<&V>| format!("{prefix}{k}: {}", v.map_or("none".into(), &show));
+        out.push(PropChange {
+            field,
+            before: side(va),
+            after: side(vb),
+        });
+    }
+}
+
+/// Compare two versions of one page, pairing nodes by id (a snapshot and the live page share
+/// ids), unlike [`diff_subtrees`]. Reports added/removed subtrees once, property, name, parent
+/// and sibling-order changes per node, and variable/mode/token changes separately.
+pub fn diff_pages(before: &Document, after: &Document) -> PageDiff {
+    let mut diff = PageDiff {
+        added: 0,
+        removed: 0,
+        modified: 0,
+        groups: Vec::new(),
+        variables: Vec::new(),
+    };
+    for &id in &after.root {
+        walk_page(before, after, id, &mut diff);
+    }
+    for &id in &before.root {
+        walk_removed(before, after, id, &mut diff);
+    }
+
+    let color = |c: &crate::model::Color| c.to_hex();
+    diff_maps(
+        "variable",
+        "",
+        &before.variables,
+        &after.variables,
+        color,
+        &mut diff.variables,
+    );
+    let names: std::collections::BTreeSet<&String> =
+        before.modes.keys().chain(after.modes.keys()).collect();
+    let empty = Default::default();
+    for m in names {
+        let (ha, hb) = (before.modes.get(m), after.modes.get(m));
+        if ha.is_some() != hb.is_some() {
+            let (was, now) = if hb.is_some() {
+                ("none", "created")
+            } else {
+                ("exists", "deleted")
+            };
+            diff.variables.push(PropChange {
+                field: "mode",
+                before: format!("{m}: {was}"),
+                after: format!("{m}: {now}"),
+            });
+        }
+        let (a, b) = (ha.unwrap_or(&empty), hb.unwrap_or(&empty));
+        diff_maps("mode", &format!("{m}/"), a, b, color, &mut diff.variables);
+    }
+    if before.mode != after.mode {
+        let show = |m: &Option<String>| format!("active mode: {}", m.as_deref().unwrap_or("none"));
+        diff.variables.push(PropChange {
+            field: "mode",
+            before: show(&before.mode),
+            after: show(&after.mode),
+        });
+    }
+    diff_maps(
+        "token",
+        "",
+        &before.tokens,
+        &after.tokens,
+        |t| t.clone(),
+        &mut diff.variables,
+    );
+    diff.modified += diff.variables.len();
+    diff
+}
+
 /// Serialize a [`FrameDiff`] into a clean JSON value for MCP output.
 pub fn to_json(d: &FrameDiff) -> Value {
     let changes: Vec<Value> = d
@@ -674,5 +945,239 @@ mod tests {
         assert_eq!(changed.bounds, Some([1, 2, 2, 3]));
         assert!((changed.ratio - 2.0 / 16.0).abs() < 1e-9);
         assert!(changed.diff_png.starts_with(b"\x89PNG"));
+    }
+
+    fn page() -> (Document, NodeId, NodeId, NodeId) {
+        let mut d = Document::default();
+        let f = add_node(
+            &mut d,
+            None,
+            "Hero",
+            NodeKind::Frame { clip: true },
+            Rect::new(0.0, 0.0, 300.0, 200.0),
+        );
+        let a = add_node(
+            &mut d,
+            Some(f),
+            "A",
+            NodeKind::Rect,
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+        );
+        let b = add_node(
+            &mut d,
+            Some(f),
+            "B",
+            NodeKind::Rect,
+            Rect::new(20.0, 0.0, 10.0, 10.0),
+        );
+        (d, f, a, b)
+    }
+
+    #[test]
+    fn diff_pages_identical_is_empty() {
+        let (d, ..) = page();
+        let p = diff_pages(&d, &d.clone());
+        assert!(p.is_empty());
+        assert_eq!((p.added, p.removed, p.modified), (0, 0, 0));
+    }
+
+    #[test]
+    fn diff_pages_added_removed_once_per_subtree() {
+        let (before, f, a, _) = page();
+        let mut after = before.clone();
+        let n = add_node(
+            &mut after,
+            Some(f),
+            "New",
+            NodeKind::Rect,
+            Rect::new(0.0, 0.0, 5.0, 5.0),
+        );
+        add_node(
+            &mut after,
+            Some(n),
+            "Kid",
+            NodeKind::Rect,
+            Rect::new(0.0, 0.0, 1.0, 1.0),
+        );
+        let p = diff_pages(&after, &before);
+        assert_eq!((p.added, p.removed, p.modified), (0, 1, 0));
+        assert_eq!(p.groups[0].nodes[0].status, "removed");
+        assert_eq!(p.groups[0].frame, f);
+        let p = diff_pages(&before, &after);
+        assert_eq!((p.added, p.removed, p.modified), (1, 0, 0));
+        assert_eq!(p.groups[0].nodes[0].id_b, Some(n));
+        // removing a sibling is not a move of the others
+        let mut gone = before.clone();
+        gone.children_mut(Some(f)).unwrap().retain(|c| *c != a);
+        gone.nodes.remove(&a);
+        let p = diff_pages(&before, &gone);
+        assert_eq!((p.added, p.removed, p.modified), (0, 1, 0));
+    }
+
+    #[test]
+    fn diff_pages_rename_is_one_changed_row() {
+        let (before, _, a, _) = page();
+        let mut after = before.clone();
+        after.nodes.get_mut(&a).unwrap().name = "Renamed".into();
+        let p = diff_pages(&before, &after);
+        assert_eq!((p.added, p.removed, p.modified), (0, 0, 1));
+        let row = &p.groups[0].nodes[0];
+        assert_eq!(row.changes.len(), 1);
+        assert_eq!(row.changes[0].field, "name");
+        assert_eq!(row.path, "Hero > Renamed");
+    }
+
+    #[test]
+    fn diff_pages_property_change() {
+        let (before, _, a, _) = page();
+        let mut after = before.clone();
+        after.nodes.get_mut(&a).unwrap().rect.w = 50.0;
+        let p = diff_pages(&before, &after);
+        assert_eq!(p.modified, 1);
+        assert_eq!(p.groups[0].nodes[0].changes[0].field, "size");
+    }
+
+    #[test]
+    fn diff_pages_reparent_and_root_reorder() {
+        let (before, f, a, b) = page();
+        let mut after = before.clone();
+        let g = add_node(
+            &mut after,
+            None,
+            "Footer",
+            NodeKind::Frame { clip: true },
+            Rect::new(0.0, 300.0, 300.0, 50.0),
+        );
+        let mut before = before;
+        before.root.push(g);
+        before.nodes.insert(g, after.nodes[&g].clone());
+        // move B under Footer
+        after.children_mut(Some(f)).unwrap().retain(|c| *c != b);
+        after.children_mut(Some(g)).unwrap().push(b);
+        after.nodes.get_mut(&b).unwrap().parent = Some(g);
+        let p = diff_pages(&before, &after);
+        assert_eq!((p.added, p.removed, p.modified), (0, 0, 1));
+        let row = &p.groups[0].nodes[0];
+        assert_eq!(p.groups[0].frame, g);
+        assert!(
+            row.changes
+                .iter()
+                .any(|c| c.field == "parent" && c.before == "Hero" && c.after == "Footer")
+        );
+        let _ = a;
+
+        let mut after = before.clone();
+        after.root.reverse();
+        let p = diff_pages(&before, &after);
+        assert_eq!(p.modified, 2);
+        assert!(
+            p.groups
+                .iter()
+                .all(|g| g.nodes[0].changes.iter().any(|c| c.field == "order"))
+        );
+    }
+
+    #[test]
+    fn diff_pages_variables_modes_tokens() {
+        let (before, ..) = page();
+        let mut after = before.clone();
+        after
+            .variables
+            .insert("accent".into(), Color::rgb(0xff, 0, 0));
+        after.tokens.insert("spacing-md".into(), "16px".into());
+        after.mode = Some("Dark".into());
+        let p = diff_pages(&before, &after);
+        assert!(p.groups.is_empty());
+        let fields: Vec<_> = p.variables.iter().map(|c| c.field).collect();
+        assert_eq!(fields, ["variable", "mode", "token"]);
+        assert_eq!(p.variables[0].before, "accent: none");
+        assert_eq!(p.variables[2].after, "spacing-md: 16px");
+    }
+
+    #[test]
+    fn diff_pages_counts_variable_rows() {
+        let (before, ..) = page();
+        let mut after = before.clone();
+        after.tokens.insert("spacing-md".into(), "16px".into());
+        let p = diff_pages(&before, &after);
+        assert_eq!((p.added, p.removed, p.modified), (0, 0, 1));
+        assert_eq!(p.modified, p.variables.len());
+    }
+
+    #[test]
+    fn diff_pages_moved_old_node_under_added_parent() {
+        let (before, f, _, b) = page();
+        let mut after = before.clone();
+        let n = add_node(
+            &mut after,
+            Some(f),
+            "Wrap",
+            NodeKind::Frame { clip: false },
+            Rect::new(0.0, 0.0, 50.0, 50.0),
+        );
+        after.children_mut(Some(f)).unwrap().retain(|c| *c != b);
+        after.children_mut(Some(n)).unwrap().push(b);
+        after.nodes.get_mut(&b).unwrap().parent = Some(n);
+        let p = diff_pages(&before, &after);
+        assert_eq!((p.added, p.removed, p.modified), (1, 0, 1));
+        let row = p.groups[0]
+            .nodes
+            .iter()
+            .find(|r| r.id_b == Some(b))
+            .unwrap();
+        assert!(
+            row.changes
+                .iter()
+                .any(|c| c.field == "parent" && c.after == "Wrap")
+        );
+    }
+
+    #[test]
+    fn diff_pages_empty_mode_created_and_deleted() {
+        let (before, ..) = page();
+        let mut after = before.clone();
+        after.modes.insert("Dark".into(), Default::default());
+        let p = diff_pages(&before, &after);
+        assert_eq!(p.variables.len(), 1);
+        assert_eq!(p.variables[0].field, "mode");
+        assert_eq!(
+            (
+                p.variables[0].before.as_str(),
+                p.variables[0].after.as_str()
+            ),
+            ("Dark: none", "Dark: created")
+        );
+        assert_eq!(
+            diff_pages(&after, &before).variables[0].after,
+            "Dark: deleted"
+        );
+    }
+
+    #[test]
+    fn diff_pages_comment_change() {
+        let (before, _, a, _) = page();
+        let mut after = before.clone();
+        after
+            .nodes
+            .get_mut(&a)
+            .unwrap()
+            .comments
+            .push(crate::model::Comment {
+                id: 1,
+                text: "tighten".into(),
+                author: "user".into(),
+                resolved: false,
+                reply: None,
+            });
+        let p = diff_pages(&before, &after);
+        assert!(!p.is_empty());
+        let c = &p.groups[0].nodes[0].changes[0];
+        assert_eq!(
+            (c.field, c.before.as_str(), c.after.as_str()),
+            ("comments", "0 (0 open)", "1 (1 open)")
+        );
+        after.nodes.get_mut(&a).unwrap().comments[0].resolved = true;
+        let p2 = diff_pages(&before, &after);
+        assert_eq!(p2.groups[0].nodes[0].changes[0].after, "1 (0 open)");
     }
 }

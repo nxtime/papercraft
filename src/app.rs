@@ -52,6 +52,8 @@ pub struct App {
         std::sync::mpsc::Receiver<crate::mcp::Call>,
         crate::mcp::server::Running,
     )>,
+    /// Groups the agent's editing calls into reviewable runs.
+    runs: crate::runs::Tracker,
 }
 
 /// Events delivered to the winit loop from other sources.
@@ -94,6 +96,7 @@ impl App {
             #[cfg(target_os = "macos")]
             menu: None,
             mcp: None,
+            runs: Default::default(),
         };
         app.st.library.library = library;
         app.ed.clipboard_io = crate::io::clipboard::System::new()
@@ -252,8 +255,10 @@ impl App {
         if self.session.project.is_some() {
             self.save_project(true);
         }
+        let counts = self.runs.counts(&self.ed);
         match self.session.open(&mut self.ed, dir) {
             Ok(()) => {
+                self.runs.end_counted(crate::project::format::now_ms(), counts, None);
                 self.st.home = None;
                 self.st.project_name = self.session.project_name();
                 self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
@@ -268,8 +273,10 @@ impl App {
         if self.session.project.is_some() {
             self.save_project(true);
         }
+        let counts = self.runs.counts(&self.ed);
         match self.session.create(&mut self.ed, "Untitled") {
             Ok(()) => {
+                self.runs.end_counted(crate::project::format::now_ms(), counts, None);
                 self.st.home = None;
                 self.st.project_name = self.session.project_name();
                 self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
@@ -282,6 +289,8 @@ impl App {
     fn go_home(&mut self) {
         if self.session.project.is_some() {
             self.save_project(true);
+            let counts = self.runs.counts(&self.ed);
+            self.runs.end_counted(crate::project::format::now_ms(), counts, None);
             if let Err(e) = self.session.close(&mut self.ed) {
                 self.error(format!("Could not save project: {e}"));
             }
@@ -696,6 +705,17 @@ impl App {
     fn redraw(&mut self) {
         let now = self.now();
         self.ed.tick(now);
+        let dir = self
+            .session
+            .project
+            .as_ref()
+            .filter(|_| self.st.home.is_none());
+        self.runs.tick(
+            crate::project::format::now_ms(),
+            dir.map(|p| p.dir.as_path()),
+            &self.ed,
+        );
+        self.st.sync_runs(&mut self.runs);
         let Some(g) = self.gfx.as_mut() else { return };
         let input = g.egui.take_egui_input(&g.window);
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
@@ -1426,7 +1446,9 @@ impl App {
             return;
         }
         for c in calls {
-            let r = crate::mcp::exec::call(self, &c.name, &c.args);
+            let mut runs = std::mem::take(&mut self.runs);
+            let r = runs.call(self, &c.name, &c.args, crate::project::format::now_ms());
+            self.runs = runs;
             self.st.log_agent(&c.name, r.as_ref().err().cloned());
             if let Err(e) = &r {
                 log::info!("mcp {}: {e}", c.name);

@@ -67,6 +67,8 @@ struct Web {
     /// This shell, for work that finishes after the current event (readbacks, file reads).
     me: Weak<RefCell<Web>>,
     relay: relay::Relay,
+    /// Groups the agent's editing calls into reviewable runs.
+    runs: crate::runs::Tracker,
     /// What the editor's clipboard provider reads and writes (see `dom::Mirror`).
     mirror: dom::SharedMirror,
     toast_until: Option<f64>,
@@ -208,6 +210,7 @@ impl Web {
             adapter_info,
             me: Weak::new(),
             relay,
+            runs: Default::default(),
             mirror,
             toast_until: None,
             status_seen: (String::new(), 0.0),
@@ -416,7 +419,17 @@ impl Web {
     fn pump_calls(&mut self) {
         while let Some(call) = self.relay.next_call() {
             self.dirty = true;
-            let result = exec::call(self, &call.name, &call.args);
+            let mut runs = std::mem::take(&mut self.runs);
+            let result = runs.call(
+                self,
+                &call.name,
+                &call.args,
+                crate::project::format::now_ms(),
+            );
+            self.runs = runs;
+            self.st.project_name = self.session.project_name();
+            self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
+            self.ed.revision += 1;
             let failed = result
                 .as_ref()
                 .err()
@@ -517,6 +530,8 @@ impl Web {
     fn go_home(&mut self) {
         if self.session.project.is_some() {
             self.save_project(true);
+            let counts = self.runs.counts(&self.ed);
+            self.runs.end_counted(crate::project::format::now_ms(), counts, None);
             if let Err(e) = self.session.close(&mut self.ed) {
                 self.error(format!("Could not save project: {e}"));
             }
@@ -534,12 +549,20 @@ impl Web {
         for a in actions {
             let r: Result<(), String> = match a {
                 HomeAction::New => {
+                    let counts = self.runs.counts(&self.ed);
                     let r = self.session.create(&mut self.ed, "Untitled");
+                    if r.is_ok() {
+                        self.runs.end_counted(crate::project::format::now_ms(), counts, None);
+                    }
                     self.enter_project(r);
                     Ok(())
                 }
                 HomeAction::Open(dir) => {
+                    let counts = self.runs.counts(&self.ed);
                     let r = self.session.open(&mut self.ed, &dir);
+                    if r.is_ok() {
+                        self.runs.end_counted(crate::project::format::now_ms(), counts, None);
+                    }
                     self.enter_project(r);
                     Ok(())
                 }
@@ -597,7 +620,11 @@ impl Web {
                     if self.session.project.is_some() {
                         self.save_project(true);
                     }
+                    let counts = self.runs.counts(&self.ed);
                     let r = self.session.create(&mut self.ed, "Untitled");
+                    if r.is_ok() {
+                        self.runs.end_counted(crate::project::format::now_ms(), counts, None);
+                    }
                     self.enter_project(r);
                 }
                 AppRequest::Open => self.request_import(),
@@ -609,7 +636,11 @@ impl Web {
                     self.save_project(true);
                     match self.session.store.duplicate(&dir) {
                         Ok(copy) => {
+                            let counts = self.runs.counts(&self.ed);
                             let r = self.session.open(&mut self.ed, &copy);
+                            if r.is_ok() {
+                                self.runs.end_counted(crate::project::format::now_ms(), counts, None);
+                            }
                             self.enter_project(r);
                         }
                         Err(e) => self.error(format!("Could not duplicate: {e}")),
@@ -675,6 +706,17 @@ impl Web {
     fn frame(&mut self) {
         let now = now_ms();
         self.pump_calls();
+        let dir = self
+            .session
+            .project
+            .as_ref()
+            .filter(|_| self.st.home.is_none());
+        self.runs.tick(
+            crate::project::format::now_ms(),
+            dir.map(|p| p.dir.as_path()),
+            &self.ed,
+        );
+        self.dirty |= self.st.sync_runs(&mut self.runs);
         if self.relay.tick(now) {
             self.dirty = true;
         }

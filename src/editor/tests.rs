@@ -611,3 +611,46 @@ fn wrap_in_frame_groups_siblings() {
     assert_eq!(rect_of(&e, f), Rect::new(100.0, 100.0, 350.0, 250.0));
     assert_eq!(rect_of(&e, b).min(), v2(400.0, 300.0));
 }
+
+#[test]
+fn restore_snapshot_restores_design_system_in_one_undo() {
+    let mut e = ed();
+    let a = e.add_node(
+        Node::new(
+            NodeId(0),
+            NodeKind::Rect,
+            Rect::new(100.0, 100.0, 100.0, 100.0),
+        ),
+        None,
+    );
+    e.edit("Light", |tx| {
+        tx.set_variable_in_mode("Light", "accent", Color::rgb(200, 0, 0));
+    });
+    e.edit("Dark", |tx| {
+        tx.set_variable_in_mode("Dark", "accent", Color::rgb(0, 0, 200));
+    });
+    e.edit("Token", |tx| tx.set_token("gap", "8px"));
+    let snap = e.doc.clone();
+
+    e.edit("Change design", |tx| {
+        tx.set_variable("accent", Color::rgb(0, 200, 0));
+        tx.set_token("gap", "16px");
+        tx.set_mode("Dark");
+    });
+    e.edit("Move", |tx| tx.node_mut(a).unwrap().rect.x = 300.0);
+    assert_ne!(e.doc, snap);
+
+    e.restore_snapshot(&snap);
+    assert_eq!(e.doc.nodes, snap.nodes);
+    assert_eq!(e.doc.root, snap.root);
+    assert_eq!(e.doc.variables, snap.variables);
+    assert_eq!(e.doc.modes, snap.modes);
+    assert_eq!(e.doc.mode, snap.mode);
+    assert_eq!(e.doc.tokens, snap.tokens);
+
+    e.undo();
+    assert_eq!(e.doc.mode.as_deref(), Some("Dark"));
+    assert_eq!(e.doc.tokens["gap"], "16px");
+    assert_eq!(e.doc.modes["Light"]["accent"], Color::rgb(0, 200, 0));
+    assert_eq!(rect_of(&e, a).min(), v2(300.0, 100.0));
+}

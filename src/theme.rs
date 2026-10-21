@@ -88,6 +88,10 @@ pub struct Palette {
     pub popover: Color32,
     /// Destructive actions and errors: a soft red, not pure red.
     pub danger: Color32,
+    /// Added / accepted.
+    pub success: Color32,
+    /// Changed.
+    pub warning: Color32,
 }
 
 pub fn palette(dark: bool) -> Palette {
@@ -108,6 +112,8 @@ pub fn palette(dark: bool) -> Palette {
             pressed: Color32::from_white_alpha(30),
             popover: Color32::from_rgb(0x32, 0x32, 0x34),
             danger: Color32::from_rgb(0xf2, 0x8b, 0x9a),
+            success: Color32::from_rgb(0x6c, 0xd0, 0x8a),
+            warning: Color32::from_rgb(0xf0, 0xc2, 0x5e),
         }
     } else {
         Palette {
@@ -126,6 +132,8 @@ pub fn palette(dark: bool) -> Palette {
             pressed: Color32::from_black_alpha(24),
             popover: Color32::from_rgb(0xfc, 0xfc, 0xfc),
             danger: Color32::from_rgb(0xd1, 0x4a, 0x5c),
+            success: Color32::from_rgb(0x2e, 0xa0, 0x5a),
+            warning: Color32::from_rgb(0xc9, 0x91, 0x10),
         }
     }
 }
@@ -519,6 +527,8 @@ pub fn catppuccin_palette(f: Flavor) -> Palette {
         pressed: veil(p.overlay0, 90),
         popover: p.surface0,
         danger: p.red,
+        success: p.green,
+        warning: p.yellow,
     }
 }
 

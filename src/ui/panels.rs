@@ -3,6 +3,7 @@
 use super::{UiState, kit};
 use crate::editor::Editor;
 use crate::model::NodeId;
+use crate::runs::RunState;
 use crate::theme::{self, Icon};
 use egui::{RichText, Ui};
 
@@ -474,14 +475,18 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     });
 }
 
-/// Where an agent connects, and the tool calls it ran: name, outcome and how long ago.
-pub fn agent(ui: &mut Ui, st: &mut UiState) {
+/// Where an agent connects, its runs (with Review and Revert) and the tool calls it ran.
+pub fn agent(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    if st.review_run.is_some() {
+        return review(ui, ed, st);
+    }
+    st.review_diff = None;
     let p = theme::pal(ui);
     title(ui, "Agent", "Tools an agent ran on this project.");
     let live = st
         .agent
         .as_ref()
-        .is_some_and(|(_, at)| at.elapsed().as_secs() < 8);
+        .is_some_and(|(_, at)| at.elapsed().as_secs() < super::AGENT_WORKING_SECS);
     ui.horizontal(|ui| {
         kit::chip(ui, if live { "Working" } else { "Idle" }, live);
         if !st.agent_log.is_empty() && kit::chip(ui, "Clear log", false).clicked() {
@@ -504,6 +509,170 @@ pub fn agent(ui: &mut Ui, st: &mut UiState) {
         }
     }
     ui.add_space(10.0);
+    egui::ScrollArea::vertical()
+        .id_salt("agent")
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            runs_section(ui, ed, st);
+            activity_section(ui, st);
+        });
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs(5));
+}
+
+pub(super) fn count(n: usize, unit: &str) -> String {
+    format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
+}
+
+/// The "Agent finished" banner and the run cards, newest first.
+fn runs_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    let p = theme::pal(ui);
+    let Some(dir) = st.project_dir.clone() else {
+        return;
+    };
+    if let Some(run) = st.run_banner.clone() {
+        let changes = run.added + run.changed + run.removed;
+        egui::Frame::new()
+            .fill(p.field)
+            .stroke(egui::Stroke::new(1.0, theme::accent()))
+            .corner_radius(theme::RADIUS_LG)
+            .inner_margin(12)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    kit::badge(ui, Icon::Pen, theme::accent(), 32.0);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.label(
+                            RichText::new("Agent finished").font(theme::semibold(theme::BODY)),
+                        );
+                        ui.label(
+                            RichText::new(count(changes, "change"))
+                                .size(theme::SECONDARY)
+                                .color(p.secondary),
+                        );
+                    });
+                });
+                ui.add_space(8.0);
+                ui.columns(2, |cols| {
+                    if kit::button_wide(&mut cols[0], kit::ButtonKind::Primary, None, "Review")
+                        .clicked()
+                    {
+                        st.review_run = Some(run.id.clone());
+                        st.run_banner = None;
+                    }
+                    if kit::button_wide(&mut cols[1], kit::ButtonKind::Secondary, None, "Revert")
+                        .clicked()
+                    {
+                        st.pending_run_revert = Some(run.id.clone());
+                        st.run_banner = None;
+                    }
+                });
+            });
+        ui.add_space(10.0);
+    }
+    revert_dialog(ui.ctx(), ed, st, &dir);
+    let open_id = st.run_open.as_ref().map(|r| r.id.clone());
+    let saved = st.runs.iter().filter(|r| open_id.as_ref() != Some(&r.id));
+    let all: Vec<_> = st.run_open.iter().chain(saved).cloned().collect();
+    if all.is_empty() {
+        return;
+    }
+    kit::section_header(ui, "Runs", None);
+    ui.spacing_mut().item_spacing.y = 8.0;
+    for run in &all {
+        let selected = st.review_run.as_ref() == Some(&run.id);
+        let changes = run.added + run.changed + run.removed;
+        let calls = count(run.calls as usize, "call");
+        let (label, sub) = match run.state {
+            RunState::Running => ("Running", format!("{calls} · in progress")),
+            state => {
+                let label = match state {
+                    RunState::Review => "Review",
+                    RunState::Accepted => "Accepted",
+                    _ => "Reverted",
+                };
+                let when = ago(run.ended.unwrap_or(run.started));
+                (label, format!("{calls} · {} · {when}", count(changes, "change")))
+            }
+        };
+        let stroke = if selected {
+            egui::Stroke::new(1.0, theme::accent())
+        } else {
+            egui::Stroke::NONE
+        };
+        let card = egui::Frame::new()
+            .fill(p.field)
+            .stroke(stroke)
+            .corner_radius(theme::RADIUS_LG)
+            .inner_margin(12)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 6.0;
+                let top = egui::vec2(ui.available_width(), 22.0);
+                let rtl = egui::Layout::right_to_left(egui::Align::Center);
+                ui.allocate_ui_with_layout(top, rtl, |ui| {
+                    let ink = match run.state {
+                        RunState::Review | RunState::Running => Some(theme::accent()),
+                        RunState::Accepted => Some(p.success),
+                        RunState::Reverted => None,
+                    };
+                    kit::chip_ink(ui, label, ink);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(match run.title.as_str() {
+                                    "" => format!("Run {}", run.number),
+                                    t => format!("Run {} · {t}", run.number),
+                                })
+                                    .font(theme::semibold(theme::BODY)),
+                            )
+                            .truncate(),
+                        );
+                    });
+                });
+                ui.label(RichText::new(sub).size(theme::SECONDARY).color(p.secondary));
+            });
+        let id = ui.id().with(("run", &run.id));
+        let click = ui.interact(card.response.rect, id, egui::Sense::click());
+        if click.clicked() && run.state != RunState::Running {
+            st.review_run = Some(run.id.clone());
+        }
+    }
+    ui.add_space(10.0);
+}
+
+/// Confirm, then put every page of the run back to how it was before it.
+fn revert_dialog(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, dir: &std::path::Path) {
+    let Some(id) = st.pending_run_revert.clone() else {
+        return;
+    };
+    let answer = super::confirm::dialog(
+        ctx,
+        "run-revert",
+        "Revert agent run?",
+        "Every page the agent changed goes back to how it was before the run, including any edits you made to those pages since.",
+        "Revert",
+    );
+    let Some(yes) = answer else {
+        return;
+    };
+    st.pending_run_revert = None;
+    let Some(mut run) = st.runs.iter().find(|r| r.id == id).cloned().filter(|_| yes) else {
+        return;
+    };
+    if st.review_run.as_ref() == Some(&id) {
+        st.review_run = None;
+    }
+    ed.status = match crate::runs::revert(dir, ed, &mut run) {
+        Ok(()) => format!("Reverted agent run {}", run.number),
+        Err(e) => format!("Could not revert the run: {e}"),
+    };
+    st.runs_key = None;
+}
+
+fn activity_section(ui: &mut Ui, st: &mut UiState) {
+    let p = theme::pal(ui);
     kit::section_header(ui, "Recent activity", None);
     if st.agent_log.is_empty() {
         ui.add_space(24.0);
@@ -517,27 +686,410 @@ pub fn agent(ui: &mut Ui, st: &mut UiState) {
         );
         return;
     }
+    ui.spacing_mut().item_spacing.y = 2.0;
+    for call in st.agent_log.iter().rev() {
+        let secs = call.at.elapsed().as_secs();
+        let ago = match secs {
+            0..=4 => "just now".to_string(),
+            5..=59 => format!("{secs}s ago"),
+            60..=3599 => format!("{}m ago", secs / 60),
+            _ => format!("{}h ago", secs / 3600),
+        };
+        let (dot, sub) = match &call.error {
+            Some(e) => (p.danger, format!("Failed · {ago} · {e}")),
+            None => (theme::accent(), ago),
+        };
+        row(ui, dot, &call.name, &sub, false, false)
+            .on_hover_text(call.error.as_deref().unwrap_or(""));
+    }
+}
+
+/// How one page of a run compares to its snapshot.
+pub enum PageReview {
+    /// The run created the page.
+    Created,
+    /// The version file is gone.
+    Missing,
+    Diff(crate::mcp::diff::PageDiff),
+    /// The page was deleted during the run; its snapshot diffed against nothing, so every node is removed.
+    Deleted(crate::mcp::diff::PageDiff),
+}
+
+pub struct ReviewPage {
+    pub page_id: String,
+    pub name: String,
+    pub review: PageReview,
+}
+
+/// The diff of one run against the live pages; `snaps` are the loaded versions, kept so a changed
+/// document only re-runs the in-memory diff.
+pub struct ReviewDiff {
+    pub run: String,
+    stamp: u64,
+    pub snaps: Vec<Option<crate::model::Document>>,
+    pub pages: Vec<ReviewPage>,
+}
+
+fn live_doc<'a>(ed: &'a Editor, page_id: &str) -> Option<&'a crate::model::Document> {
+    let slot = ed.pages.iter().find(|p| p.id == page_id)?;
+    match &slot.stash {
+        Some(s) => Some(&s.doc),
+        None => Some(&ed.doc),
+    }
+}
+
+fn build_review(ed: &Editor, run: &crate::runs::Run, dir: &std::path::Path) -> ReviewDiff {
+    let snaps = run
+        .pages
+        .iter()
+        .map(|rp| rp.version.as_deref().and_then(|v| crate::versions::load(dir, v)))
+        .collect();
+    let mut r = ReviewDiff {
+        run: run.id.clone(),
+        stamp: 0,
+        snaps,
+        pages: Vec::new(),
+    };
+    refresh_review(&mut r, ed, run);
+    r
+}
+
+fn refresh_review(r: &mut ReviewDiff, ed: &Editor, run: &crate::runs::Run) {
+    r.stamp = ed.doc_stamp;
+    r.pages = run
+        .pages
+        .iter()
+        .zip(&r.snaps)
+        .map(|(rp, snap)| {
+            let name = ed
+                .pages
+                .iter()
+                .find(|p| p.id == rp.page_id)
+                .map_or_else(|| rp.page_id.clone(), |p| p.name.clone());
+            ReviewPage {
+                page_id: rp.page_id.clone(),
+                name,
+                review: page_review(rp.version.is_some(), snap.as_ref(), live_doc(ed, &rp.page_id)),
+            }
+        })
+        .collect();
+}
+
+/// `has_version`: the run changed an existing page (it has a snapshot to compare against).
+fn page_review(
+    has_version: bool,
+    snap: Option<&crate::model::Document>,
+    live: Option<&crate::model::Document>,
+) -> PageReview {
+    if !has_version {
+        return PageReview::Created;
+    }
+    match (snap, live) {
+        (Some(before), Some(after)) => PageReview::Diff(crate::mcp::diff::diff_pages(before, after)),
+        (Some(before), None) => {
+            PageReview::Deleted(crate::mcp::diff::diff_pages(before, &crate::model::Document::default()))
+        }
+        (None, _) => PageReview::Missing,
+    }
+}
+
+/// One line for a changed node: the first property change, then "+N more".
+fn detail(n: &crate::mcp::diff::NodeDiff) -> String {
+    match (n.status, n.changes.first()) {
+        ("added", _) => "added".into(),
+        ("removed", _) => "deleted".into(),
+        (_, Some(c)) => {
+            let more = n.changes.len() - 1;
+            let tail = if more > 0 { format!(" +{more} more") } else { String::new() };
+            format!("{} {} → {}{tail}", c.field, c.before, c.after)
+        }
+        _ => "changed".into(),
+    }
+}
+
+enum ReviewAct {
+    Open(String, Option<NodeId>),
+    Undo(String, crate::mcp::diff::NodeDiff),
+}
+
+fn diff_row(
+    ui: &mut Ui,
+    page_id: &str,
+    n: &crate::mcp::diff::NodeDiff,
+    deleted: bool,
+    act: &mut Option<ReviewAct>,
+) {
+    let p = theme::pal(ui);
+    let (tint, icon) = match n.status {
+        "added" => (p.success, Icon::Plus),
+        "removed" => (p.danger, Icon::Minus),
+        _ => (p.warning, Icon::Pencil),
+    };
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 48.0), egui::Sense::click());
+    let hover = super::motion::hover(ui.ctx(), resp.id.with("rv"), &resp);
+    ui.painter()
+        .rect_filled(rect, theme::RADIUS_LG, p.hover.gamma_multiply(hover));
+    let badge = egui::Rect::from_min_size(
+        rect.left_center() - egui::vec2(0.0, 14.0),
+        egui::vec2(28.0, 28.0),
+    );
+    ui.painter()
+        .rect_filled(badge, theme::RADIUS_MD, tint.gamma_multiply(0.18));
+    theme::paint_icon(ui.painter(), badge.shrink(6.0), icon, tint);
+    let x = rect.left() + 40.0;
+    let clip = ui.painter().with_clip_rect(egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(rect.right() - 40.0, rect.bottom()),
+    ));
+    clip.text(
+        egui::pos2(x, rect.center().y - 9.0),
+        egui::Align2::LEFT_CENTER,
+        &n.name,
+        egui::FontId::proportional(theme::BODY),
+        p.text,
+    );
+    clip.text(
+        egui::pos2(x, rect.center().y + 10.0),
+        egui::Align2::LEFT_CENTER,
+        detail(n),
+        egui::FontId::proportional(theme::SECONDARY),
+        p.secondary,
+    );
+    // A deleted page has no live node to revert into; "Revert run" re-creates it.
+    if !deleted {
+        let btn = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - 32.0, rect.center().y - 16.0),
+            egui::vec2(32.0, 32.0),
+        );
+        let undo = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(btn), |ui| {
+                theme::icon_button(ui, Icon::Restore, 32.0, false)
+            })
+            .inner
+            .on_hover_text("Revert this change");
+        if undo.clicked() {
+            *act = Some(ReviewAct::Undo(page_id.to_string(), n.clone()));
+            return;
+        }
+    }
+    if resp.clicked() {
+        *act = Some(ReviewAct::Open(page_id.to_string(), n.id_b));
+    }
+}
+
+/// The run review: changes by frame, per-row revert, Revert run and Accept all.
+fn review(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    let p = theme::pal(ui);
+    let (Some(dir), Some(id)) = (st.project_dir.clone(), st.review_run.clone()) else {
+        st.review_run = None;
+        return;
+    };
+    let Some(mut run) = st.runs.iter().find(|r| r.id == id).cloned() else {
+        if !st.runs.is_empty() || st.runs_key.is_some() {
+            st.review_run = None;
+        }
+        return;
+    };
+    match &mut st.review_diff {
+        Some(r) if r.run == id => {
+            if r.stamp != ed.doc_stamp {
+                refresh_review(r, ed, &run);
+            }
+        }
+        _ => st.review_diff = Some(build_review(ed, &run, &dir)),
+    }
+    revert_dialog(ui.ctx(), ed, st, &dir);
+    let Some(rd) = &st.review_diff else {
+        return;
+    };
+    let (mut added, mut changed, mut removed, mut frames) = (0, 0, 0, 0);
+    for page in &rd.pages {
+        match &page.review {
+            PageReview::Created => added += 1,
+            PageReview::Missing => {}
+            PageReview::Diff(d) => {
+                (added, changed, removed) = (added + d.added, changed + d.modified, removed + d.removed);
+                frames += d.groups.len();
+            }
+            PageReview::Deleted(d) => {
+                removed += d.removed;
+                frames += d.groups.len();
+            }
+        }
+    }
+    let mut back = false;
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(match run.title.as_str() {
+                "" => format!("Run {}", run.number),
+                t => format!("Run {} · {t}", run.number),
+            })
+            .font(theme::semibold(16.0)),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            back = kit::close_button(ui).on_hover_text("Back to runs").clicked();
+        });
+    });
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        kit::chip_ink(ui, &format!("+{added}"), Some(p.success));
+        kit::chip_ink(ui, &format!("~{changed}"), Some(p.warning));
+        kit::chip_ink(ui, &format!("−{removed}"), Some(p.danger));
+        ui.label(
+            RichText::new(format!("on {}", count(frames, "frame")))
+                .size(theme::SECONDARY)
+                .color(p.secondary),
+        );
+    });
+    ui.add_space(8.0);
+    let mut act = None;
+    let footer = 44.0 + 16.0;
     egui::ScrollArea::vertical()
-        .id_salt("agent")
+        .id_salt("review")
+        .max_height((ui.available_height() - footer).max(80.0))
         .auto_shrink(false)
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            for call in st.agent_log.iter().rev() {
-                let secs = call.at.elapsed().as_secs();
-                let ago = match secs {
-                    0..=4 => "just now".to_string(),
-                    5..=59 => format!("{secs}s ago"),
-                    60..=3599 => format!("{}m ago", secs / 60),
-                    _ => format!("{}h ago", secs / 3600),
-                };
-                let (dot, sub) = match &call.error {
-                    Some(e) => (p.danger, format!("Failed · {ago} · {e}")),
-                    None => (theme::accent(), ago),
-                };
-                row(ui, dot, &call.name, &sub, false, false)
-                    .on_hover_text(call.error.as_deref().unwrap_or(""));
+            ui.spacing_mut().item_spacing.y = 4.0;
+            for page in &rd.pages {
+                match &page.review {
+                    PageReview::Created => {
+                        kit::section_header(ui, &page.name, None);
+                        ui.label(RichText::new("Page created").color(p.secondary));
+                    }
+                    PageReview::Missing => {
+                        ui.label(
+                            RichText::new(format!("Snapshot missing for page {}", page.name))
+                                .color(p.danger),
+                        );
+                    }
+                    PageReview::Diff(d) | PageReview::Deleted(d) => {
+                        let deleted = matches!(page.review, PageReview::Deleted(_));
+                        if deleted {
+                            kit::section_header(ui, &page.name, None);
+                            ui.label(RichText::new("Page deleted").color(p.danger));
+                        }
+                        for g in &d.groups {
+                            ui.add_space(8.0);
+                            kit::section_header(ui, &format!("{} · {}", g.name, g.nodes.len()), None);
+                            for n in &g.nodes {
+                                diff_row(ui, &page.page_id, n, deleted, &mut act);
+                            }
+                        }
+                        if !d.variables.is_empty() {
+                            ui.add_space(8.0);
+                            kit::section_header(ui, &format!("Variables · {}", d.variables.len()), None);
+                            for v in &d.variables {
+                                let n = crate::mcp::diff::NodeDiff {
+                                    id_a: None,
+                                    id_b: None,
+                                    path: String::new(),
+                                    name: v.after.split(':').next().unwrap_or("").to_string(),
+                                    kind: "variable",
+                                    status: "modified",
+                                    changes: vec![v.clone()],
+                                };
+                                variable_row(ui, &n);
+                            }
+                        }
+                    }
+                }
             }
         });
-    ui.ctx()
-        .request_repaint_after(std::time::Duration::from_secs(5));
+    ui.add_space(8.0);
+    let (mut revert, mut accept) = (false, false);
+    ui.columns(2, |c| {
+        revert = kit::button_wide(&mut c[0], kit::ButtonKind::Danger, Some(Icon::Restore), "Revert run").clicked();
+        accept = kit::button_wide(&mut c[1], kit::ButtonKind::Primary, None, "Accept all").clicked();
+    });
+    match act {
+        Some(ReviewAct::Open(page_id, node)) => {
+            if let Some(i) = ed.pages.iter().position(|p| p.id == page_id) {
+                ed.switch_page(i);
+                if let Some(n) = node.filter(|n| ed.doc.get(*n).is_some()) {
+                    ed.select(vec![n]);
+                    if let Some(b) = ed.doc.world_rect(n) {
+                        ed.camera.fit(&b, ed.viewport, 64.0, 1.0);
+                    }
+                    ed.revision += 1;
+                }
+            }
+        }
+        Some(ReviewAct::Undo(page_id, n)) => {
+            if let Err(e) = crate::runs::revert_change(&dir, ed, &run, &page_id, &n) {
+                ed.status = format!("Could not revert the change: {e}");
+            }
+        }
+        None => {}
+    }
+    if back {
+        st.review_run = None;
+        st.review_diff = None;
+    }
+    if revert {
+        st.pending_run_revert = Some(id);
+    }
+    if accept {
+        run.state = RunState::Accepted;
+        if let Err(e) = crate::runs::save(&dir, &run) {
+            ed.status = format!("Could not save the run: {e}");
+        }
+        st.runs_key = None;
+        st.review_run = None;
+        st.review_diff = None;
+    }
+}
+
+/// A Variables row: same look as a diff row, without the per-row revert.
+fn variable_row(ui: &mut Ui, n: &crate::mcp::diff::NodeDiff) {
+    let p = theme::pal(ui);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 48.0), egui::Sense::hover());
+    let badge = egui::Rect::from_min_size(rect.left_center() - egui::vec2(0.0, 14.0), egui::vec2(28.0, 28.0));
+    ui.painter().rect_filled(badge, theme::RADIUS_MD, p.warning.gamma_multiply(0.18));
+    theme::paint_icon(ui.painter(), badge.shrink(6.0), Icon::Pencil, p.warning);
+    let x = rect.left() + 40.0;
+    let clip = ui.painter().with_clip_rect(rect);
+    clip.text(egui::pos2(x, rect.center().y - 9.0), egui::Align2::LEFT_CENTER, &n.name, egui::FontId::proportional(theme::BODY), p.text);
+    clip.text(egui::pos2(x, rect.center().y + 10.0), egui::Align2::LEFT_CENTER, detail(n), egui::FontId::proportional(theme::SECONDARY), p.secondary);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geom::Rect;
+    use crate::model::{Node, NodeKind};
+
+    fn doc_with_frame() -> crate::model::Document {
+        let mut doc = crate::model::Document::default();
+        let id = doc.alloc_id();
+        let mut n = Node::new(id, NodeKind::Frame { clip: true }, Rect::new(0.0, 0.0, 320.0, 200.0));
+        n.name = "Card".into();
+        doc.nodes.insert(id, n);
+        doc.children_mut(None).unwrap().push(id);
+        doc
+    }
+
+    #[test]
+    fn deleted_page_diffs_snapshot_against_empty() {
+        let snap = doc_with_frame();
+        let PageReview::Deleted(d) = page_review(true, Some(&snap), None) else {
+            panic!("expected Deleted");
+        };
+        assert!(d.removed > 0);
+        assert_eq!(d.added, 0);
+    }
+
+    #[test]
+    fn missing_snapshot_stays_missing() {
+        let live = doc_with_frame();
+        assert!(matches!(page_review(true, None, Some(&live)), PageReview::Missing));
+        assert!(matches!(page_review(true, None, None), PageReview::Missing));
+    }
+
+    #[test]
+    fn page_without_version_is_created() {
+        let live = doc_with_frame();
+        assert!(matches!(page_review(false, None, Some(&live)), PageReview::Created));
+    }
 }

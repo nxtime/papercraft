@@ -120,6 +120,22 @@ pub struct UiState {
     pub agent: Option<(String, web_time::Instant)>,
     /// Recent agent tool calls, oldest first (the Agent view).
     pub agent_log: Vec<AgentCall>,
+    /// Saved agent runs of the open project, newest first; re-read when `runs_key` stops matching
+    /// the project folder (run finished, project changed).
+    pub runs: Vec<crate::runs::Run>,
+    pub runs_key: Option<std::path::PathBuf>,
+    /// The run being recorded now, copied from the tracker each frame.
+    pub run_open: Option<crate::runs::Run>,
+    /// The run that just ended with changes: the Agent view's "Agent finished" banner.
+    pub run_banner: Option<crate::runs::Run>,
+    /// Canvas toast for the same run: (run id, change count, shown at).
+    pub run_toast: Option<(String, usize, web_time::Instant)>,
+    /// Run (id) the user chose to review; the review view draws it.
+    pub review_run: Option<String>,
+    /// Diff of the open review, cached until the document changes; the canvas overlay reads it.
+    pub review_diff: Option<panels::ReviewDiff>,
+    /// Run (id) waiting for the "Revert agent run?" confirm.
+    pub pending_run_revert: Option<String>,
     /// Where an agent connects (MCP URL natively, the relay URL in the browser); empty until known.
     pub agent_endpoint: String,
     /// An extra sidebar view: history, comments or the agent log. None shows layers, library or design.
@@ -225,6 +241,31 @@ pub struct AgentCall {
 }
 
 impl UiState {
+    /// Per frame, after `Tracker::tick`: mirrors the open run and picks up a finished one.
+    /// Returns true when a run just ended with changes.
+    pub fn sync_runs(&mut self, t: &mut crate::runs::Tracker) -> bool {
+        self.run_open = t.open_run().cloned();
+        let finished = t.take_finished();
+        if finished.is_some() {
+            self.runs_key = None;
+        }
+        if let Some(dir) = self.project_dir.clone()
+            && self.runs_key.as_ref() != Some(&dir)
+        {
+            self.runs = crate::runs::list(&dir);
+            self.runs_key = Some(dir);
+        }
+        let Some(run) = finished else {
+            return false;
+        };
+        let changed = run.added + run.changed + run.removed > 0;
+        if changed {
+            self.run_toast = Some((run.id.clone(), run.added + run.changed + run.removed, web_time::Instant::now()));
+            self.run_banner = Some(run);
+        }
+        changed
+    }
+
     /// Records an agent's tool call for the toolbar hint and the Agent view.
     pub fn log_agent(&mut self, name: &str, error: Option<String>) {
         let at = web_time::Instant::now();
@@ -244,7 +285,7 @@ impl UiState {
 const AGENT_WORKING_SECS: u64 = 6;
 
 /// What an agent's tool call means in plain words, for the activity pill.
-fn agent_verb(tool: &str) -> &'static str {
+pub(crate) fn agent_verb(tool: &str) -> &'static str {
     match tool {
         "write_html" | "create_artboard" | "create_shape" => "Drawing layout",
         "update_styles" | "set_text_content" | "rename_nodes" => "Styling",
@@ -449,7 +490,7 @@ fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egu
     egui::Area::new("presenter".into())
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_BOTTOM)
-        .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - 24.0))
+        .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - RUN_TOAST_LIFT))
         .show(ctx, |ui| {
             egui::Frame::new()
                 .fill(p.sidebar)
@@ -597,6 +638,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             UiEvent::ToggleGrid => st.show_grid_off = !st.show_grid_off,
         }
     }
+    if st.run_open.is_some() {
+        // So the tracker's idle timeout fires even when nothing else repaints.
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+    }
     if st.hide_ui || st.present {
         #[cfg(not(target_arch = "wasm32"))]
         st.updater.show(ui.ctx());
@@ -724,6 +769,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     toolbar(ui.ctx(), ed, canvas);
     agent_glow(ui.ctx(), st, canvas);
     status(ui.ctx(), ed, canvas);
+    review_overlay(ui.ctx(), ed, st, canvas);
+    run_toast(ui.ctx(), st, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
     if st.show_help {
         help(ui.ctx(), st, canvas);
@@ -1233,7 +1280,7 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         match view {
             panels::SideView::History => panels::history(ui, ed, st),
             panels::SideView::Comments => panels::comments(ui, ed, st),
-            panels::SideView::Agent => panels::agent(ui, st),
+            panels::SideView::Agent => panels::agent(ui, ed, st),
         }
         return;
     }
@@ -1684,6 +1731,164 @@ fn toast(ctx: &egui::Context, text: &str, error: bool) {
                     ui.label(RichText::new(text).color(ink));
                 });
         });
+}
+
+/// How long the "Agent finished" toast stays on the canvas.
+const RUN_TOAST_SECS: f32 = 8.0;
+/// Gap between the toast and the canvas bottom, clear of the toolbar.
+const RUN_TOAST_LIFT: f32 = 72.0;
+/// Corner radius of the review outlines (screen px).
+const REVIEW_RADIUS: f32 = 2.0;
+const REVIEW_STROKE: f32 = 2.0;
+const REVIEW_DASH: f32 = 6.0;
+
+/// While a run is under review: green/yellow outlines on added/changed nodes, a red dashed ghost
+/// where removed nodes were, and a count tag over each frame with changes (active page only).
+fn review_overlay(ctx: &egui::Context, ed: &Editor, st: &UiState, canvas: egui::Rect) {
+    let Some(rd) = &st.review_diff else {
+        return;
+    };
+    let id = ed.active_page_id();
+    let Some((i, page)) = rd.pages.iter().enumerate().find(|(_, p)| p.page_id == id) else {
+        return;
+    };
+    let panels::PageReview::Diff(diff) = &page.review else {
+        return;
+    };
+    let snap = rd.snaps.get(i).and_then(Option::as_ref);
+    let to_screen = |r: &crate::geom::Rect| {
+        let s = ed.camera.world_rect_to_screen(r);
+        egui::Rect::from_min_size(
+            canvas.min + egui::vec2(s.x as f32, s.y as f32),
+            egui::vec2(s.w as f32, s.h as f32),
+        )
+    };
+    egui::Area::new("review-overlay".into())
+        .order(egui::Order::Foreground)
+        .fixed_pos(canvas.min)
+        .interactable(false)
+        .show(ctx, |ui| {
+            let p = theme::pal(ui);
+            let painter = ui.painter().with_clip_rect(canvas);
+            for g in &diff.groups {
+                for n in &g.nodes {
+                    let (rect, color, ghost) = match n.status {
+                        "added" => (n.id_b.and_then(|b| ed.doc.world_rect(b)), p.success, false),
+                        "removed" => (
+                            n.id_a.and_then(|a| snap?.world_rect(a)),
+                            p.danger,
+                            true,
+                        ),
+                        _ => (n.id_b.and_then(|b| ed.doc.world_rect(b)), p.warning, false),
+                    };
+                    let Some(rect) = rect else { continue };
+                    let r = to_screen(&rect);
+                    let stroke = egui::Stroke::new(REVIEW_STROKE, color);
+                    if ghost {
+                        painter.rect_filled(r, REVIEW_RADIUS, color.gamma_multiply(0.08));
+                        let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+                        painter.extend(egui::Shape::dashed_line(&pts, stroke, REVIEW_DASH, REVIEW_DASH * 0.6));
+                    } else {
+                        painter.rect_stroke(r, REVIEW_RADIUS, stroke, egui::StrokeKind::Outside);
+                    }
+                }
+                let Some(fr) = ed.doc.world_rect(g.frame).or_else(|| snap?.world_rect(g.frame)) else {
+                    continue;
+                };
+                let fr = to_screen(&fr);
+                let galley = painter.layout_no_wrap(
+                    panels::count(g.nodes.len(), "change"),
+                    theme::semibold(theme::SECONDARY),
+                    kit::ink_on(p.warning),
+                );
+                let size = galley.size() + egui::vec2(16.0, 6.0);
+                let tag = egui::Rect::from_min_size(
+                    egui::pos2(fr.right() - size.x, fr.top() - size.y - 6.0),
+                    size,
+                );
+                painter.rect_filled(tag, 255, p.warning);
+                painter.galley(tag.min + egui::vec2(8.0, 3.0), galley, p.warning);
+            }
+        });
+}
+
+/// Bottom-centre toast when an agent run ends with changes: Review, Revert, auto-hides.
+fn run_toast(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
+    let Some((id, changes, at)) = st.run_toast.clone() else {
+        return;
+    };
+    if at.elapsed().as_secs_f32() > RUN_TOAST_SECS {
+        st.run_toast = None;
+        return;
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    let mut act = None;
+    egui::Area::new("run-toast".into())
+        .order(egui::Order::Foreground)
+        .pivot(Align2::CENTER_BOTTOM)
+        .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - RUN_TOAST_LIFT))
+        .show(ctx, |ui| {
+            ui.multiply_opacity(motion::appear(
+                ctx,
+                "run-toast-appear",
+                motion::MEDIUM,
+                motion::ease_out_cubic,
+            ));
+            let p = theme::pal(ui);
+            egui::Frame::popup(ui.style())
+                .fill(p.popover)
+                .stroke(egui::Stroke::new(1.0, p.hover))
+                .corner_radius(16.0)
+                .inner_margin(egui::Margin::symmetric(16, 12))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (r, _) =
+                            ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                        theme::paint_icon(ui.painter(), r, Icon::Pen, p.secondary);
+                        ui.label(
+                            RichText::new(format!(
+                                "Agent finished · {}",
+                                panels::count(changes, "change")
+                            ))
+                            .font(theme::semibold(theme::BODY)),
+                        );
+                        ui.add_space(8.0);
+                        if kit::button(ui, kit::ButtonKind::Primary, None, "Review").clicked() {
+                            act = Some(false);
+                        }
+                        if kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Restore), "Revert")
+                            .clicked()
+                        {
+                            act = Some(true);
+                        }
+                    });
+                });
+        });
+    egui::Area::new("run-toast-note".into())
+        .order(egui::Order::Foreground)
+        .fixed_pos(canvas.min + egui::vec2(24.0, 24.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            let p = theme::pal(ui);
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                theme::paint_icon(ui.painter(), r, Icon::Restore, p.secondary);
+                ui.label(
+                    RichText::new("Snapshot saved")
+                        .size(theme::SECONDARY)
+                        .color(p.secondary),
+                );
+            });
+        });
+    let Some(revert) = act else { return };
+    st.run_toast = None;
+    st.run_banner = None;
+    st.side_extra = Some(panels::SideView::Agent);
+    if revert {
+        st.pending_run_revert = Some(id);
+    } else {
+        st.review_run = Some(id);
+    }
 }
 
 fn status(ctx: &egui::Context, ed: &Editor, canvas: egui::Rect) {

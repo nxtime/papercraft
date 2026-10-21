@@ -158,6 +158,30 @@ impl Editor {
         at
     }
 
+    /// Re-create a deleted page with its original identity and name.
+    pub(crate) fn add_page_with_id(&mut self, id: &str, snap: &Document) -> usize {
+        let at = self.pages.len();
+        self.pages.push(PageSlot {
+            id: id.to_string(),
+            name: snap.name.clone(),
+            stash: Some(Box::new(PageStash {
+                doc: Document {
+                    name: snap.name.clone(),
+                    next_id: snap.next_id,
+                    ..Default::default()
+                },
+                history: History::default(),
+                camera: Camera::default(),
+                selection: Vec::new(),
+                needs_fit: true,
+            })),
+            saved_gen: u64::MAX,
+        });
+        self.meta_dirty = true;
+        self.revision += 1;
+        at
+    }
+
     fn insert_empty_page(&mut self, at: usize, name: Option<&str>) {
         // A new page joins the group of the page that is active.
         let group = self.page_group(self.active_page_id()).map(str::to_string);
@@ -269,9 +293,16 @@ impl Editor {
         Some(removed.id)
     }
 
-    /// Replaces the active page's content with a saved snapshot, as one undoable change.
+    /// Replaces the active page's content and design system with a saved snapshot, as one undoable
+    /// change. The design system goes first so the snapshot's node fills win over any linked colors.
     pub fn restore_snapshot(&mut self, snap: &crate::model::Document) {
         self.edit("Restore version", |tx| {
+            tx.set_design_system(
+                &snap.variables,
+                &snap.modes,
+                &snap.tokens,
+                snap.mode.as_deref(),
+            );
             for root in tx.doc().root.clone() {
                 tx.remove(root);
             }
