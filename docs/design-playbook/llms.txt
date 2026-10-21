@@ -1,0 +1,42 @@
+# design-playbook
+
+> Design reference for building accessible, non-generic user interfaces. About 150 rules with stable ids (INT, PSY, VIS, MOT, A11Y, FBK, SYS, BAD), each traced to a source; WCAG 2.2 AA oriented. Web and native egui. Search with scripts/search.py or follow the links below. Rules without a cited source are general knowledge defaults.
+
+Rule id prefixes: INT interaction intent, PSY perception and timing, VIS visual design, MOT motion, A11Y accessibility, FBK feedback states forms, SYS design systems tokens, BAD anti-patterns, CSS CSS craft, PAT component patterns.
+
+## Principles
+- [Interaction and intent](principles/01-interaction-intent.md): wait, infer, act-and-undo, ask; undo over confirm; release-to-commit; menu aim
+- [Perception and timing](principles/02-perception-and-psychology.md): response-time limits, Fitts, Hick, Gestalt, heuristics
+- [Visual design](principles/03-visual-design.md): hierarchy, spacing, type, color roles, depth, radii, dark mode
+- [Motion](principles/04-motion.md): easing, durations, interruptibility, reduced motion, compositor-only properties
+- [Accessibility](principles/05-accessibility.md): WCAG 2.2 AA rules, keyboard and focus, ARIA, accessible design systems
+- [Feedback, states, forms](principles/06-feedback-states-forms.md): loading, empty, errors, optimistic UI, forms
+- [Design systems and tokens](principles/07-design-systems-tokens.md): token layers, DTCG format, component contract, governance
+- [Anti-patterns](principles/08-anti-patterns.md): hard failures, soft failures, generic AI design tells
+- [CSS craft](principles/09-css-craft.md): layered shadows, transitions, CSS vs JS animation, springs, reset, defensive CSS, anchor positioning
+- [Component patterns](principles/10-component-patterns.md): tooltips, toggletips, notifications, toggle buttons, optimistic UI numbers, touch target sizes
+
+## Platforms
+- [Web](platforms/web.md): baseline CSS, native elements, dialog and focus, forms, motion recipes
+- [Native egui](platforms/native-egui.md): AccessKit, focus ring, target size, motion scale, state gallery
+
+## Checklists and templates
+- [Design review](checklists/design-review.md)
+- [Accessibility audit](checklists/a11y-audit.md)
+- [Pre-ship gate](checklists/pre-ship.md)
+- [Screen brief](templates/screen-brief.md)
+- [Component spec](templates/component-spec.md)
+- [Base tokens](templates/tokens.base.json): space, radius, size, motion, elevation
+- [Light tokens](templates/tokens.light.json): semantic colors with enforced contrast pairs
+- [Dark tokens](templates/tokens.dark.json)
+
+## Sources
+- [Source registry and research protocol](sources/SOURCES.md)
+- [Video notes](sources/videos.md)
+- [Reading list: where design knowledge lives](sources/reading-list.md)
+
+## Optional
+- [Unverified claims](sources/UNVERIFIED.md)
+- [Agent guide](AGENTS.md)
+- [Search tool](scripts/search.py)
+- [Contrast tool](scripts/contrast.py)
