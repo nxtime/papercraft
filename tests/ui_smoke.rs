@@ -156,3 +156,21 @@ fn present_click_follows_prototype_link() {
     run(&ctx, &mut ed, &mut st, vec![btn_ev(false)]);
     assert_eq!(st.present_index, 1, "click on linked layer opens its frame");
 }
+
+#[test]
+fn interface_scale_changes_the_point_size_and_still_draws() {
+    let ctx = egui::Context::default();
+    ui::setup_style(&ctx);
+    let mut ed = Editor::default();
+    let mut st = UiState::default();
+    frame(&ctx, |ui| {
+        ui::draw(ui, &mut ed, &mut st);
+    });
+    let before = ctx.pixels_per_point();
+    theme::apply_ui_scale(&ctx, 1.25, false);
+    frame(&ctx, |ui| {
+        ui::draw(ui, &mut ed, &mut st);
+    });
+    assert!((ctx.pixels_per_point() / before - 1.25).abs() < 1e-3);
+    theme::apply_ui_scale(&ctx, 1.0, false);
+}
