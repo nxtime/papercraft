@@ -7,7 +7,7 @@ description: Drive the PaperCraft design app (native infinite-canvas design tool
 
 PaperCraft is a native Rust design app. You edit the project that is open in the running app: every tool call is one undo step and the window repaints live. Same tools over MCP (`http://127.0.0.1:29980/mcp` or the `papercraft-mcp` stdio bridge) and over the shell (`papercraft-cli`). Look and taste live in the `papercraft-design` skill; this one is the mechanics.
 
-References: [tools.md](references/tools.md) (every tool and argument), [html-subset.md](references/html-subset.md) (what `write_html` accepts), [recipes.md](references/recipes.md) (mobile flow, landing page, dashboard, design-system page).
+References: [compact-workflow.md](references/compact-workflow.md) (pages and groups, compressing, design-code sync, few tokens, shared work), [tools.md](references/tools.md) (every tool and argument), [html-subset.md](references/html-subset.md) (what `write_html` accepts), [recipes.md](references/recipes.md) (mobile flow, landing page, dashboard, design-system page).
 
 ## 1. Connect and orient
 
@@ -24,9 +24,9 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
 ## 2. The loop: build, look, lint, fix
 
 1. **Tokens first.** `set_variables` once (roles: `bg`, `surface`, `border`, `text`, `text-muted`, `accent`, `on-accent`, `danger`). Add a second mode for dark or light. No hex in the design afterwards.
-2. **Components first.** Anything that appears twice (button, field, chip, row, tab bar) is built once as an artboard, `create_component`, then placed with `create_instance` or `<x-paper-instance component="Name" component-id="ID"/>`.
+2. **Components first.** Anything that appears twice (button, field, chip, row, tab bar) is built once as an artboard, `create_component`, then placed with `create_instance`.
 3. **Build in small steps.** `create_artboard`, then one `write_html` per visual group (header, card, row) so the user sees progress. Name every layer with `layer-name`.
-4. **Look.** `get_screenshot` of the artboard after each group or two (pass `out` or `-o`/`--out FILE` in `papercraft-cli` to choose the output path). Scale 2 to read small text. Read it as a designer: hierarchy, alignment, spacing rhythm, clipping, wrapping.
+4. **Look.** `get_screenshot` of the artboard after each group or two. Scale 2 to read small text. Read it as a designer: hierarchy, alignment, spacing rhythm, clipping, wrapping.
 5. **Lint.** `lint_design` on the artboard. Fix every error and warning; consider the `info` items. Run it again until errors and warnings are zero.
 6. **Fix with the smallest edit.** `update_styles` and `set_text_content` on the existing nodes, not a rewrite. Rewrite a group with `write_html` mode `replace` only when its structure is wrong.
 7. **Finish.** `finish_working_on_nodes` (saves). Tell the user what you made in a sentence or two, with artboard names, not ids.
@@ -67,7 +67,7 @@ For a screen with dozens of parts, drive the CLI from a short Python helper (`ca
 ```
 
 Artboards: mobile 390×844, tablet 768×1024, desktop 1440×900, large desktop 2560×1440 (a 1440p display; ask which the user uses and design that first). A narrow window (1280×800) is its own artboard: collapse the sidebar to an icon rail, make secondary actions icon-only with a tooltip, keep one labelled primary action.
-Dot-grid canvas (no pattern fill exists): one `<svg>` with a single path of tiny round-capped dashes, absolute at 0,0 inside the canvas frame: `<svg style="position:absolute;left:0px;top:0px" width="W" height="H" viewBox="0 0 W H"><path d="M16 16h0.01M48 16h0.01..." stroke="var(--surface-2)" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>`. One vector layer, about 3,000 dots at a 32px step. Its colour is frozen at write time. Create with `height:"fit-content"` when the content decides the height. Replace margin with `gap` and `padding`. `min-width`, `max-width`, `min-height`, `max-height`, `align-self` (`start`, `center`, `end`, `stretch`), per-side borders (`border-top`, `border-right`, `border-bottom`, `border-left`), and `text-decoration-color` / `wavy` (`text-decoration: underline wavy var(--warning)`) are also supported.
+Dot-grid canvas (no pattern fill exists): one `<svg>` with a single path of tiny round-capped dashes, absolute at 0,0 inside the canvas frame: `<svg style="position:absolute;left:0px;top:0px" width="W" height="H" viewBox="0 0 W H"><path d="M16 16h0.01M48 16h0.01..." stroke="var(--surface-2)" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>`. One vector layer, about 3,000 dots at a 32px step. Its colour is frozen at write time. Create with `height:"fit-content"` when the content decides the height. Replace margin with `gap` and `padding`.
 
 Full flows: [recipes.md](references/recipes.md).
 
@@ -77,44 +77,33 @@ Full flows: [recipes.md](references/recipes.md).
 |---|---|
 | Know the project, pages, artboards | `get_basic_info`, `get_tree_summary`, `get_children` |
 | Know what is selected | `get_selection` |
-| Inspect one node or export code | `get_node_info`, `get_computed_styles`, `get_jsx` (`inline` \| `tailwind` \| `react` \| `angular` \| `html` \| `egui`) |
-| Extract AI design-to-code spec | `get_design_spec` (`nodeId`, `target`: `react` \| `tailwind` \| `angular` \| `html` \| `egui`) |
-| Verify generated code against design | `verify_code` (`nodeId`, `target`, `code`) |
-| Compare two frames or subtrees | `diff_frames` (`beforeId`, `afterId`) |
+| Inspect one node | `get_node_info`, `get_computed_styles`, `get_jsx` |
 | Find nodes by text or style | `find_nodes` |
-| See it | `get_screenshot` (`nodeId`, `scale` 1 or 2, `out` / `-o\|--out FILE`) |
+| See it | `get_screenshot` (`nodeId`, `scale` 1 or 2) |
 | New screen | `create_artboard` (`width` and `height` required) |
 | Add content | `write_html` (`insert-children` or `replace`) |
 | Change styles or text | `update_styles`, `set_text_content`, `rename_nodes` |
 | Whiteboard shapes, sticky notes, arrows | `create_shape` |
-| Copy, move, delete (including across pages) | `duplicate_nodes` (`toPageId`), `move_nodes` (`toPageId`), `<x-paper-clone node-id="<page>:<id>"/>`, `delete_nodes` |
-| Tokens | `get_variables` (`format`: `css` \| `json` \| `tailwind`), `set_variables` (`mode`), `set_tokens`, `set_variable_mode` |
-| Reuse & components | `create_component`, `create_instance`, `swap_instance`, `detach_instance`, `import_components`, `get_components`, `<x-paper-instance component="Name" component-id="ID"/>` |
+| Copy, move, delete | `duplicate_nodes`, `move_nodes`, `delete_nodes` |
+| Tokens | `get_variables` (`format` css or json), `set_variables` (`mode`), `set_variable_mode` |
+| Reuse | `create_component`, `create_instance`, `get_components`, `<x-paper-instance>` |
 | Icons | `search_icons`, `<x-paper-icon name="set:name">`; CLI: `papercraft-cli icons add\|list\|search` |
-| Check & auto-fix quality | `lint_design` (`fix: true` to auto-fix grid/scale/variables/targets) |
+| Check quality | `lint_design` |
 | Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf` |
 | Point at things for the user | `select_nodes` (`zoom: true`) |
 | Take back | `undo`, `redo` |
 | Save | `finish_working_on_nodes` |
 
-## Design-to-Code Handoff & Enforcement (React, Angular, HTML/CSS, Rust egui)
-
-When implementing a PaperCraft design in production code (React/TSX, Tailwind JSX, Angular standalone components, HTML + CSS, or Rust `egui`), follow this mandatory three-step protocol:
-
-1. **Never implement from a screenshot alone.** Always call `get_design_spec` (`nodeId`, `target: "react" | "tailwind" | "angular" | "html" | "egui"`) to extract the structured layout tree, exact auto-layout flow/sizing (`fixed`, `hug`, `fill`), design tokens (`--var`), component instances, and reference code.
-2. **Write the target code** following the spec's layout flow (Flexbox/Grid for web; `egui::Frame` + `ui.horizontal`/`ui.vertical` + `tokens` module for Rust `egui`), binding all color variables instead of hardcoding hex values, and never using `position: absolute` on flow children.
-3. **Enforce with `verify_code`**: Pass the written code to `verify_code({nodeId, target, code})`. Fix any reported `missing-text`, `hardcoded-color`, `forbidden-absolute`, `missing-layout`, `missing-component`, or `spacing-drift` violations until `passed: true` (`score: 100`).
-
 ## 6. Known limits (design around them)
 
 * **Font is Inter only**, regular and bold plus italic. No other families, no weights between. Build hierarchy from size, weight, color and space.
-* **Color variables (`set_variables`) apply to fills and text color**; strokes and gradients keep fixed colors. Non-color tokens (`set_tokens`) provide shared spacing, radius, and shadow values expanded on write; `lint_design` (`fix: true`) enforces scale and 4px grid discipline.
-* **No CSS margin, grid or tables in `write_html`; no CSS filters or transforms** (reported under `ignoredStyles`). Replace margin with `gap` and `padding`.
+* **Variables are colors only**, for fills and text color. Strokes and gradients keep fixed colors. Spacing, radius and type sizes are plain numbers: keep them on the scale by discipline and `lint_design`.
+* **No margin, grid or tables; no shadows, filters or transforms** (reported under `ignoredStyles`). Fake elevation with a border or a lighter surface.
 * **No rotation.** Nodes are axis-aligned.
-* **Components and their instances live on one page** (use `import_components` to copy main components from anywhere on another page, including inside artboards, then instantiate with `<x-paper-instance component="Name"/>` or `component-id="ID"`). Variants are modeled as separate components (`Button / Primary`, `Button / Secondary`) and can be swapped in place with `swap_instance` (preserving overrides) or unlinked with `detach_instance`.
-* **Supported imports, diffs, and code handoff**: `.fig` file import is supported, `diff_frames` compares two frames/subtrees at the property level, `get_jsx` exports `inline`, `tailwind`, `react`, `angular`, `html`, or `egui`, and `get_design_spec` + `verify_code` provide full AI design-to-code handoff and enforcement.
+* **Components and their instances live on one page.** Put shared components on the page where they are used, or duplicate the component per page.
+* **No variants or properties**: one component per variant (`Button / Primary`, `Button / Secondary`). No swap or detach tool.
 * **Remote images are not fetched.** Use a local path or `data:` URI.
-* **One project open at a time**; copying and moving layers between pages is supported via `duplicate_nodes` / `move_nodes` (`toPageId`) and cross-page `<x-paper-clone node-id="<page>:<id>"/>`.
+* **One project open at a time**; moving layers between pages is not supported.
 * **Text boxes with fixed widths can wrap earlier than in a browser.** Check headlines in the screenshot and widen.
 * **Instances are skipped by lint**; lint the main component.
 * **Icons inside an instance cannot be swapped**, only text can (`swap_instance` swaps to another main). Need the same button with a different glyph? Generate one component per icon in a loop (`Icon button / undo-2`, `Icon button / redo-2`...), not one generic button.
@@ -131,10 +120,10 @@ When implementing a PaperCraft design in production code (React/TSX, Tailwind JS
 |---|---|
 | `papercraft-cli` exits 1, "isn't running" | The app is closed, no project is open, or the port differs. Start it and open a project; check `PAPERCRAFT_MCP_PORT`. |
 | Call fails with an unknown node id | The id is from another page or was deleted. Re-read with `get_children`; pass `pageId`. |
-| `write_html` reports `ignoredStyles` | You used a CSS property that has no equivalent (`margin`, `transform`...). Replace it, see [html-subset.md](references/html-subset.md). |
+| `write_html` reports `ignoredStyles` | You used a CSS property that has no equivalent (`margin`, `box-shadow`, `transform`...). Replace it, see [html-subset.md](references/html-subset.md). |
 | Content is cut off | The artboard height is fixed. `update_styles` with `height: "fit-content"` or a larger number. |
 | A color did not change with the theme | It was written as hex, or it is a stroke or gradient. Use `var(--name)` on fills and text; strokes need `update_styles` after a mode switch. |
-| `create_instance` fails | The component is on another page. Instances must be on the component's page (or run `import_components` first). |
+| `create_instance` fails | The component is on another page. Instances must be on the component's page. |
 | Icon does not appear | The set is not installed: `papercraft-cli icons add phosphor`, then `papercraft-cli icons search <words>` for the exact `set:name`. |
 | Layer panel is a pile of `Frame` | You skipped `layer-name`. Fix with `rename_nodes` (batch) before finishing. |
 | Text looks tiny in the screenshot | Screenshots default to scale 1. Use `scale: 2`. |

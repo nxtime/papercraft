@@ -32,6 +32,8 @@ pub enum Command {
     Library(String),
     ToggleLibrary,
     Theme(theme::Choice),
+    /// Set the interface scale (native app only).
+    Scale(f32),
     /// Open the settings dialog.
     Settings,
     /// Back to the projects home screen.
@@ -175,6 +177,14 @@ pub fn entries(ed: &Editor, st: &UiState) -> Vec<Entry> {
             cmd: Command::Theme(c),
         });
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    for scale in theme::UI_SCALES {
+        out.push(Entry {
+            label: format!("Interface scale: {:.0}%", scale * 100.0),
+            detail: "Appearance".into(),
+            cmd: Command::Scale(scale),
+        });
+    }
     for (i, p) in ed.pages.iter().enumerate() {
         out.push(Entry {
             label: format!("Go to page: {}", p.name),
@@ -254,7 +264,7 @@ pub fn run(ed: &mut Editor, st: &mut UiState, cmd: Command) {
         }
         Command::Settings => st.settings.open = true,
         // Needs the egui context; handled where the palette is drawn.
-        Command::Theme(_) => {}
+        Command::Theme(_) | Command::Scale(_) => {}
     }
 }
 
@@ -412,6 +422,8 @@ pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui
         if let Command::Theme(t) = c {
             theme::apply_choice(ctx, t);
             t.save();
+        } else if let Command::Scale(v) = c {
+            theme::apply_ui_scale(ctx, v, true);
         } else {
             run(ed, st, c);
         }
