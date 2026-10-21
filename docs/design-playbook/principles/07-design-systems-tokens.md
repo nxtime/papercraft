@@ -41,7 +41,7 @@ model modes as separate token files or a documented `$extensions` key.
 Encode checkable rules: every `text-*`/`bg-*` pair listed in
 `contrast.pairs` meets 4.5:1 (3:1 large), border/focus tokens meet 3:1,
 `target-min` is 44, `focus-ring-width` >= 2, `motion.reduce` exists. CI fails
-when a theme breaks an invariant (`scripts/contrast.py --tokens`). Child
+when a theme breaks an invariant (`playbook tokens`). Child
 themes may change hue, never the invariants (V06).
 
 ### SYS-06 Atomic structure is a thinking tool, not a folder rule

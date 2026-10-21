@@ -1,5 +1,5 @@
 {
-  "$description": "Semantic color tokens, light mode. Components use these names only (SYS-02). Pairs below are enforced by scripts/contrast.py.",
+  "$description": "Semantic color tokens, light mode. Components use these names only (SYS-02). Pairs below are enforced by playbook tokens.",
   "color": {
     "$type": "color",
     "surface": {

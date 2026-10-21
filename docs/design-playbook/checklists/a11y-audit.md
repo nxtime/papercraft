@@ -5,7 +5,7 @@ passes matter most. Record evidence (screenshot, command output) per failure.
 
 ## A. Automated floor (5 minutes)
 - [ ] axe-core or Lighthouse on each key view in light and dark
-- [ ] `python3 scripts/contrast.py --pairs <file>` on token pairs
+- [ ] `playbook tokens <file>` on token pairs
 - [ ] HTML validation for duplicate ids and invalid ARIA
 Automated pass is not a pass.
 

@@ -16,7 +16,7 @@ reader passes (checklists/a11y-audit.md).
 ### A11Y-01 Text contrast >= 4.5:1; large text >= 3:1 (SC 1.4.3, AA)
 Large = 18 pt (24 px) or 14 pt bold (about 18.5 px). No rounding: 4.499 fails.
 Hover and focus text states count. Brand guidelines are not an exemption;
-logotypes and inactive controls are. Compute with `scripts/contrast.py`.
+logotypes and inactive controls are. Compute with `playbook contrast`.
 
 ### A11Y-02 Non-text contrast >= 3:1 (SC 1.4.11, AA)
 Input borders, icon-only controls, focus indicators, chart marks against their

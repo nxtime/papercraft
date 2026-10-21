@@ -81,14 +81,14 @@ Kole Jain "Every UI/UX Concept Explained" (EcbgbKtOELY), Hatch Conference
 "Design Systems in the Age of Agents" (JeJhPtsbIGA).
 
 ## Research protocol when the playbook has no answer
-1. `python3 scripts/search.py "<question>"`; follow rule ids to sources.
+1. `playbook search "<question>"`; follow rule ids to sources.
 2. Prefer P sources: W3C WAI, MDN, platform HIG/Material, NN/g. Fetch the page,
    do not rely on memory for thresholds.
 3. For a pattern, read the WAI-ARIA APG pattern and Inclusive Components.
 4. For taste and craft, study real products (Mobbin, Linear, Raycast, Vercel,
    Stripe) and note the mechanism, not the look.
 5. Add the finding to the right principle with a new rule id, add the source row
-   here, and run `python3 -I -m unittest discover -s tests`.
+   here, and run `go test ./...`.
 6. If a claim cannot be fetched, put it in `UNVERIFIED.md`, not in a rule.
 
 ## Other places to look (not yet read)
