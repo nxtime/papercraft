@@ -125,11 +125,14 @@ pub fn chip(ui: &mut Ui, label: &str, active: bool) -> Response {
 }
 
 /// A chip with its own ink (for example `p.success` for Accepted); None is the idle grey.
+/// Height of [`chip`], so rows that hold one can size around it.
+pub const CHIP_H: f32 = 22.0;
+
 pub fn chip_ink(ui: &mut Ui, label: &str, ink: Option<Color32>) -> Response {
     let p = theme::pal(ui);
     let font = theme::semibold(theme::SECONDARY);
     let w = galley_width(ui, label, font.clone()) + 20.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, CHIP_H), Sense::click());
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("chip"), &resp);
     ui.painter().rect_filled(
         rect,

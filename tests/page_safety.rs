@@ -285,18 +285,15 @@ fn group_menu_moves_pages_and_removal_keeps_them() {
 fn design_removals_require_confirmation_and_apply_to_all_pages() {
     for kind in ["mode", "variable", "token"] {
         let mut h = Harness::new();
-        for page in 0..h.ed.pages.len() {
-            h.ed.with_page(page, |ed| {
-                ed.edit("Setup", |tx| {
-                    tx.set_variable_in_mode(
-                        "Mocha",
-                        "accent",
-                        papercraft::model::Color::rgb(1, 2, 3),
-                    );
-                    tx.set_token("space-1", "4px");
-                })
-            });
-        }
+        // Two modes (a collection keeps at least one), a variable and a token, project-wide.
+        h.ed.edit_design("Setup", |ds| {
+            let none = Default::default();
+            let accent = papercraft::model::Color::rgb(1, 2, 3);
+            papercraft::editor::design::set_color(ds, &none, "accent", Some("Mocha"), accent)?;
+            papercraft::editor::design::set_color(ds, &none, "accent", Some("Latte"), accent)?;
+            papercraft::editor::design::set_token(ds, "space-1", "4px")
+        })
+        .unwrap();
         let action = || match kind {
             "mode" => ui::confirm::Removal::Mode("Mocha".into()),
             "variable" => ui::confirm::Removal::Variable("accent".into()),

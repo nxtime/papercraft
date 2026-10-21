@@ -736,13 +736,18 @@ impl Headless {
     pub fn new() -> Result<Headless, String> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            ..Default::default()
-        }))
-        .map_err(|e| format!("no GPU adapter available: {e}"))?;
+        // No hardware adapter (a server, CI): retry with the software one.
+        let request = |fallback| {
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                force_fallback_adapter: fallback,
+                compatible_surface: None,
+                ..Default::default()
+            }))
+        };
+        let adapter = request(false)
+            .or_else(|_| request(true))
+            .map_err(|e| format!("no GPU adapter available: {e}"))?;
         let adapter_info = adapter.get_info();
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("papercraft headless"),

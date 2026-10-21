@@ -15,6 +15,7 @@
 //! | a value that is not a hex color | a token (PaperCraft colors are hex only) |
 
 use crate::model::{Color, Document};
+use crate::variables::{DesignSystem, Kind, PageModes};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -298,6 +299,50 @@ pub fn tokens_css(doc: &Document) -> String {
     out
 }
 
+/// The design system as a `tokens.css` file for a page with `modes`: colors, then numbers (px),
+/// strings (verbatim) and booleans, each run headed by a `/* group */` comment per variable group.
+/// The comments are ignored on import, so it still round-trips.
+pub fn tokens_css_system(ds: &DesignSystem, modes: &PageModes) -> String {
+    let cache = ds.cache_for(modes);
+    let mut vars: Vec<&crate::variables::Variable> = ds
+        .collections
+        .iter()
+        .flat_map(|c| &c.variables)
+        .collect();
+    vars.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut out = String::from(":root {\n");
+    for colors in [true, false] {
+        let mut group: Option<&str> = None;
+        for v in vars.iter().filter(|v| (v.kind == Kind::Color) == colors) {
+            let css = crate::variables::css_name(v);
+            let value = match cache.variables.get(&css) {
+                Some(c) => c.to_hex(),
+                None => match cache.tokens.get(&css) {
+                    Some(t) => clean_value(t),
+                    None => continue,
+                },
+            };
+            let g = crate::variables::group_of(&v.name);
+            if group != Some(g) {
+                if !g.is_empty() {
+                    out.push_str(&format!("  /* {} */\n", g.replace("*/", "")));
+                }
+                group = Some(g);
+            }
+            out.push_str(&format!("  --{css}: {value};\n"));
+        }
+    }
+    out.push_str("}\n");
+    for (mode, vars) in &cache.modes {
+        out.push_str(&format!("[data-theme=\"{}\"] {{\n", mode_name(mode)));
+        for (name, color) in vars {
+            out.push_str(&format!("  --{name}: {};\n", color.to_hex()));
+        }
+        out.push_str("}\n");
+    }
+    out
+}
+
 /// A CSS-safe custom-property name: letters, digits, `-` and `_`.
 pub fn sanitize_name(name: &str) -> String {
     let name = name.trim().trim_start_matches("--");
@@ -535,13 +580,36 @@ pub fn export_package_with(
     doc: &Document,
     meta: &Meta,
 ) -> Result<Vec<std::path::PathBuf>, String> {
+    write_package(dir, doc, meta, tokens_css(doc))
+}
+
+/// [`export_package_with`] with the tokens written from the project design system (groups,
+/// numbers, strings, booleans) as the page `modes` see it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn export_package_system(
+    dir: &Path,
+    doc: &Document,
+    meta: &Meta,
+    ds: &DesignSystem,
+    modes: &PageModes,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    write_package(dir, doc, meta, tokens_css_system(ds, modes))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_package(
+    dir: &Path,
+    doc: &Document,
+    meta: &Meta,
+    tokens: String,
+) -> Result<Vec<std::path::PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let manifest = serde_json::to_string_pretty(&meta.manifest())
         .map_err(|e| format!("{MANIFEST_FILE}: {e}"))?;
     let mut written = Vec::new();
     for (name, body) in [
         (MANIFEST_FILE, manifest),
-        (TOKENS_FILE, tokens_css(doc)),
+        (TOKENS_FILE, tokens),
         (DESIGN_FILE, design_md(doc)),
     ] {
         let path = dir.join(name);

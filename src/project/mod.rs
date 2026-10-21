@@ -5,6 +5,7 @@
 //! ```text
 //! <root>/<Project name>/
 //!     project.json        manifest: id, name, timestamps, ordered page list
+//!     design.json         the project's design system (collections of variables)
 //!     pages/<page-id>.json one infinite canvas per page
 //!     assets/<hash>.<ext> images used by image fills
 //!     thumbnail.png       preview for the home screen (written by the app)
@@ -17,9 +18,11 @@ pub mod format;
 
 use crate::io::atomic;
 pub use format::{FormatError, Manifest, PageData, PageRef, new_id, now_ms};
+use crate::variables::{COLORS_COLLECTION, DesignSystem, PageModes};
 use std::path::{Path, PathBuf};
 
 pub const MANIFEST: &str = "project.json";
+pub const DESIGN: &str = "design.json";
 pub const PAGES_DIR: &str = "pages";
 pub const THUMBNAIL: &str = "thumbnail.png";
 pub const ASSETS_DIR: &str = "assets";
@@ -55,6 +58,40 @@ pub struct TrashEntry {
 pub struct Project {
     pub dir: PathBuf,
     pub manifest: Manifest,
+}
+
+/// The first page's variables, modes and tokens plus whatever only later pages have (pages
+/// can diverge: removals were page-only). The first page wins on a name conflict.
+fn union_doc(pages: &[PageData]) -> crate::model::Document {
+    let mut out = pages.first().map(|p| p.doc.clone()).unwrap_or_default();
+    for p in pages.iter().skip(1) {
+        for (k, c) in &p.doc.variables {
+            out.variables.entry(k.clone()).or_insert(*c);
+        }
+        for (mode, vars) in &p.doc.modes {
+            let m = out.modes.entry(mode.clone()).or_default();
+            for (k, c) in vars {
+                m.entry(k.clone()).or_insert(*c);
+            }
+        }
+        for (k, v) in &p.doc.tokens {
+            out.tokens.entry(k.clone()).or_insert(v.clone());
+        }
+    }
+    out
+}
+
+/// What [`Project::load_all`] read.
+#[derive(Debug, Clone)]
+pub struct Loaded {
+    pub design: DesignSystem,
+    pub pages: Vec<PageData>,
+    /// Active mode per collection, per page (same order as `pages`).
+    pub modes: Vec<PageModes>,
+    /// Pages whose file differs from what was loaded (cache rebuilt, keys assigned).
+    pub changed: Vec<usize>,
+    /// `design.json` did not exist: it was built from the first page.
+    pub design_new: bool,
 }
 
 /// File-system safe folder name for a project name.
@@ -231,6 +268,8 @@ impl Store {
         copy_dir(dir, &target)?;
         // A copy is its own project, not another editor of the shared one.
         crate::vfs::remove_file(target.join(crate::sync::SHARE_FILE)).ok();
+        // Nor a published library: its `library.json` still carries the source's library id.
+        crate::vfs::remove_file(target.join(crate::libraries::LIBRARY_FILE)).ok();
         let mut p = Project::open(&target)?;
         p.manifest.id = new_id();
         p.manifest.name = name;
@@ -357,34 +396,125 @@ impl Project {
         Ok(p)
     }
 
-    /// Load every page listed in the manifest. A page whose file is missing comes back empty
-    /// (e.g. after a crash between creating it and its first save).
+    /// Every page, with its cache rebuilt from the design system.
     pub fn load_pages(&self) -> Result<Vec<PageData>, FormatError> {
-        self.manifest
-            .pages
-            .iter()
-            .map(|r| match self.load_page(&r.id) {
-                Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(PageData {
+        Ok(self.load_all()?.pages)
+    }
+
+    pub fn design_path(&self) -> PathBuf {
+        self.dir.join(DESIGN)
+    }
+
+    /// `design.json`, or `None` when the project has none yet.
+    pub fn load_design(&self) -> Result<Option<DesignSystem>, FormatError> {
+        match crate::vfs::read_to_string(self.design_path()) {
+            Ok(s) => Ok(Some(serde_json::from_str(&s).map_err(FormatError::Json)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn save_design(&self, design: &DesignSystem) -> Result<(), FormatError> {
+        let s = serde_json::to_string_pretty(design).expect("design system serializes");
+        atomic::write(&self.design_path(), s.as_bytes())?;
+        Ok(())
+    }
+
+    /// Load the design system and every page listed in the manifest. A page whose file is
+    /// missing comes back empty (e.g. after a crash between creating it and its first save).
+    /// A project without `design.json` gets one built from the first page; pages get the
+    /// derived variable cache and every main component a key. Nothing is written here:
+    /// `Loaded::changed` and `Loaded::design_new` say what the next save must write.
+    pub fn load_all(&self) -> Result<Loaded, FormatError> {
+        let mut pages = Vec::new();
+        let mut modes = Vec::new();
+        for r in &self.manifest.pages {
+            let (mut p, m) = match crate::vfs::read_to_string(self.page_path(&r.id))
+                .map_err(FormatError::from)
+                .and_then(|s| format::page_from_json_modes(&s))
+            {
+                Ok(x) => x,
+                Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => (
+                    PageData {
                         id: r.id.clone(),
                         name: r.name.clone(),
-                        doc: crate::model::Document {
-                            name: r.name.clone(),
-                            ..Default::default()
-                        },
+                        doc: crate::model::Document::default(),
                         camera: None,
-                    })
+                    },
+                    PageModes::new(),
+                ),
+                Err(e) => return Err(e),
+            };
+            // The manifest owns page names (renames touch only the manifest).
+            p.name = r.name.clone();
+            p.doc.name = r.name.clone();
+            pages.push(p);
+            modes.push(m);
+        }
+        let stored = match self.load_design() {
+            Ok(d) => d,
+            // A damaged design.json must not lock the project: keep the bad file for recovery
+            // and rebuild from the page caches (which hold every value). Next save rewrites it.
+            Err(FormatError::Json(e)) => {
+                let backup = self.dir.join(format!("{DESIGN}.broken-{}", now_ms()));
+                log::warn!("{DESIGN} is malformed ({e}); saved as {backup:?}, rebuilding");
+                crate::vfs::rename(self.design_path(), backup)?;
+                None
+            }
+            Err(e) => return Err(e),
+        };
+        let design_new = stored.is_none();
+        let design = stored.unwrap_or_else(|| {
+            crate::variables::migrate_from_document(&union_doc(&pages))
+        });
+        let mut changed = Vec::new();
+        for (i, (p, m)) in pages.iter_mut().zip(&mut modes).enumerate() {
+            // A page without per-collection modes keeps the mode its old `mode` field names.
+            if m.is_empty()
+                && let Some(name) = &p.doc.mode
+                && let Some(c) = design.collections.iter().find(|c| c.name == COLORS_COLLECTION)
+                && let Some(mode) = c.modes.iter().find(|x| &x.name == name)
+            {
+                m.insert(c.id.clone(), mode.id.clone());
+            }
+            let cache = design.cache_for(m);
+            let mut dirty = p.doc.variables != cache.variables
+                || p.doc.modes != cache.modes
+                || p.doc.mode != cache.mode
+                || p.doc.tokens != cache.tokens;
+            p.doc.variables = cache.variables;
+            p.doc.modes = cache.modes;
+            p.doc.mode = cache.mode;
+            p.doc.tokens = cache.tokens;
+            for n in p.doc.nodes.values_mut() {
+                if n.component && n.component_key.is_none() {
+                    // From the page and node ids, so every device agrees on the key.
+                    n.component_key = Some(format!("{}:{}", p.id, n.id.0));
+                    dirty = true;
                 }
-                other => other,
-            })
-            .collect()
+            }
+            if dirty {
+                changed.push(i);
+            }
+        }
+        Ok(Loaded {
+            design,
+            pages,
+            modes,
+            changed,
+            design_new,
+        })
     }
 
     pub fn save_page(&self, page: &PageData) -> Result<(), FormatError> {
+        self.save_page_modes(page, &PageModes::new())
+    }
+
+    pub fn save_page_modes(&self, page: &PageData, modes: &PageModes) -> Result<(), FormatError> {
         crate::vfs::create_dir_all(self.dir.join(PAGES_DIR))?;
         atomic::write(
             &self.page_path(&page.id),
-            format::page_to_json(page).as_bytes(),
+            format::page_to_json_modes(page, modes).as_bytes(),
         )?;
         Ok(())
     }
@@ -476,6 +606,44 @@ mod tests {
         assert_eq!(pages[0], page);
         assert!(pages[1].doc.nodes.is_empty());
         assert_eq!(pages[1].name, "Ghost");
+        crate::vfs::remove_dir_all(&s.root).ok();
+    }
+
+    #[test]
+    fn malformed_design_json_is_backed_up_and_rebuilt_from_pages() {
+        let s = temp_store();
+        let (p, mut page) = s.create("P").unwrap();
+        page.doc.variables.insert("bg".into(), crate::model::Color::rgb(1, 2, 3));
+        p.save_page(&page).unwrap();
+        crate::vfs::write(p.design_path(), "{ not json").unwrap();
+        let loaded = p.load_all().unwrap();
+        assert!(loaded.design_new, "rebuilt design is written by the next save");
+        assert!(loaded.design.find_by_css("bg").is_some());
+        let backups: Vec<_> = std::fs::read_dir(&p.dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("design.json.broken-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), "{ not json");
+        assert!(!p.design_path().exists());
+        crate::vfs::remove_dir_all(&s.root).ok();
+    }
+
+    #[test]
+    fn migrated_component_keys_are_stable_across_loads() {
+        let s = temp_store();
+        let (p, mut page) = s.create("P").unwrap();
+        let id = page.doc.alloc_id();
+        let mut n = crate::model::Node::new(id, crate::model::NodeKind::Frame { clip: false }, crate::geom::Rect::new(0., 0., 5., 5.));
+        n.component = true;
+        page.doc.nodes.insert(id, n);
+        page.doc.root.push(id);
+        p.save_page(&page).unwrap();
+        let key = |l: &Loaded| l.pages[0].doc.get(id).unwrap().component_key.clone();
+        let (a, b) = (p.load_all().unwrap(), p.load_all().unwrap());
+        assert_eq!(key(&a), key(&b));
+        assert_eq!(key(&a), Some(format!("{}:{}", page.id, id.0)));
         crate::vfs::remove_dir_all(&s.root).ok();
     }
 

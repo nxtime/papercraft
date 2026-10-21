@@ -506,10 +506,14 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "get_variables",
-            "Color variables of the page's project (name -> hex). Fills that follow a variable \
-             were written with `var(--name)`; set_variables moves all of them at once. \
-             `format` css returns a `:root { --name: #hex }` block (plus `[data-theme]` rules for modes), \
-             json a W3C DTCG design-tokens object, and tailwind a Tailwind v4 `@theme` block.",
+            "Variables of the page's project. Default JSON: `variables` (name -> hex), `tokens`, and \
+             `collections` (id, name, modes, defaultMode, variables with id, name, cssName, group, \
+             type color|number|string|boolean, values per mode name, aliases as {\"alias\": name}, \
+             description, hidden) plus `pageModes` (active mode per collection on this page). Fills \
+             that follow a variable were written with `var(--name)`; set_variables moves all of them \
+             at once. `format` css returns a `:root { --name: #hex }` block (plus `[data-theme]` rules \
+             for modes), json a W3C DTCG object (groups nest on `/`, aliases are {group.name}), and \
+             tailwind a Tailwind v4 `@theme` block.",
             json!({"pageId": page_id(),
                    "format": {"type": "string", "enum": ["css", "json", "tailwind"]}}),
             &[],
@@ -517,16 +521,40 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "set_variables",
-            "Define or change color variables (names like `surface`, `accent-text`), on every \
-             page. Use them as `var(--name)` in write_html / update_styles / create_artboard \
+            "Define or change variables (names like `surface`, `accent-text`, or grouped \
+             `color/brand/primary`), on every page. Plain {\"name\": \"#hex\"} defines a color. An \
+             entry may be an object {value, type, collection, mode, alias, description, hidden}: \
+             `type` color|number|string|boolean (numbers bind as px), `collection` a name or id \
+             (created if missing), `alias` the name of another variable of the same type. Use them as `var(--name)` in write_html / update_styles / create_artboard \
              colors (backgroundColor, background, color) instead of hex literals, so a theme \
              change is one call. Fills already following a changed variable are updated. \
              Variables apply to fills and text color; strokes and gradients keep fixed colors.",
             json!({"variables": {"type": "object", "propertyNames": {"type": "string"},
                 "additionalProperties": {"type": "string"},
-                "description": "{\"accent\": \"#cba6f7\", \"surface\": \"#313244\"}"},
-                   "mode": {"type": "string", "description": "Store the values for this mode (e.g. \"Light\", \"Dark\"); they apply when it is the active mode. The first mode you define becomes active."}}),
+"description": "{\"accent\": \"#cba6f7\"} or {\"space/md\": {\"value\": 16, \"type\": \"number\"}, \"accent-hover\": {\"alias\": \"accent\"}}"},
+                   "mode": {"type": "string", "description": "Store the values for this mode (e.g. \"Light\", \"Dark\"); they apply when it is the active mode. The first mode you define becomes active."},
+                   "collection": {"type": "string", "description": "Default collection (name or id) for entries that name none."},
+                   "type": {"type": "string", "enum": ["color", "number", "string", "boolean"], "description": "Default type for entries that name none."}}),
             &["variables"],
+            false,
+        ),
+        tool(
+            "create_collection",
+            "Create a variable collection (a set of variables with modes), e.g. `Brand` with \
+             modes [\"Light\", \"Dark\"]. Without `modes` it has one mode, `Default`. Then fill it with \
+             set_variables {collection}.",
+            json!({"name": {"type": "string"},
+                   "modes": {"type": "array", "items": {"type": "string"}}}),
+            &["name"],
+            false,
+        ),
+        tool(
+            "delete_variables",
+            "Delete variables by name. A variable another one aliases is refused (the error names \
+             the dependents) unless `force` is true, which gives the dependents its resolved value.",
+            json!({"names": {"type": "array", "items": {"type": "string"}},
+                   "force": {"type": "boolean"}}),
+            &["names"],
             false,
         ),
         tool(
@@ -575,10 +603,53 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "get_components",
-            "Main components on a page (id, name, size) with how many instances each has.",
+            "Main components of every page (or one with `pageId`): id, name, `componentKey` (stable), \
+             `pageId`, `pageName`, size, and `uses` (instances across all pages).",
             json!({"pageId": page_id()}),
             &[],
             true,
+        ),
+        tool(
+            "publish_library",
+            "Publish this project's variables (not hidden) and components (not named with a leading \
+             `_` or `.`) as a library other projects can enable. Writes library.json with the next \
+             version and returns what changed since the last publish.",
+            json!({"description": {"type": "string", "description": "What the library is for (kept from the last publish when omitted)."}}),
+            &[],
+            false,
+        ),
+        tool(
+            "list_libraries",
+            "Libraries other projects published (`available`, with `enabled`) and the ones this \
+             project uses (`enabled`: version, sourceVersion, sourceFound, updateAvailable).",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
+            "enable_library",
+            "Use a published library: its variables become read-only, bindable and aliasable, and \
+             its components can be placed with create_instance componentKey. Refused when a CSS \
+             name is already defined here.",
+            json!({"libraryId": {"type": "string", "description": "From list_libraries."}}),
+            &["libraryId"],
+            false,
+        ),
+        tool(
+            "update_library",
+            "Apply the library's newest publish to this project: variables and components are \
+             replaced and every instance of it re-synced, overrides kept. Returns the changes.",
+            json!({"libraryId": {"type": "string"}}),
+            &["libraryId"],
+            false,
+        ),
+        tool(
+            "disable_library",
+            "Stop using a library: bindings to its variables are detached (values kept), its \
+             instances become plain frames, its variables and components leave this project.",
+            json!({"libraryId": {"type": "string"}}),
+            &["libraryId"],
+            false,
         ),
         tool(
             "import_components",
@@ -597,7 +668,7 @@ pub fn definitions() -> Vec<Value> {
             "create_component",
             "Turn a frame or artboard into a main component. Build reusable parts (button, row, \
              chip, tab) once as components, then place them with create_instance or \
-             <x-paper-instance>. Components and instances live on one page.",
+             <x-paper-instance>. Instances may live on any page and follow the main.",
             json!({"nodeId": {"type": "string", "description": "The frame to convert."},
                    "name": {"type": "string", "description": "Optional new layer name."},
                    "pageId": page_id()}),
@@ -609,23 +680,39 @@ pub fn definitions() -> Vec<Value> {
             "Place an instance of a component. Edit text and styles on the instance's descendants \
              with set_text_content / update_styles (they become overrides); edits to the main \
              component flow to every instance. Returns the instance id and its text layers.",
-            json!({"componentId": {"type": "string"},
+            json!({"componentId": {"type": "string", "description": "A main on any page (\"pageId:num\")."},
+                   "componentKey": {"type": "string", "description": "Instead of componentId: the key from get_components."},
                    "parentId": {"type": "string", "description": "Parent frame; omit or \"root\" for the page."},
                    "index": {"type": "number", "description": "Position among the parent's children."},
                    "x": {"type": "number"}, "y": {"type": "number"},
                    "name": {"type": "string"},
                    "pageId": page_id()}),
-            &["componentId"],
+            &[],
             false,
         ),
         tool(
             "swap_instance",
-            "Swap an instance root to point at a different main component on the same page, \
+            "Swap an instance root to point at a different main component (any page), \
              preserving overrides on descendants matched by name and layer type.",
             json!({"nodeId": node_id("The instance root node to swap."),
                    "componentId": node_id("The new main component id."),
+                   "componentKey": {"type": "string", "description": "Instead of componentId: a key from get_components, including a library component."},
                    "pageId": page_id()}),
-            &["nodeId", "componentId"],
+            &["nodeId"],
+            false,
+        ),
+        tool(
+            "bind_variable",
+            "Bind a field of layers to a variable (or detach it). `field`: stroke, text-color, \
+             width, height, gap, padding, padding-top/right/bottom/left, radius, font-size, \
+             line-height, opacity, visible. `variable` is a name like color/brand/primary or its \
+             css name; null or omitted detaches (the current value stays). The value applies at \
+             once; on an instance the field becomes an override.",
+            json!({"nodeIds": ids("Layers to bind."),
+                   "field": {"type": "string"},
+                   "variable": {"type": ["string", "null"]},
+                   "pageId": page_id()}),
+            &["nodeIds", "field"],
             false,
         ),
         tool(
@@ -814,13 +901,15 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
         | "get_computed_styles" | "get_fill_image" | "find_nodes" | "get_font_family_info"
         | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
-        | "diff_frames" => false,
+        | "diff_frames" | "publish_library" | "list_libraries" => false,
         "select_nodes" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"
         | "create_file" | "finish_working_on_nodes" => false,
         "lint_design" => args["fix"] == true,
         "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html"
         | "create_shape" | "update_styles" | "set_text_content" | "rename_nodes"
         | "add_feedback" | "resolve_feedback" | "set_variables" | "set_tokens"
+        | "create_collection" | "delete_variables" | "bind_variable"
+        | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
         | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes"
         | "duplicate_nodes" | "move_nodes" | "undo" | "redo" => true,

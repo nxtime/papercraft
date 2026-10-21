@@ -14,6 +14,7 @@ pub enum UiEvent {
     ToggleUi,
     ToggleHelp,
     ToggleGrid,
+    OpenVariables,
 }
 
 impl Editor {

@@ -632,6 +632,18 @@ pub struct InstanceLink {
     /// Properties overridden on this node (not synced from the main component).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overrides: Vec<String>,
+    /// Where the main lives. `None` = same page as this instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
+}
+
+/// The document holding a main component, when it is not the instance's own page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Source {
+    /// Another page of the same project, by page id.
+    Page(String),
+    /// An enabled library, by library id.
+    Library(String),
 }
 
 #[cfg(test)]

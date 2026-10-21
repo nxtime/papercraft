@@ -5,6 +5,7 @@ use super::paint::{
 };
 use crate::geom::{Rect, V2};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
 use std::fmt;
 
 #[derive(
@@ -420,6 +421,14 @@ pub struct Node {
     /// Prototype link: clicking this layer in Present mode jumps to this frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<NodeId>,
+    /// Variable bindings by field name (`stroke`, `text-color`, `width`, `height`, `gap`,
+    /// `padding`, `padding-top`/`right`/`bottom`/`left`, `radius`, `font-size`, `line-height`,
+    /// `opacity`, `visible`) mapped to the variable's CSS name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, String>,
+    /// Stable key of a main component (set on `create_component`), used by instances on other pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_key: Option<String>,
 }
 
 /// A note attached to a layer: what to change, from the user to an agent or back.
@@ -522,6 +531,8 @@ impl Node {
             instance: None,
             comments: Vec::new(),
             link: None,
+            bindings: BTreeMap::new(),
+            component_key: None,
         }
     }
 
@@ -599,6 +610,19 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_without_binding_fields_loads_and_default_skips_them() {
+        let n = Node::new(NodeId(1), NodeKind::Rect, Rect::new(0.0, 0.0, 10.0, 10.0));
+        let v = serde_json::to_value(&n).unwrap();
+        assert!(v.get("bindings").is_none());
+        assert!(v.get("component_key").is_none());
+        let back: Node = serde_json::from_value(v).unwrap();
+        assert!(back.bindings.is_empty());
+        assert_eq!(back.component_key, None);
+        let link: InstanceLink = serde_json::from_str(r#"{"main":3}"#).unwrap();
+        assert_eq!(link.source, None);
+    }
 
     #[test]
     fn color_hex_roundtrip() {

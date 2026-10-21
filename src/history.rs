@@ -6,7 +6,8 @@
 
 use crate::geom::V2;
 use crate::model::{Color, Document, Node, NodeId, VarState};
-use std::collections::{BTreeMap, HashMap};
+use crate::variables::{Cache, DesignSystem, PageModes};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const MAX_DEPTH: usize = 500;
 
@@ -23,11 +24,44 @@ pub struct Change {
     entries: Vec<Entry>,
     root: Option<(Vec<NodeId>, Vec<NodeId>)>,
     variables: Option<(VarState, VarState)>,
+    /// Project design system before/after. Every page's step of a design edit carries it.
+    design: Option<(Box<DesignSystem>, Box<DesignSystem>)>,
+    /// The page's active mode per collection before/after (`Editor::set_page_mode`).
+    page_modes: Option<(PageModes, PageModes)>,
     next_id: (u64, u64),
     coalesce_key: Option<String>,
 }
 
+/// Project-level state a step carries besides the page document; the editor puts it back.
+#[derive(Debug, Default)]
+pub struct Undone {
+    pub label: String,
+    /// The design system the step leads to, and the one it started from. The editor moves
+    /// `Editor::design` only when it still equals `design_from` (nothing newer replaced it).
+    pub design: Option<DesignSystem>,
+    pub design_from: Option<DesignSystem>,
+    pub page_modes: Option<PageModes>,
+}
+
 impl Change {
+    fn undone(&self, forward: bool) -> Undone {
+        Undone {
+            label: self.label.clone(),
+            design: self
+                .design
+                .as_ref()
+                .map(|(b, a)| (**if forward { a } else { b }).clone()),
+            design_from: self
+                .design
+                .as_ref()
+                .map(|(b, a)| (**if forward { b } else { a }).clone()),
+            page_modes: self
+                .page_modes
+                .as_ref()
+                .map(|(b, a)| (if forward { a } else { b }).clone()),
+        }
+    }
+
     fn apply(&self, doc: &mut Document, forward: bool) {
         for e in &self.entries {
             let state = if forward { &e.after } else { &e.before };
@@ -66,6 +100,8 @@ pub struct Recording {
     order: Vec<NodeId>,
     root_before: Option<Vec<NodeId>>,
     variables_before: Option<VarState>,
+    pub(crate) design: Option<(DesignSystem, DesignSystem)>,
+    pub(crate) page_modes: Option<(PageModes, PageModes)>,
     next_id_before: u64,
 }
 
@@ -304,6 +340,54 @@ impl<'a> Tx<'a> {
         fills
     }
 
+    /// Replace the page's variable cache with `cache` (derived from the project design system)
+    /// and bring the fills that follow variables in step: `renames` (old CSS name to new) move
+    /// links, a variable that is gone stops being followed (fill keeps its color), every other
+    /// followed fill takes the new color. Returns fills whose color changed, per variable.
+    pub fn set_cache(
+        &mut self,
+        cache: &Cache,
+        renames: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, usize> {
+        self.snapshot_variables();
+        let had: BTreeSet<String> = self.doc.variables.keys().cloned().collect();
+        let users: Vec<NodeId> = self
+            .doc
+            .nodes
+            .values()
+            .filter(|n| n.style.fills.iter().any(|p| p.var().is_some()))
+            .map(|n| n.id)
+            .collect();
+        let mut fills = BTreeMap::new();
+        for id in users {
+            let Some(n) = self.node_mut(id) else { continue };
+            for p in &mut n.style.fills {
+                let Some(old) = p.var().map(str::to_string) else {
+                    continue;
+                };
+                let name = renames.get(&old).cloned().unwrap_or_else(|| old.clone());
+                let Some(color) = cache.variables.get(&name).copied() else {
+                    if had.contains(&old) {
+                        p.unlink_var();
+                    }
+                    continue;
+                };
+                if let crate::model::Paint::Solid { color: c, var } = p {
+                    *var = Some(name.clone());
+                    if *c != color {
+                        *c = color;
+                        *fills.entry(name).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        self.doc.variables.clone_from(&cache.variables);
+        self.doc.modes.clone_from(&cache.modes);
+        self.doc.mode.clone_from(&cache.mode);
+        self.doc.tokens.clone_from(&cache.tokens);
+        fills
+    }
+
     /// Move every fill following `name` to `color`.
     fn apply_variable(&mut self, name: &str, color: Color) -> usize {
         let users: Vec<NodeId> = self
@@ -444,7 +528,17 @@ impl History {
             .variables_before
             .filter(|b| *b != doc.var_state())
             .map(|b| (b, doc.var_state()));
-        if entries.is_empty() && root.is_none() && variables.is_none() {
+        let design = rec
+            .design
+            .filter(|(b, a)| b != a)
+            .map(|(b, a)| (Box::new(b), Box::new(a)));
+        let page_modes = rec.page_modes.filter(|(b, a)| b != a);
+        if entries.is_empty()
+            && root.is_none()
+            && variables.is_none()
+            && design.is_none()
+            && page_modes.is_none()
+        {
             return false;
         }
         let change = Change {
@@ -452,6 +546,8 @@ impl History {
             entries,
             root,
             variables,
+            design,
+            page_modes,
             next_id: (rec.next_id_before, doc.next_id),
             coalesce_key,
         };
@@ -471,22 +567,22 @@ impl History {
         true
     }
 
-    pub fn undo(&mut self, doc: &mut Document) -> Option<String> {
+    pub fn undo(&mut self, doc: &mut Document) -> Option<Undone> {
         let c = self.undo.pop()?;
         c.apply(doc, false);
         self.generation += 1;
-        let label = c.label.clone();
+        let u = c.undone(false);
         self.redo.push(c);
-        Some(label)
+        Some(u)
     }
 
-    pub fn redo(&mut self, doc: &mut Document) -> Option<String> {
+    pub fn redo(&mut self, doc: &mut Document) -> Option<Undone> {
         let c = self.redo.pop()?;
         c.apply(doc, true);
         self.generation += 1;
-        let label = c.label.clone();
+        let u = c.undone(true);
         self.undo.push(c);
-        Some(label)
+        Some(u)
     }
 
     pub fn generation(&self) -> u64 {
@@ -537,6 +633,16 @@ fn merge(older: &mut Change, newer: Change) {
     match (&mut older.variables, newer.variables) {
         (Some((_, after)), Some((_, new_after))) => *after = new_after,
         (v @ None, Some(nv)) => *v = Some(nv),
+        _ => {}
+    }
+    match (&mut older.design, newer.design) {
+        (Some((_, after)), Some((_, new_after))) => *after = new_after,
+        (d @ None, Some(nd)) => *d = Some(nd),
+        _ => {}
+    }
+    match (&mut older.page_modes, newer.page_modes) {
+        (Some((_, after)), Some((_, new_after))) => *after = new_after,
+        (m @ None, Some(nm)) => *m = Some(nm),
         _ => {}
     }
     older.next_id.1 = newer.next_id.1;

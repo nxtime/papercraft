@@ -11,6 +11,8 @@ use crate::model::{
     NodeKind, Paint, Sizing, Stop, StrokeAlign, TextAlign,
 };
 use crate::theme;
+use super::bind::BIND_W;
+use crate::variables::Kind;
 use egui::{RichText, Ui};
 
 const LABEL_W: f32 = 64.0;
@@ -126,6 +128,7 @@ fn color_field(
     ed: &mut Editor,
     c: Color,
     bound: Option<&str>,
+    detach: &mut bool,
     width: f32,
 ) -> Option<Color> {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, theme::FIELD_H), egui::Sense::hover());
@@ -149,19 +152,23 @@ fn color_field(
         egui::pos2(rect.right() - 8.0, rect.bottom()),
     );
     if let Some(v) = bound {
+        let x = egui::Rect::from_center_size(rect.right_center() - egui::vec2(14.0, 0.0), egui::Vec2::splat(16.0));
+        *detach = super::bind::cross(ui, x);
+        let name = super::bind::display_name(&ed.design, v);
+        let text_rect = egui::Rect::from_min_max(text_rect.min, egui::pos2(x.left() - 4.0, rect.bottom()));
         let mut label_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect));
         label_ui.set_clip_rect(text_rect.intersect(ui.clip_rect()));
         label_ui
             .add_sized(
                 text_rect.size(),
                 egui::Label::new(
-                    RichText::new(format!("--{v}"))
-                        .size(theme::SECONDARY + 1.0)
-                        .color(theme::pal(ui).secondary),
+                    RichText::new(&name)
+                        .font(theme::semibold(theme::SECONDARY + 1.0))
+                        .color(theme::accent()),
                 )
                 .truncate(),
             )
-            .on_hover_text(format!("--{v}"));
+            .on_hover_text(name);
         return out;
     }
     let id = ui.id().with("hex");
@@ -325,6 +332,53 @@ fn field(
         );
     }
     out
+}
+
+/// [`field`] with a variable affordance: a bind button beside it, or, when every selected layer
+/// binds `bfield` to the same variable, the variable's chip in its place.
+#[allow(clippy::too_many_arguments)]
+fn bound_field(
+    ui: &mut Ui,
+    ed: &mut Editor,
+    ids: &[NodeId],
+    bfield: &str,
+    prefix: &str,
+    suffix: &str,
+    value: f64,
+    speed: f64,
+    range: std::ops::RangeInclusive<f64>,
+    width: f32,
+) -> Option<f64> {
+    if let Some(css) = super::bind::shared_binding(ed, ids, bfield) {
+        let shown = format!("{}{suffix}", fmt_num(value));
+        let act = super::bind::bound_chip(ui, ed, Kind::Number, &css, &shown, width);
+        super::bind::apply(ed, ids, bfield, act);
+        return None;
+    }
+    let w = (width - BIND_W - ui.spacing().item_spacing.x).max(36.0);
+    let out = field(ui, ed, prefix, suffix, value, speed, range, w);
+    if let Some(css) = super::bind::bind_button(ui, ed, Kind::Number) {
+        super::bind::apply(ed, ids, bfield, Some(Some(css)));
+    }
+    out
+}
+
+/// A row for a field that has no room for a bind button: label, then the bind button or chip.
+fn bind_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], bfield: &str, label: &str, kind: Kind, shown: &str) {
+    let bound = super::bind::shared_binding(ed, ids, bfield);
+    row(ui, label, |ui| match bound {
+        Some(css) => {
+            let w = ui.available_width();
+            let act = super::bind::bound_chip(ui, ed, kind, &css, shown, w);
+            super::bind::apply(ed, ids, bfield, act);
+        }
+        None => {
+            if let Some(css) = super::bind::bind_button(ui, ed, kind) {
+                super::bind::apply(ed, ids, bfield, Some(Some(css)));
+            }
+            ui.label(RichText::new("Bind to a variable").size(theme::SECONDARY).color(theme::pal(ui).tertiary));
+        }
+    });
 }
 
 fn fmt_num(v: f64) -> String {
@@ -1136,14 +1190,14 @@ fn geometry(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         });
         ui.horizontal(|ui| {
             let w = half(ui);
-            if let Some(v) = num_field(ui, ed, "W  ", r.w, 1.0, 0.0..=1e6, w) {
+            if let Some(v) = bound_field(ui, ed, ids, "width", "W  ", "", r.w, 1.0, 0.0..=1e6, w) {
                 resize(ed, ids[0], v2(v, r.h));
             }
             // Disabling the Ui itself (not `add_enabled_ui`, whose scope shifts the cell).
             if matches!(first.kind, NodeKind::Text { .. }) {
                 ui.disable();
             }
-            if let Some(v) = num_field(ui, ed, "H  ", r.h, 1.0, 0.0..=1e6, w) {
+            if let Some(v) = bound_field(ui, ed, ids, "height", "H  ", "", r.h, 1.0, 0.0..=1e6, w) {
                 resize(ed, ids[0], v2(r.w, v));
             }
         });
@@ -1193,10 +1247,13 @@ fn geometry(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             let sp = ui.spacing().item_spacing.x;
             let room = ui.available_width() - 32.0;
             if !per_corner {
-                if let Some(v) = num_field(
+                if let Some(v) = bound_field(
                     ui,
                     ed,
+                    ids,
+                    "radius",
                     "Radius  ",
+                    "",
                     first.style.corner_radius,
                     0.5,
                     0.0..=1e4,
@@ -1388,7 +1445,7 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         ui.add_space(6.0);
         ui.add_enabled_ui(!l.gap_auto, |ui| {
             let room = (ui.available_width() - 34.0).max(60.0);
-            if let Some(v) = num_field(ui, ed, "Gap ", l.gap, 0.5, -1e4..=1e4, room) {
+            if let Some(v) = bound_field(ui, ed, ids, "gap", "Gap ", "", l.gap, 0.5, -1e4..=1e4, room) {
                 set(ed, &|l| l.gap = v);
             }
         });
@@ -1399,7 +1456,8 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     ui.horizontal(|ui| {
         let cw = ((ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / 4.0).max(36.0);
         for (i, p) in ["T ", "R ", "B ", "L "].iter().enumerate() {
-            if let Some(v) = num_field(ui, ed, p, l.padding[i], 0.5, 0.0..=1e4, cw) {
+            let side = ["padding-top", "padding-right", "padding-bottom", "padding-left"][i];
+            if let Some(v) = bound_field(ui, ed, ids, side, p, "", l.padding[i], 0.5, 0.0..=1e4, cw) {
                 set(ed, &|l| l.padding[i] = v);
             }
         }
@@ -1518,6 +1576,9 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             });
         }
     });
+    bind_row(ui, ed, ids, "font-size", "Size", Kind::Number, &fmt_num(*font_size));
+    bind_row(ui, ed, ids, "line-height", "Line height", Kind::Number, &fmt_num(first.text_style.line_height.unwrap_or(0.0)));
+    bind_row(ui, ed, ids, "text-color", "Color", Kind::Color, "");
     if ids.len() == 1 && ed.text_edit.is_none() {
         let NodeKind::Text { text, .. } = &first.kind else {
             return;
@@ -1597,63 +1658,24 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
         }
         match p {
             Paint::Solid { color, var } => {
-                let has_vars = !ed.doc.variables.is_empty() || var.is_some();
-                let btn_label = if var.is_some() { "var" } else { "--" };
                 let spacing = ui.spacing().item_spacing.x;
-                let variable_width = if has_vars {
-                    ui.painter()
-                        .layout_no_wrap(
-                            btn_label.into(),
-                            egui::TextStyle::Button.resolve(ui.style()),
-                            ui.visuals().text_color(),
-                        )
-                        .size()
-                        .x
-                        + 2.0 * ui.spacing().button_padding.x
-                        + spacing
-                } else {
-                    0.0
-                };
-                let w = ui.available_width() - variable_width - 24.0 - spacing;
-                if let Some(c) = color_field(ui, ed, *color, var.as_deref(), w.max(40.0)) {
+                let bind_w = if var.is_some() { 0.0 } else { BIND_W + spacing };
+                let w = ui.available_width() - bind_w - 24.0 - spacing;
+                let mut detach = false;
+                if let Some(c) = color_field(ui, ed, *color, var.as_deref(), &mut detach, w.max(40.0)) {
                     set(ed, Paint::solid(c));
                 }
-                if has_vars {
-                    let vars: Vec<(String, Color)> = ed
-                        .doc
-                        .variables
-                        .iter()
-                        .map(|(k, v)| (k.clone(), *v))
-                        .collect();
-                    ui.menu_button(btn_label, |ui| {
-                        for (vname, vcol) in &vars {
-                            let active = var.as_deref() == Some(vname.as_str());
-                            if ui
-                                .selectable_label(active, format!("--{vname} ({})", vcol.to_hex()))
-                                .clicked()
-                            {
-                                set(ed, Paint::solid_var(*vcol, vname));
-                                ui.close();
-                            }
-                        }
-                        if var.is_some() {
-                            if !vars.is_empty() {
-                                ui.separator();
-                            }
-                            if super::icon_menu_item(
-                                ui,
-                                crate::theme::Icon::Minus,
-                                "Unlink variable",
-                            )
-                            .clicked()
-                            {
-                                let mut unlinked = p.clone();
-                                unlinked.unlink_var();
-                                set(ed, unlinked);
-                                ui.close();
-                            }
-                        }
-                    });
+                let mut picked = None;
+                if detach {
+                    let mut unlinked = p.clone();
+                    unlinked.unlink_var();
+                    set(ed, unlinked);
+                } else if var.is_none() {
+                    picked = super::bind::bind_button(ui, ed, Kind::Color);
+                }
+                if let Some(css) = picked {
+                    let c = ed.doc.variables.get(&css).copied().unwrap_or(*color);
+                    set(ed, Paint::solid_var(c, &css));
                 }
             }
             Paint::Image {
@@ -1776,6 +1798,9 @@ fn stroke(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if s.stroke.is_some() {
                 if crate::theme::icon_button(ui, crate::theme::Icon::Minus, 24.0, false).clicked() {
+                    if super::bind::shared_binding(ed, ids, "stroke").is_some() {
+                        super::bind::apply(ed, ids, "stroke", Some(None));
+                    }
                     apply(ed, "stroke", ids, |n| n.style.stroke = None);
                 }
             } else if crate::theme::icon_button(ui, crate::theme::Icon::Plus, 24.0, false).clicked()
@@ -1786,9 +1811,21 @@ fn stroke(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     });
     let Some(c) = s.stroke else { return };
     let full = ui.available_width();
-    if let Some(nc) = color_field(ui, ed, c, None, full) {
-        apply(ed, "stroke", ids, |n| n.style.stroke = Some(nc));
-    }
+    let bound = super::bind::shared_binding(ed, ids, "stroke");
+    let mut detach = false;
+    let w = if bound.is_some() { full } else { full - BIND_W - ui.spacing().item_spacing.x };
+    ui.horizontal(|ui| {
+        if let Some(nc) = color_field(ui, ed, c, bound.as_deref(), &mut detach, w) {
+            apply(ed, "stroke", ids, |n| n.style.stroke = Some(nc));
+        }
+        if detach {
+            super::bind::apply(ed, ids, "stroke", Some(None));
+        } else if bound.is_none()
+            && let Some(css) = super::bind::bind_button(ui, ed, Kind::Color)
+        {
+            super::bind::apply(ed, ids, "stroke", Some(Some(css)));
+        }
+    });
     ui.horizontal(|ui| {
         let w = half(ui);
         if let Some(v) = num_field(ui, ed, "W ", s.stroke_width, 0.1, 0.0..=500.0, w) {
@@ -1904,44 +1941,59 @@ fn layer(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             apply(ed, "blend", ids, |n| n.style.blend = v);
         }
         let op = first.style.opacity * 100.0;
-        if let Some(v) = field(ui, ed, "", "%", op, 0.5, 0.0..=100.0, w) {
+        if let Some(v) = bound_field(ui, ed, ids, "opacity", "", "%", op, 0.5, 0.0..=100.0, w) {
             apply(ed, "opacity", ids, |n| n.style.opacity = v / 100.0);
         }
     });
+    bind_row(ui, ed, ids, "visible", "Visible", Kind::Boolean, &first.visible.to_string());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn bound_color_field_keeps_following_control_outside_field() {
-        let ctx = egui::Context::default();
-        super::super::setup_style(&ctx);
+    fn bound_ed() -> (Editor, NodeId, NodeId) {
         let mut ed = Editor::default();
-        let mut next = egui::Rect::NOTHING;
-        let mut field_left = 0.0;
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            theme::figma_fields(ui);
-            ui.horizontal(|ui| {
-                field_left = ui.next_widget_position().x;
-                color_field(ui, &mut ed, Color::BLACK, Some("surface-2"), 100.0);
-                next = ui.menu_button("var", |_| {}).response.rect;
-            });
-        });
-        output.textures_delta.clear();
-        assert!(
-            next.left() >= field_left + 100.0,
-            "next control overlaps color field: {next:?}"
-        );
-        let label = output.shapes.iter().find(|shape| {
-            matches!(&shape.shape, egui::epaint::Shape::Text(t) if t.galley.text().starts_with("--surface"))
-        }).expect("bound color label");
-        assert!(
-            label.clip_rect.right() <= field_left + 100.0,
-            "bound label paints beyond field"
-        );
+        ed.edit_design("t", |ds| {
+            let c = ds.add_collection("Tokens");
+            ds.add_variable(&c, "space/md", Kind::Number)?;
+            Ok(())
+        })
+        .unwrap();
+        let mk = |ed: &mut Editor, bind: bool| {
+            let id = ed.add_node(
+                Node::new(NodeId(0), NodeKind::Frame { clip: false }, crate::geom::Rect::new(0.0, 0.0, 50.0, 30.0)),
+                None,
+            );
+            if bind {
+                ed.bind(&[id], "radius", Some("space-md")).unwrap();
+            }
+            id
+        };
+        let (a, b) = (mk(&mut ed, true), mk(&mut ed, false));
+        (ed, a, b)
     }
+
+    #[test]
+    fn inspector_draws_bound_and_unbound_node() {
+        for pick in [0, 1] {
+            let ctx = egui::Context::default();
+            super::super::setup_style(&ctx);
+            let (mut ed, a, b) = bound_ed();
+            ed.selection = vec![[a, b][pick]];
+            let mut st = UiState::default();
+            // Two frames: a bound chip must not detach itself while idle.
+            let mut out = ctx.run_ui(Default::default(), |ui| panel(ui, &mut ed, &mut st));
+            out.textures_delta.clear();
+            let mut out = ctx.run_ui(Default::default(), |ui| panel(ui, &mut ed, &mut st));
+            out.textures_delta.clear();
+            let chip = out.shapes.iter().any(|s| {
+                matches!(&s.shape, egui::epaint::Shape::Text(t) if t.galley.text().contains("space/md"))
+            });
+            assert_eq!(chip, pick == 0, "chip shown only for the bound node");
+        }
+    }
+
     #[test]
     fn bound_fill_row_fits_narrow_inspector() {
         for width in [192.0, 232.0, 392.0] {
@@ -1967,19 +2019,6 @@ mod tests {
                 row_width <= width + 0.1,
                 "fill row {row_width} overflows inspector {width}"
             );
-            let mut variable = None;
-            let mut binding = None;
-            for shape in &output.shapes {
-                if let egui::epaint::Shape::Text(t) = &shape.shape {
-                    if t.galley.text() == "var" {
-                        variable = Some(t.galley.rect.translate(t.pos.to_vec2()));
-                    }
-                    if t.galley.text().starts_with("--surface") {
-                        binding = Some(shape.clip_rect);
-                    }
-                }
-            }
-            assert!(binding.unwrap().right() < variable.unwrap().left());
         }
     }
 }

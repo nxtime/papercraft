@@ -6,6 +6,7 @@
 //! unit-testable on its own.
 
 use crate::geom::Camera;
+use crate::variables::PageModes;
 use crate::model::{Color, Document, Node, NodeId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -16,7 +17,13 @@ pub const PAGE_FORMAT: &str = "paper-rs-page";
 /// The single-file format of papercraft 0.1 (`.paper-rs`), version 1. It migrates to a page.
 pub const LEGACY_FORMAT: &str = "paper-rs";
 
-pub const PROJECT_VERSION: u32 = 1;
+/// v1: pages only. v2: `design.json` is the source of truth for variables and pages carry
+/// bindings, component keys and sources. An older app would write pages without those and never
+/// update `design.json`, so it must refuse a v2 project (`TooNew`) instead of losing data.
+pub const PROJECT_VERSION: u32 = 2;
+/// Project migrations, indexed by source version: `PROJECT_STEPS[0]` turns v1 into v2. The
+/// manifest itself does not change; the design system is built on load from the pages.
+const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v];
 /// v1: legacy single file. v2: page file inside a project. v3: fill layers (`fills`).
 pub const PAGE_VERSION: u32 = 3;
 
@@ -37,7 +44,7 @@ impl std::fmt::Display for FormatError {
             FormatError::WrongFormat(s) => write!(f, "not a papercraft file (format {s:?})"),
             FormatError::TooNew { version, supported } => write!(
                 f,
-                "file version {version} is newer than this app supports ({supported})"
+                "made by a newer PaperCraft (file version {version}, this app reads up to {supported}); update PaperCraft to open it"
             ),
             FormatError::Invalid(s) => write!(f, "invalid document: {s}"),
         }
@@ -104,7 +111,7 @@ impl Manifest {
 
     pub fn from_json(s: &str) -> Result<Manifest, FormatError> {
         let v: Value = serde_json::from_str(s).map_err(FormatError::Json)?;
-        let v = migrate(v, PROJECT_FORMAT, PROJECT_VERSION, &[], &[])?;
+        let v = migrate(v, PROJECT_FORMAT, PROJECT_VERSION, &[], PROJECT_STEPS)?;
         serde_json::from_value(v).map_err(FormatError::Json)
     }
 }
@@ -139,6 +146,9 @@ struct PageFile {
     mode: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     tokens: BTreeMap<String, String>,
+    /// Active mode id per collection id.
+    #[serde(default, rename = "collectionModes", skip_serializing_if = "BTreeMap::is_empty")]
+    modes_by_collection: BTreeMap<String, String>,
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
@@ -176,6 +186,11 @@ fn page_v2_to_v3(mut v: Value) -> Value {
 }
 
 pub fn page_to_json(p: &PageData) -> String {
+    page_to_json_modes(p, &PageModes::new())
+}
+
+/// A page file with its active mode per collection.
+pub fn page_to_json_modes(p: &PageData, modes: &PageModes) -> String {
     let mut nodes: Vec<Node> = p.doc.nodes.values().cloned().collect();
     nodes.sort_by_key(|n| n.id);
     let f = PageFile {
@@ -191,12 +206,18 @@ pub fn page_to_json(p: &PageData) -> String {
         modes: p.doc.modes.clone(),
         mode: p.doc.mode.clone(),
         tokens: p.doc.tokens.clone(),
+        modes_by_collection: modes.clone(),
     };
     serde_json::to_string_pretty(&f).expect("page serializes")
 }
 
 /// Parse a page file (or a legacy `.paper-rs` document) of any supported version.
 pub fn page_from_json(s: &str) -> Result<PageData, FormatError> {
+    page_from_json_modes(s).map(|(p, _)| p)
+}
+
+/// Like [`page_from_json`], plus the page's active mode per collection.
+pub fn page_from_json_modes(s: &str) -> Result<(PageData, PageModes), FormatError> {
     let v: Value = serde_json::from_str(s).map_err(FormatError::Json)?;
     let v = migrate(v, PAGE_FORMAT, PAGE_VERSION, PAGE_ALIASES, PAGE_STEPS)?;
     let f: PageFile = serde_json::from_value(v).map_err(FormatError::Json)?;
@@ -213,12 +234,15 @@ pub fn page_from_json(s: &str) -> Result<PageData, FormatError> {
         tokens: f.tokens,
     };
     doc.validate().map_err(FormatError::Invalid)?;
-    Ok(PageData {
-        id: f.id,
-        name: f.name,
-        doc,
-        camera: f.camera,
-    })
+    Ok((
+        PageData {
+            id: f.id,
+            name: f.name,
+            doc,
+            camera: f.camera,
+        },
+        f.modes_by_collection,
+    ))
 }
 
 /// Check the format tag and run the migration chain up to `current`.
@@ -344,6 +368,18 @@ mod tests {
         assert_eq!(r.style.corner_radius, 2.0);
         assert!(p.doc.get(NodeId(2)).unwrap().style.fills.is_empty());
         assert!(page_to_json(&p).contains("\"version\": 3"));
+    }
+
+    #[test]
+    fn v1_manifest_migrates_to_v2_and_v3_is_refused() {
+        let v1 = r#"{"format":"paper-rs-project","version":1,"id":"a","name":"N","created":1,
+            "modified":2,"pages":[{"id":"p","name":"Page 1"}]}"#;
+        assert_eq!(Manifest::from_json(v1).unwrap().version, PROJECT_VERSION);
+        assert_eq!(PROJECT_VERSION, 2);
+        // What the old 0.4.0 reader (supports 1) does with a v2 file: TooNew.
+        let err = Manifest::from_json(&v1.replace("\"version\":1", "\"version\":3")).unwrap_err();
+        assert!(matches!(err, FormatError::TooNew { version: 3, supported: 2 }));
+        assert!(err.to_string().contains("made by a newer PaperCraft"));
     }
 
     #[test]

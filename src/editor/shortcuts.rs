@@ -59,6 +59,7 @@ pub enum Action {
     ToggleUi,
     ToggleHelp,
     ToggleGrid,
+    OpenVariables,
     SelectNext,
     SelectPrev,
     SelectParent,
@@ -164,6 +165,8 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
         (Char('/'), CMD, A::ToggleHelp, "Keyboard shortcuts"),
         (Char('?'), SHIFT, A::ToggleHelp, "Keyboard shortcuts"),
         (Char('\''), CMD_SHIFT, A::ToggleGrid, "Show / hide dot grid"),
+        // Cmd+Alt+V is taken by Paste properties.
+        (Char('v'), CMD_ALT_SHIFT, A::OpenVariables, "Variables"),
         (Tab, PLAIN, A::SelectNext, "Select next sibling"),
         (Tab, SHIFT, A::SelectPrev, "Select previous sibling"),
         (Enter, SHIFT, A::SelectParent, "Select parent"),
@@ -419,6 +422,7 @@ pub fn category(a: Action) -> &'static str {
         | A::ZoomSelection
         | A::ToggleSnapping
         | A::ToggleGrid
+        | A::OpenVariables
         | A::ToggleUi
         | A::ToggleHelp
         | A::NextPage

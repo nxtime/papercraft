@@ -9,14 +9,15 @@
 use super::css::{self, Context, Styles};
 use super::html::{self, Element, Html};
 use super::{Out, ToolResult, tools};
-use crate::editor::Editor;
+use crate::editor::{Editor, design};
 use crate::geom::{Rect, V2, v2};
 use crate::history::Tx;
 use crate::model::{
     AutoLayout, Binding, Color, Direction, Document, Head, ImageMode, Node, NodeId, NodeKind,
-    Paint, PathPoint, Route, Sizing, SubPath, TextAlign,
+    Paint, PathPoint, Route, Sizing, Source, SubPath, TextAlign,
 };
 use crate::project::{Project, Store};
+use crate::variables::{self, DesignSystem, Kind, Value as DsVal};
 use crate::render::gpu::Headless;
 use crate::session::Session;
 use serde_json::{Map, Value, json};
@@ -260,6 +261,12 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
         "create_file" => create_file(host, &a),
         "get_font_family_info" => font_info(&a),
         "get_guide" => guide(&a),
+        "publish_library" | "list_libraries" | "enable_library" | "update_library"
+        | "disable_library" => {
+            check_file(host, &a)?;
+            host.editor().commit_pending();
+            library_tool(host, name, &a)
+        }
         _ => {
             check_file(host, &a)?;
             let ed = host.editor();
@@ -299,6 +306,8 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "set_variables" => set_variables(ed, &a),
                 "set_variable_mode" => set_variable_mode(ed, &a),
                 "set_tokens" => set_tokens(ed, &a),
+                "create_collection" => create_collection(ed, &a),
+                "delete_variables" => delete_variables(ed, &a),
                 "import_design_system" => import_design_system(host, &a),
                 "export_design_system" => export_design_system(host, &a),
                 "get_components" => get_components(ed, &a),
@@ -306,6 +315,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "create_component" => create_component(ed, &a),
                 "create_instance" => create_instance(ed, &a),
                 "swap_instance" => swap_instance(ed, &a),
+                "bind_variable" => bind_variable(ed, &a),
                 "detach_instance" => detach_instance(ed, &a),
                 "diff_frames" => diff_frames(ed, &a),
                 "search_icons" => search_icons(&a),
@@ -444,9 +454,8 @@ fn create_file(host: &mut dyn Host, a: &Args) -> ToolResult {
 }
 
 fn create_page(ed: &mut Editor, a: &Args) -> ToolResult {
-    let vars = ed.page_doc(ed.active_page).var_state();
+    // The new page copies the active page's modes and cache (`insert_empty_page`).
     let i = ed.add_page_in_background(a.str("name"));
-    ed.with_page(i, |ed| ed.doc.restore_vars(&vars));
     text(json!({"pageId": ed.pages[i].id, "name": ed.pages[i].name}))
 }
 
@@ -2727,7 +2736,14 @@ fn clone_subtree_from_doc(
             .iter()
             .filter_map(|x| map.get(x).copied())
             .collect();
-        if let Some(l) = &mut c.instance {
+        if c.component && c.component_key.is_some() {
+            c.component_key = Some(crate::variables::new_id());
+        }
+        // Only a same-page link can point into the copied subtree; cross-page and library links
+        // keep their main.
+        if let Some(l) = &mut c.instance
+            && l.source.is_none()
+        {
             if let Some(m) = map.get(&l.main) {
                 l.main = *m;
             } else if !tx.doc().get(l.main).is_some_and(|mn| mn.component) {
@@ -2780,6 +2796,9 @@ fn clone_subtree(
         let mut c = n.clone();
         c.id = map[&n.id];
         c.children = n.children.iter().map(|x| map[x]).collect();
+        if c.component && c.component_key.is_some() {
+            c.component_key = Some(crate::variables::new_id());
+        }
         if let NodeKind::Connector { start, end, .. } = &mut c.kind {
             for b in [start, end].into_iter().flatten() {
                 if let Some(nn) = map.get(&b.node) {
@@ -3328,25 +3347,13 @@ fn get_variables(ed: &mut Editor, a: &Args) -> ToolResult {
     let page = page_arg(ed, a)?;
     let doc = ed.page_doc(page);
     match a.str("format") {
-        Some("css") => {
-            let body: String = doc
-                .variables
-                .iter()
-                .map(|(k, c)| format!("  --{k}: {};\n", c.to_hex()))
-                .chain(doc.tokens.iter().map(|(k, v)| format!("  --{k}: {v};\n")))
-                .collect();
-            let mut out = format!(":root {{\n{body}}}\n");
-            for (mode, vars) in &doc.modes {
-                out.push_str(&format!("[data-theme=\"{mode}\"] {{\n"));
-                for (k, c) in vars {
-                    out.push_str(&format!("  --{k}: {};\n", c.to_hex()));
-                }
-                out.push_str("}\n");
-            }
-            return Ok(vec![Out::Text(out)]);
-        }
+        Some("css") => return Ok(vec![Out::Text(super::codegen::export_variables_css(doc))]),
         Some("json") => {
-            return text(super::codegen::export_variables_dtcg(doc));
+            let ds = design_of(ed);
+            return text(super::codegen::export_dtcg_system(
+                &ds,
+                &ed.pages[page].modes,
+            ));
         }
         Some("tailwind") => {
             return Ok(vec![Out::Text(super::codegen::export_variables_tailwind(
@@ -3369,7 +3376,286 @@ fn get_variables(ed: &mut Editor, a: &Args) -> ToolResult {
         v["mode"] = json!(doc.mode);
         v["modes"] = json!(doc.modes.keys().collect::<Vec<_>>());
     }
+    let ds = design_of(ed);
+    let page_modes = &ed.pages[page].modes;
+    v["collections"] = ds
+        .collections
+        .iter()
+        .map(|c| collection_json(&ds, c))
+        .collect();
+    v["pageModes"] = ds
+        .collections
+        .iter()
+        .map(|c| {
+            let active = page_modes.get(&c.id).unwrap_or(&c.default_mode);
+            let name = c.modes.iter().find(|m| &m.id == active).map(|m| &m.name);
+            (c.name.clone(), json!(name))
+        })
+        .collect::<Map<String, Value>>()
+        .into();
     text(v)
+}
+
+/// The project design system; a project that never went through the session reads as its first
+/// page does, like `edit_design`.
+fn design_of(ed: &Editor) -> DesignSystem {
+    if ed.design.collections.is_empty() {
+        return variables::migrate_from_document(ed.page_doc(0));
+    }
+    ed.design.clone()
+}
+
+fn collection_json(ds: &DesignSystem, c: &variables::Collection) -> Value {
+    let value = |v: &DsVal| match v {
+        DsVal::Color(c) => json!(c.to_hex()),
+        DsVal::Number(n) => json!(n),
+        DsVal::String(s) => json!(s),
+        DsVal::Boolean(b) => json!(b),
+        DsVal::Alias(id) => json!({"alias": ds.find(id).map(|(_, t)| t.name.clone())}),
+    };
+    let vars: Vec<Value> = c
+        .variables
+        .iter()
+        .map(|v| {
+            let values: Map<String, Value> = c
+                .modes
+                .iter()
+                .filter_map(|m| Some((m.name.clone(), value(v.values.get(&m.id)?))))
+                .collect();
+            json!({"id": v.id, "name": v.name, "cssName": variables::css_name(v),
+                   "group": variables::group_of(&v.name), "type": v.kind,
+                   "values": values, "description": v.description, "hidden": v.hidden})
+        })
+        .collect();
+    let default = c.modes.iter().find(|m| m.id == c.default_mode).map(|m| &m.name);
+    json!({"id": c.id, "name": c.name, "library": c.library,
+           "modes": c.modes.iter().map(|m| &m.name).collect::<Vec<_>>(),
+           "defaultMode": default, "variables": vars})
+}
+
+/// One `set_variables` entry after parsing.
+struct VarSpec {
+    name: String,
+    kind: Option<Kind>,
+    value: Option<DsVal>,
+    alias: Option<String>,
+    collection: Option<String>,
+    mode: Option<String>,
+    description: Option<String>,
+    hidden: Option<bool>,
+    /// The old shape: a plain color by name.
+    plain_color: Option<Color>,
+}
+
+fn parse_kind(s: &str) -> Result<Kind, String> {
+    match s {
+        "color" => Ok(Kind::Color),
+        "number" => Ok(Kind::Number),
+        "string" => Ok(Kind::String),
+        "boolean" => Ok(Kind::Boolean),
+        _ => Err(format!("unknown type `{s}` (color, number, string, boolean)")),
+    }
+}
+
+fn parse_value(name: &str, kind: Option<Kind>, v: &Value) -> Result<(Kind, DsVal), String> {
+    let bad = |k: &str| format!("variable `{name}`: `{v}` is not a {k}");
+    match (kind, v) {
+        (Some(Kind::Color) | None, Value::String(s)) if css::color(s).is_some() => {
+            Ok((Kind::Color, DsVal::Color(css::color(s).unwrap())))
+        }
+        (Some(Kind::Color), _) => Err(bad("color")),
+        (Some(Kind::Number) | None, Value::Number(n)) => {
+            Ok((Kind::Number, DsVal::Number(n.as_f64().unwrap_or_default())))
+        }
+        (Some(Kind::Number), Value::String(s)) => s
+            .trim()
+            .trim_end_matches("px")
+            .trim()
+            .parse()
+            .map(|n| (Kind::Number, DsVal::Number(n)))
+            .map_err(|_| bad("number")),
+        (Some(Kind::Number), _) => Err(bad("number")),
+        (Some(Kind::String), Value::String(s)) => Ok((Kind::String, DsVal::String(s.clone()))),
+        (Some(Kind::String), _) => Err(bad("string")),
+        (Some(Kind::Boolean) | None, Value::Bool(b)) => Ok((Kind::Boolean, DsVal::Boolean(*b))),
+        (Some(Kind::Boolean), _) => Err(bad("boolean")),
+        (None, _) => Err(bad("color (pass type for other kinds)")),
+    }
+}
+
+fn parse_var_name(name: &str) -> Result<String, String> {
+    let name = name.trim().trim_start_matches("--").trim_matches('/').to_string();
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/'))
+    {
+        return Err(format!(
+            "variable name `{name}` may only use letters, digits, -, _ and / (groups)"
+        ));
+    }
+    Ok(name)
+}
+
+fn parse_spec(name: &str, entry: &Value, a: &Args) -> Result<VarSpec, String> {
+    let name = parse_var_name(name)?;
+    let obj = entry.as_object();
+    let field = |k: &str| {
+        obj.and_then(|o| o.get(k))
+            .or_else(|| a.get(k))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let kind = field("type").as_deref().map(parse_kind).transpose()?;
+    let alias = obj
+        .and_then(|o| o.get("alias"))
+        .and_then(Value::as_str)
+        .map(|s| s.trim().trim_start_matches("--").to_string());
+    let raw = match obj {
+        Some(o) => o.get("value"),
+        None => Some(entry),
+    };
+    let (kind, value) = match (raw, &alias) {
+        (Some(v), None) => {
+            let (k, v) = parse_value(&name, kind, v)?;
+            (Some(k), Some(v))
+        }
+        (Some(_), Some(_)) => return Err(format!("variable `{name}`: give a value or an alias, not both")),
+        (None, _) => (kind, None),
+    };
+    let description = obj
+        .and_then(|o| o.get("description"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let hidden = obj.and_then(|o| o.get("hidden")).and_then(Value::as_bool);
+    let collection = field("collection");
+    let mode = field("mode");
+    let plain_color = match (&value, obj, &collection) {
+        (Some(DsVal::Color(c)), None, None) if a.get("type").is_none() => Some(*c),
+        _ => None,
+    };
+    Ok(VarSpec {
+        name,
+        kind,
+        value,
+        alias,
+        collection,
+        mode,
+        description,
+        hidden,
+        plain_color,
+    })
+}
+
+/// `(collection id, variable id, kind)` of a variable by name or CSS name.
+fn find_var(ds: &DesignSystem, name: &str) -> Option<(String, String, Kind)> {
+    let css = crate::design_system::sanitize_name(name);
+    ds.collections.iter().find_map(|c| {
+        c.variables
+            .iter()
+            .find(|v| v.name == name || variables::css_name(v) == css)
+            .map(|v| (c.id.clone(), v.id.clone(), v.kind))
+    })
+}
+
+fn mode_for(ds: &mut DesignSystem, cid: &str, name: &str) -> Result<String, variables::Error> {
+    let c = ds
+        .collection(cid)
+        .ok_or_else(|| variables::Error::NotFound(cid.into()))?;
+    if let Some(m) = c.modes.iter().find(|m| m.name == name || m.id == name) {
+        return Ok(m.id.clone());
+    }
+    // A collection with only its unnamed `Default` mode adopts the first name defined.
+    if c.modes.len() == 1 && c.modes[0].name == variables::DEFAULT_MODE && c.library.is_none() {
+        let id = c.modes[0].id.clone();
+        if let Some(c) = ds.collections.iter_mut().find(|c| c.id == cid) {
+            c.modes[0].name = name.into();
+        }
+        return Ok(id);
+    }
+    ds.add_mode(cid, name)
+}
+
+fn set_entry(
+    ds: &mut DesignSystem,
+    active: &variables::PageModes,
+    s: &VarSpec,
+) -> Result<(), variables::Error> {
+    use variables::Error;
+    if let Some(c) = s.plain_color {
+        return design::set_color(ds, active, &s.name, s.mode.as_deref(), c);
+    }
+    let target = match &s.alias {
+        Some(t) => Some(find_var(ds, t).ok_or_else(|| Error::NotFound(t.clone()))?),
+        None => None,
+    };
+    let existing = find_var(ds, &s.name);
+    let kind = s
+        .kind
+        .or(existing.as_ref().map(|e| e.2))
+        .or(target.as_ref().map(|t| t.2))
+        .ok_or_else(|| Error::Missing(s.name.clone()))?;
+    let cid = match (&s.collection, &existing) {
+        (Some(c), _) => match ds.collections.iter().find(|x| &x.id == c || &x.name == c) {
+            Some(x) => x.id.clone(),
+            None => ds.add_collection(c),
+        },
+        (None, Some(e)) => e.0.clone(),
+        (None, None) if kind == Kind::Color => design::color_collection(ds),
+        (None, None) => match ds
+            .collections
+            .iter()
+            .find(|c| c.library.is_none() && c.name == variables::TOKENS_COLLECTION)
+        {
+            Some(c) => c.id.clone(),
+            None => ds.add_collection(variables::TOKENS_COLLECTION),
+        },
+    };
+    let (vid, fresh) = match existing.filter(|e| e.0 == cid) {
+        Some(e) if e.2 != kind => return Err(Error::KindMismatch(s.name.clone())),
+        Some(e) => (e.1, false),
+        None => (ds.add_variable(&cid, &s.name, kind)?, true),
+    };
+    let value = match (&s.value, &target) {
+        (Some(v), _) => Some(v.clone()),
+        (None, Some(t)) => Some(DsVal::Alias(t.1.clone())),
+        (None, None) => None,
+    };
+    if let Some(value) = value {
+        let mid = match &s.mode {
+            Some(m) => mode_for(ds, &cid, m)?,
+            None => {
+                let c = ds.collection(&cid).expect("collection exists");
+                active
+                    .get(&cid)
+                    .filter(|m| c.modes.iter().any(|x| &x.id == *m))
+                    .unwrap_or(&c.default_mode)
+                    .clone()
+            }
+        };
+        if fresh {
+            let all: Vec<String> = ds.collection(&cid).unwrap().modes.iter().map(|m| m.id.clone()).collect();
+            for m in all {
+                ds.set_value(&vid, &m, value.clone())?;
+            }
+        }
+        ds.set_value(&vid, &mid, value)?;
+    }
+    if s.description.is_some() || s.hidden.is_some() {
+        let c = ds.collections.iter_mut().find(|c| c.id == cid).unwrap();
+        if c.library.is_some() {
+            return Err(Error::ReadOnly(c.name.clone()));
+        }
+        let v = c.variables.iter_mut().find(|v| v.id == vid).unwrap();
+        if let Some(d) = &s.description {
+            v.description = d.clone();
+        }
+        if let Some(h) = s.hidden {
+            v.hidden = h;
+        }
+    }
+    Ok(())
 }
 
 fn set_variables(ed: &mut Editor, a: &Args) -> ToolResult {
@@ -3378,44 +3664,99 @@ fn set_variables(ed: &mut Editor, a: &Args) -> ToolResult {
         .and_then(Value::as_object)
         .filter(|m| !m.is_empty())
         .ok_or("`variables` must be an object like {\"accent\": \"#cba6f7\"}")?;
-    let mut parsed: Vec<(String, Color)> = Vec::new();
-    for (name, v) in vars {
-        let name = name.trim().trim_start_matches("--").to_string();
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(format!(
-                "variable name `{name}` may only use letters, digits, - and _"
-            ));
-        }
-        let c = v
-            .as_str()
-            .and_then(css::color)
-            .ok_or_else(|| format!("variable `{name}`: `{v}` is not a color"))?;
-        parsed.push((name, c));
-    }
-    let mode = a.str("mode").filter(|m| !m.is_empty());
-    let mut updated: Map<String, Value> = Map::new();
-    for page in 0..ed.pages.len() {
-        let counts = ed.with_page(page, |ed| {
-            ed.edit_variables("Set variables", |tx| {
-                parsed
-                    .iter()
-                    .map(|(n, c)| match mode {
-                        Some(m) => tx.set_variable_in_mode(m, n, *c),
-                        None => tx.set_variable(n, *c),
-                    })
-                    .collect::<Vec<_>>()
-            })
-        });
-        for ((name, _), n) in parsed.iter().zip(counts) {
-            let e = updated.entry(name.clone()).or_insert(json!(0));
-            *e = json!(e.as_u64().unwrap_or(0) + n as u64);
-        }
-    }
+    let mut specs = vars
+        .iter()
+        .map(|(n, v)| parse_spec(n, v, a))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Aliases last, so they may point at a variable defined in the same call.
+    specs.sort_by_key(|s| s.alias.is_some());
+    let active = ed.pages[ed.active_page].modes.clone();
+    let ((), fills) = ed
+        .edit_design("Set variables", |ds| {
+            specs.iter().try_for_each(|s| set_entry(ds, &active, s))
+        })
+        .map_err(|e| e.to_string())?;
+    let updated: Map<String, Value> = specs
+        .iter()
+        .map(|s| {
+            let css = crate::design_system::sanitize_name(&s.name);
+            (s.name.clone(), json!(fills.get(&css).copied().unwrap_or(0)))
+        })
+        .collect();
     text(json!({"fillsUpdated": updated, "pages": ed.pages.len()}))
+}
+
+fn create_collection(ed: &mut Editor, a: &Args) -> ToolResult {
+    let name = a.req_str("name")?.trim().to_string();
+    if name.is_empty() {
+        return Err("`name` is empty".into());
+    }
+    let modes: Vec<String> = a
+        .get("modes")
+        .and_then(Value::as_array)
+        .map(|v| v.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+    let (id, _) = ed
+        .edit_design("Create collection", |ds| {
+            if ds.collections.iter().any(|c| c.library.is_none() && c.name == name) {
+                return Err(variables::Error::Duplicate(format!("collection {name}")));
+            }
+            let id = ds.add_collection(&name);
+            if let Some((first, rest)) = modes.split_first() {
+                let c = ds.collections.iter_mut().find(|c| c.id == id).unwrap();
+                c.modes[0].name = first.clone();
+                for m in rest {
+                    ds.add_mode(&id, m)?;
+                }
+            }
+            Ok(id)
+        })
+        .map_err(|e| e.to_string())?;
+    let c = ed.design.collection(&id).expect("just created");
+    text(json!({"id": id, "name": c.name, "modes": c.modes.iter().map(|m| &m.name).collect::<Vec<_>>()}))
+}
+
+fn delete_variables(ed: &mut Editor, a: &Args) -> ToolResult {
+    let names: Vec<String> = a
+        .get("names")
+        .and_then(Value::as_array)
+        .map(|v| v.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .filter(|v: &Vec<String>| !v.is_empty())
+        .ok_or("`names` must be an array of variable names")?;
+    let force = a.bool("force").unwrap_or(false);
+    let ds = design_of(ed);
+    let ids = names
+        .iter()
+        .map(|n| {
+            find_var(&ds, n.trim().trim_start_matches("--"))
+                .map(|e| e.1)
+                .ok_or_else(|| format!("no variable `{n}`"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !force {
+        for (n, id) in names.iter().zip(&ids) {
+            // Dependents that go in the same call do not count.
+            let mut deps = ds.dependents(id);
+            deps.retain(|d| !names.contains(d));
+            if !deps.is_empty() {
+                return Err(format!(
+                    "`{n}` is aliased by {}; pass force to detach them to their resolved values",
+                    deps.join(", ")
+                ));
+            }
+        }
+    }
+    ed.edit_design("Delete variables", |ds| {
+        for id in &ids {
+            // Gone already when the same variable was named twice.
+            if ds.find(id).is_some() {
+                ds.remove_variable(id, true)?;
+            }
+        }
+        Ok(())
+    })
+    .map_err(|e| e.to_string())?;
+    text(json!({"deleted": names.len()}))
 }
 
 fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
@@ -3494,15 +3835,12 @@ fn set_tokens(ed: &mut Editor, a: &Args) -> ToolResult {
         }
         parsed.push((name, value));
     }
-    for page in 0..ed.pages.len() {
-        ed.with_page(page, |ed| {
-            ed.edit_variables("Set tokens", |tx| {
-                for (n, v) in &parsed {
-                    tx.set_token(n, v);
-                }
-            })
-        });
-    }
+    ed.edit_design("Set tokens", |ds| {
+        parsed
+            .iter()
+            .try_for_each(|(n, v)| design::set_token(ds, n, v))
+    })
+    .map_err(|e| e.to_string())?;
     text(
         json!({"tokens": parsed.len(), "use": "var(--name) in any style value, e.g. padding: var(--spacing-md); substituted when written"}),
     )
@@ -3517,32 +3855,61 @@ fn set_variable_mode(ed: &mut Editor, a: &Args) -> ToolResult {
             known.join(", ")
         ));
     }
+    // Project-wide like before: every page switches (the Design tab switches one page).
+    let (cid, mid) = design::find_mode(&ed.design, &mode).ok_or(format!("no mode `{mode}`"))?;
     let mut fills = 0;
     for page in 0..ed.pages.len() {
-        fills += ed.with_page(page, |ed| {
-            ed.edit_variables("Set variable mode", |tx| tx.set_mode(&mode))
-        });
+        fills += ed
+            .set_page_mode_on(page, &cid, &mid)
+            .map_err(|e| e.to_string())?;
     }
     text(json!({"mode": mode, "fillsUpdated": fills}))
 }
 
 fn get_components(ed: &mut Editor, a: &Args) -> ToolResult {
-    let page = page_arg(ed, a)?;
-    let doc = ed.page_doc(page);
-    let mut comps: Vec<&Node> = doc.nodes.values().filter(|n| n.component).collect();
-    comps.sort_by_key(|n| n.id);
-    let items: Vec<Value> = comps
-        .iter()
-        .map(|c| {
-            let uses = doc
-                .nodes
-                .values()
-                .filter(|n| n.instance.as_ref().is_some_and(|l| l.main == c.id) && n.id != c.id)
-                .count();
-            json!({"id": node_key(ed, page, c.id), "name": c.name,
-                   "width": r2(c.rect.w), "height": r2(c.rect.h), "instances": uses})
-        })
-        .collect();
+    let only = a.str("pageId").filter(|p| !p.is_empty()).map(|p| find_page(ed, p)).transpose()?;
+    // Instances anywhere, by the page and node of their main.
+    let mut uses: HashMap<(usize, NodeId), usize> = HashMap::new();
+    for page in 0..ed.pages.len() {
+        for n in ed.page_doc(page).nodes.values() {
+            let Some(l) = &n.instance else { continue };
+            let main_page = match &l.source {
+                None => page,
+                Some(Source::Page(p)) => match ed.pages.iter().position(|s| s.id == *p) {
+                    Some(i) => i,
+                    None => continue,
+                },
+                Some(Source::Library(_)) => continue,
+            };
+            if n.id != l.main || main_page != page {
+                *uses.entry((main_page, l.main)).or_default() += 1;
+            }
+        }
+    }
+    let mut items: Vec<Value> = Vec::new();
+    for page in (0..ed.pages.len()).filter(|p| only.is_none_or(|o| o == *p)) {
+        let doc = ed.page_doc(page);
+        let mut comps: Vec<&Node> = doc.nodes.values().filter(|n| n.component).collect();
+        comps.sort_by_key(|n| n.id);
+        for c in comps {
+            let n = uses.get(&(page, c.id)).copied().unwrap_or(0);
+            items.push(json!({"id": node_key(ed, page, c.id), "name": c.name,
+                "componentKey": c.component_key, "pageId": ed.pages[page].id,
+                "pageName": ed.pages[page].name,
+                "width": r2(c.rect.w), "height": r2(c.rect.h), "uses": n, "instances": n}));
+        }
+    }
+    if only.is_none() {
+        for (lib, doc) in &ed.library_docs {
+            let mut comps: Vec<&Node> = doc.nodes.values().filter(|n| n.component).collect();
+            comps.sort_by_key(|n| n.id);
+            for c in comps {
+                items.push(json!({"name": c.name, "componentKey": c.component_key,
+                    "source": {"library": lib, "name": doc.name},
+                    "width": r2(c.rect.w), "height": r2(c.rect.h)}));
+            }
+        }
+    }
     text(json!({"components": items}))
 }
 
@@ -3678,7 +4045,12 @@ fn import_components(ed: &mut Editor, a: &Args) -> ToolResult {
                         .filter_map(|k| map.get(k).copied())
                         .collect();
                     c.comments.clear();
-                    if let Some(l) = &mut c.instance {
+                    if c.component && c.component_key.is_some() {
+                        c.component_key = Some(crate::variables::new_id());
+                    }
+                    if let Some(l) = &mut c.instance
+                        && l.source.is_none()
+                    {
                         match map.get(&l.main) {
                             Some(m) => l.main = *m,
                             None => c.instance = None,
@@ -3730,6 +4102,7 @@ fn create_component(ed: &mut Editor, a: &Args) -> ToolResult {
         ed.edit("Create component", |tx| {
             let n = tx.node_mut(id).unwrap();
             n.component = true;
+            n.component_key.get_or_insert_with(crate::variables::new_id);
             if let Some(name) = name {
                 n.name = name;
             }
@@ -3740,16 +4113,49 @@ fn create_component(ed: &mut Editor, a: &Args) -> ToolResult {
     text(json!({"id": node_key(ed, page, id), "name": name, "component": true}))
 }
 
+/// The main component a call names, on any page: `componentId` ("pageId:num") or
+/// `componentKey` (the stable key from get_components).
+fn find_component(ed: &Editor, a: &Args, default_page: usize) -> Result<(usize, NodeId), String> {
+    if let Some(key) = a.str("componentKey").filter(|k| !k.is_empty()) {
+        return (0..ed.pages.len())
+            .find_map(|p| {
+                ed.page_doc(p)
+                    .nodes
+                    .values()
+                    .find(|n| n.component && n.component_key.as_deref() == Some(key))
+                    .map(|n| (p, n.id))
+            })
+            .ok_or_else(|| format!("no component with componentKey `{key}`"));
+    }
+    let (page, id) = resolve(ed, a.req_str("componentId")?, default_page)?;
+    if !ed.page_doc(page).get(id).is_some_and(|n| n.component) {
+        return Err(format!(
+            "{} is not a component (see create_component)",
+            ed.page_doc(page).get(id).map_or("", |n| n.name.as_str())
+        ));
+    }
+    Ok((page, id))
+}
+
 fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
-    let (page, comp) = resolve(ed, a.req_str("componentId")?, page_arg(ed, a)?)?;
-    let parent = match a.str("parentId") {
-        None | Some("") | Some("root") => None,
+    let def = page_arg(ed, a)?;
+    // A componentKey that no page owns may name a component of an enabled library.
+    let lib = a
+        .str("componentKey")
+        .filter(|_| find_component(ed, a, def).is_err())
+        .and_then(|k| ed.find_library_component(k));
+    let (cpage, comp) = match &lib {
+        Some((_, id)) => (def, *id),
+        None => find_component(ed, a, def)?,
+    };
+    let (page, parent) = match a.str("parentId") {
+        None | Some("") | Some("root") => (def, None),
         Some(p) => {
-            let (pp, id) = resolve(ed, p, page)?;
-            if pp != page {
-                return Err("the parent must be on the same page as the component".into());
+            let (pp, id) = resolve(ed, p, def)?;
+            if a.str("pageId").is_some_and(|s| !s.is_empty()) && pp != def {
+                return Err("the parent must be on the page given by pageId".into());
             }
-            Some(id)
+            (pp, Some(id))
         }
     };
     let index = a.num("index").map(|i| i.max(0.0) as usize);
@@ -3757,16 +4163,20 @@ fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
     let name = a
         .str("name")
         .map(|n| n.chars().take(50).collect::<String>());
-    let id = ed.with_page(page, |ed| {
-        let main = ed.doc.get(comp).ok_or("component not found")?;
-        if !main.component {
-            return Err(format!(
-                "{} is not a component (see create_component)",
-                main.name
-            ));
+    let (src_doc, source) = match &lib {
+        Some((l, _)) => (ed.library_docs.get(l).cloned(), Some(Source::Library(l.clone()))),
+        None => {
+            let d = (cpage != page).then(|| ed.page_doc(cpage).clone());
+            let s = d.as_ref().map(|_| Source::Page(ed.pages[cpage].id.clone()));
+            (d, s)
         }
-        let size = (main.rect.w, main.rect.h);
-        Ok(ed.edit("Create instance", |tx| {
+    };
+    let id = ed.with_page(page, |ed| {
+        let size = {
+            let m = src_doc.as_ref().unwrap_or(&ed.doc).get(comp).ok_or("component not found")?;
+            (m.rect.w, m.rect.h)
+        };
+        Ok::<_, String>(ed.edit("Create instance", |tx| {
             let rect = match (parent, at) {
                 (None, Some((x, y))) => Some(Rect::new(x, y, size.0, size.1)),
                 (None, None) => {
@@ -3778,12 +4188,24 @@ fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
                         .filter_map(|r| tx.doc().world_rect(*r))
                         .map(|r| r.right())
                         .fold(f64::MIN, f64::max);
-                    let y = tx.doc().world_rect(comp).map_or(0.0, |r| r.y);
+                    let y = src_doc
+                        .as_ref()
+                        .unwrap_or(tx.doc())
+                        .world_rect(comp)
+                        .map_or(0.0, |r| r.y);
                     Some(Rect::new(right.max(0.0) + 80.0, y, size.0, size.1))
                 }
                 _ => None,
             };
-            let id = crate::editor::structure::instantiate(tx, comp, parent, index, rect);
+            let id = crate::editor::structure::instantiate_from(
+                tx,
+                src_doc.as_ref(),
+                source,
+                comp,
+                parent,
+                index,
+                rect,
+            );
             if let Some(name) = name {
                 tx.node_mut(id).unwrap().name = name;
             }
@@ -3812,25 +4234,41 @@ fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
 fn swap_instance(ed: &mut Editor, a: &Args) -> ToolResult {
     let def = page_arg(ed, a)?;
     let (page, inst) = resolve(ed, a.req_str("nodeId")?, def)?;
-    let (comp_page, new_main) = resolve(ed, a.req_str("componentId")?, page)?;
-    if page != comp_page {
-        return Err("instance and component must be on the same page".into());
-    }
+    let lib = a
+        .str("componentKey")
+        .filter(|_| find_component(ed, a, page).is_err())
+        .and_then(|k| ed.find_library_component(k));
+    let (cpage, new_main) = match &lib {
+        Some((_, id)) => (page, *id),
+        None => find_component(ed, a, page)?,
+    };
+    let (src_doc, source) = match &lib {
+        Some((l, _)) => (ed.library_docs.get(l).cloned(), Some(Source::Library(l.clone()))),
+        None => {
+            let d = (cpage != page).then(|| ed.page_doc(cpage).clone());
+            let s = d.as_ref().map(|_| Source::Page(ed.pages[cpage].id.clone()));
+            (d, s)
+        }
+    };
     ed.with_page(page, |ed| {
-        if !ed.is_instance_root(inst) {
+        // An instance root: linked, and not itself inside an instance. A missing main is fine,
+        // so a swap restores such an instance.
+        let n = ed.doc.get(inst).ok_or("node not found")?;
+        let is_root = n.instance.is_some()
+            && n.parent
+                .and_then(|p| ed.doc.get(p))
+                .is_none_or(|p| p.instance.is_none());
+        if !is_root {
             return Err(format!(
                 "`{}` is not a component instance root",
                 a.req_str("nodeId").unwrap_or_default()
             ));
         }
-        if !ed.doc.get(new_main).is_some_and(|m| m.component) {
-            return Err(format!(
-                "`{}` is not a main component",
-                a.req_str("componentId").unwrap_or_default()
-            ));
+        if cpage == page && lib.is_none() && (inst == new_main || ed.doc.is_ancestor(inst, new_main)) {
+            return Err("could not swap instance to that component".into());
         }
         let ok = ed.edit("Swap instance", |tx| {
-            crate::editor::structure::swap_instance_tx(tx, inst, new_main)
+            crate::editor::structure::swap_instance_tx(tx, src_doc.as_ref(), source, inst, new_main)
         });
         if !ok {
             return Err("could not swap instance to that component".into());
@@ -3839,9 +4277,27 @@ fn swap_instance(ed: &mut Editor, a: &Args) -> ToolResult {
     })?;
     text(json!({
         "id": node_key(ed, page, inst),
-        "componentId": node_key(ed, page, new_main),
+        "componentId": if lib.is_some() { Value::Null } else { json!(node_key(ed, cpage, new_main)) },
         "swapped": true,
     }))
+}
+
+fn bind_variable(ed: &mut Editor, a: &Args) -> ToolResult {
+    let def = page_arg(ed, a)?;
+    let keys = a.strs("nodeIds")?;
+    let (page, ids) = resolve_all(ed, &keys, def)?;
+    let field = a.req_str("field")?;
+    let css = match a.str("variable").filter(|v| !v.is_empty()) {
+        None => None,
+        Some(name) => {
+            let ds = design_of(ed);
+            let (_, vid, _) = find_var(&ds, name.trim().trim_start_matches("--"))
+                .ok_or_else(|| format!("no variable `{name}`"))?;
+            Some(variables::css_name(ds.find(&vid).unwrap().1))
+        }
+    };
+    ed.with_page(page, |ed| ed.bind(&ids, field, css.as_deref()))?;
+    text(json!({"nodes": ids.len(), "field": field, "variable": css}))
 }
 
 fn detach_instance(ed: &mut Editor, a: &Args) -> ToolResult {
@@ -3898,19 +4354,18 @@ fn import_design_system(host: &mut dyn Host, a: &Args) -> ToolResult {
     if let Some(p) = a.str("pageId").filter(|p| !p.is_empty()) {
         find_page(ed, p)?;
     }
-    let mut fills = 0;
-    for page in 0..ed.pages.len() {
-        fills += ed.with_page(page, |ed| {
-            ed.edit_variables("Import design system", |tx| {
-                tx.set_design_system(
-                    &pkg.tokens.variables,
-                    &pkg.tokens.modes,
-                    &pkg.tokens.tokens,
-                    None,
-                )
-            })
-        });
-    }
+    let (_, per_var) = ed
+        .edit_design("Import design system", |ds| {
+            design::replace_system(
+                ds,
+                &pkg.tokens.variables,
+                &pkg.tokens.modes,
+                &pkg.tokens.tokens,
+            );
+            Ok(())
+        })
+        .map_err(|e| e.to_string())?;
+    let fills: usize = per_var.values().sum();
     text(json!({
         "package": {"id": pkg.manifest.id, "name": pkg.manifest.name,
                     "category": pkg.manifest.category, "description": pkg.manifest.description},
@@ -3941,7 +4396,9 @@ fn export_design_system(host: &mut dyn Host, a: &Args) -> ToolResult {
     if let Some(name) = project {
         meta.name = name;
     }
-    let written = crate::design_system::export_package_with(&dir, &doc, &meta)?;
+    let ds = design_of(ed);
+    let written =
+        crate::design_system::export_package_system(&dir, &doc, &meta, &ds, &ed.pages[page].modes)?;
     text(json!({
         "path": dir,
         "files": written,
@@ -3954,6 +4411,70 @@ fn export_design_system(host: &mut dyn Host, a: &Args) -> ToolResult {
 #[cfg(target_arch = "wasm32")]
 fn export_design_system(_: &mut dyn Host, _: &Args) -> ToolResult {
     Err(NO_DISK.into())
+}
+
+// ------------------------------------------------------------------------------ libraries
+
+fn library_tool(host: &mut dyn Host, name: &str, a: &Args) -> ToolResult {
+    use crate::libraries as lib;
+    let Some((dir, project_id)) = host.project().map(|p| (p.dir.clone(), p.manifest.id.clone())) else {
+        return Err("libraries need a saved project (create_file, then open_file)".into());
+    };
+    let store = host.store().clone();
+    let summary = |l: &lib::LibrarySummary, enabled: bool| {
+        json!({"libraryId": l.library_id, "name": l.name, "description": l.description,
+            "version": l.version, "variables": l.variables, "components": l.components,
+            "enabled": enabled})
+    };
+    let r = match name {
+        "publish_library" => {
+            let gpu = host.gpu();
+            let ed = host.editor();
+            let changes = lib::publish_diff(&dir, ed)?;
+            let p = lib::publish_with_previews(&dir, ed, a.str("description").unwrap_or(""), gpu.as_ref())?;
+            json!({"libraryId": p.library_id, "name": p.name, "version": p.version,
+                "components": p.components.len(), "changes": changes.to_string()})
+        }
+        "list_libraries" => {
+            let ed = host.editor();
+            let enabled = lib::status(&store, &dir, ed);
+            let available: Vec<Value> = lib::available(&store, Some(&dir))
+                .iter()
+                .map(|l| summary(l, enabled.iter().any(|e| e.library_id == l.library_id)))
+                .collect();
+            let enabled: Vec<Value> = enabled
+                .iter()
+                .map(|e| json!({"libraryId": e.library_id, "name": e.name, "version": e.local_version,
+                    "sourceVersion": e.source_version, "sourceFound": e.source_version.is_some(),
+                    "updateAvailable": e.update_available}))
+                .collect();
+            return text(json!({"libraryId": project_id, "available": available, "enabled": enabled}));
+        }
+        "enable_library" => {
+            let id = a.req_str("libraryId")?;
+            let l = lib::available(&store, Some(&dir))
+                .into_iter()
+                .find(|l| l.library_id == id || l.name == id)
+                .ok_or_else(|| format!("no available library `{id}` (see list_libraries)"))?;
+            lib::enable(&dir, host.editor(), &l)?;
+            json!({"libraryId": l.library_id, "name": l.name, "version": l.version,
+                "variables": l.variables, "components": l.components})
+        }
+        "update_library" => {
+            let id = a.req_str("libraryId")?;
+            let changes = lib::update_diff(&store, &dir, id)?;
+            lib::update(&store, &dir, host.editor(), id)?;
+            json!({"libraryId": id, "changes": changes.to_string()})
+        }
+        _ => {
+            let id = a.req_str("libraryId")?;
+            let r = lib::disable(&dir, host.editor(), id)?;
+            json!({"libraryId": id, "detachedFills": r.fills, "detachedBindings": r.bindings,
+                "detachedInstances": r.instances})
+        }
+    };
+    host.save()?;
+    text(r)
 }
 
 // ------------------------------------------------------------------------------ icons

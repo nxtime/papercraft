@@ -5,7 +5,9 @@ use super::Editor;
 use crate::geom::{Rect, V2, v2};
 use crate::history::Tx;
 use crate::layout;
-use crate::model::{AutoLayout, Direction, InstanceLink, Node, NodeId, NodeKind, Sizing};
+use crate::model::{
+    AutoLayout, Direction, Document, InstanceLink, Node, NodeId, NodeKind, Sizing, Source,
+};
 use std::collections::{BTreeSet, HashSet};
 
 /// Property groups an instance can override (and that sync copies from the main component).
@@ -19,14 +21,13 @@ pub fn override_key(field: &str) -> &'static str {
     match field {
         "x" | "y" | "position" => "position",
         "width" | "height" | "size" => "size",
-        "fill" | "fills" | "color" => "fills",
+        "fill" | "fills" | "color" | "text-color" => "fills",
         "stroke" | "stroke width" | "stroke align" | "dash" | "cap" | "join" => "stroke",
         "radius" | "radii" => "radius",
         "opacity" | "blend" => "opacity",
         "text" => "text",
-        "font size" | "font" | "bold" | "italic" | "align" | "line height" | "letter spacing" => {
-            "font"
-        }
+        "font size" | "font" | "bold" | "italic" | "align" | "line height" | "letter spacing"
+        | "font-size" | "line-height" => "font",
         "visible" => "visible",
         "name" => "name",
         _ => "layout",
@@ -106,9 +107,21 @@ fn copy_props(main: &Node, inst: &mut Node, overrides: &[String], is_root: bool)
         inst.rect.w = main.rect.w;
         inst.rect.h = main.rect.h;
     }
+    // Bindings follow the main, field by field, except in overridden groups.
+    let fields: BTreeSet<String> = main.bindings.keys().chain(inst.bindings.keys()).cloned().collect();
+    for f in fields {
+        if ov(override_key(&f)) {
+            continue;
+        }
+        match main.bindings.get(&f) {
+            Some(v) => inst.bindings.insert(f, v.clone()),
+            None => inst.bindings.remove(&f),
+        };
+    }
 }
 
-/// Copy a subtree as a new instance subtree under `parent` (ids are fresh).
+/// Copy a subtree as a new instance subtree under `parent` (ids are fresh). The main is on
+/// the same page.
 pub fn instantiate(
     tx: &mut Tx,
     main: NodeId,
@@ -116,23 +129,43 @@ pub fn instantiate(
     index: Option<usize>,
     root_rect: Option<Rect>,
 ) -> NodeId {
-    let src = tx.doc().get(main).unwrap().clone();
+    instantiate_from(tx, None, None, main, parent, index, root_rect)
+}
+
+/// Like [`instantiate`] for a main in another document `src` (`None` = this one), recorded
+/// as `source` on every node of the instance.
+pub fn instantiate_from(
+    tx: &mut Tx,
+    src: Option<&Document>,
+    source: Option<Source>,
+    main: NodeId,
+    parent: Option<NodeId>,
+    index: Option<usize>,
+    root_rect: Option<Rect>,
+) -> NodeId {
+    let node = match src {
+        Some(d) => d.get(main),
+        None => tx.doc().get(main),
+    };
+    let src_node = node.unwrap().clone();
     let id = tx.alloc_id();
-    let mut n = src.clone();
+    let mut n = src_node.clone();
     n.id = id;
     n.children = Vec::new();
     n.component = false;
+    n.component_key = None;
     n.comments.clear();
     n.instance = Some(InstanceLink {
         main,
         overrides: Vec::new(),
+        source: source.clone(),
     });
     if let Some(r) = root_rect {
         n.rect = r;
     }
     tx.insert(n, parent, index);
-    for c in src.children {
-        instantiate(tx, c, Some(id), None, None);
+    for c in src_node.children {
+        instantiate_from(tx, src, source.clone(), c, Some(id), None, None);
     }
     id
 }
@@ -156,13 +189,27 @@ pub fn mark_overrides(tx: &mut Tx, id: NodeId, keys: &[&str]) {
     }
 }
 
-/// Bring one instance subtree in line with its main counterpart.
-fn sync_node(tx: &mut Tx, inst: NodeId, is_root: bool) {
+/// Re-sync the instance subtree at `inst` from `ext` (a library snapshot), keeping overrides.
+pub fn sync_library_instance(tx: &mut Tx, inst: NodeId, ext: &Document) {
+    sync_node(tx, inst, true, Some(ext));
+}
+
+/// Bring one instance subtree in line with its main counterpart. `ext` is the document of
+/// the main's page when the link has a `source`; without it such an instance is left alone.
+pub(super) fn sync_node(tx: &mut Tx, inst: NodeId, is_root: bool, ext: Option<&Document>) {
     let Some(n) = tx.doc().get(inst) else { return };
     let Some(link) = n.instance.clone() else {
         return;
     };
-    let Some(main) = tx.doc().get(link.main).cloned() else {
+    let ext = ext.filter(|_| link.source.is_some());
+    let main = match ext {
+        None => tx.doc().get(link.main),
+        Some(d) => d.get(link.main),
+    };
+    if link.source.is_some() && ext.is_none() {
+        return;
+    }
+    let Some(main) = main.cloned() else {
         return;
     };
     let mut updated = n.clone();
@@ -172,13 +219,13 @@ fn sync_node(tx: &mut Tx, inst: NodeId, is_root: bool) {
     }
     // Children: match by link; create missing, remove stale, follow main's order.
     let kids: Vec<NodeId> = tx.doc().get(inst).unwrap().children.clone();
-    let mut by_main: Vec<(NodeId, NodeId)> = kids
+    let mut by_main: Vec<(NodeId, Option<Source>, NodeId)> = kids
         .iter()
         .filter_map(|k| {
             tx.doc()
                 .get(*k)
                 .and_then(|c| c.instance.as_ref())
-                .map(|l| (l.main, *k))
+                .map(|l| (l.main, l.source.clone(), *k))
         })
         .collect();
     for k in &kids {
@@ -186,23 +233,23 @@ fn sync_node(tx: &mut Tx, inst: NodeId, is_root: bool) {
             .doc()
             .get(*k)
             .and_then(|c| c.instance.as_ref())
-            .is_none_or(|l| !main.children.contains(&l.main));
+            .is_none_or(|l| !main.children.contains(&l.main) || l.source != link.source);
         if stale {
             tx.remove(*k);
-            by_main.retain(|(_, x)| x != k);
+            by_main.retain(|(_, _, x)| x != k);
         }
     }
     for (i, mc) in main.children.iter().enumerate() {
-        match by_main.iter().find(|(m, _)| m == mc) {
-            Some((_, k)) => {
+        match by_main.iter().find(|(m, s, _)| m == mc && *s == link.source) {
+            Some((_, _, k)) => {
                 let k = *k;
                 if tx.doc().children(Some(inst)).iter().position(|x| *x == k) != Some(i) {
                     tx.move_to_index(k, i);
                 }
-                sync_node(tx, k, false);
+                sync_node(tx, k, false, ext);
             }
             None => {
-                instantiate(tx, *mc, Some(inst), Some(i), None);
+                instantiate_from(tx, ext, link.source.clone(), *mc, Some(inst), Some(i), None);
             }
         }
     }
@@ -213,6 +260,7 @@ impl Editor {
     /// auto layout, and instances of edited components. Runs inside the transaction, so it
     /// undoes together with the edit that caused it.
     pub fn fixup(&mut self) {
+        self.touched_mains.clear();
         let Some((rec, _)) = &self.rec else { return };
         let touched: Vec<NodeId> = rec.touched().to_vec();
         if touched.is_empty() {
@@ -253,6 +301,7 @@ impl Editor {
             .copied()
             .filter(|id| self.doc.get(*id).is_some_and(|n| n.component))
             .collect();
+        self.touched_mains = comps.clone();
         {
             let mut tx = self.tx();
             for g in &groups {
@@ -263,11 +312,15 @@ impl Editor {
                     .doc()
                     .nodes
                     .values()
-                    .filter(|n| n.instance.as_ref().is_some_and(|l| l.main == *c))
+                    .filter(|n| {
+                        n.instance
+                            .as_ref()
+                            .is_some_and(|l| l.main == *c && l.source.is_none())
+                    })
                     .map(|n| n.id)
                     .collect();
                 for i in instances {
-                    sync_node(&mut tx, i, true);
+                    sync_node(&mut tx, i, true, None);
                     cands.insert(i);
                 }
             }
@@ -326,12 +379,17 @@ impl Editor {
         let key = override_key(field);
         let mut tx = self.tx();
         for id in ids {
-            let is_inst = tx.doc().get(*id).is_some_and(|n| n.instance.is_some());
-            if is_inst
-                && let Some(n) = tx.node_mut(*id)
-                && let Some(l) = &mut n.instance
-                && !l.overrides.iter().any(|o| o == key)
-            {
+            let Some(n) = tx.doc().get(*id) else { continue };
+            let Some(l) = &n.instance else { continue };
+            let push = !l.overrides.iter().any(|o| o == key);
+            let unbind = n.bindings.keys().any(|f| override_key(f) == key);
+            if !push && !unbind {
+                continue;
+            }
+            let n = tx.node_mut(*id).unwrap();
+            // An overridden field stops following its variable, on this instance only.
+            n.bindings.retain(|f, _| override_key(f) != key);
+            if push && let Some(l) = &mut n.instance {
                 l.overrides.push(key.into());
             }
         }
@@ -426,7 +484,9 @@ impl Editor {
                 .is_some_and(|n| n.is_frame() && n.instance.is_none())
         {
             self.edit("Create component", |tx| {
-                tx.node_mut(id).unwrap().component = true;
+                let n = tx.node_mut(id).unwrap();
+                n.component = true;
+                n.component_key.get_or_insert_with(crate::variables::new_id);
             });
             return;
         }
@@ -436,6 +496,7 @@ impl Editor {
             self.edit("Create component", |tx| {
                 let node = tx.node_mut(f).unwrap();
                 node.component = true;
+                node.component_key.get_or_insert_with(crate::variables::new_id);
                 node.name = format!("Component {}", n + 1);
             });
         }
@@ -479,7 +540,7 @@ impl Editor {
         let roots: Vec<NodeId> = self
             .top_selection()
             .into_iter()
-            .filter(|id| self.is_instance_root(*id))
+            .filter(|id| self.is_instance_root(*id) || self.is_main_missing(*id))
             .collect();
         if roots.is_empty() {
             return;
@@ -504,6 +565,7 @@ impl Editor {
                     .find(|a| self.is_instance_root(*a))
             })
             .collect();
+        let exts: Vec<Option<Document>> = roots.iter().map(|r| self.source_doc(*r)).collect();
         self.edit("Reset overrides", |tx| {
             for r in &ids {
                 for id in tx.doc().subtree(*r) {
@@ -512,39 +574,134 @@ impl Editor {
                     }
                 }
             }
-            for r in roots {
-                sync_node(tx, r, true);
+            for (r, ext) in roots.into_iter().zip(&exts) {
+                sync_node(tx, r, true, ext.as_ref());
             }
         });
     }
 
+    /// Index of the page the document being edited belongs to (differs from `active_page`
+    /// inside `with_page`).
+    pub fn edit_page_index(&self) -> usize {
+        self.edit_page.unwrap_or(self.active_page)
+    }
+
+    /// The page and node a link points at, when that node exists.
+    fn link_main(&self, l: &InstanceLink) -> Option<(usize, &Node)> {
+        let page = match &l.source {
+            None => self.edit_page_index(),
+            Some(Source::Page(p)) => self.pages.iter().position(|s| s.id == *p)?,
+            Some(Source::Library(_)) => return None,
+        };
+        let doc = if page == self.edit_page_index() {
+            &self.doc
+        } else {
+            &self.pages[page].stash.as_ref()?.doc
+        };
+        doc.get(l.main).map(|n| (page, n))
+    }
+
+    /// A clone of the document holding the main of instance node `id`, when it is another page.
+    pub(super) fn source_doc(&self, id: NodeId) -> Option<Document> {
+        let l = self.doc.get(id)?.instance.as_ref()?;
+        let Source::Page(_) = l.source.as_ref()? else {
+            return match l.source.as_ref()? {
+                Source::Library(id) => self.library_docs.get(id).cloned(),
+                Source::Page(_) => None,
+            };
+        };
+        let (page, _) = self.link_main(l)?;
+        Some(self.page_doc(page).clone())
+    }
+
+    fn library_main_ok(&self, lib: &str, main: NodeId) -> bool {
+        self.library_docs.get(lib).and_then(|d| d.get(main)).is_some_and(|m| m.component)
+    }
+
     pub fn is_instance_root(&self, id: NodeId) -> bool {
         self.doc.get(id).is_some_and(|n| {
-            n.instance
-                .as_ref()
-                .is_some_and(|l| self.doc.get(l.main).is_some_and(|m| m.component))
+            n.instance.as_ref().is_some_and(|l| match &l.source {
+                // A library instance whose library or component is gone still counts (detach, warning).
+                Some(Source::Library(lib)) => self.library_main_ok(lib, l.main) || self.is_main_missing(id),
+                _ => self.link_main(l).is_some_and(|(_, m)| m.component),
+            })
         })
     }
 
-    /// The main component an instance root points to.
+    /// An instance root whose main component no longer exists.
+    pub fn is_main_missing(&self, id: NodeId) -> bool {
+        self.doc.get(id).is_some_and(|n| {
+            let Some(l) = &n.instance else { return false };
+            let root = n
+                .parent
+                .and_then(|p| self.doc.get(p))
+                .is_none_or(|p| p.instance.is_none());
+            root && match &l.source {
+                Some(Source::Library(lib)) => !self.library_main_ok(lib, l.main),
+                _ => self.link_main(l).is_none_or(|(_, m)| !m.component),
+            }
+        })
+    }
+
+    /// Instance roots on page `page` whose main component is gone (deleted, or its page).
+    /// They keep their content; the UI offers Detach or Restore. Not for use inside `with_page`.
+    pub fn missing_mains(&self, page: usize) -> Vec<NodeId> {
+        let doc = self.page_doc(page);
+        let mut out: Vec<NodeId> = doc
+            .nodes
+            .values()
+            .filter(|n| {
+                let Some(l) = &n.instance else { return false };
+                let root = n
+                    .parent
+                    .and_then(|p| doc.get(p))
+                    .is_none_or(|p| p.instance.is_none());
+                let found = match &l.source {
+                    None => doc.get(l.main),
+                    Some(Source::Page(p)) => self
+                        .pages
+                        .iter()
+                        .position(|s| s.id == *p)
+                        .and_then(|i| self.page_doc(i).get(l.main)),
+                    Some(Source::Library(lib)) => return root && !self.library_main_ok(lib, l.main),
+                };
+                root && found.is_none_or(|m| !m.component)
+            })
+            .map(|n| n.id)
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The main component an instance root points to, when it is on the same page.
     pub fn instance_main_root(&self, id: NodeId) -> Option<NodeId> {
         let l = self.doc.get(id)?.instance.as_ref()?;
-        self.doc.get(l.main).filter(|m| m.component).map(|m| m.id)
+        if l.source.is_some() {
+            return None;
+        }
+        self.link_main(l).filter(|(_, m)| m.component).map(|(_, m)| m.id)
     }
 
     /// Select the main component of the selected instance.
     pub fn go_to_main(&mut self) {
-        if let Some(m) = self
+        let Some(l) = self
             .selection
             .first()
-            .and_then(|id| self.instance_main_root(*id))
-        {
-            self.selection = vec![m];
-            if let Some(r) = self.doc.world_rect(m) {
-                self.camera
-                    .fit(&r, self.viewport, 80.0, self.camera.zoom.max(1.0));
-                self.revision += 1;
-            }
+            .and_then(|id| self.doc.get(*id))
+            .and_then(|n| n.instance.clone())
+        else {
+            return;
+        };
+        let Some((page, m)) = self.link_main(&l).filter(|(_, m)| m.component).map(|(p, m)| (p, m.id))
+        else {
+            return;
+        };
+        self.switch_page(page);
+        self.selection = vec![m];
+        if let Some(r) = self.doc.world_rect(m) {
+            self.camera
+                .fit(&r, self.viewport, 80.0, self.camera.zoom.max(1.0));
+            self.revision += 1;
         }
     }
 
@@ -558,7 +715,7 @@ impl Editor {
         {
             return false;
         }
-        self.edit("Swap instance", |tx| swap_instance_tx(tx, inst, new_main));
+        self.edit("Swap instance", |tx| swap_instance_tx(tx, None, None, inst, new_main));
         true
     }
 
@@ -783,16 +940,23 @@ pub fn infer_layout(rects: &[Rect], fw: f64, fh: f64) -> AutoLayout {
 }
 
 /// Swap `inst` to `new_main` inside an open transaction, matching child overrides by name/kind.
-pub fn swap_instance_tx(tx: &mut Tx, inst: NodeId, new_main: NodeId) -> bool {
-    let Some(new_comp) = tx.doc().get(new_main).cloned() else {
+pub fn swap_instance_tx(
+    tx: &mut Tx,
+    ext: Option<&Document>,
+    source: Option<Source>,
+    inst: NodeId,
+    new_main: NodeId,
+) -> bool {
+    let src = ext.unwrap_or(tx.doc());
+    let Some(new_comp) = src.get(new_main).cloned() else {
         return false;
     };
     if !new_comp.component {
         return false;
     }
     let mut target_by_name: Vec<(String, &'static str, NodeId)> = Vec::new();
-    for cid in tx.doc().subtree(new_main).into_iter().skip(1) {
-        if let Some(cn) = tx.doc().get(cid) {
+    for cid in src.subtree(new_main).into_iter().skip(1) {
+        if let Some(cn) = src.get(cid) {
             target_by_name.push((cn.name.clone(), cn.kind.type_name(), cid));
         }
     }
@@ -814,10 +978,15 @@ pub fn swap_instance_tx(tx: &mut Tx, inst: NodeId, new_main: NodeId) -> bool {
                 link.main = tid;
             }
         }
+        // Unmatched nodes are removed by the sync below; they must not keep the old source.
+        if let Some(link) = tx.node_mut(k).and_then(|n| n.instance.as_mut()) {
+            link.source = source.clone();
+        }
     }
     if let Some(root) = tx.node_mut(inst) {
         if let Some(link) = &mut root.instance {
             link.main = new_main;
+            link.source = source;
         }
         if root
             .instance
@@ -827,6 +996,86 @@ pub fn swap_instance_tx(tx: &mut Tx, inst: NodeId, new_main: NodeId) -> bool {
             root.name = new_comp.name;
         }
     }
-    sync_node(tx, inst, true);
+    sync_node(tx, inst, true, ext);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Paint;
+
+    /// Two pages; a component on page 0 with a text child, an instance of it on page 1.
+    fn setup() -> (Editor, NodeId, NodeId) {
+        let mut e = Editor::default();
+        e.add_page_in_background(None);
+        let comp = e.add_node(
+            Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0., 0., 50., 50.)),
+            None,
+        );
+        e.selection = vec![comp];
+        e.create_component();
+        let src = e.doc.clone();
+        let source = Some(Source::Page(e.pages[0].id.clone()));
+        let inst = e.with_page(1, |e| {
+            e.edit("i", |tx| instantiate_from(tx, Some(&src), source, comp, None, None, None))
+        });
+        (e, comp, inst)
+    }
+
+    fn red(e: &Editor, page: usize, id: NodeId) -> bool {
+        matches!(e.page_doc(page).get(id).unwrap().style.fills.first(),
+            Some(Paint::Solid { color, .. }) if color.r == 255 && color.b == 0)
+    }
+
+    #[test]
+    fn main_edit_updates_other_page_with_undo_per_page() {
+        let (mut e, comp, inst) = setup();
+        assert!(e.doc.get(comp).unwrap().component_key.is_some());
+        assert!(e.page_doc(1).get(inst).unwrap().component_key.is_none());
+        e.edit("red", |tx| {
+            tx.node_mut(comp).unwrap().style.fills = vec![Paint::solid(crate::model::Color::rgb(255, 0, 0))];
+        });
+        assert!(red(&e, 1, inst), "page B follows the main");
+        e.undo();
+        assert!(!red(&e, 0, comp), "A restored");
+        assert!(red(&e, 1, inst), "B untouched by undo on A");
+        e.with_page(1, |e| e.undo());
+        assert!(!red(&e, 1, inst), "undo on B restores B");
+    }
+
+    #[test]
+    fn deleting_main_keeps_instance_and_lists_it() {
+        let (mut e, comp, inst) = setup();
+        assert!(e.missing_mains(1).is_empty());
+        e.edit("del", |tx| tx.remove(comp));
+        assert!(e.page_doc(1).get(inst).is_some());
+        assert_eq!(e.missing_mains(1), vec![inst]);
+    }
+
+    #[test]
+    fn sync_replaces_child_links_with_a_different_source() {
+        let mut e = Editor::default();
+        let comp = e.add_node(
+            Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0., 0., 50., 50.)),
+            None,
+        );
+        let kid = e.add_node(
+            Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0., 0., 5., 5.)),
+            Some(comp),
+        );
+        e.selection = vec![comp];
+        e.create_component();
+        let inst = e.edit("i", |tx| instantiate(tx, comp, None, None, None));
+        let old_kid = e.doc.get(inst).unwrap().children[0];
+        e.edit("stale", |tx| {
+            tx.node_mut(old_kid).unwrap().instance.as_mut().unwrap().source = Some(Source::Page("gone".into()));
+        });
+        e.edit("sync", |tx| sync_node(tx, inst, true, None));
+        let kids = e.doc.get(inst).unwrap().children.clone();
+        assert_eq!(kids.len(), 1);
+        assert_ne!(kids[0], old_kid, "stale-source child replaced");
+        let l = e.doc.get(kids[0]).unwrap().instance.clone().unwrap();
+        assert_eq!((l.main, l.source), (kid, None));
+    }
 }

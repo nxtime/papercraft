@@ -4,6 +4,7 @@ use super::css;
 use crate::model::{
     Align, AutoLayout, Direction, Document, Node, NodeId, NodeKind, Paint, Sizing, TextAlign,
 };
+use crate::variables::{DesignSystem, Kind, PageModes, Value as DsValue};
 use serde_json::{Map, Value, json};
 
 fn parent_layout(doc: &Document, n: &Node) -> Option<AutoLayout> {
@@ -586,6 +587,25 @@ pub fn to_html_css(doc: &Document, root: NodeId) -> String {
     format!("<style>\n{css_out}</style>\n{markup}")
 }
 
+/// Variables and tokens as `:root` custom properties plus one `[data-theme]` block per mode.
+pub fn export_variables_css(doc: &Document) -> String {
+    let body: String = doc
+        .variables
+        .iter()
+        .map(|(k, c)| format!("  --{k}: {};\n", c.to_hex()))
+        .chain(doc.tokens.iter().map(|(k, v)| format!("  --{k}: {v};\n")))
+        .collect();
+    let mut out = format!(":root {{\n{body}}}\n");
+    for (mode, vars) in &doc.modes {
+        out.push_str(&format!("[data-theme=\"{mode}\"] {{\n"));
+        for (k, c) in vars {
+            out.push_str(&format!("  --{k}: {};\n", c.to_hex()));
+        }
+        out.push_str("}\n");
+    }
+    out
+}
+
 /// Export document variables and tokens as a Tailwind v4 `@theme` block plus mode overrides.
 pub fn export_variables_tailwind(doc: &Document) -> String {
     let mut out = String::from("@theme {\n");
@@ -650,6 +670,89 @@ pub fn export_variables_dtcg(doc: &Document) -> Value {
         out.insert(k.clone(), json!({ "$type": ty, "$value": v }));
     }
     Value::Object(out)
+}
+
+/// The project design system as DTCG JSON: groups (`/` in a name) nest, aliases are `{a.b}`
+/// references, extra modes sit in `$extensions.modes`. `$value` follows the page's `modes`.
+pub fn export_dtcg_system(ds: &DesignSystem, modes: &PageModes) -> Value {
+    let reference = |id: &str| {
+        let name = ds.find(id).map_or("", |(_, v)| v.name.as_str());
+        format!("{{{}}}", name.replace('/', "."))
+    };
+    let literal = |v: &DsValue, kind: Kind| match v {
+        DsValue::Color(c) => json!(c.to_hex()),
+        DsValue::Number(n) if kind == Kind::Number => json!(format!("{n}px")),
+        DsValue::Number(n) => json!(n),
+        DsValue::String(s) => json!(s),
+        DsValue::Boolean(b) => json!(b),
+        DsValue::Alias(id) => json!(reference(id)),
+    };
+    let mut out = Map::new();
+    for c in &ds.collections {
+        for v in &c.variables {
+            let active = modes.get(&c.id).unwrap_or(&c.default_mode);
+            let Some(raw) = v.values.get(active).or_else(|| v.values.get(&c.default_mode)) else {
+                continue;
+            };
+            let ty = match (v.kind, raw) {
+                (Kind::Color, _) => "color",
+                (Kind::Number, _) => "dimension",
+                (Kind::Boolean, _) => "boolean",
+                (Kind::String, DsValue::String(s)) if is_dimension_token(s) => "dimension",
+                (Kind::String, _) => "string",
+            };
+            let mut entry = Map::new();
+            entry.insert("$type".into(), json!(ty));
+            entry.insert("$value".into(), literal(raw, v.kind));
+            if !v.description.is_empty() {
+                entry.insert("$description".into(), json!(v.description));
+            }
+            if c.modes.len() > 1 {
+                let per: Map<String, Value> = c
+                    .modes
+                    .iter()
+                    .filter_map(|m| Some((m.name.clone(), literal(v.values.get(&m.id)?, v.kind))))
+                    .collect();
+                entry.insert("$extensions".into(), json!({ "modes": per }));
+            }
+            insert_nested(&mut out, &v.name, entry);
+        }
+    }
+    Value::Object(out)
+}
+
+/// Put `entry` at the `/` path of `name`; when a path segment is already a token, the entry
+/// goes in flat under its full name instead.
+fn insert_nested(root: &mut Map<String, Value>, name: &str, entry: Map<String, Value>) {
+    let segs: Vec<&str> = name.split('/').filter(|s| !s.is_empty()).collect();
+    let Some((leaf, groups)) = segs.split_last() else {
+        return;
+    };
+    // A group that is already a token, or a leaf already taken, sends the entry in flat.
+    let mut probe = Some(&*root);
+    for g in groups {
+        probe = match probe.and_then(|m| m.get(*g)) {
+            None => None,
+            Some(Value::Object(m)) if !m.contains_key("$value") => Some(m),
+            Some(_) => {
+                root.insert(name.replace('/', "-"), Value::Object(entry));
+                return;
+            }
+        };
+    }
+    if probe.is_some_and(|m| m.contains_key(*leaf)) {
+        root.insert(name.replace('/', "-"), Value::Object(entry));
+        return;
+    }
+    let mut cur = root;
+    for g in groups {
+        cur = cur
+            .entry(g.to_string())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .expect("checked above");
+    }
+    cur.insert(leaf.to_string(), Value::Object(entry));
 }
 
 fn pascal_ident(name: &str) -> String {
@@ -1692,6 +1795,7 @@ mod tests {
         frame.instance = Some(InstanceLink {
             main: comp_id,
             overrides: Vec::new(),
+            source: None,
         });
         frame.layout = Some(AutoLayout {
             direction: Direction::Vertical,

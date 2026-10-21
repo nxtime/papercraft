@@ -2,6 +2,7 @@
 //! projects home screen.
 
 pub mod agent;
+pub mod bind;
 pub mod confirm;
 pub mod design;
 pub mod home;
@@ -13,7 +14,9 @@ pub mod motion;
 pub mod pages;
 pub mod palette;
 pub mod panels;
+pub mod libraries;
 pub mod settings;
+pub mod variables;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
 
@@ -80,6 +83,8 @@ pub struct UiState {
     pub show_design: bool,
     pub palette: palette::PaletteUi,
     pub settings: settings::SettingsUi,
+    pub variables: variables::VariablesUi,
+    pub libraries: libraries::LibrariesUi,
     /// All panels hidden (⌘\\): just the canvas.
     pub hide_ui: bool,
     /// Present mode: only the canvas, with a presenter bar to step through the page's frames.
@@ -104,18 +109,8 @@ pub struct UiState {
     pub feedback_draft: String,
     /// Text in the layers panel's search box; only matching layers (and their parents) show.
     pub layer_filter: String,
-    /// Name typed into the Design tab's new-variable box.
-    pub variable_draft: String,
-    /// Name typed into the Design tab's new-mode box.
-    pub mode_draft: String,
-    /// Name typed into the Design tab's new-token name box.
-    pub token_name_draft: String,
-    /// Value typed into the Design tab's new-token value box.
-    pub token_val_draft: String,
-    /// Filter text for the Design tab's components list.
-    pub component_filter: String,
-    /// Variable currently being renamed inline `(old_name, draft_new_name)`.
-    pub var_renaming: Option<(String, String)>,
+    /// The Libraries modal is open (Assets header button).
+    pub libraries_open: bool,
     /// The last tool an agent ran and when, for the toolbar's activity hint.
     pub agent: Option<(String, web_time::Instant)>,
     /// Recent agent tool calls, oldest first (the Agent view).
@@ -211,6 +206,13 @@ fn account_footer(ui: &mut Ui, st: &mut UiState) {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.set_max_width((ui.available_width() - 44.0).max(40.0));
+            // A child column starts at the top of the row while the avatar is centred in it;
+            // pad the column so its two lines centre on the avatar.
+            let block = ui.fonts_mut(|f| {
+                f.row_height(&theme::semibold(theme::BODY))
+                    + f.row_height(&egui::FontId::proportional(theme::SECONDARY))
+            });
+            ui.add_space((r.center().y - block / 2.0 - ui.cursor().top()).max(0.0));
             ui.add(
                 egui::Label::new(RichText::new(name).font(theme::semibold(theme::BODY))).truncate(),
             );
@@ -636,6 +638,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             UiEvent::ToggleUi => st.hide_ui = !st.hide_ui,
             UiEvent::ToggleHelp => st.show_help = !st.show_help,
             UiEvent::ToggleGrid => st.show_grid_off = !st.show_grid_off,
+            UiEvent::OpenVariables => st.variables.open = !st.variables.open,
         }
     }
     if st.run_open.is_some() {
@@ -776,6 +779,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         help(ui.ctx(), st, canvas);
     }
     settings::show(ui.ctx(), st);
+    variables::show(ui.ctx(), ed, st);
+    libraries::show(ui.ctx(), ed, st);
     #[cfg(not(target_arch = "wasm32"))]
     st.updater.show(ui.ctx());
     confirm::show(ui.ctx(), ed, st);
@@ -829,10 +834,23 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             ui.separator();
             ui.add_space(6.0);
         }
-        if theme::icon_button(ui, theme::Icon::Grid, 26.0, false)
-            .on_hover_text("All projects")
-            .clicked()
-        {
+        // The title column sits at the top of the bar while the bar centres single widgets, so
+        // place the home icon on the column's centre (measured last frame) instead.
+        let column_id = egui::Id::new("title-column-centre");
+        let cy = ui
+            .ctx()
+            .data(|d| d.get_temp::<f32>(column_id))
+            .unwrap_or(ui.max_rect().center().y);
+        let slot = egui::Rect::from_center_size(
+            egui::pos2(ui.cursor().left() + 13.0, cy),
+            egui::vec2(26.0, 26.0),
+        );
+        let home = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
+                theme::icon_button(ui, theme::Icon::Grid, 26.0, false)
+            })
+            .inner;
+        if home.on_hover_text("All projects").clicked() {
             ed.requests.push(crate::editor::AppRequest::Home);
         }
         ui.add_space(4.0);
@@ -841,7 +859,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         } else {
             st.project_name.clone()
         };
-        ui.vertical(|ui| {
+        let column = ui.vertical(|ui| {
             // Leave room for the zoom pill and icons on the right; long titles truncate.
             ui.set_max_width(
                 (ui.available_width()
@@ -855,7 +873,6 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 .max(40.0),
             );
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.add_space(if st.native_chrome { 6.0 } else { 1.0 });
             let state = if !st.save_state.is_empty() {
                 st.save_state.clone()
             } else if ed.is_dirty() {
@@ -863,18 +880,31 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             } else {
                 String::new()
             };
-            ui.horizontal(|ui| {
-                ui.add(egui::Label::new(title_text(title)).truncate());
-                if !state.is_empty() {
-                    kit::chip(ui, &state, state == "Saved");
-                }
-            });
+            // The text, not its row: the row is button height with the title low in it.
+            let top = ui
+                .horizontal(|ui| {
+                    let t = ui.add(egui::Label::new(title_text(title)).truncate());
+                    if !state.is_empty() {
+                        kit::chip(ui, &state, state == "Saved");
+                    }
+                    t.rect.top()
+                })
+                .inner;
             let sub = ed.page_name().to_string();
-            ui.add(
-                egui::Label::new(RichText::new(sub).size(theme::SECONDARY).color(p.secondary))
-                    .truncate(),
-            );
+            let bottom = ui
+                .add(
+                    egui::Label::new(RichText::new(sub).size(theme::SECONDARY).color(p.secondary))
+                        .truncate(),
+                )
+                .rect
+                .bottom();
+            (top + bottom) / 2.0
         });
+        let centre = column.inner;
+        if (centre - cy).abs() > 0.5 {
+            ui.ctx().data_mut(|d| d.insert_temp(column_id, centre));
+            ui.ctx().request_repaint();
+        }
         agent_pill(ui, st, !tight);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -891,6 +921,10 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         ed.run(action);
                         ui.close();
                     }
+                }
+                if icon_menu_item(ui, Icon::Library, "Libraries…").clicked() {
+                    st.libraries.open = true;
+                    ui.close();
                 }
             });
             ui.add_space(6.0);
@@ -1140,7 +1174,7 @@ fn title_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 fn side_tabs(ui: &mut Ui, st: &mut UiState) {
     const TABS: [(i32, &str); 6] = [
         (0, "Layers"),
-        (1, "Library"),
+        (1, "Assets"),
         (2, "Design"),
         (3, "History"),
         (4, "Notes"),
@@ -1192,7 +1226,7 @@ fn side_tabs(ui: &mut Ui, st: &mut UiState) {
                         0 => {
                             lottie_icon::paint_hover(ui, resp.id, "layers", icon_box, tint, hovered)
                         }
-                        1 => theme::paint_icon(ui.painter(), icon_box, Icon::Library, tint),
+                        1 => theme::paint_icon(ui.painter(), icon_box, Icon::Component, tint),
                         2 => lottie_icon::paint_hover(
                             ui,
                             resp.id,

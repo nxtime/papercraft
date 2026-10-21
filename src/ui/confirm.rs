@@ -177,15 +177,16 @@ pub(super) fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
                 ed.remove_page_group(&name);
             }
             action => {
-                for page in 0..ed.pages.len() {
-                    ed.with_page(page, |ed| {
-                        ed.edit_variables("Remove design token", |tx| match &action {
-                            Removal::Mode(name) => tx.remove_mode(name),
-                            Removal::Variable(name) => tx.remove_variable(name),
-                            Removal::Token(name) => tx.remove_token(name),
-                            _ => unreachable!(),
-                        })
-                    });
+                // One design-system edit: every page loses it, not just the active one.
+                let r = ed.edit_design("Remove design token", |ds| match &action {
+                    Removal::Mode(name) => crate::editor::design::remove_mode_by_name(ds, name),
+                    Removal::Variable(name) | Removal::Token(name) => {
+                        crate::editor::design::remove_by_css(ds, name)
+                    }
+                    _ => unreachable!(),
+                });
+                if let Err(e) = r {
+                    ed.status = e.to_string();
                 }
             }
         },

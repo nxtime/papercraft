@@ -24,6 +24,8 @@ pub struct Session {
     pub sync: crate::sync::Sync,
     sync_checked: Option<Instant>,
     dirty_since: Option<Instant>,
+    /// `design.json` as last read or written (`None` = no file yet).
+    design_disk: Option<crate::variables::DesignSystem>,
     thumb_stale: bool,
     last_thumb: Option<Instant>,
 }
@@ -38,6 +40,7 @@ impl Session {
             sync,
             sync_checked: None,
             dirty_since: None,
+            design_disk: None,
             thumb_stale: false,
             last_thumb: None,
         }
@@ -54,8 +57,15 @@ impl Session {
     pub fn open(&mut self, ed: &mut Editor, dir: &Path) -> Result<(), FormatError> {
         let p = Project::open(dir)?;
         crate::assets::load_dir(&dir.join(crate::project::ASSETS_DIR));
-        let pages = p.load_pages()?;
-        ed.open_pages(pages, p.manifest.active_page.as_deref());
+        let loaded = p.load_all()?;
+        ed.open_pages(loaded.pages, p.manifest.active_page.as_deref());
+        ed.design = loaded.design;
+        crate::libraries::sweep_orphans(dir, &ed.design.libraries);
+        ed.library_docs = crate::libraries::load_docs(dir);
+        ed.project_dir = Some(dir.to_path_buf());
+        for (slot, modes) in ed.pages.iter_mut().zip(loaded.modes) {
+            slot.modes = modes;
+        }
         // The groups of the opened project (an old project has none).
         ed.page_groups = p.manifest.page_groups.clone();
         ed.sync_page_group_order();
@@ -63,6 +73,12 @@ impl Session {
         for i in 0..ed.pages.len() {
             ed.mark_page_saved(i);
         }
+        // Pages migrated on load (cache rebuilt, component keys) are written by the next save.
+        for &i in &loaded.changed {
+            ed.pages[i].saved_gen = u64::MAX;
+        }
+        self.design_disk = (!loaded.design_new).then(|| ed.design.clone());
+        ed.meta_dirty = loaded.design_new && !ed.design.collections.is_empty();
         self.project = Some(p);
         self.dirty_since = None;
         self.thumb_stale = false;
@@ -196,6 +212,18 @@ impl Session {
         };
         ed.commit_pending();
         let dirty = ed.dirty_pages();
+        // design.json goes first: a crash after it leaves pages whose cache is stale, which load
+        // rebuilds from the design; the other order would leave page fields newer than the truth.
+        if self.design_disk.as_ref() != Some(&ed.design) {
+            if self.design_disk.is_none() {
+                // First design.json: the manifest turns v2 before it exists, so an old app
+                // refuses the project rather than editing pages behind the design's back.
+                p.manifest.version = crate::project::format::PROJECT_VERSION;
+                p.write_manifest()?;
+            }
+            p.save_design(&ed.design)?;
+            self.design_disk = Some(ed.design.clone());
+        }
         for &i in &dirty {
             let data = ed.page_data(i);
             // Images first, so a page never references a file that isn't there.
@@ -203,7 +231,7 @@ impl Session {
                 &p.dir.join(crate::project::ASSETS_DIR),
                 crate::assets::used_by(&data.doc),
             )?;
-            p.save_page(&data)?;
+            p.save_page_modes(&data, &ed.pages[i].modes)?;
             ed.mark_page_saved(i);
         }
         let pages: Vec<PageRef> = ed
@@ -239,7 +267,7 @@ impl Session {
         self.save(ed)?;
         if let Some(p) = &self.project {
             // The camera isn't tracked by history; persist the active page's view.
-            p.save_page(&ed.page_data(ed.active_page))?;
+            p.save_page_modes(&ed.page_data(ed.active_page), &ed.pages[ed.active_page].modes)?;
         }
         Ok(())
     }
@@ -416,6 +444,149 @@ mod tests {
             p.manifest.active_page.as_deref(),
             Some(pages[0].id.as_str())
         );
+        crate::vfs::remove_dir_all(&s.root).ok();
+    }
+
+    const V1_PAGE: &str = r##"{"format":"paper-rs-page","version":3,"id":"pg1","name":"Page 1",
+        "next_id":3,"root":[1,2],"nodes":[
+        {"id":1,"name":"Main","type":"frame","rect":{"x":0,"y":0,"w":5,"h":5},"component":true},
+        {"id":2,"name":"Plain","type":"rect","rect":{"x":0,"y":0,"w":5,"h":5}}],
+        "variables":{"bg":"#000000"},
+        "modes":{"Light":{"bg":"#ffffff"},"Dark":{"bg":"#000000"}},
+        "mode":"Dark","tokens":{"space-md":"16px","font":"Inter"}}"##;
+
+    fn v1_project(root: &Store, page: &str) -> std::path::PathBuf {
+        let dir = root.root.join("Old");
+        crate::vfs::create_dir_all(dir.join("pages")).unwrap();
+        let mut m = crate::project::Manifest::new("Old");
+        m.pages[0].id = "pg1".into();
+        m.active_page = Some("pg1".into());
+        m.version = 1;
+        crate::vfs::write(dir.join("project.json"), m.to_json()).unwrap();
+        crate::vfs::write(dir.join("pages/pg1.json"), page).unwrap();
+        dir
+    }
+
+    #[test]
+    fn v1_project_migrates_to_design_json() {
+        let s = store();
+        let dir = v1_project(&s, V1_PAGE);
+        let orig = crate::project::format::page_from_json(V1_PAGE).unwrap().doc;
+        let mut sess = Session::new(s.clone());
+        let mut ed = Editor::default();
+        sess.open(&mut ed, &dir).unwrap();
+        assert!(!dir.join("design.json").exists(), "written on next save");
+        let cols = &ed.design.collections;
+        assert_eq!(cols[0].name, "Colors");
+        assert_eq!(cols[0].modes.len(), 2);
+        let dark = cols[0].modes.iter().find(|m| m.name == "Dark").unwrap();
+        assert_eq!(cols[0].default_mode, dark.id);
+        assert_eq!(cols[1].name, "Tokens");
+        let doc = &ed.doc;
+        assert_eq!(doc.variables, orig.variables);
+        assert_eq!(doc.modes, orig.modes);
+        assert_eq!(doc.mode, orig.mode);
+        assert_eq!(doc.tokens, orig.tokens);
+        let key = doc.get(NodeId(1)).unwrap().component_key.clone().unwrap();
+        assert!(doc.get(NodeId(2)).unwrap().component_key.is_none());
+        assert!(ed.project_dirty());
+
+        sess.save(&mut ed).unwrap();
+        assert!(dir.join("design.json").is_file());
+        let design = ed.design.clone();
+        let mut sess2 = Session::new(s.clone());
+        let mut ed2 = Editor::default();
+        sess2.open(&mut ed2, &dir).unwrap();
+        assert_eq!(ed2.design, design);
+        assert_eq!(ed2.pages[0].modes, ed.pages[0].modes);
+        assert_eq!(ed2.doc.get(NodeId(1)).unwrap().component_key, Some(key));
+        assert_eq!(ed2.doc.variables, orig.variables);
+        assert_eq!(ed2.doc.mode, orig.mode);
+        assert!(!ed2.project_dirty());
+        let raw = crate::vfs::read_to_string(dir.join("project.json")).unwrap();
+        // The manifest is rewritten at version 2 so 0.4.0 refuses the project instead of
+        // writing pages without bindings and never updating design.json.
+        assert!(raw.contains("\"version\": 2"));
+        // An older app reads the page files directly and still sees the cache fields.
+        let old = crate::project::format::page_from_json(
+            &crate::vfs::read_to_string(dir.join("pages/pg1.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(old.doc.variables, orig.variables);
+        assert_eq!(old.doc.modes, orig.modes);
+        assert_eq!(old.doc.tokens, orig.tokens);
+        crate::vfs::remove_dir_all(&s.root).ok();
+    }
+
+    #[test]
+    fn design_json_is_written_before_pages() {
+        let s = store();
+        let dir = v1_project(&s, V1_PAGE);
+        let mut sess = Session::new(s.clone());
+        let mut ed = Editor::default();
+        sess.open(&mut ed, &dir).unwrap();
+        let red = crate::model::Color::rgb(255, 0, 0);
+        ed.edit_design("Add", |ds| {
+            crate::editor::design::set_color(ds, &Default::default(), "brand", None, red)
+        })
+        .unwrap();
+        // Page writes fail: `pages` is now a file.
+        crate::vfs::remove_dir_all(dir.join("pages")).unwrap();
+        crate::vfs::write(dir.join("pages"), "x").unwrap();
+        assert!(sess.save(&mut ed).is_err());
+        let on_disk = Project::open(&dir).unwrap().load_design().unwrap().unwrap();
+        assert!(on_disk.find_by_css("brand").is_some(), "design saved before the page failed");
+        // The manifest turned v2 with it.
+        let raw = crate::vfs::read_to_string(dir.join("project.json")).unwrap();
+        assert!(raw.contains("\"version\": 2"));
+        crate::vfs::remove_dir_all(&s.root).ok();
+    }
+
+    #[test]
+    fn project_without_variables_gets_empty_design() {
+        let s = store();
+        let dir = v1_project(
+            &s,
+            r#"{"format":"paper-rs-page","version":3,"id":"pg1","name":"P","next_id":1,"root":[],"nodes":[]}"#,
+        );
+        let mut sess = Session::new(s.clone());
+        let mut ed = Editor::default();
+        sess.open(&mut ed, &dir).unwrap();
+        assert!(ed.design.collections.is_empty());
+        assert!(!ed.project_dirty());
+        sess.save(&mut ed).unwrap();
+        assert!(dir.join("design.json").is_file());
+        crate::vfs::remove_dir_all(&s.root).ok();
+    }
+
+    #[test]
+    fn migration_unions_diverged_pages() {
+        let s = store();
+        let dir = v1_project(&s, V1_PAGE);
+        let mut m = Project::open(&dir).unwrap().manifest;
+        m.pages.push(crate::project::PageRef { id: "pg2".into(), name: "Two".into() });
+        crate::vfs::write(dir.join("project.json"), m.to_json()).unwrap();
+        crate::vfs::write(
+            dir.join("pages/pg2.json"),
+            r##"{"format":"paper-rs-page","version":3,"id":"pg2","name":"Two","next_id":1,"root":[],"nodes":[],
+            "variables":{"bg":"#123456","accent":"#ff0000"},
+            "modes":{"Light":{"bg":"#abcdef","accent":"#ff0000"}},
+            "tokens":{"space-md":"99px","radius":"4px"}}"##,
+        )
+        .unwrap();
+        let mut sess = Session::new(s.clone());
+        let mut ed = Editor::default();
+        sess.open(&mut ed, &dir).unwrap();
+        let (c, t) = (&ed.design.collections[0], &ed.design.collections[1]);
+        let var = |n: &str| c.variables.iter().find(|v| v.name == n).unwrap();
+        let mode = |n: &str| c.modes.iter().find(|m| m.name == n).unwrap().id.clone();
+        use crate::variables::Value;
+        assert_eq!(var("bg").values[&mode("Light")], Value::Color(crate::model::Color::rgb(255, 255, 255)));
+        assert!(var("accent").values.contains_key(&mode("Dark")));
+        let tok = |n: &str| t.variables.iter().find(|v| v.name == n).map(|v| v.values.values().next().cloned());
+        assert_eq!(tok("space-md"), Some(Some(Value::Number(16.0))));
+        assert!(tok("radius").is_some());
+        assert!(ed.project_dirty());
         crate::vfs::remove_dir_all(&s.root).ok();
     }
 }

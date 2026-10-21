@@ -737,6 +737,7 @@ mod tests {
         doc.nodes.get_mut(&root).unwrap().instance = Some(InstanceLink {
             main: comp_id,
             overrides: Vec::new(),
+            source: None,
         });
 
         let drift_code = r#"

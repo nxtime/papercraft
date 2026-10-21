@@ -725,3 +725,209 @@ fn changing_variable_modes_preserves_existing_frame_geometry() {
         Color::rgb(0xcb, 0xa6, 0xf7)
     );
 }
+
+#[test]
+fn old_variable_and_token_calls_land_in_collections() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_tokens",
+        json!({"tokens": {"spacing-md": "16px", "font": "Inter", "gap": 4}}),
+    );
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"accent": "#cba6f7"}}),
+    );
+    let ds = &h.ed.design;
+    let col = |n: &str| ds.collections.iter().find(|c| c.name == n).unwrap();
+    assert!(col("Colors").variables.iter().any(|v| v.name == "accent"));
+    let kind = |n: &str| {
+        col("Tokens")
+            .variables
+            .iter()
+            .find(|v| v.name == n)
+            .unwrap()
+            .kind
+    };
+    assert_eq!(kind("spacing-md"), papercraft::variables::Kind::Number);
+    assert_eq!(kind("gap"), papercraft::variables::Kind::Number);
+    assert_eq!(kind("font"), papercraft::variables::Kind::String);
+    assert_eq!(h.ed.doc.tokens["spacing-md"], "16px");
+    assert_eq!(h.ed.doc.tokens["font"], "Inter");
+
+    // A second page follows, and a new page copies the active page's modes.
+    for (mode, hex) in [("Light", "#eeeeee"), ("Dark", "#111111")] {
+        call(
+            &mut h,
+            "set_variables",
+            json!({"mode": mode, "variables": {"accent": hex}}),
+        );
+    }
+    let (cid, dark) = papercraft::editor::design::find_mode(&h.ed.design, "Dark").unwrap();
+    h.ed.set_page_mode(&cid, &dark).unwrap();
+    let p2 = call(&mut h, "create_page", json!({"name": "Second"}));
+    let i = h.ed.pages.iter().position(|p| p.id == p2["pageId"]).unwrap();
+    assert_eq!(h.ed.pages[i].modes, h.ed.pages[h.ed.active_page].modes);
+    assert_eq!(h.ed.page_doc(i).mode.as_deref(), Some("Dark"));
+    assert_eq!(h.ed.page_doc(i).variables["accent"], Color::rgb(0x11, 0x11, 0x11));
+}
+
+fn try_call(h: &mut exec::SessionHost, name: &str, args: Value) -> Result<Value, String> {
+    exec::call(h, name, &args).map(|outs| match outs.into_iter().next() {
+        Some(Out::Text(t)) => serde_json::from_str(&t).unwrap_or(Value::String(t)),
+        _ => Value::Null,
+    })
+}
+
+#[test]
+fn set_variables_new_shapes_and_get_variables_collections() {
+    let mut h = host();
+    call(&mut h, "create_collection", json!({"name": "Brand", "modes": ["Light", "Dark"]}));
+    assert!(try_call(&mut h, "create_collection", json!({"name": "Brand"})).is_err());
+    call(
+        &mut h,
+        "set_variables",
+        json!({"collection": "Brand", "variables": {
+            "color/brand/primary": {"value": "#ff0000", "description": "Main"},
+            "color/brand/hover": {"alias": "color/brand/primary", "hidden": true},
+            "space/md": {"value": 16, "type": "number", "collection": "Sizes"},
+            "flag": {"value": true},
+            "font": {"value": "Inter", "type": "string"},
+        }}),
+    );
+    // Old shape still lands in the first color collection.
+    call(&mut h, "set_variables", json!({"variables": {"accent": "#00ff00"}}));
+    let v = call(&mut h, "get_variables", json!({}));
+    let cols = v["collections"].as_array().unwrap();
+    let brand = cols.iter().find(|c| c["name"] == "Brand").unwrap();
+    assert_eq!(brand["modes"], json!(["Light", "Dark"]));
+    assert_eq!(brand["defaultMode"], "Light");
+    let var = |n: &str| {
+        cols.iter()
+            .flat_map(|c| c["variables"].as_array().unwrap())
+            .find(|x| x["name"] == n)
+            .unwrap_or_else(|| panic!("no {n}"))
+            .clone()
+    };
+    let p = var("color/brand/primary");
+    assert_eq!(p["cssName"], "color-brand-primary");
+    assert_eq!(p["group"], "color/brand");
+    assert_eq!(p["type"], "color");
+    assert_eq!(p["values"]["Dark"], "#ff0000");
+    assert_eq!(p["description"], "Main");
+    let hover = var("color/brand/hover");
+    assert_eq!(hover["values"]["Light"], json!({"alias": "color/brand/primary"}));
+    assert_eq!(hover["hidden"], true);
+    assert_eq!(var("space/md")["type"], "number");
+    assert_eq!(var("space/md")["values"]["Default"], 16.0);
+    assert!(cols.iter().any(|c| c["name"] == "Sizes"));
+    assert_eq!(var("flag")["type"], "boolean");
+    assert_eq!(var("font")["type"], "string");
+    assert!(v["variables"]["accent"].is_string());
+    assert_eq!(v["pageModes"]["Brand"], "Light");
+    // Existing keys stay; the alias resolves into the cache.
+    assert_eq!(v["variables"]["color-brand-hover"], "#ff0000");
+    assert_eq!(h.ed.doc.tokens["space-md"], "16px");
+    // A wrong kind or an alias cycle is refused and changes nothing.
+    assert!(try_call(&mut h, "set_variables", json!({"variables": {"space/md": "#fff"}})).is_err());
+    assert!(
+        try_call(
+            &mut h,
+            "set_variables",
+            json!({"variables": {"color/brand/primary": {"alias": "color/brand/hover"}}})
+        )
+        .is_err()
+    );
+    // Old color-only error text stays.
+    let e = try_call(&mut h, "set_variables", json!({"variables": {"x": "nope"}})).unwrap_err();
+    assert!(e.contains("is not a color"), "{e}");
+}
+
+#[test]
+fn dtcg_nests_groups_and_references_aliases() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {
+            "color/brand/primary": "#ff0000",
+            "color/brand/hover": {"alias": "color/brand/primary"},
+            "space/md": {"value": 16, "type": "number"},
+            "enabled": {"value": true},
+            "plain": "#000000",
+        }}),
+    );
+    let t = call(&mut h, "get_variables", json!({"format": "json"}));
+    assert_eq!(t["color"]["brand"]["primary"]["$type"], "color");
+    assert_eq!(t["color"]["brand"]["primary"]["$value"], "#ff0000");
+    assert_eq!(t["color"]["brand"]["hover"]["$value"], "{color.brand.primary}");
+    assert_eq!(t["space"]["md"]["$type"], "dimension");
+    assert_eq!(t["space"]["md"]["$value"], "16px");
+    assert_eq!(t["enabled"]["$type"], "boolean");
+    assert_eq!(t["enabled"]["$value"], true);
+    assert_eq!(t["plain"]["$value"], "#000000");
+    // css keeps today's flat shape: colors, numbers as px.
+    let css = call(&mut h, "get_variables", json!({"format": "css"}));
+    let css = css.as_str().unwrap();
+    assert!(css.contains("--color-brand-primary: #ff0000;"), "{css}");
+    assert!(css.contains("--space-md: 16px;"), "{css}");
+}
+
+#[test]
+fn delete_variables_needs_force_when_aliased() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"base": "#112233", "alt": {"alias": "base"}}}),
+    );
+    let e = try_call(&mut h, "delete_variables", json!({"names": ["base"]})).unwrap_err();
+    assert!(e.contains("alt"), "{e}");
+    assert!(h.ed.design.find_by_css("base").is_some());
+    // Deleting both in one call is fine without force.
+    call(&mut h, "delete_variables", json!({"names": ["base", "alt"]}));
+    assert!(h.ed.design.find_by_css("base").is_none());
+    assert!(h.ed.design.find_by_css("alt").is_none());
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"base": "#112233", "alt": {"alias": "base"}}}),
+    );
+    call(&mut h, "delete_variables", json!({"names": ["base"], "force": true}));
+    let (_, alt) = h.ed.design.find_by_css("alt").unwrap();
+    assert!(matches!(
+        alt.values.values().next(),
+        Some(papercraft::variables::Value::Color(_))
+    ));
+    assert!(try_call(&mut h, "delete_variables", json!({"names": ["ghost"]})).is_err());
+}
+
+#[test]
+fn export_design_system_writes_groups_and_round_trips() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {
+            "color/brand/primary": "#ff0000",
+            "space/md": {"value": 16, "type": "number"},
+            "font": {"value": "Inter", "type": "string"},
+            "on": {"value": true},
+        }}),
+    );
+    let dir = std::env::temp_dir().join(format!("papercraft-ds-pkg-{:016x}", fastrand::u64(..)));
+    call(&mut h, "export_design_system", json!({"path": dir}));
+    let css = std::fs::read_to_string(dir.join("tokens.css")).unwrap();
+    assert!(css.contains("/* color/brand */"), "{css}");
+    assert!(css.contains("--color-brand-primary: #ff0000;"));
+    assert!(css.contains("--space-md: 16px;"));
+    assert!(css.contains("--font: Inter;"));
+    assert!(!css.contains("--on:"), "booleans are not CSS tokens");
+    let mut h2 = host();
+    call(&mut h2, "import_design_system", json!({"path": dir}));
+    let doc = h2.ed.doc.clone();
+    assert_eq!(doc.variables["color-brand-primary"], Color::rgb(255, 0, 0));
+    assert_eq!(doc.tokens["space-md"], "16px");
+    assert_eq!(doc.tokens["font"], "Inter");
+}

@@ -605,6 +605,7 @@ fn finish_title(ed: &Editor, args: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::design;
     use crate::model::Document;
 
     fn temp() -> PathBuf {
@@ -654,21 +655,26 @@ mod tests {
                     None,
                 );
             }
-            ed.edit("Design", |tx| {
-                tx.set_variable_in_mode("Light", "accent", Color::rgb(200, 0, 0));
-                tx.set_variable_in_mode("Dark", "accent", Color::rgb(0, 0, 200));
-                tx.set_token("gap", "8px");
-            });
+            // Variables are project-wide: every page shows the same values.
+            let none = crate::variables::PageModes::new();
+            ed.edit_design("Design", |ds| {
+                design::set_color(ds, &none, "accent", Some("Light"), Color::rgb(200, 0, 0))?;
+                design::set_color(ds, &none, "accent", Some("Dark"), Color::rgb(0, 0, 200))?;
+                design::set_token(ds, "gap", "8px")
+            })
+            .unwrap();
             before.push(ed.page_data(i).doc);
             r.pages.push(snapshot_page(&dir, &ed, i));
             let root = ed.doc.root[0];
             ed.edit("Agent changes", |tx| {
                 tx.node_mut(root).unwrap().name = "Agent".into();
                 tx.move_to_index(root, 1);
-                tx.set_variable("accent", Color::rgb(0, 200, 0));
-                tx.set_mode("Dark");
-                tx.set_token("gap", "16px");
             });
+            ed.edit_design("Agent design", |ds| {
+                design::set_color(ds, &none, "accent", None, Color::rgb(0, 200, 0))?;
+                design::set_token(ds, "gap", "16px")
+            })
+            .unwrap();
             after.push(ed.doc.clone());
             ed.rename_page(i, "Renamed");
         }
@@ -677,13 +683,20 @@ mod tests {
         assert_eq!(ed.active_page_id(), active);
         assert_eq!(r.state, RunState::Reverted);
         assert_eq!(list(&dir), vec![r]);
+        // The design is shared, so the restored variables are the snapshots' (identical here).
         for i in 0..2 {
             ed.switch_page(i);
-            assert_content(&ed.doc, &before[i]);
+            assert_eq!(ed.doc.var_state(), before[0].var_state());
+        }
+        for i in 0..2 {
+            ed.switch_page(i);
+            assert_eq!(ed.doc.nodes, before[i].nodes);
+            assert_eq!(ed.doc.root, before[i].root);
             assert_eq!(ed.page_name(), before[i].name);
             assert_eq!(ed.doc.name, before[i].name);
             ed.undo();
-            assert_content(&ed.doc, &after[i]);
+            assert_eq!(ed.doc.nodes, after[i].nodes);
+            assert_eq!(ed.doc.root, after[i].root);
         }
     }
 

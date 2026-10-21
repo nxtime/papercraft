@@ -36,6 +36,10 @@ pub enum Command {
     Scale(f32),
     /// Open the settings dialog.
     Settings,
+    /// Open the Variables modal.
+    Variables,
+    /// Open the Libraries modal.
+    Libraries,
     /// Back to the projects home screen.
     Home,
     /// Check for a newer PaperCraft.
@@ -188,6 +192,16 @@ pub fn entries(ed: &Editor, st: &UiState) -> Vec<Entry> {
         }
     }
     out.push(Entry {
+        label: "Libraries…".into(),
+        detail: "Publish and enable".into(),
+        cmd: Command::Libraries,
+    });
+    out.push(Entry {
+        label: "Variables…".into(),
+        detail: "Design".into(),
+        cmd: Command::Variables,
+    });
+    out.push(Entry {
         label: "Settings…".into(),
         detail: "Preferences".into(),
         cmd: Command::Settings,
@@ -297,6 +311,8 @@ pub fn run(ed: &mut Editor, st: &mut UiState, cmd: Command) {
             st.show_design = false;
         }
         Command::Settings => st.settings.open = true,
+        Command::Variables => st.variables.open = true,
+        Command::Libraries => st.libraries.open = true,
         // Needs the egui context; handled where the palette is drawn.
         Command::Theme(_) | Command::Scale(_) => {}
     }

@@ -4,7 +4,7 @@
 use super::{Editor, Gesture};
 use crate::geom::Camera;
 use crate::history::History;
-use crate::model::{Document, NodeId};
+use crate::model::{Document, NodeId, Source};
 use crate::project::{PageData, new_id};
 use std::collections::HashMap;
 
@@ -26,6 +26,8 @@ pub struct PageSlot {
     pub stash: Option<Box<PageStash>>,
     /// History generation at the last save.
     pub saved_gen: u64,
+    /// Active mode id per collection id on this page.
+    pub modes: crate::variables::PageModes,
 }
 
 impl PageSlot {
@@ -35,6 +37,7 @@ impl PageSlot {
             name: name.into(),
             stash: None,
             saved_gen: 0,
+            modes: Default::default(),
         }
     }
 }
@@ -77,6 +80,7 @@ impl Editor {
                     })
                 }),
                 saved_gen: 0,
+                modes: Default::default(),
             })
             .collect();
         self.active_page = active_i;
@@ -176,6 +180,7 @@ impl Editor {
                 needs_fit: true,
             })),
             saved_gen: u64::MAX,
+            modes: Default::default(),
         });
         self.meta_dirty = true;
         self.revision += 1;
@@ -192,11 +197,23 @@ impl Editor {
             .unwrap_or_else(|| format!("Page {}", self.pages.len() + 1));
         let name = self.unique_page_name(&base);
         let mut slot = PageSlot::new(&name);
+        // A new page starts with the active page's modes and the cache they give.
+        slot.modes = self.pages[self.active_page].modes.clone();
+        let mut doc = Document {
+            name: name.clone(),
+            ..Default::default()
+        };
+        if self.design.collections.is_empty() {
+            doc.restore_vars(&self.doc.var_state());
+        } else {
+            let c = self.design.cache_for(&slot.modes);
+            doc.variables = c.variables;
+            doc.modes = c.modes;
+            doc.mode = c.mode;
+            doc.tokens = c.tokens;
+        }
         slot.stash = Some(Box::new(PageStash {
-            doc: Document {
-                name: name.clone(),
-                ..Default::default()
-            },
+            doc,
             history: History::default(),
             camera: Camera::default(),
             selection: Vec::new(),
@@ -225,12 +242,18 @@ impl Editor {
         let group = self.page_group(&self.pages[i].id).map(str::to_string);
         let name = self.unique_page_name(&format!("{} copy", src.name));
         let mut slot = PageSlot::new(&name);
+        slot.modes = self.pages[i].modes.clone();
         slot.saved_gen = u64::MAX;
+        let mut doc = Document {
+            name: name.clone(),
+            ..src.doc
+        };
+        // A copied main is a new component, not a second source of the same key.
+        for n in doc.nodes.values_mut().filter(|n| n.component) {
+            n.component_key = Some(crate::variables::new_id());
+        }
         slot.stash = Some(Box::new(PageStash {
-            doc: Document {
-                name: name.clone(),
-                ..src.doc
-            },
+            doc,
             history: History::default(),
             camera: src.camera.unwrap_or_default(),
             selection: Vec::new(),
@@ -293,32 +316,55 @@ impl Editor {
         Some(removed.id)
     }
 
-    /// Replaces the active page's content and design system with a saved snapshot, as one undoable
-    /// change. The design system goes first so the snapshot's node fills win over any linked colors.
+    /// Replaces the active page's content and variable values with a saved snapshot, as one
+    /// undoable change (on the active page; the other pages' steps carry only their cache).
+    ///
+    /// The snapshot holds only the derived cache fields, so its values are written back into the
+    /// project design system as a design edit: colors per mode and tokens that differ from what
+    /// the page resolves now, and the snapshot's active mode. Every page follows. Variables the
+    /// snapshot lacks are kept (other pages use them) and aliases that already give the snapshot's
+    /// value stay aliases. If the design edit is refused (a name clash), only the content is
+    /// restored and the status says so.
     pub fn restore_snapshot(&mut self, snap: &crate::model::Document) {
-        self.edit("Restore version", |tx| {
-            tx.set_design_system(
-                &snap.variables,
-                &snap.modes,
-                &snap.tokens,
-                snap.mode.as_deref(),
-            );
-            for root in tx.doc().root.clone() {
-                tx.remove(root);
-            }
-            for root in snap.root.clone() {
-                for (i, id) in snap.subtree(root).into_iter().enumerate() {
-                    let Some(node) = snap.get(id).cloned() else {
-                        continue;
-                    };
-                    if i == 0 {
-                        tx.insert(node, None, None);
-                    } else {
-                        tx.put(node);
+        use crate::editor::design::{OnActive, set_color, set_token_in};
+        use crate::variables::Kind;
+        let active = self.pages[self.active_page].modes.clone();
+        let now = if self.design.collections.is_empty() {
+            crate::variables::migrate_from_document(self.page_doc(0)).cache_for(&active)
+        } else {
+            self.design.cache_for(&active)
+        };
+        let design_values = |ds: &mut crate::variables::DesignSystem| {
+            for (mode, vars) in &snap.modes {
+                for (n, c) in vars {
+                    if now.modes.get(mode).and_then(|m| m.get(n)) != Some(c) {
+                        set_color(ds, &active, n, Some(mode), *c)?;
                     }
                 }
             }
-        });
+            if snap.modes.is_empty() {
+                for (n, c) in &snap.variables {
+                    if now.variables.get(n) != Some(c) {
+                        set_color(ds, &active, n, None, *c)?;
+                    }
+                }
+            }
+            for (n, v) in &snap.tokens {
+                let boolean = ds.find_by_css(n).is_some_and(|(_, x)| x.kind == Kind::Boolean);
+                if !boolean && now.tokens.get(n) != Some(v) {
+                    set_token_in(ds, &active, n, v, None)?;
+                }
+            }
+            Ok(())
+        };
+        let on_active = OnActive {
+            mode: snap.mode.clone(),
+            apply: Box::new(|tx| replace_content(tx, snap)),
+        };
+        if let Err(e) = self.edit_design_with("Restore version", design_values, Some(on_active), None) {
+            self.edit("Restore version", |tx| replace_content(tx, snap));
+            self.status = format!("Restored the page; variables kept as they are ({e})");
+        }
         self.selection.clear();
     }
 
@@ -404,15 +450,63 @@ impl Editor {
             std::mem::swap(&mut ed.selection, &mut s.selection);
         };
         let saved_marker = self.saved_marker;
+        let outer = self.edit_page.replace(i);
         swap(self, &mut s);
         let r = f(self);
         self.commit();
         swap(self, &mut s);
+        self.edit_page = outer;
         self.saved_marker = saved_marker;
         self.pages[i].stash = Some(s);
         self.revision += 1;
         self.doc_stamp = super::next_stamp();
+        self.flush_cross_pages();
         r
+    }
+
+    /// Re-sync instances on other pages after a main component changed: each touched page
+    /// gets its own undo step. Instances pick up their main from the source page's document.
+    pub(super) fn flush_cross_pages(&mut self) {
+        const MAX_ROUNDS: usize = 8; // mains that contain instances of each other
+        if self.cross_busy || self.edit_page.is_some() {
+            return;
+        }
+        self.cross_busy = true;
+        for _ in 0..MAX_ROUNDS {
+            let Some((src, mains)) = (!self.cross_pending.is_empty())
+                .then(|| self.cross_pending.remove(0))
+            else {
+                break;
+            };
+            let src_id = self.pages[src].id.clone();
+            let src_doc = self.page_doc(src).clone();
+            for page in (0..self.pages.len()).filter(|p| *p != src) {
+                let roots: Vec<NodeId> = self
+                    .page_doc(page)
+                    .nodes
+                    .values()
+                    .filter(|n| {
+                        n.instance.as_ref().is_some_and(|l| {
+                            matches!(&l.source, Some(Source::Page(p)) if *p == src_id)
+                                && mains.contains(&l.main)
+                        })
+                    })
+                    .map(|n| n.id)
+                    .collect();
+                if roots.is_empty() {
+                    continue;
+                }
+                self.with_page(page, |ed| {
+                    ed.edit("Update instances", |tx| {
+                        for r in roots {
+                            super::structure::sync_node(tx, r, true, Some(&src_doc));
+                        }
+                    })
+                });
+            }
+        }
+        self.cross_pending.clear();
+        self.cross_busy = false;
     }
 
     /// The document of page `i` (active or parked).
@@ -535,3 +629,23 @@ impl Editor {
         }
     }
 }
+
+/// Swap the page content for the snapshot's nodes (the variables are handled by the caller).
+fn replace_content(tx: &mut crate::history::Tx, snap: &Document) {
+    for root in tx.doc().root.clone() {
+        tx.remove(root);
+    }
+    for root in snap.root.clone() {
+        for (i, id) in snap.subtree(root).into_iter().enumerate() {
+            let Some(node) = snap.get(id).cloned() else {
+                continue;
+            };
+            if i == 0 {
+                tx.insert(node, None, None);
+            } else {
+                tx.put(node);
+            }
+        }
+    }
+}
+

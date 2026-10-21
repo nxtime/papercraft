@@ -3,6 +3,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod app;
 pub mod assets;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cli;
 pub mod connector;
 pub mod demo;
 pub mod design_system;
@@ -13,6 +15,7 @@ pub mod icons;
 pub mod ink;
 pub mod io;
 pub mod layout;
+pub mod libraries;
 pub mod library;
 pub mod lottie;
 #[cfg(target_os = "macos")]
@@ -29,6 +32,7 @@ pub mod theme;
 pub mod ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
+pub mod variables;
 pub mod vector;
 pub mod runs;
 pub mod versions;

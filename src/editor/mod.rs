@@ -3,6 +3,7 @@
 //! It consumes platform-agnostic [`InputEvent`]s, so every interaction can be scripted in tests.
 
 pub mod commands;
+pub mod design;
 pub mod hit;
 pub mod input;
 pub mod pages;
@@ -256,8 +257,21 @@ pub struct Editor {
     pub page_groups: BTreeMap<String, Vec<String>>,
     /// Page list or names changed (not tracked by undo history).
     pub meta_dirty: bool,
+    /// The open project's design system (`design.json`).
+    pub design: crate::variables::DesignSystem,
+    /// Enabled libraries' components as documents, by library id (`libraries/<id>.json`).
+    pub library_docs: BTreeMap<String, Document>,
+    /// Folder of the open project (where `libraries/` lives), set by `Session::open`.
+    pub project_dir: Option<std::path::PathBuf>,
     /// Auto-layout frames not re-laid out while a child is being dragged inside them.
     pub layout_suspended: Vec<NodeId>,
+    /// Page whose document is in `doc` while `with_page` edits a parked page.
+    pub(crate) edit_page: Option<usize>,
+    /// Main components touched by the last fixup, and committed edits (page, mains) whose
+    /// instances on other pages still have to be re-synced.
+    pub(crate) touched_mains: Vec<NodeId>,
+    pub(crate) cross_pending: Vec<(usize, Vec<NodeId>)>,
+    pub(crate) cross_busy: bool,
     /// Pen tool in progress.
     pub pen: Option<vector_ops::PenState>,
     /// Path point editing in progress.
@@ -333,7 +347,14 @@ impl Editor {
             active_page: 0,
             page_groups: BTreeMap::new(),
             meta_dirty: false,
+            design: Default::default(),
+            library_docs: BTreeMap::new(),
+            project_dir: None,
             layout_suspended: Vec::new(),
+            edit_page: None,
+            touched_mains: Vec::new(),
+            cross_pending: Vec::new(),
+            cross_busy: false,
             pen: None,
             path_edit: None,
             measures: Vec::new(),
@@ -375,11 +396,16 @@ impl Editor {
 
     pub fn commit(&mut self) {
         self.fixup();
+        let mains = std::mem::take(&mut self.touched_mains);
         if let Some((rec, key)) = self.rec.take()
             && self.history.commit(&self.doc, rec, key)
         {
             self.revision += 1;
+            if !mains.is_empty() {
+                self.cross_pending.push((self.edit_page_index(), mains));
+            }
         }
+        self.flush_cross_pages();
     }
 
     /// Run one edit as a complete transaction.
@@ -418,8 +444,9 @@ impl Editor {
         self.cancel_gesture();
         self.end_text_edit();
         self.commit();
-        if let Some(l) = self.history.undo(&mut self.doc) {
-            self.status = format!("Undo {l}");
+        if let Some(u) = self.history.undo(&mut self.doc) {
+            self.status = format!("Undo {}", u.label);
+            self.restore_project_state(u);
         }
         self.after_history();
     }
@@ -428,8 +455,9 @@ impl Editor {
         self.cancel_gesture();
         self.end_text_edit();
         self.commit();
-        if let Some(l) = self.history.redo(&mut self.doc) {
-            self.status = format!("Redo {l}");
+        if let Some(u) = self.history.redo(&mut self.doc) {
+            self.status = format!("Redo {}", u.label);
+            self.restore_project_state(u);
         }
         self.after_history();
     }
@@ -1995,6 +2023,7 @@ impl Editor {
             A::ToggleUi => self.ui_events.push(commands::UiEvent::ToggleUi),
             A::ToggleHelp => self.ui_events.push(commands::UiEvent::ToggleHelp),
             A::ToggleGrid => self.ui_events.push(commands::UiEvent::ToggleGrid),
+            A::OpenVariables => self.ui_events.push(commands::UiEvent::OpenVariables),
             A::SelectNext => self.select_sibling(true),
             A::SelectPrev => self.select_sibling(false),
             A::SelectParent => self.select_parent(),
