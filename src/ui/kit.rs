@@ -5,8 +5,21 @@
 use crate::theme::Surface as _;
 use crate::theme::{self, Icon};
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Rect, Response, RichText, Sense, Stroke, Ui, vec2,
+    Align2, Color32, CornerRadius, FontId, Rect, Response, RichText, Sense, Stroke, Ui, WidgetInfo,
+    WidgetType, vec2,
 };
+
+/// Paints the keyboard focus indicator outside an interactive widget.
+pub fn focus_ring(ui: &Ui, rect: Rect, radius: impl Into<CornerRadius>, resp: &Response) {
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(2.0),
+            radius.into(),
+            Stroke::new(2.0, theme::accent()),
+            egui::StrokeKind::Outside,
+        );
+    }
+}
 
 /// Height of a regular button, matching the design's 36px controls.
 pub const BUTTON_H: f32 = 34.0;
@@ -114,6 +127,8 @@ fn paint_button(
         font,
         ink,
     );
+    resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
+    focus_ring(ui, rect, theme::radius_lg(), &resp);
     resp
 }
 
@@ -183,6 +198,8 @@ fn chip_painted_lead(ui: &mut Ui, label: &str, ink: Option<Color32>, selected: b
         font,
         ink,
     );
+    resp.widget_info(|| WidgetInfo::selected(WidgetType::Button, ui.is_enabled(), selected, label));
+    focus_ring(ui, rect, CornerRadius::same(PILL), &resp);
     resp
 }
 
@@ -246,11 +263,11 @@ pub fn section_header(ui: &mut Ui, title: &str, action: Option<(Icon, &str)>) ->
         ui.label(
             RichText::new(title.to_uppercase())
                 .font(theme::semibold(theme::SECONDARY))
-                .color(p.tertiary),
+                .color(p.secondary),
         );
         if let Some((icon, tip)) = action {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                clicked = theme::icon_button(ui, icon, 22.0, false)
+                clicked = theme::icon_button(ui, icon, 24.0, false)
                     .on_hover_text(tip)
                     .clicked();
             });
@@ -397,6 +414,8 @@ pub fn close_button(ui: &mut Ui) -> Response {
         p.secondary,
         resp.hovered(),
     );
+    resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), "Close"));
+    focus_ring(ui, rect, theme::radius_lg(), &resp);
     resp.on_hover_text("Close")
 }
 
@@ -441,6 +460,8 @@ pub fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool) -> bool {
         },
         p.text,
     );
+    resp.widget_info(|| WidgetInfo::selected(WidgetType::Button, ui.is_enabled(), selected, label));
+    focus_ring(ui, row, theme::radius_lg(), &resp);
     resp.clicked()
 }
 
@@ -462,6 +483,8 @@ pub fn lottie_button(ui: &mut Ui, name: &str, tip: &str, size: f32) -> Response 
         p.text,
         resp.hovered(),
     );
+    resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), tip));
+    focus_ring(ui, rect, (size * 0.3).clamp(6.0, 12.0), &resp);
     resp.on_hover_text(tip)
 }
 
@@ -528,6 +551,33 @@ pub fn slider(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>
         Sense::click_and_drag(),
     );
     let (lo, hi) = (*range.start(), *range.end());
+    if resp.has_focus() {
+        let step = (hi - lo)
+            * if ui.input(|i| i.modifiers.shift) {
+                0.1
+            } else {
+                0.01
+            };
+        let next = ui.input(|i| {
+            if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowDown) {
+                Some((*value - step).max(lo))
+            } else if i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::ArrowUp) {
+                Some((*value + step).min(hi))
+            } else if i.key_pressed(egui::Key::Home) {
+                Some(lo)
+            } else if i.key_pressed(egui::Key::End) {
+                Some(hi)
+            } else {
+                None
+            }
+        });
+        if let Some(next) = next {
+            if next != *value {
+                *value = next;
+                resp.mark_changed();
+            }
+        }
+    }
     if let Some(pos) = resp.interact_pointer_pos() {
         let t = f64::from(((pos.x - rect.left() - 8.0) / (rect.width() - 16.0)).clamp(0.0, 1.0));
         let v = lo + t * (hi - lo);
@@ -546,6 +596,8 @@ pub fn slider(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("slider"), &resp);
     ui.painter()
         .circle_filled(egui::pos2(x, rect.center().y), 7.0 + hover, p.text);
+    resp.widget_info(|| WidgetInfo::slider(ui.is_enabled(), *value, ""));
+    focus_ring(ui, rect, CornerRadius::same(8), &resp);
     resp
 }
 
@@ -572,6 +624,8 @@ pub fn draw_button(
         rect.shrink((size * 0.24).round()),
         if enabled { p.text } else { p.tertiary },
     );
+    resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, tip));
+    focus_ring(ui, rect, (size * 0.3).clamp(6.0, 12.0), &resp);
     resp.on_hover_text(tip)
 }
 
