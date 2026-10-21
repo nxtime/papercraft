@@ -632,17 +632,17 @@ fn card_menu(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
     match hv.shared.get(&e.dir).map(|s| s.link.clone()) {
         _ if hv.library => {}
         Some(link) => {
-            if ui.button("Copy share link").clicked() {
+            if super::icon_menu_item(ui, Icon::Export, "Copy share link").clicked() {
                 ui.ctx().copy_text(link);
                 ui.close();
             }
-            if ui.button("Stop sharing").clicked() {
+            if super::icon_menu_item(ui, Icon::Wrap, "Stop sharing").clicked() {
                 hv.actions.push(HomeAction::Unshare(e.dir.clone()));
                 ui.close();
             }
         }
         None => {
-            if ui.button("Share…").clicked() {
+            if super::icon_menu_item(ui, Icon::Export, "Share…").clicked() {
                 hv.dialog = Some(ShareDialog {
                     dir: Some(e.dir.clone()),
                     text: hv.default_server.clone(),
@@ -654,20 +654,20 @@ fn card_menu(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
     if !hv.library {
         ui.separator();
     }
-    if ui.button("Open").clicked() {
+    if super::icon_menu_item(ui, Icon::ArrowRight, "Open").clicked() {
         hv.actions.push(HomeAction::Open(e.dir.clone()));
         ui.close();
     }
-    if ui.button("Rename").clicked() {
+    if super::icon_menu_item(ui, Icon::Text, "Rename").clicked() {
         hv.renaming = Some((e.dir.clone(), e.manifest.name.clone()));
         ui.close();
     }
-    if ui.button("Duplicate").clicked() {
+    if super::icon_menu_item(ui, Icon::Group, "Duplicate").clicked() {
         hv.actions.push(HomeAction::Duplicate(e.dir.clone()));
         ui.close();
     }
     ui.separator();
-    if ui.button("Move to Trash").clicked() {
+    if super::icon_menu_item(ui, Icon::Trash, "Move to Trash").clicked() {
         hv.pending_removal = Some(HomeAction::Trash(e.dir.clone()));
         ui.close();
     }

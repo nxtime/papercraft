@@ -941,12 +941,9 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor, agent: &mut Option<agent::AgentUi>) {
 const ICON_MENU_W: f32 = 200.0;
 
 /// A menu row with a leading icon, hover tint and the pointing-hand cursor.
-fn icon_menu_item(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
+pub(super) fn icon_menu_item(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
     let p = theme::pal(ui);
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ICON_MENU_W, 32.0),
-        egui::Sense::click(),
-    );
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ICON_MENU_W, 32.0), egui::Sense::click());
     let hover = motion::hover(ui.ctx(), resp.id.with("menu-item"), &resp);
     if hover > 0.0 {
         ui.painter()
