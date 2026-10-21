@@ -21,6 +21,17 @@ pub fn focus_ring(ui: &Ui, rect: Rect, radius: impl Into<CornerRadius>, resp: &R
     }
 }
 
+/// Draws the 1 px boundary that separates a control from the surface behind it
+/// (WCAG 1.4.11 asks for 3:1 against that surface).
+fn outline(ui: &Ui, rect: Rect, radius: impl Into<CornerRadius>) {
+    ui.painter().rect_stroke(
+        rect,
+        radius.into(),
+        Stroke::new(1.0, theme::pal(ui).outline),
+        egui::StrokeKind::Inside,
+    );
+}
+
 /// Height of a regular button, matching the design's 36px controls.
 pub const BUTTON_H: f32 = 34.0;
 /// Radius of a pill (chips, tabs, toggles).
@@ -110,6 +121,9 @@ fn paint_button(
     } else {
         ui.painter().rect_filled(rect, theme::radius_lg(), fill);
     }
+    if kind == ButtonKind::Secondary && !theme::is_acrylic() {
+        outline(ui, rect, theme::radius_lg());
+    }
     let mut x = if wide {
         rect.center().x - (text_w + icon_w) / 2.0
     } else {
@@ -132,27 +146,15 @@ fn paint_button(
     resp
 }
 
-/// Text colour that reads on `fill`: near-black on light fills, white on dark ones.
+/// Text colour that reads on `fill`: white or the dark ink, whichever has the
+/// higher WCAG contrast ratio.
 pub fn ink_on(fill: Color32) -> Color32 {
-    let lum = (0.2126 * f32::from(fill.r())
-        + 0.7152 * f32::from(fill.g())
-        + 0.0722 * f32::from(fill.b()))
-        / 255.0;
-    if lum > 0.5 {
-        Color32::from_rgb(0x18, 0x18, 0x25)
-    } else {
-        Color32::WHITE
-    }
+    theme::readable_ink(fill)
 }
 
 /// Text colour that reads on the accent (and error) fill.
-pub fn on_accent(p: theme::Palette) -> Color32 {
-    // The design's `on-accent` is the darkest surface of the flavour.
-    if theme::accent().r() as u32 + theme::accent().g() as u32 + theme::accent().b() as u32 > 380 {
-        p.backdrop
-    } else {
-        Color32::WHITE
-    }
+pub fn on_accent() -> Color32 {
+    theme::readable_ink(theme::accent())
 }
 
 /// A small pill label. `active` uses the accent text, like Chip / Accent.
@@ -189,6 +191,9 @@ fn chip_painted_lead(ui: &mut Ui, label: &str, ink: Option<Color32>, selected: b
         theme::fill_selected(ui, rect, PILL, fill);
     } else {
         theme::fill_control(ui, rect, PILL, fill);
+    }
+    if !theme::is_acrylic() {
+        outline(ui, rect, CornerRadius::same(PILL));
     }
     let ink = ink.unwrap_or(p.secondary);
     ui.painter().text(
@@ -503,7 +508,7 @@ pub fn control_style(ui: &Ui) -> craft_ui::controls::ControlStyle {
         text: p.text,
         secondary: p.secondary,
         accent: theme::accent(),
-        on_accent: on_accent(p),
+        on_accent: on_accent(),
         selected: p.field,
         radius: theme::radius_md(),
         box_radius: theme::ru(6),
@@ -685,7 +690,7 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, Option<&str>)], selected: usize) -
             );
         }
         let ink = if on {
-            on_accent(p)
+            on_accent()
         } else if off.is_some() {
             p.tertiary
         } else {
