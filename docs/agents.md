@@ -1,6 +1,6 @@
 # Driving PaperCraft with agents
 
-PaperCraft exposes one set of 61 tools three ways. They all run the same code inside the app, so an agent sees what you see and every call is one undo step.
+PaperCraft exposes one set of 67 tools three ways. They all run the same code inside the app, so an agent sees what you see and every call is one undo step.
 
 | Way | Use it when | Needs the app running |
 |---|---|---|
@@ -8,7 +8,7 @@ PaperCraft exposes one set of 61 tools three ways. They all run the same code in
 | MCP over stdio, `papercraft-mcp` | the client only starts stdio servers | for calls; `tools/list` works offline |
 | Shell, `papercraft-cli` | the agent has a terminal and you want no tool schemas in its context | for `call`; `list`, `schema` and `icons` work offline |
 
-If you would rather talk to the agent inside the app, Chat mode (⌘J, or `Design | Chat` in the top bar) is the in-app alternative. It runs Claude Code or Codex through their CLIs against the same MCP server, or the Anthropic API with your own key, and keeps the conversation next to the canvas, with the same runs, review and revert. The setup and the thread are in [chat.md](chat.md). The rest of this guide covers driving the app from your own terminal or agent client.
+If you would rather talk to the agent inside the app, Chat mode (⌘J, or `Design | Chat` in the top bar) is the in-app alternative. It runs Claude Code or Codex through their CLIs against the same MCP server, ACP agents such as OpenCode or Gemini CLI, or the Anthropic API with your own key, and keeps the conversation next to the canvas, with the same runs, review and revert. The setup and the thread are in [chat.md](chat.md). The rest of this guide covers driving the app from your own terminal or agent client.
 
 ## Install
 
@@ -111,6 +111,16 @@ EOF
 * Variables: `get_variables` and `set_variables` take collections, groups (`color/brand/primary`), types (`color`, `number`, `string`, `boolean`), `mode`, `alias`, `description` and `hidden`; the old `{"name":"#hex"}` call still works and lands in the first collection. `create_collection` makes a collection with modes, `delete_variables` removes by name (refuses aliased ones unless `force`), `bind_variable` binds or detaches a field of layers (`stroke`, `text-color`, `width`, `height`, `gap`, `padding`, `radius`, `font-size`, `line-height`, `opacity`, `visible`).
 * Components: `get_components` lists mains of every page and enabled library with a `componentKey`; `create_instance` and `swap_instance` accept a main from any page or library (`componentId` or `componentKey`).
 * Libraries: `publish_library`, `list_libraries`, `enable_library`, `update_library`, `disable_library`. They work offline too, on the project store.
+
+## Annotation tools
+
+* `annotate {pageId?, notes: [{node, text, type?}]}` adds many notes in one undo step. `node` is a node id or an exact layer name; the first line of `text` is the label and the rest the body; `type` is a category key (default `rule`) that the page's template must enable. Placement is automatic.
+* `get_annotation_template {pageId?}` returns the allowed types with their guidance and fields. Call it once before `annotate`.
+* `set_annotation_template {template, scope?: "page" | "project", pageId?}` switches the template by id or name.
+* `get_annotations {nodeId?, pageId?, full?}` reads notes as `[number, node, type, text]` rows.
+* `update_annotation {id | ref, text?, type?}` and `delete_annotations {ids}` take ids or references such as `Sign in #3`.
+
+See [annotations.md](annotations.md) for categories, templates and what the notes look like.
 
 ## Safety
 

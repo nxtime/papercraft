@@ -2,7 +2,7 @@
 
 PaperCraft is an early alpha: a local-first infinite-canvas design app that agents can drive. This
 file lists what is still missing, in priority order, with an honest status. Done items are checked
-against `src/mcp/tools.rs` and the UI code (2026-10-12); rows 7, 8, 12, 15, 23, 25, 32, 34, 39, 40, 44, 45, 46 and section 6 were updated 2026-10-21. Milestone history is in
+against `src/mcp/tools.rs` and the UI code (2026-10-12); rows 7, 8, 12, 15, 23, 25, 32, 34, 39, 40, 44, 45, 46 and section 6 were updated 2026-10-21; rows 15, 47 and 48 on 2026-10-22. Milestone history is in
 [PROGRESS.md](PROGRESS.md); known rendering and import limits are in the README.
 
 Status: **done** (works today), **partial** (some of it works), **todo**.
@@ -32,7 +32,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 15 | MCP and CLI tool surface | **done** | 61 tools, one undo step per call, `papercraft-cli list / schema / call`. |
+| 15 | MCP and CLI tool surface | **done** | 67 tools, one undo step per call, `papercraft-cli list / schema / call`. |
 | 16 | Agent skills | **done** | `skills/papercraft` and `skills/papercraft-design`. |
 | 17 | Accessibility annotations | todo | Reading order, roles and alt text on layers, checked by the linter. |
 | 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |
@@ -86,3 +86,10 @@ Spec: [specs/agent-runs/spec.md](specs/agent-runs/spec.md), tasks: [specs/agent-
 | 43 | Comments assigned to agents | todo | `@agent` in a thread triggers an edit and a reply. Needs threaded comments. |
 | 44 | In-app prompt bar | **done** | Chat mode: Claude Code, Codex or your own Anthropic key; see `docs/chat.md`. |
 | 45 | Correct tool annotations | **done** | `lint_design` no longer sends `readOnlyHint`; `fix: true` edits are classified. |
+
+## 7. Annotations and chat agents
+
+| # | Item | Status | Notes |
+|---|---|---|---|
+| 47 | Design annotations | **done** | Notes with leader lines and categories, templates per project and page, view modes (⌘⇧A), Annotate tool (N), side view, inspector section, six MCP tools; see `docs/annotations.md`. |
+| 48 | ACP agents in Chat | **done** | Any ACP agent on the PATH (OpenCode works; Gemini CLI refuses ACP clients for now; Cursor needs `cursor-agent login`), npx agents after enabling, custom agents; see `docs/chat.md`. |

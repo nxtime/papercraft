@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-10-21.
+Last updated: 2026-10-22.
 
 ## Phase 3: local-first design and whiteboard tool
 
@@ -75,6 +75,16 @@ are credited in `THIRD_PARTY.md`.
   heading (and the sticky note) visible, and ⌘Z removes each agent edit in one step.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
+
+### 2026-10-22: 0.6.1 (agents via ACP, annotations)
+
+* Agents are found through the login shell's PATH (read once at startup, 3 s limit, merged with the app PATH and the usual folders), so an app opened from the Dock finds Claude Code, Codex and the rest. No install instructions anywhere; a missing agent shows Not found with Set path… and Docs.
+* ACP backend (`src/chat/acp.rs`): any agent that speaks the Agent Client Protocol over stdio, with PaperCraft's MCP server, streamed updates, permission flow, cancel and load. Registry as data in `src/chat/agents.rs`: native agents found on PATH, npx agents off until enabled, custom agents by name, command and arguments. Verified here: OpenCode works; Gemini CLI's server currently refuses ACP clients; Cursor needs `cursor-agent login`; Pi works through `pi-acp` after enabling.
+* Agent panel over the chat column (Detected, Enable via npx, Not found, API endpoints, Custom, search), a Connect an agent setup card, a sign-in card, and multiple `@ Selection` chips.
+* Settings → Chat redesigned: one agents list with details, endpoints, defaults, scrolling page on one label grid.
+* Send bug: a turn that cannot start keeps the typed text and shows an error row with Retry, never a silent no-op (`a_failed_start_keeps_the_text_and_shows_an_error`).
+* Annotations: notes with leader lines on a page, six categories with keys (style comes only from the category), project and per-page templates with built-ins and a Customize modal, view modes (⌘⇧A), Annotate tool (N), side view, inspector section, Annotate with AI, six MCP tools (`annotate` batches), and comments in `get_design_spec` and the code exports. Exports and Present leave annotations out.
+* Evidence: `src/chat/{path,agents,acp}.rs`, `src/ui/{chat_agents,annotations,annotations_canvas}.rs`, `src/model/annotation.rs`, `src/editor/annotations.rs`, `src/mcp/tools.rs`, `tests/annotations*.rs`, `specs/chat-agents/`, `specs/annotations/`, `docs/chat.md`, `docs/annotations.md`.
 
 ### 2026-10-21: Chat mode
 
