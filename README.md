@@ -136,6 +136,16 @@ EOF
   <sub><code>preview.png</code> from an offline shell script, with no app running.</sub>
 </p>
 
+### Chat
+
+Chat mode (⌘J, or `Design | Chat` in the top bar) puts a conversation next to the canvas. It runs Claude Code or Codex through their CLIs with PaperCraft's MCP server, or the Anthropic API with your own key, and it shows tool calls, checkpoints and run review in the thread. Chats are saved in the project's `chats/` folder. See [docs/chat.md](docs/chat.md).
+
+<p align="center">
+  <img src="docs/screenshots/readme/chat.png" alt="Chat mode: the chat column on the left shows a finished agent run with its Review, Revert and Accept actions, and the canvas on the right" width="100%">
+  <br>
+  <sub>Chat mode with a finished agent run: review, revert or accept from the thread.</sub>
+</p>
+
 ### Skills
 
 [`skills/`](skills) holds agent skills: `papercraft` (the build, screenshot, lint, fix loop and tool cheat sheet), `papercraft-design` (design-quality rules) and `papercraft-critique`. [docs/agents.md](docs/agents.md) is the full guide: install, registering with agents, scripts, runs and review, safety. [docs/design-system.md](docs/design-system.md) covers variables, components and libraries.
@@ -212,6 +222,7 @@ The scenario tests drive the editor with synthetic pointer and keyboard events; 
 | ⌘⌥⇧V | Variables | ⌘⌥C / ⌘⌥V | Copy / paste properties |
 | ⌘= / ⌘- / ⇧0 | Zoom in / out / 100% | ⇧1 / ⇧2 | Zoom to fit / selection |
 | PageUp / PageDown | Previous / next page | ⌘\\ | Show / hide UI |
+| ⌘J | Design / Chat mode | ⌘L | Add selection to chat (Chat mode) |
 
 Draw a frame around existing shapes and it adopts them; dragging a layer into or out of a frame re-parents it. Hold ⌘ while dragging to suspend snapping.
 
@@ -226,7 +237,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 * **Variables:** gradients keep fixed colors; there are no text styles and no component variants or properties.
 * **Booleans are destructive:** the result is a new vector path with flattened curves.
 * **`write_html`** ignores margin, tables and transforms (it reports them as `ignoredStyles`) and does not fetch remote images; pass a local path or a `data:` URI.
-* **Agents:** one project is open at a time in the app, and `move_nodes` stays on one page. There is no in-app prompt box; agents run outside and connect over MCP or the CLI.
+* **Agents:** one project is open at a time in the app, and `move_nodes` stays on one page. The in-app Chat mode runs Claude Code, Codex or your own Anthropic key; other agents run outside and connect over MCP or the CLI.
 * **Sharing** has no live presence (cursors, selections) yet.
 * **Pen pressure** is simulated from stroke velocity on macOS tablets, because winit 0.30 does not expose it for mouse-like pen events.
 * **Releases** cover macOS (Apple silicon) and Linux x86_64. Windows packaging scripts exist but are not part of releases.

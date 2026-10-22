@@ -76,6 +76,14 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-21: Chat mode
+
+* Chat layout next to the canvas (⌘J, `Design | Chat`), with three backends: Claude Code and Codex through their CLIs (`claude -p` stream-json, `codex exec --json`) against the app's MCP server, and the Anthropic API with a key in the OS credential store. One event stream for all three; tool calls run through the same MCP dispatch, so runs, review and revert behave as before.
+* Thread: markdown replies, thinking row, tool cards, step groups, plan from `TodoWrite`, approval for destructive tools on the API backend, run checkpoints with Restore to here, usage line and context meter, `@ Selection` and image attachments, Stop.
+* Chats live in the project's `chats/` folder. Settings → Chat holds CLI paths, the default backend and the API key.
+* Offline CLI fix: an offline save writes no camera, and a top-level shape created without a position goes to the next free spot instead of the origin.
+* Evidence: `src/chat/`, `src/ui/chat.rs`, `src/ui/chat_msgs.rs`, `src/ui/chat_md.rs`, `src/ui/settings.rs`, `src/mcp/exec.rs`, `tests/fixtures/chat/`, `specs/chat/`, `docs/chat.md`.
+
 ### 2026-10-21: Agent runs and change review
 
 * Agent editing calls group into runs, snapshot each edited page as `Before agent run N`, and end on 30 seconds idle, `finish_working_on_nodes`, or project switch. Runs persist under `runs/` and keep the newest 50.

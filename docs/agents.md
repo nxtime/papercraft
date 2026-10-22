@@ -8,6 +8,8 @@ PaperCraft exposes one set of 61 tools three ways. They all run the same code in
 | MCP over stdio, `papercraft-mcp` | the client only starts stdio servers | for calls; `tools/list` works offline |
 | Shell, `papercraft-cli` | the agent has a terminal and you want no tool schemas in its context | for `call`; `list`, `schema` and `icons` work offline |
 
+If you would rather talk to the agent inside the app, Chat mode (⌘J, or `Design | Chat` in the top bar) is the in-app alternative. It runs Claude Code or Codex through their CLIs against the same MCP server, or the Anthropic API with your own key, and keeps the conversation next to the canvas, with the same runs, review and revert. The setup and the thread are in [chat.md](chat.md). The rest of this guide covers driving the app from your own terminal or agent client.
+
 ## Install
 
 1. Get the app and the tools: the DMG and the `papercraft-cli` zip from the [releases](https://git.marcospaulo.dev.br/masi/papercraft/releases), or `cargo build --release` (binaries `papercraft`, `papercraft-cli`, `papercraft-mcp` in `target/release/`).

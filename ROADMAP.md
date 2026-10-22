@@ -2,7 +2,7 @@
 
 PaperCraft is an early alpha: a local-first infinite-canvas design app that agents can drive. This
 file lists what is still missing, in priority order, with an honest status. Done items are checked
-against `src/mcp/tools.rs` and the UI code (2026-10-12); rows 7, 8, 12, 15, 23, 25, 32, 34, 39, 40, 45, 46 and section 6 were updated 2026-10-21. Milestone history is in
+against `src/mcp/tools.rs` and the UI code (2026-10-12); rows 7, 8, 12, 15, 23, 25, 32, 34, 39, 40, 44, 45, 46 and section 6 were updated 2026-10-21. Milestone history is in
 [PROGRESS.md](PROGRESS.md); known rendering and import limits are in the README.
 
 Status: **done** (works today), **partial** (some of it works), **todo**.
@@ -84,5 +84,5 @@ Spec: [specs/agent-runs/spec.md](specs/agent-runs/spec.md), tasks: [specs/agent-
 | 41 | Agent presence on the canvas | todo | Outline the node a tool call touches, label it, pause or stop the run. |
 | 42 | `get_context` tool | todo | Selection, variables, nearby components and lint summary in one call, so an agent orients in one round trip. |
 | 43 | Comments assigned to agents | todo | `@agent` in a thread triggers an edit and a reply. Needs threaded comments. |
-| 44 | In-app prompt bar | todo | Run a prompt on the selection through the user's own key or local CLI. Largest scope: provider config, key storage, cost. |
+| 44 | In-app prompt bar | **done** | Chat mode: Claude Code, Codex or your own Anthropic key; see `docs/chat.md`. |
 | 45 | Correct tool annotations | **done** | `lint_design` no longer sends `readOnlyHint`; `fix: true` edits are classified. |
