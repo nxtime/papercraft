@@ -1,19 +1,12 @@
 //! Settings dialog: appearance, canvas, chat agents and keys, updates.
 
 use super::{UiState, kit, motion};
-#[cfg(not(target_arch = "wasm32"))]
-use super::confirm;
 use crate::chat::BackendKind;
 use crate::chat::endpoint::{self, Endpoint};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::chat::endpoint::ApiFormat;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::chat::{claude_code, codex};
 use crate::theme::{self, Icon};
 use egui::{RichText, Ui};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +24,14 @@ pub const API_MODELS: [(&str, &str); 3] = [
     ("claude-haiku-5-5", "Haiku 5.5"),
 ];
 pub const API_EFFORTS: [(&str, &str); 3] = [("low", "Low"), ("medium", "Medium"), ("high", "High")];
+/// Fixed size of the dialog, the same on every page; long pages scroll inside it.
+const MODAL_W: f32 = 880.0;
+const MODAL_H: f32 = 640.0;
+/// Top padding, page header and bottom padding above and below a scrolling page.
+const PAGE_CHROME: f32 = 112.0;
+fn modal_height(ctx: &egui::Context) -> f32 {
+    MODAL_H.min(ctx.content_rect().height() - 96.0)
+}
 const DEFAULT_MODEL: &str = "claude-opus-5-5";
 const DEFAULT_EFFORT: &str = "medium";
 #[cfg(not(target_arch = "wasm32"))]
@@ -40,15 +41,44 @@ const BACKENDS: [(BackendKind, &str); 3] = [
     (BackendKind::Anthropic, "API"),
 ];
 
+/// One registry agent's settings. Native agents are always on; `enabled` gates `npx` ones
+/// (running them fetches code, so the user opts in once).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentPrefs {
+    pub path: Option<String>,
+    /// Replaces the registry's launch args, split on whitespace.
+    pub args: Option<String>,
+    pub enabled: bool,
+    /// Native agents only: left out of the chat agent picker.
+    pub hidden: bool,
+}
+
+/// An ACP agent the user added: `command` runs with `args` (whitespace-split) over stdio.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomAgent {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    pub args: String,
+}
+
 /// Chat defaults and agent paths, kept in `chat_settings.json` in the config folder.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChatPrefs {
-    /// Override for the `claude` binary; None means the first one on `PATH`.
+    /// Old home of `agents["claude-code"].path`: read from old files, mirrored from `agents`, never written.
+    #[serde(skip_serializing)]
     pub claude_path: Option<String>,
-    /// Override for the `codex` binary; None means the first one on `PATH`.
+    /// Old home of `agents["codex"].path`: read from old files, mirrored from `agents`, never written.
+    #[serde(skip_serializing)]
     pub codex_path: Option<String>,
     pub default_backend: BackendKind,
+    /// Per-agent overrides by registry id. `from_json` moves the old `claude_path`/`codex_path` in.
+    pub agents: BTreeMap<String, AgentPrefs>,
+    /// User-defined ACP agents (name + command + args).
+    pub custom_agents: Vec<CustomAgent>,
     /// API endpoints, at least one. Keys are in the keychain, never here.
     pub endpoints: Vec<Endpoint>,
     /// Id of the endpoint new chats start on.
@@ -66,6 +96,8 @@ impl Default for ChatPrefs {
             claude_path: None,
             codex_path: None,
             default_backend: BackendKind::ClaudeCode,
+            agents: BTreeMap::new(),
+            custom_agents: vec![],
             endpoints: vec![Endpoint::default()],
             default_endpoint: endpoint::DEFAULT_ENDPOINT_ID.into(),
             api_effort: DEFAULT_EFFORT.into(),
@@ -89,6 +121,13 @@ impl ChatPrefs {
         if prefs.endpoints.is_empty() {
             prefs.endpoints = vec![Endpoint::default()];
         }
+        for (id, old) in [("claude-code", prefs.claude_path.clone()), ("codex", prefs.codex_path.clone())] {
+            let entry = prefs.agents.entry(id.into()).or_default();
+            if entry.path.is_none() {
+                entry.path = old;
+            }
+        }
+        prefs.tidy();
         if !has_endpoints {
             let model = legacy_model.filter(|m| API_MODELS.iter().any(|(id, _)| id == m));
             prefs.endpoints[0].model = model.unwrap_or_else(|| DEFAULT_MODEL.into());
@@ -100,6 +139,14 @@ impl ChatPrefs {
             prefs.api_effort = DEFAULT_EFFORT.into();
         }
         prefs
+    }
+
+    /// Drops empty agent entries and mirrors the Claude Code and Codex paths into the old fields
+    /// that code outside Settings may still read.
+    pub fn tidy(&mut self) {
+        self.agents.retain(|_, a| *a != AgentPrefs::default());
+        self.claude_path = self.agents.get("claude-code").and_then(|a| a.path.clone());
+        self.codex_path = self.agents.get("codex").and_then(|a| a.path.clone());
     }
 
     /// The endpoint with this id; None or an unknown id means the default one.
@@ -141,7 +188,7 @@ pub struct SettingsUi {
     /// Paths, key or Re-scan changed on the Chat page: the chat column detects the agents again.
     pub chat_changed: bool,
     #[cfg(not(target_arch = "wasm32"))]
-    chat_page: ChatPage,
+    chat_page: native::ChatPage,
 }
 
 impl SettingsUi {
@@ -160,94 +207,11 @@ impl Default for SettingsUi {
             chat: ChatPrefs::load(),
             chat_changed: false,
             #[cfg(not(target_arch = "wasm32"))]
-            chat_page: ChatPage::default(),
+            chat_page: native::ChatPage::default(),
         }
     }
 }
 
-/// Chat page state that lives only while the dialog is open.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
-struct ChatPage {
-    /// Set when the page is first shown after the dialog opened; cleared when the dialog closes.
-    scan: Option<Scan>,
-    /// Typed keys by endpoint id.
-    key_drafts: std::collections::HashMap<String, String>,
-    key_error: Option<String>,
-    /// The endpoint whose key waits for the remove confirmation.
-    key_remove: Option<String>,
-}
-
-/// What the page shows about the CLIs and the stored key, read once (not every frame).
-#[cfg(not(target_arch = "wasm32"))]
-struct Scan {
-    claude: Option<Found>,
-    codex: Option<Found>,
-    /// Last four characters of each endpoint's key (by id); the keys themselves are never kept here.
-    key_tails: std::collections::HashMap<String, String>,
-    env_key: bool,
-}
-
-/// Binary path and version.
-#[cfg(not(target_arch = "wasm32"))]
-type Found = (PathBuf, String);
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Scan {
-    fn read(prefs: &ChatPrefs) -> Scan {
-        Scan {
-            claude: claude_code::detect(prefs.claude_path.as_deref().map(Path::new)),
-            codex: codex::detect(prefs.codex_path.as_deref().map(Path::new)),
-            key_tails: prefs.endpoints.iter().filter_map(|e| Some((e.id.clone(), key_tail(&endpoint::get_key(e)?)))).collect(),
-            env_key: std::env::var(KEY_ENV).is_ok(),
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-const KEY_ENV: &str = "ANTHROPIC_API_KEY";
-#[cfg(not(target_arch = "wasm32"))]
-const KEY_TAIL_CHARS: usize = 4;
-#[cfg(not(target_arch = "wasm32"))]
-const KEY_MASK: &str = "•••• ";
-#[cfg(not(target_arch = "wasm32"))]
-const KEY_PLACEHOLDER: &str = "API key (optional for a local server)";
-#[cfg(not(target_arch = "wasm32"))]
-const CLAUDE_KEY_PLACEHOLDER: &str = "sk-ant-…";
-#[cfg(not(target_arch = "wasm32"))]
-const CLAUDE_INSTALL: &str = "npm i -g @anthropic-ai/claude-code";
-#[cfg(not(target_arch = "wasm32"))]
-const CODEX_INSTALL: &str = "npm i -g @openai/codex";
-#[cfg(not(target_arch = "wasm32"))]
-const AGENT_NAME_W: f32 = 150.0;
-#[cfg(not(target_arch = "wasm32"))]
-const AGENT_CHIP_W: f32 = 84.0;
-#[cfg(not(target_arch = "wasm32"))]
-const KEY_BUTTONS_W: f32 = 180.0;
-#[cfg(not(target_arch = "wasm32"))]
-const FORMAT_W: f32 = 130.0;
-#[cfg(not(target_arch = "wasm32"))]
-const FORMATS: [(ApiFormat, &str); 2] = [(ApiFormat::Anthropic, "Anthropic format"), (ApiFormat::OpenAi, "OpenAI format")];
-#[cfg(not(target_arch = "wasm32"))]
-const DEFAULT_GAP: f32 = 12.0;
-
-#[cfg(not(target_arch = "wasm32"))]
-fn key_tail(key: &str) -> String {
-    let chars: Vec<char> = key.chars().collect();
-    chars[chars.len().saturating_sub(KEY_TAIL_CHARS)..].iter().collect()
-}
-
-/// Where the platform keeps the API key, for the settings note.
-#[cfg(not(target_arch = "wasm32"))]
-fn keychain_name() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "macOS Keychain"
-    } else if cfg!(windows) {
-        "Windows Credential Manager"
-    } else {
-        "Secret Service"
-    }
-}
 
 pub fn show(ctx: &egui::Context, st: &mut UiState) {
     let t = motion::progress(
@@ -275,8 +239,8 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
             if !live {
                 ui.disable();
             }
-            ui.set_width(780.0f32.min(ctx.content_rect().width() - 48.0));
-            ui.set_height(520.0f32.min(ctx.content_rect().height() - 96.0));
+            ui.set_width(MODAL_W.min(ctx.content_rect().width() - 48.0));
+            ui.set_height(modal_height(ctx));
             ui.horizontal_top(|ui| {
                 egui::Frame::new()
                     .fill(p.backdrop)
@@ -325,7 +289,7 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
         let (title, sub) = match st.settings.page {
             Page::Appearance => ("Appearance", "Theme, scale and motion."),
             Page::Canvas => ("Canvas", "How the canvas looks."),
-            Page::Chat => ("Chat", "Agents and keys for design by conversation."),
+            Page::Chat => ("Chat", "Agents, API endpoints and defaults for design by conversation."),
             Page::Updates => ("Updates", "Keep PaperCraft current."),
         };
         ui.vertical(|ui| {
@@ -403,7 +367,11 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
                 },
             );
         }
-        Page::Chat => chat_page(ui, ctx, &mut st.settings),
+        Page::Chat => {
+            // The columns have no fixed height of their own, so the page gets the dialog's.
+            let height = modal_height(ctx) - PAGE_CHROME;
+            egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(height).min_scrolled_height(height).show(ui, |ui| chat_page(ui, ctx, &mut st.settings));
+        }
         Page::Updates => {
             kit::setting_row(
                 ui,
@@ -425,291 +393,665 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
     }
 }
 
+/// The desktop Chat page. Detection runs on a thread; the page only draws what it has.
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use super::*;
+    use crate::chat::agents::{self, AgentKind, AgentState, AgentStatus};
+    use crate::chat::endpoint::ApiFormat;
+    use crate::ui::confirm;
+    use egui::{Align, Layout, vec2};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::mpsc::{Receiver, channel};
+    use std::time::Duration;
+
+    const KEY_ENV: &str = "ANTHROPIC_API_KEY";
+    const KEY_TAIL_CHARS: usize = 4;
+    const KEY_MASK: &str = "•••• ";
+    const KEY_PLACEHOLDER: &str = "API key (optional for a local server)";
+    const CLAUDE_KEY_PLACEHOLDER: &str = "sk-ant-…";
+    /// One grid for every field row: a label column, then the field.
+    const LABEL_W: f32 = 160.0;
+    const CARD_PAD: i8 = 16;
+    const ROW_PAD: i8 = 12;
+    const SECTION_GAP: f32 = 24.0;
+    const ROW_H: f32 = 44.0;
+    const ICON_BADGE: f32 = 40.0;
+    /// Room for the status chip, toggle and chevron at the right of a row.
+    const RIGHT_W: f32 = 270.0;
+    const SCROLLBAR_GAP: f32 = 14.0;
+    const POLL_EVERY: Duration = Duration::from_millis(100);
+    const FORMATS: [(ApiFormat, &str); 2] = [(ApiFormat::Anthropic, "Anthropic Messages"), (ApiFormat::OpenAi, "OpenAI-compatible")];
+
+    /// Chat page state that lives only while the dialog is open.
+    #[derive(Default)]
+    pub(super) struct ChatPage {
+        /// Set when the page is first shown after the dialog opened; cleared when the dialog closes.
+        pub(super) scan: Option<Scan>,
+        /// Typed keys by endpoint id.
+        pub(super) key_drafts: HashMap<String, String>,
+        pub(super) key_error: Option<String>,
+        /// The endpoint whose key waits for the remove confirmation.
+        pub(super) key_remove: Option<String>,
+        /// The custom agent that waits for the remove confirmation.
+        pub(super) agent_remove: Option<String>,
+        /// Expanded rows, as `agent:<id>` or `ep:<id>`.
+        pub(super) open: HashSet<String>,
+        pub(super) show_more: bool,
+    }
+
+    /// What the page shows about the agents and the stored keys. Keys themselves are never kept.
+    pub(super) struct Scan {
+        /// None until the first detection finishes.
+        pub(super) agents: Option<Vec<AgentStatus>>,
+        pub(super) probe: Option<Receiver<Vec<AgentStatus>>>,
+        /// Last four characters of each endpoint's key (by id).
+        pub(super) key_tails: HashMap<String, String>,
+        pub(super) env_key: bool,
+    }
+
+    impl Scan {
+        fn read(prefs: &ChatPrefs, ctx: &egui::Context) -> Scan {
+            let mut scan = Scan { agents: None, probe: None, key_tails: HashMap::new(), env_key: false };
+            scan.refresh(prefs, ctx);
+            scan
+        }
+
+        /// Detects the agents again (the old result stays on screen until the new one lands) and
+        /// reads the key tails.
+        fn refresh(&mut self, prefs: &ChatPrefs, ctx: &egui::Context) {
+            let (tx, rx) = channel();
+            let (prefs_copy, ctx_copy) = (prefs.clone(), ctx.clone());
+            std::thread::spawn(move || {
+                let _ = tx.send(agents::detect_all(&prefs_copy));
+                ctx_copy.request_repaint();
+            });
+            self.probe = Some(rx);
+            self.key_tails = prefs.endpoints.iter().filter_map(|e| Some((e.id.clone(), key_tail(&endpoint::get_key(e)?)))).collect();
+            self.env_key = std::env::var(KEY_ENV).is_ok();
+        }
+
+        fn poll(&mut self) {
+            let Some(rx) = &self.probe else { return };
+            if let Ok(found) = rx.try_recv() {
+                self.agents = Some(found);
+                self.probe = None;
+            }
+        }
+    }
+
+    fn key_tail(key: &str) -> String {
+        let chars: Vec<char> = key.chars().collect();
+        chars[chars.len().saturating_sub(KEY_TAIL_CHARS)..].iter().collect()
+    }
+
+    /// Where the platform keeps the API key, for the settings note.
+    fn keychain_name() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "macOS Keychain"
+        } else if cfg!(windows) {
+            "Windows Credential Manager"
+        } else {
+            "Secret Service"
+        }
+    }
+
+    /// What the frame changed.
+    #[derive(Default)]
+    struct Edits {
+        save: bool,
+        /// Detect again and reread key tails.
+        rescan: bool,
+        /// Tell the chat column without detecting here (a toggle or a key).
+        notify: bool,
+    }
+
+    /// One agent as the list shows it.
+    struct AgentRow {
+        id: String,
+        name: String,
+        /// None for a custom agent.
+        kind: Option<AgentKind>,
+        state: AgentState,
+        hidden: bool,
+    }
+
+    /// Ready and not hidden by the user: shown without the "Show more" click.
+    pub(super) fn shown_by_default(state: &AgentState, hidden: bool) -> bool {
+        matches!(state, AgentState::Ready { .. }) && !hidden
+    }
+
+    /// Splits rows flagged `true` (shown by default) from the rest, keeping their order.
+    pub(super) fn split_primary<T>(rows: impl IntoIterator<Item = (T, bool)>) -> (Vec<T>, Vec<T>) {
+        let (primary, more): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(_, shown)| *shown);
+        (primary.into_iter().map(|(r, _)| r).collect(), more.into_iter().map(|(r, _)| r).collect())
+    }
+
+    fn agent_rows(prefs: &ChatPrefs, statuses: &[AgentStatus]) -> Vec<AgentRow> {
+        let state_of = |id: &str| statuses.iter().find(|s| s.id == id).map_or(AgentState::NotFound, |s| s.state.clone());
+        let hidden_of = |id: &str| prefs.agents.get(id).is_some_and(|a| a.hidden);
+        let registry = agents::AGENTS.iter().map(|d| AgentRow { id: d.id.into(), name: d.name.into(), kind: Some(d.kind), state: state_of(d.id), hidden: hidden_of(d.id) });
+        let custom = prefs.custom_agents.iter().map(|c| AgentRow { id: c.id.clone(), name: c.name.clone(), kind: None, state: state_of(&c.id), hidden: false });
+        registry.chain(custom).collect()
+    }
+
+    pub(super) fn chat_page(ui: &mut Ui, ctx: &egui::Context, settings: &mut SettingsUi) {
+        let SettingsUi { chat: prefs, chat_page: page, .. } = &mut *settings;
+        let mut scan = page.scan.take().unwrap_or_else(|| Scan::read(prefs, ctx));
+        scan.poll();
+        if scan.probe.is_some() {
+            ctx.request_repaint_after(POLL_EVERY);
+        }
+        let mut ed = Edits::default();
+        ui.set_max_width(ui.available_width() - SCROLLBAR_GAP);
+        ui.spacing_mut().item_spacing.y = 8.0;
+
+        let mut detect = false;
+        section(ui, "Agents", "Found on your login shell PATH, like your terminal does.", |ui| {
+            detect = kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Restore), "Detect again").clicked();
+        });
+        card(ui, |ui| agents_card(ui, prefs, page, &scan, &mut ed));
+
+        ui.add_space(SECTION_GAP - 8.0);
+        let mut add_endpoint = false;
+        section(ui, "API endpoints", &format!("Bring your own key. Keys live in the {}.", keychain_name()), |ui| {
+            add_endpoint = kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Plus), "Add endpoint").clicked();
+        });
+        card(ui, |ui| endpoints_card(ui, prefs, page, &mut scan, &mut ed));
+        if add_endpoint {
+            let ep = Endpoint::blank();
+            page.open.insert(format!("ep:{}", ep.id));
+            prefs.endpoints.push(ep);
+            ed.save = true;
+        }
+        if let Some(e) = &page.key_error {
+            ui.label(RichText::new(e).color(ui.visuals().error_fg_color));
+        }
+        if scan.env_key {
+            note(ui, &format!("{KEY_ENV} from the environment is used for api.anthropic.com when no key is stored."));
+        }
+
+        ui.add_space(SECTION_GAP - 8.0);
+        section(ui, "Defaults for new chats", "Each chat can still pick its own.", |_| {});
+        card(ui, |ui| defaults_card(ui, prefs, &mut ed));
+        ui.add_space(SECTION_GAP);
+
+        confirm_removals(ctx, prefs, page, &mut scan, &mut ed);
+        if detect {
+            ed.rescan = true;
+        }
+        if ed.save {
+            prefs.tidy();
+            prefs.save();
+        }
+        if ed.rescan {
+            scan.refresh(prefs, ctx);
+        }
+        page.scan = Some(scan);
+        settings.chat_changed |= ed.rescan || ed.notify;
+    }
+
+    fn confirm_removals(ctx: &egui::Context, prefs: &mut ChatPrefs, page: &mut ChatPage, scan: &mut Scan, ed: &mut Edits) {
+        if let Some(id) = page.key_remove.clone() {
+            let answer = confirm::dialog(
+                ctx,
+                "chat-key-remove",
+                "Remove API key?",
+                "The key is deleted from the Keychain. Chats on this endpoint stop until a key is saved again.",
+                "Remove",
+            );
+            match answer {
+                Some(true) => {
+                    page.key_remove = None;
+                    if let Some(ep) = prefs.endpoints.iter().find(|e| e.id == id) {
+                        match endpoint::delete_key(ep) {
+                            Ok(()) => {
+                                ed.notify = true;
+                                scan.key_tails.remove(&id);
+                                page.key_error = None;
+                            }
+                            Err(e) => page.key_error = Some(format!("Could not remove the key: {e}")),
+                        }
+                    }
+                }
+                Some(false) => page.key_remove = None,
+                None => {}
+            }
+        }
+        if let Some(id) = page.agent_remove.clone() {
+            let name = prefs.custom_agents.iter().find(|c| c.id == id).map_or("this agent", |c| c.name.as_str()).to_owned();
+            match confirm::dialog(ctx, "chat-agent-remove", "Remove custom agent?", &format!("{name} is removed from the list. Chats that use it stop until you pick another agent."), "Remove") {
+                Some(true) => {
+                    page.agent_remove = None;
+                    prefs.custom_agents.retain(|c| c.id != id);
+                    page.open.remove(&format!("agent:{id}"));
+                    ed.save = true;
+                    ed.rescan = true;
+                }
+                Some(false) => page.agent_remove = None,
+                None => {}
+            }
+        }
+    }
+
+    // ---- layout pieces ----
+
+    /// Section title and subtitle on the left, `action` at the right.
+    fn section(ui: &mut Ui, title: &str, sub: &str, action: impl FnOnce(&mut Ui)) {
+        let p = theme::pal(ui);
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), 40.0), Layout::left_to_right(Align::Center), |ui| {
+            ui.set_min_height(40.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(RichText::new(title).font(theme::semibold(16.0)));
+                ui.label(RichText::new(sub).size(12.0).color(p.secondary));
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), action);
+        });
+    }
+
+    /// The raised surface of a section, 16 px inside.
+    fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+        let p = theme::pal(ui);
+        egui::Frame::new().fill(p.backdrop).corner_radius(theme::RADIUS_PANEL).inner_margin(CARD_PAD).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 4.0;
+            add(ui);
+        });
+    }
+
+    /// A row inside a card; lighter while expanded.
+    fn row_frame(ui: &mut Ui, open: bool, add: impl FnOnce(&mut Ui)) {
+        let p = theme::pal(ui);
+        let fill = if open { theme::blend(p.backdrop, p.hover) } else { egui::Color32::TRANSPARENT };
+        egui::Frame::new().fill(fill).corner_radius(theme::RADIUS_LG).inner_margin(ROW_PAD).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 8.0;
+            add(ui);
+        });
+    }
+
+    /// Icon, name (with version), a muted line, and `right` laid out from the right edge.
+    fn row_header(ui: &mut Ui, icon: Icon, title: &str, version: &str, sub: &str, right: impl FnOnce(&mut Ui)) {
+        let p = theme::pal(ui);
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), ROW_H), Layout::left_to_right(Align::Center), |ui| {
+            ui.set_min_height(ROW_H);
+            ui.spacing_mut().item_spacing.x = 12.0;
+            let left_w = (ui.available_width() - RIGHT_W).max(0.0);
+            ui.allocate_ui_with_layout(vec2(left_w, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                ui.set_width(left_w);
+                kit::badge(ui, icon, p.secondary, ICON_BADGE);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.label(RichText::new(title).font(theme::semibold(theme::BODY + 1.0)));
+                        if !version.is_empty() {
+                            ui.add(egui::Label::new(RichText::new(version).size(theme::SECONDARY).color(p.secondary)).truncate());
+                        }
+                    });
+                    ui.add(egui::Label::new(RichText::new(sub).size(theme::SECONDARY).color(p.secondary)).truncate());
+                });
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), right);
+        });
+    }
+
+    /// A label in the 160 px column and the field after it.
+    fn field_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
+        let p = theme::pal(ui);
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.allocate_ui_with_layout(vec2(LABEL_W, theme::FIELD_H), Layout::left_to_right(Align::Center), |ui| {
+                ui.set_min_size(vec2(LABEL_W, theme::FIELD_H));
+                ui.label(RichText::new(label).color(p.secondary));
+            });
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.set_width(ui.available_width());
+                add(ui);
+            });
+        });
+    }
+
+    fn note(ui: &mut Ui, text: &str) {
+        ui.label(RichText::new(text).size(theme::SECONDARY).color(theme::pal(ui).secondary));
+    }
+
+    fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> egui::Response {
+        ui.add(egui::TextEdit::singleline(text).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(ui.available_width()))
+    }
+
+    /// A text field for an optional string: edits show at once, `Enter` or leaving the field
+    /// commits (save and detect again). An empty field is `None`.
+    fn optional_field(ui: &mut Ui, value: &mut Option<String>, hint: &str, ed: &mut Edits) {
+        let mut text = value.clone().unwrap_or_default();
+        let r = text_field(ui, &mut text, hint);
+        if r.changed() {
+            *value = (!text.is_empty()).then_some(text);
+        }
+        if r.lost_focus() {
+            *value = value.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+            ed.save = true;
+            ed.rescan = true;
+        }
+    }
+
+    /// A plain string field: saves as you type, detects again when it loses focus.
+    fn text_edit(ui: &mut Ui, value: &mut String, hint: &str, ed: &mut Edits) {
+        let r = text_field(ui, value, hint);
+        ed.save |= r.changed();
+        ed.rescan |= r.lost_focus();
+    }
+
+    fn chevron(ui: &mut Ui, open: bool) -> bool {
+        theme::icon_button(ui, if open { Icon::ChevronUp } else { Icon::ChevronDown }, 24.0, false).clicked()
+    }
+
+    fn flip(open: &mut HashSet<String>, key: String, clicked: bool) {
+        if clicked && !open.remove(&key) {
+            open.insert(key);
+        }
+    }
+
+    /// `~` for the home folder, so paths stay short.
+    fn tilde(path: &str) -> String {
+        match dirs::home_dir().and_then(|h| path.strip_prefix(h.to_str()?).map(str::to_owned)) {
+            Some(rest) => format!("~{rest}"),
+            None => path.to_owned(),
+        }
+    }
+
+    /// `v2.1.307` out of whatever the program prints for `--version`; empty when no number is in it.
+    fn short_version(raw: &str) -> String {
+        raw.split_whitespace()
+            .find(|t| t.trim_start_matches('v').starts_with(|c: char| c.is_ascii_digit()))
+            .map_or_else(String::new, |t| format!("v{}", t.trim_start_matches('v')))
+    }
+
+    // ---- agents ----
+
+    fn agents_card(ui: &mut Ui, prefs: &mut ChatPrefs, page: &mut ChatPage, scan: &Scan, ed: &mut Edits) {
+        let Some(statuses) = &scan.agents else {
+            note(ui, "Looking for agents…");
+            return;
+        };
+        let rows = agent_rows(prefs, statuses);
+        let (primary, more) = split_primary(rows.into_iter().map(|r| {
+            let shown = shown_by_default(&r.state, r.hidden);
+            (r, shown)
+        }));
+        for row in &primary {
+            agent_row(ui, row, prefs, page, ed);
+        }
+        if !more.is_empty() {
+            let text = if page.show_more { "Show fewer agents".to_owned() } else { format!("Show {} more agents", more.len()) };
+            ui.add_space(4.0);
+            let link = ui.add(egui::Label::new(RichText::new(text).color(theme::accent())).sense(egui::Sense::click()));
+            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                page.show_more = !page.show_more;
+            }
+            if page.show_more {
+                for row in &more {
+                    agent_row(ui, row, prefs, page, ed);
+                }
+            }
+        }
+        ui.add_space(8.0);
+        if kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Plus), "Add custom agent").clicked() {
+            let id = format!("custom-{:08x}", fastrand::u32(..));
+            page.open.insert(format!("agent:{id}"));
+            prefs.custom_agents.push(CustomAgent { id, name: "New agent".into(), ..Default::default() });
+            page.show_more = true;
+            ed.save = true;
+        }
+    }
+
+    fn agent_row(ui: &mut Ui, row: &AgentRow, prefs: &mut ChatPrefs, page: &mut ChatPage, ed: &mut Edits) {
+        let p = theme::pal(ui);
+        let key = format!("agent:{}", row.id);
+        let open = page.open.contains(&key);
+        let custom_command = prefs.custom_agents.iter().find(|c| c.id == row.id).map(|c| c.command.clone());
+        let (version, sub) = match &row.state {
+            AgentState::Ready { path, version } => (short_version(version), tilde(path)),
+            AgentState::NeedsEnable => (String::new(), "Runs via npx · off until enabled".to_owned()),
+            AgentState::NotFound => (String::new(), custom_command.filter(|c| !c.is_empty()).unwrap_or_else(|| "Not found on PATH".to_owned())),
+            AgentState::WrongProgram { path } => (String::new(), tilde(path)),
+        };
+        let (label, ink) = match &row.state {
+            AgentState::Ready { .. } => ("Ready", Some(p.success)),
+            AgentState::NeedsEnable => ("Needs enable", None),
+            AgentState::NotFound => ("Not found", None),
+            AgentState::WrongProgram { .. } => ("Different program", Some(p.warning)),
+        };
+        let npx = matches!(row.kind, Some(AgentKind::Npx { .. }));
+        let enabled = prefs.agents.get(&row.id).is_some_and(|a| a.enabled);
+        let ready = matches!(row.state, AgentState::Ready { .. });
+        let mut clicked = false;
+        row_frame(ui, open, |ui| {
+            row_header(ui, Icon::Component, &row.name, &version, &sub, |ui| {
+                clicked = chevron(ui, open);
+                if npx && enabled {
+                    let mut on = true;
+                    if kit::toggle(ui, &mut on).changed() {
+                        prefs.agents.entry(row.id.clone()).or_default().enabled = false;
+                        ed.save = true;
+                        ed.rescan = true;
+                    }
+                } else if npx {
+                    if kit::button(ui, kit::ButtonKind::Secondary, None, "Enable").clicked() {
+                        prefs.agents.entry(row.id.clone()).or_default().enabled = true;
+                        ed.save = true;
+                        ed.rescan = true;
+                    }
+                } else if row.kind.is_some() && ready {
+                    let mut on = !row.hidden;
+                    if kit::toggle(ui, &mut on).on_hover_text("Show in the chat agent picker").changed() {
+                        prefs.agents.entry(row.id.clone()).or_default().hidden = !on;
+                        ed.save = true;
+                        ed.notify = true;
+                    }
+                }
+                kit::chip_ink(ui, label, ink);
+            });
+            if !open {
+                return;
+            }
+            match row.kind {
+                Some(_) => registry_body(ui, row, prefs, ed),
+                None => custom_body(ui, row, prefs, page, ed),
+            }
+        });
+        flip(&mut page.open, key, clicked);
+    }
+
+    fn registry_body(ui: &mut Ui, row: &AgentRow, prefs: &mut ChatPrefs, ed: &mut Edits) {
+        let Some(def) = agents::find(&row.id) else { return };
+        let direct = matches!(def.kind, AgentKind::Direct);
+        field_row(ui, "Path override", |ui| {
+            let entry = prefs.agents.entry(row.id.clone()).or_default();
+            optional_field(ui, &mut entry.path, "Auto (found on PATH)", ed);
+            note(ui, "Empty uses the program found on your login shell PATH. A path here wins.");
+        });
+        if !direct {
+            field_row(ui, "Arguments override", |ui| {
+                let hint = if def.launch.is_empty() { "Optional".to_owned() } else { def.launch.join(" ") };
+                optional_field(ui, &mut prefs.agents.entry(row.id.clone()).or_default().args, &hint, ed);
+            });
+        }
+        field_row(ui, "Documentation", |ui| {
+            ui.hyperlink_to(def.docs_url.trim_start_matches("https://"), def.docs_url);
+        });
+        if matches!(def.kind, AgentKind::Npx { .. }) {
+            field_row(ui, "Security", |ui| {
+                ui.label(RichText::new("Runs code fetched by npx").size(theme::SECONDARY).color(theme::pal(ui).warning));
+            });
+        }
+    }
+
+    fn custom_body(ui: &mut Ui, row: &AgentRow, prefs: &mut ChatPrefs, page: &mut ChatPage, ed: &mut Edits) {
+        let Some(c) = prefs.custom_agents.iter_mut().find(|c| c.id == row.id) else { return };
+        field_row(ui, "Name", |ui| text_edit(ui, &mut c.name, "Name", ed));
+        field_row(ui, "Command", |ui| {
+            text_edit(ui, &mut c.command, "Program name or full path", ed);
+            note(ui, "Started over stdio and spoken to as an ACP agent.");
+        });
+        field_row(ui, "Arguments", |ui| text_edit(ui, &mut c.args, "Optional, for example acp", ed));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if kit::button(ui, kit::ButtonKind::Danger, Some(Icon::Trash), "Remove").clicked() {
+                page.agent_remove = Some(row.id.clone());
+            }
+        });
+    }
+
+    // ---- endpoints ----
+
+    fn endpoints_card(ui: &mut Ui, prefs: &mut ChatPrefs, page: &mut ChatPage, scan: &mut Scan, ed: &mut Edits) {
+        let p = theme::pal(ui);
+        let count = prefs.endpoints.len();
+        let default_id = prefs.default_endpoint.clone();
+        let mut remove = None;
+        let mut make_default = None;
+        for (i, ep) in prefs.endpoints.iter_mut().enumerate() {
+            let key = format!("ep:{}", ep.id);
+            let open = page.open.contains(&key);
+            let is_default = ep.id == default_id;
+            let tail = scan.key_tails.get(&ep.id).cloned();
+            let (label, ink) = match (&tail, ep.needs_key(), scan.env_key && ep.is_claude_host()) {
+                (Some(_), ..) | (None, _, true) => ("Ready", Some(p.success)),
+                (None, true, false) => ("Needs key", Some(p.warning)),
+                (None, false, _) => ("No key", None),
+            };
+            let host = endpoint::host(&ep.base_url).unwrap_or_else(|| "no URL yet".to_owned());
+            let format_label = FORMATS.iter().find(|(f, _)| *f == ep.format).map_or("", |(_, l)| *l);
+            let sub = format!("{format_label} · {host}");
+            let mut clicked = false;
+            row_frame(ui, open, |ui| {
+                row_header(ui, Icon::Library, &ep.name, "", &sub, |ui| {
+                    clicked = chevron(ui, open);
+                    kit::chip_ink(ui, label, ink);
+                    if is_default {
+                        kit::chip_ink(ui, "Default", Some(theme::accent()));
+                    }
+                });
+                if !open {
+                    return;
+                }
+                field_row(ui, "Name", |ui| text_edit(ui, &mut ep.name, "Name", ed));
+                field_row(ui, "Format", |ui| {
+                    let width = ui.available_width();
+                    if let Some(f) = kit::select(ui, ep.format, &FORMATS, width) {
+                        ep.format = f;
+                        ed.save = true;
+                        ed.rescan = true;
+                    }
+                });
+                field_row(ui, "Base URL", |ui| text_edit(ui, &mut ep.base_url, "https://api.anthropic.com or http://127.0.0.1:11434/v1", ed));
+                field_row(ui, "Model", |ui| text_edit(ui, &mut ep.model, "Model id", ed));
+                key_row(ui, ep, tail.as_deref(), page, scan, ed);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if count > 1 && kit::button(ui, kit::ButtonKind::Danger, Some(Icon::Trash), "Remove endpoint").clicked() {
+                        remove = Some(i);
+                    }
+                    if !is_default && kit::button(ui, kit::ButtonKind::Secondary, None, "Make default").clicked() {
+                        make_default = Some(ep.id.clone());
+                    }
+                });
+            });
+            flip(&mut page.open, key, clicked);
+        }
+        if let Some(id) = make_default {
+            prefs.default_endpoint = id;
+            ed.save = true;
+        }
+        if let Some(i) = remove {
+            let gone = prefs.endpoints.remove(i);
+            // The key goes too, unless another endpoint uses the same base URL.
+            let shared = prefs.endpoints.iter().any(|e| endpoint::normalize_url(&e.base_url) == endpoint::normalize_url(&gone.base_url));
+            if !shared {
+                let _ = endpoint::delete_key(&gone);
+            }
+            scan.key_tails.remove(&gone.id);
+            page.key_drafts.remove(&gone.id);
+            page.open.remove(&format!("ep:{}", gone.id));
+            if prefs.default_endpoint == gone.id {
+                prefs.default_endpoint = prefs.endpoints[0].id.clone();
+            }
+            ed.save = true;
+            ed.rescan = true;
+        }
+    }
+
+    /// The masked key field with Save and Remove. The key goes to the Keychain only.
+    fn key_row(ui: &mut Ui, ep: &Endpoint, tail: Option<&str>, page: &mut ChatPage, scan: &mut Scan, ed: &mut Edits) {
+        let hint = match tail {
+            Some(t) => format!("{KEY_MASK}{t}"),
+            None if ep.is_claude_host() => CLAUDE_KEY_PLACEHOLDER.to_owned(),
+            None => KEY_PLACEHOLDER.to_owned(),
+        };
+        let draft = page.key_drafts.entry(ep.id.clone()).or_default();
+        field_row(ui, "API key", |ui| {
+            ui.add(egui::TextEdit::singleline(draft).password(true).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(ui.available_width()));
+            note(ui, &format!("Stored in the {}. Never written to the project or logs.", keychain_name()));
+        });
+        let mut save_clicked = false;
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            save_clicked = ui.add_enabled_ui(!draft.trim().is_empty(), |ui| kit::button(ui, kit::ButtonKind::Primary, None, "Save").clicked()).inner;
+            if tail.is_some() && kit::button(ui, kit::ButtonKind::Danger, Some(Icon::Trash), "Remove key").clicked() {
+                page.key_remove = Some(ep.id.clone());
+            }
+        });
+        if save_clicked {
+            match endpoint::set_key(ep, draft) {
+                Ok(()) => {
+                    ed.notify = true;
+                    scan.key_tails.insert(ep.id.clone(), key_tail(draft.trim()));
+                    draft.clear();
+                    page.key_error = None;
+                }
+                Err(e) => page.key_error = Some(format!("Could not save the key: {e}")),
+            }
+        }
+    }
+
+    // ---- defaults ----
+
+    fn defaults_card(ui: &mut Ui, prefs: &mut ChatPrefs, ed: &mut Edits) {
+        field_row(ui, "Backend", |ui| {
+            let width = ui.available_width();
+            if let Some(b) = kit::select(ui, prefs.default_backend, &BACKENDS, width) {
+                prefs.default_backend = b;
+                ed.save = true;
+            }
+        });
+        field_row(ui, "Endpoint", |ui| {
+            let width = ui.available_width();
+            let options: Vec<(usize, &str)> = prefs.endpoints.iter().enumerate().map(|(i, e)| (i, e.name.as_str())).collect();
+            let current = prefs.endpoints.iter().position(|e| e.id == prefs.default_endpoint).unwrap_or(0);
+            if let Some(i) = kit::select(ui, current, &options, width) {
+                prefs.default_endpoint = prefs.endpoints[i].id.clone();
+                ed.save = true;
+            }
+        });
+        field_row(ui, "Effort", |ui| {
+            let width = ui.available_width();
+            let effort = API_EFFORTS.iter().map(|(id, _)| *id).find(|id| *id == prefs.api_effort).unwrap_or(DEFAULT_EFFORT);
+            if let Some(e) = kit::select(ui, effort, &API_EFFORTS, width) {
+                prefs.api_effort = e.to_owned();
+                ed.save = true;
+            }
+            note(ui, "Sent to api.anthropic.com only.");
+        });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+use native::chat_page;
+
 #[cfg(target_arch = "wasm32")]
 fn chat_page(ui: &mut Ui, _ctx: &egui::Context, _settings: &mut SettingsUi) {
     let p = theme::pal(ui);
     ui.label(RichText::new("Chat needs the PaperCraft desktop app.").color(p.secondary));
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn chat_page(ui: &mut Ui, ctx: &egui::Context, settings: &mut SettingsUi) {
-    let p = theme::pal(ui);
-    let SettingsUi { chat: prefs, chat_page: page, .. } = &mut *settings;
-    let mut key_changed = false;
-    let mut scan = page.scan.take().unwrap_or_else(|| Scan::read(prefs));
-    let mut save = false;
-    let mut rescan = false;
-
-    kit::section_header(ui, "Local agents", None);
-    ui.add_space(4.0);
-    let claude_commit = agent_row(
-        ui,
-        ("Claude Code", CLAUDE_INSTALL, "claude"),
-        scan.claude.as_ref(),
-        &mut prefs.claude_path,
-    );
-    ui.add_space(6.0);
-    let codex_commit = agent_row(
-        ui,
-        ("Codex", CODEX_INSTALL, "codex"),
-        scan.codex.as_ref(),
-        &mut prefs.codex_path,
-    );
-    if claude_commit || codex_commit {
-        save = true;
-        rescan = true;
-    }
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Detected on PATH. Set a path to override.").size(theme::SECONDARY).color(p.secondary));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if kit::button(ui, kit::ButtonKind::Secondary, None, "Re-scan").clicked() {
-                rescan = true;
-            }
-        });
-    });
-
-    ui.add_space(16.0);
-    kit::section_header(ui, "API endpoints", None);
-    ui.add_space(4.0);
-    let note = |ui: &mut Ui, text: &str| {
-        ui.label(RichText::new(text).size(theme::SECONDARY).color(p.secondary));
-    };
-    note(ui, "Any server that speaks the Anthropic Messages or the OpenAI Chat Completions format. A key is optional for local servers.");
-    ui.add_space(6.0);
-    let edits = endpoint_cards(ui, prefs, page, &mut scan);
-    save |= edits.save;
-    rescan |= edits.rescan;
-    key_changed |= edits.key_changed;
-    ui.add_space(6.0);
-    if kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Plus), "Add endpoint").clicked() {
-        prefs.endpoints.push(Endpoint::blank());
-        save = true;
-    }
-    if let Some(id) = page.key_remove.clone() {
-        let answer = confirm::dialog(
-            ctx,
-            "chat-key-remove",
-            "Remove API key?",
-            "The key is deleted from the Keychain. Chats on this endpoint stop until a key is saved again.",
-            "Remove",
-        );
-        match answer {
-            Some(true) => {
-                page.key_remove = None;
-                if let Some(ep) = prefs.endpoints.iter().find(|e| e.id == id) {
-                    match endpoint::delete_key(ep) {
-                        Ok(()) => {
-                            key_changed = true;
-                            scan.key_tails.remove(&id);
-                            page.key_error = None;
-                        }
-                        Err(e) => page.key_error = Some(format!("Could not remove the key: {e}")),
-                    }
-                }
-            }
-            Some(false) => page.key_remove = None,
-            None => {}
-        }
-    }
-    if let Some(e) = &page.key_error {
-        ui.label(RichText::new(e).color(ui.visuals().error_fg_color));
-    }
-    if !scan.key_tails.is_empty() {
-        note(ui, &format!("Keys are stored in the {} and never written to the project or logs.", keychain_name()));
-    }
-    if scan.env_key {
-        note(ui, &format!("{KEY_ENV} from the environment is used for api.anthropic.com when no key is stored."));
-    }
-
-    ui.add_space(16.0);
-    kit::section_header(ui, "Defaults for new chats", None);
-    ui.add_space(4.0);
-    let w = ((ui.available_width() - 2.0 * DEFAULT_GAP) / 3.0).max(0.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = DEFAULT_GAP;
-        ui.vertical(|ui| {
-            ui.set_width(w);
-            note(ui, "Backend");
-            if let Some(b) = kit::select(ui, prefs.default_backend, &BACKENDS, w) {
-                prefs.default_backend = b;
-                save = true;
-            }
-        });
-        ui.vertical(|ui| {
-            ui.set_width(w);
-            note(ui, "Endpoint (API)");
-            let options: Vec<(usize, &str)> = prefs.endpoints.iter().enumerate().map(|(i, e)| (i, e.name.as_str())).collect();
-            let current = prefs.endpoints.iter().position(|e| e.id == prefs.default_endpoint).unwrap_or(0);
-            if let Some(i) = kit::select(ui, current, &options, w) {
-                prefs.default_endpoint = prefs.endpoints[i].id.clone();
-                save = true;
-            }
-        });
-        ui.vertical(|ui| {
-            ui.set_width(w);
-            note(ui, "Effort (api.anthropic.com)");
-            let effort = API_EFFORTS.iter().map(|(id, _)| *id).find(|id| *id == prefs.api_effort).unwrap_or(DEFAULT_EFFORT);
-            if let Some(e) = kit::select(ui, effort, &API_EFFORTS, w) {
-                prefs.api_effort = e.to_owned();
-                save = true;
-            }
-        });
-    });
-
-    if save {
-        prefs.save();
-    }
-    if rescan {
-        scan = Scan::read(prefs);
-    }
-    page.scan = Some(scan);
-    settings.chat_changed |= rescan || key_changed;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
-struct EndpointEdits {
-    save: bool,
-    rescan: bool,
-    key_changed: bool,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn edit(ui: &mut Ui, text: &mut String, hint: &str, width: f32, out: &mut EndpointEdits) {
-    let r = ui.add(egui::TextEdit::singleline(text).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(width));
-    out.save |= r.changed();
-    out.rescan |= r.lost_focus();
-}
-
-/// One card per endpoint: name, default chip, remove; format and base URL; model; key.
-/// Text edits save as you type and re-scan when the field loses focus.
-#[cfg(not(target_arch = "wasm32"))]
-fn endpoint_cards(ui: &mut Ui, prefs: &mut ChatPrefs, page: &mut ChatPage, scan: &mut Scan) -> EndpointEdits {
-    let p = theme::pal(ui);
-    let mut out = EndpointEdits::default();
-    let mut remove = None;
-    let mut make_default = None;
-    let count = prefs.endpoints.len();
-    for (i, ep) in prefs.endpoints.iter_mut().enumerate() {
-        let is_default = ep.id == prefs.default_endpoint;
-        let claude = ep.is_claude_host();
-        egui::Frame::new().fill(p.backdrop).corner_radius(theme::RADIUS_LG).inner_margin(12).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = 6.0;
-            ui.horizontal(|ui| {
-                let w = (ui.available_width() - 130.0).max(0.0);
-                edit(ui, &mut ep.name, "Name", w, &mut out);
-                if kit::chip(ui, if is_default { "Default" } else { "Make default" }, is_default).clicked() {
-                    make_default = Some(ep.id.clone());
-                }
-                if count > 1 && theme::icon_button(ui, Icon::Trash, 22.0, false).on_hover_text("Remove endpoint").clicked() {
-                    remove = Some(i);
-                }
-            });
-            ui.horizontal(|ui| {
-                if let Some(f) = kit::select(ui, ep.format, &FORMATS, FORMAT_W) {
-                    ep.format = f;
-                    out.save = true;
-                    out.rescan = true;
-                }
-                let w = ui.available_width().max(0.0);
-                edit(ui, &mut ep.base_url, "https://api.anthropic.com or http://127.0.0.1:11434/v1", w, &mut out);
-            });
-            let w = ui.available_width().max(0.0);
-            edit(ui, &mut ep.model, "Model id", w, &mut out);
-            let tail = scan.key_tails.get(&ep.id).cloned();
-            let draft = page.key_drafts.entry(ep.id.clone()).or_default();
-            let hint = match &tail {
-                Some(t) => format!("{KEY_MASK}{t}"),
-                None if claude => CLAUDE_KEY_PLACEHOLDER.to_string(),
-                None => KEY_PLACEHOLDER.to_string(),
-            };
-            let mut save_clicked = false;
-            ui.horizontal(|ui| {
-                let w = (ui.available_width() - KEY_BUTTONS_W).max(0.0);
-                ui.add(egui::TextEdit::singleline(draft).password(true).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(w));
-                let can_save = !draft.trim().is_empty();
-                save_clicked = ui.add_enabled_ui(can_save, |ui| kit::button(ui, kit::ButtonKind::Primary, None, "Save").clicked()).inner;
-                if tail.is_some() && kit::button(ui, kit::ButtonKind::Danger, Some(Icon::Trash), "Remove").clicked() {
-                    page.key_remove = Some(ep.id.clone());
-                }
-            });
-            if save_clicked {
-                match endpoint::set_key(ep, draft) {
-                    Ok(()) => {
-                        out.key_changed = true;
-                        scan.key_tails.insert(ep.id.clone(), key_tail(draft.trim()));
-                        draft.clear();
-                        page.key_error = None;
-                    }
-                    Err(e) => page.key_error = Some(format!("Could not save the key: {e}")),
-                }
-            }
-        });
-        ui.add_space(6.0);
-    }
-    if let Some(id) = make_default {
-        prefs.default_endpoint = id;
-        out.save = true;
-    }
-    if let Some(i) = remove {
-        let gone = prefs.endpoints.remove(i);
-        // The key goes too, unless another endpoint uses the same base URL.
-        let shared = prefs.endpoints.iter().any(|e| endpoint::normalize_url(&e.base_url) == endpoint::normalize_url(&gone.base_url));
-        if !shared {
-            let _ = endpoint::delete_key(&gone);
-        }
-        scan.key_tails.remove(&gone.id);
-        page.key_drafts.remove(&gone.id);
-        if prefs.default_endpoint == gone.id {
-            prefs.default_endpoint = prefs.endpoints[0].id.clone();
-        }
-        out.save = true;
-        out.rescan = true;
-    }
-    out
-}
-
-/// One CLI: name and version, the path field (empty means PATH), and a found or missing chip.
-/// Returns true when the path was committed (the field lost focus), so the caller saves and rescans.
-#[cfg(not(target_arch = "wasm32"))]
-fn agent_row(ui: &mut Ui, (name, install, bin): (&str, &str, &str), found: Option<&Found>, path: &mut Option<String>) -> bool {
-    let p = theme::pal(ui);
-    let mut committed = false;
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.set_width(AGENT_NAME_W);
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(RichText::new(name).font(theme::semibold(theme::BODY)));
-            if let Some((_, version)) = found {
-                ui.label(RichText::new(format!("v{version}")).size(theme::SECONDARY).color(p.secondary));
-            }
-        });
-        let hint = found.map_or_else(|| bin.to_string(), |(bin, _)| bin.display().to_string());
-        let mut text = path.clone().unwrap_or_default();
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut text)
-                .hint_text(hint)
-                .desired_width((ui.available_width() - AGENT_CHIP_W).max(0.0)),
-        );
-        if field.changed() {
-            *path = (!text.is_empty()).then_some(text);
-        }
-        if field.lost_focus() {
-            *path = path.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
-            committed = true;
-        }
-        if found.is_some() {
-            kit::chip_ink(ui, "Found", Some(p.success));
-        } else {
-            kit::chip_ink(ui, "Not found", None);
-        }
-    });
-    if found.is_none() {
-        ui.label(RichText::new(format!("Not found. Install: {install}")).size(theme::SECONDARY).color(p.secondary));
-    }
-    committed
 }
 
 #[cfg(test)]
@@ -723,6 +1065,12 @@ mod tests {
             claude_path: Some("/opt/homebrew/bin/claude".into()),
             codex_path: Some("/usr/local/bin/codex".into()),
             default_backend: BackendKind::Anthropic,
+            agents: BTreeMap::from([
+                ("claude-code".into(), AgentPrefs { path: Some("/opt/homebrew/bin/claude".into()), ..Default::default() }),
+                ("codex".into(), AgentPrefs { path: Some("/usr/local/bin/codex".into()), ..Default::default() }),
+                ("pi".into(), AgentPrefs { args: Some("--x".into()), enabled: true, ..Default::default() }),
+            ]),
+            custom_agents: vec![CustomAgent { id: "mine".into(), name: "Mine".into(), command: "my-agent".into(), args: "--stdio".into() }],
             endpoints: vec![
                 Endpoint { model: "claude-haiku-5-5".into(), ..Default::default() },
                 Endpoint { id: "ep-1".into(), name: "Local".into(), format: ApiFormat::OpenAi, base_url: "http://127.0.0.1:11434/v1".into(), model: "llama".into() },
@@ -733,6 +1081,21 @@ mod tests {
         };
         assert_eq!(ChatPrefs::from_json(&prefs.to_json()), prefs);
         assert_eq!(ChatPrefs::from_json(&ChatPrefs::default().to_json()), ChatPrefs::default());
+    }
+
+    #[test]
+    fn old_agent_paths_migrate_into_agents() {
+        let prefs = ChatPrefs::from_json(r#"{"claude_path":"/a/claude","codex_path":"/a/codex"}"#);
+        assert_eq!(prefs.agents["claude-code"].path.as_deref(), Some("/a/claude"));
+        assert_eq!(prefs.agents["codex"].path.as_deref(), Some("/a/codex"));
+        assert_eq!(prefs.claude_path.as_deref(), Some("/a/claude"));
+        let json = prefs.to_json();
+        assert!(!json.contains("claude_path") && !json.contains("codex_path"), "legacy fields are never written");
+        assert_eq!(ChatPrefs::from_json(&json), prefs);
+        let kept = ChatPrefs::from_json(r#"{"claude_path":"/old","agents":{"claude-code":{"path":"/new"}}}"#);
+        assert_eq!(kept.agents["claude-code"].path.as_deref(), Some("/new"));
+        assert_eq!(kept.claude_path.as_deref(), Some("/new"));
+        assert!(ChatPrefs::from_json("{}").agents.is_empty());
     }
 
     #[test]
@@ -760,23 +1123,57 @@ mod tests {
         assert_eq!(ChatPrefs::from_json("not json"), ChatPrefs::default());
     }
 
+    #[test]
+    fn default_group_holds_ready_and_shown_agents_only() {
+        use crate::chat::agents::AgentState::{NeedsEnable, NotFound, Ready, WrongProgram};
+        let ready = Ready { path: "/bin/a".into(), version: "1".into() };
+        assert!(native::shown_by_default(&ready, false));
+        assert!(!native::shown_by_default(&ready, true), "hidden by the user");
+        for s in [NeedsEnable, NotFound, WrongProgram { path: "/bin/goose".into() }] {
+            assert!(!native::shown_by_default(&s, false));
+        }
+        let rows = [("a", true), ("b", false), ("c", true), ("d", false)];
+        assert_eq!(native::split_primary(rows), (vec!["a", "c"], vec!["b", "d"]));
+        assert_eq!(native::split_primary(Vec::<(u8, bool)>::new()), (vec![], vec![]));
+    }
+
+    #[test]
+    fn hidden_flag_and_paths_round_trip_without_legacy_fields() {
+        let mut prefs = ChatPrefs::default();
+        prefs.agents.insert("gemini".into(), AgentPrefs { hidden: true, ..Default::default() });
+        prefs.agents.insert("claude-code".into(), AgentPrefs { path: Some("/x/claude".into()), ..Default::default() });
+        prefs.agents.insert("pi".into(), AgentPrefs::default());
+        prefs.tidy();
+        assert!(!prefs.agents.contains_key("pi"), "empty entries are dropped");
+        assert_eq!(prefs.claude_path.as_deref(), Some("/x/claude"));
+        let json = prefs.to_json();
+        assert!(!json.contains("claude_path"));
+        assert_eq!(ChatPrefs::from_json(&json), prefs);
+    }
+
     /// Seeds the scan so the page renders with no CLI on the machine and no key, without
     /// spawning processes or reading the Keychain.
     #[test]
     fn chat_page_draws_with_no_clis_and_no_key() {
+        use crate::chat::agents::{AGENTS, AgentState, AgentStatus};
         let ctx = egui::Context::default();
         crate::ui::setup_style(&ctx);
         let mut st = UiState::default();
-        st.settings = SettingsUi {
-            open: true,
-            page: Page::Chat,
-            chat: ChatPrefs::default(),
-            chat_changed: false,
-            chat_page: ChatPage {
-                scan: Some(Scan { claude: None, codex: None, key_tails: Default::default(), env_key: false }),
-                ..ChatPage::default()
-            },
+        let mut chat = ChatPrefs::default();
+        chat.custom_agents.push(CustomAgent { id: "mine".into(), name: "Mine".into(), command: "my-agent".into(), args: "acp".into() });
+        chat.endpoints.push(Endpoint { id: "ep-1".into(), name: "Local".into(), base_url: "http://127.0.0.1:11434/v1".into(), model: "llama".into(), ..Default::default() });
+        let statuses = AGENTS
+            .iter()
+            .map(|a| AgentStatus { id: a.id.into(), state: if a.id == "goose" { AgentState::WrongProgram { path: "/opt/homebrew/bin/goose".into() } } else { AgentState::NotFound } })
+            .chain([AgentStatus { id: "mine".into(), state: AgentState::NotFound }])
+            .collect();
+        let page = native::ChatPage {
+            scan: Some(native::Scan { agents: Some(statuses), probe: None, key_tails: Default::default(), env_key: false }),
+            show_more: true,
+            open: ["agent:claude-code", "agent:qwen", "agent:mine", "ep:anthropic", "ep:ep-1"].into_iter().map(String::from).collect(),
+            ..Default::default()
         };
+        st.settings = SettingsUi { open: true, page: Page::Chat, chat, chat_changed: false, chat_page: page };
         let mut ed = crate::editor::Editor::default();
         for _ in 0..3 {
             let input = egui::RawInput {
@@ -789,5 +1186,6 @@ mod tests {
             out.textures_delta.clear();
         }
         assert!(st.settings.chat_page.scan.is_some());
+        assert!(!st.settings.chat_changed, "drawing alone changes nothing");
     }
 }

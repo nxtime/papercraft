@@ -2,6 +2,8 @@
 //! projects home screen.
 
 pub mod agent;
+pub mod annotations;
+pub mod annotations_canvas;
 pub mod bind;
 pub mod chat;
 pub mod chat_md;
@@ -150,6 +152,12 @@ pub struct UiState {
     /// Chat mode: the chat column replaces the layers and inspector.
     pub chat_mode: bool,
     pub chat: chat::ChatState,
+    /// Annotation view state (mode, hidden categories, collapsed notes); not saved.
+    pub annotations: annotations_canvas::AnnotationsView,
+    /// Annotation picked on the canvas, for the side view and inspector.
+    pub selected_annotation: Option<u64>,
+    /// Annotations UI state (popover, Customize modal, inline edit), not saved.
+    pub ann_ui: annotations::AnnotationsUi,
 }
 
 /// Where a dragged layer lands relative to a row.
@@ -672,7 +680,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             UiEvent::ToggleChat => st.set_chat_mode(!st.chat_mode),
             UiEvent::ToggleHelp => st.show_help = !st.show_help,
             UiEvent::ToggleGrid => st.show_grid_off = !st.show_grid_off,
+            UiEvent::ToggleAnnotations => {
+                let d = ed.active_template(ed.active_page).display;
+                st.annotations.cycle(d);
+            }
             UiEvent::OpenVariables => st.variables.open = !st.variables.open,
+            UiEvent::Annotate(id) => annotations::open_popover(ed, &mut st.ann_ui, id),
         }
     }
     if st.run_open.is_some() {
@@ -821,6 +834,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         );
     }
     toolbar(ui.ctx(), ed, canvas);
+    annotations::overlays(ui.ctx(), ed, st, canvas);
     if st.chat_mode && st.chat.inspector {
         chat::inspector_overlay(ui.ctx(), ed, st, canvas);
     }
@@ -830,6 +844,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     agent_glow(ui.ctx(), st, canvas);
     status(ui.ctx(), ed, canvas);
     review_overlay(ui.ctx(), ed, st, canvas);
+    annotations_canvas::draw(ui.ctx(), ed, &mut st.annotations, &mut st.selected_annotation, canvas);
     run_toast(ui.ctx(), st, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
     if st.show_help {
@@ -1242,19 +1257,21 @@ fn title_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 /// components), history, comments and the agent log. Each tab grows with the width; when there is
 /// room it also shows its name.
 fn side_tabs(ui: &mut Ui, st: &mut UiState) {
-    const TABS: [(i32, &str); 6] = [
+    const TABS: [(i32, &str); 7] = [
         (0, "Layers"),
         (1, "Assets"),
         (2, "Design"),
         (3, "History"),
         (4, "Notes"),
         (5, "Agent"),
+        (6, "Annotations"),
     ];
     let p = theme::pal(ui);
     let current = match st.side_extra {
         Some(panels::SideView::History) => 3,
         Some(panels::SideView::Comments) => 4,
         Some(panels::SideView::Agent) => 5,
+        Some(panels::SideView::Annotations) => 6,
         None if st.show_design => 2,
         None => i32::from(st.show_library),
     };
@@ -1314,6 +1331,7 @@ fn side_tabs(ui: &mut Ui, st: &mut UiState) {
                             tint,
                             hovered,
                         ),
+                        6 => theme::paint_icon(ui.painter(), icon_box, Icon::Note, tint),
                         _ => lottie_icon::paint_hover(
                             ui, resp.id, "sparkles", icon_box, tint, hovered,
                         ),
@@ -1342,6 +1360,7 @@ fn side_tabs(ui: &mut Ui, st: &mut UiState) {
                             3 => Some(panels::SideView::History),
                             4 => Some(panels::SideView::Comments),
                             5 => Some(panels::SideView::Agent),
+                            6 => Some(panels::SideView::Annotations),
                             _ => None,
                         };
                     }
@@ -1385,6 +1404,7 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             panels::SideView::History => panels::history(ui, ed, st),
             panels::SideView::Comments => panels::comments(ui, ed, st),
             panels::SideView::Agent => panels::agent(ui, ed, st),
+            panels::SideView::Annotations => annotations::panel(ui, ed, st),
         }
         return;
     }
@@ -1764,6 +1784,7 @@ fn tool_icon(t: Tool) -> Icon {
         Tool::Arrow => Icon::Arrow,
         Tool::Sticky => Icon::Sticky,
         Tool::Laser => Icon::Laser,
+        Tool::Annotate => Icon::Note,
         Tool::Star => Icon::Star,
         Tool::Pen => Icon::Pen,
         Tool::Line => Icon::Line,

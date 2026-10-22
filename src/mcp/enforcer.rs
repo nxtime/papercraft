@@ -337,6 +337,10 @@ pub fn verify_code(
     let norm_target = normalize_target(target)?;
     let is_egui = norm_target == "egui";
 
+    // Annotation comments describe rules, not rendered content or layout.
+    let source = code.lines().filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>().join("\n");
+    let code = source.as_str();
     let visible_ids = visible_subtree(doc, root);
 
     let mut violations: Vec<Violation> = Vec::new();

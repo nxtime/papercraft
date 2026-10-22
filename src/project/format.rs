@@ -6,7 +6,8 @@
 //! unit-testable on its own.
 
 use crate::geom::Camera;
-use crate::variables::PageModes;
+use crate::variables::{PAGE_TEMPLATE_KEY, PageModes};
+use crate::model::annotation::Annotation;
 use crate::model::{Color, Document, Node, NodeId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -149,6 +150,11 @@ struct PageFile {
     /// Active mode id per collection id.
     #[serde(default, rename = "collectionModes", skip_serializing_if = "BTreeMap::is_empty")]
     modes_by_collection: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    annotations: Vec<Annotation>,
+    /// This page's annotation template (overrides the project default).
+    #[serde(default, rename = "annotationTemplate", skip_serializing_if = "Option::is_none")]
+    annotation_template: Option<String>,
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
@@ -206,7 +212,9 @@ pub fn page_to_json_modes(p: &PageData, modes: &PageModes) -> String {
         modes: p.doc.modes.clone(),
         mode: p.doc.mode.clone(),
         tokens: p.doc.tokens.clone(),
-        modes_by_collection: modes.clone(),
+        modes_by_collection: modes.iter().filter(|(k, _)| *k != PAGE_TEMPLATE_KEY).map(|(k, v)| (k.clone(), v.clone())).collect(),
+        annotations: p.doc.annotations.clone(),
+        annotation_template: modes.get(PAGE_TEMPLATE_KEY).cloned(),
     };
     serde_json::to_string_pretty(&f).expect("page serializes")
 }
@@ -220,7 +228,10 @@ pub fn page_from_json(s: &str) -> Result<PageData, FormatError> {
 pub fn page_from_json_modes(s: &str) -> Result<(PageData, PageModes), FormatError> {
     let v: Value = serde_json::from_str(s).map_err(FormatError::Json)?;
     let v = migrate(v, PAGE_FORMAT, PAGE_VERSION, PAGE_ALIASES, PAGE_STEPS)?;
-    let f: PageFile = serde_json::from_value(v).map_err(FormatError::Json)?;
+    let mut f: PageFile = serde_json::from_value(v).map_err(FormatError::Json)?;
+    if let Some(t) = f.annotation_template.take() {
+        f.modes_by_collection.insert(PAGE_TEMPLATE_KEY.into(), t);
+    }
     let max_id = f.nodes.iter().map(|n| n.id.0).max().unwrap_or(0);
     let nodes: HashMap<NodeId, Node> = f.nodes.into_iter().map(|n| (n.id, n)).collect();
     let doc = Document {
@@ -232,6 +243,7 @@ pub fn page_from_json_modes(s: &str) -> Result<(PageData, PageModes), FormatErro
         modes: f.modes,
         mode: f.mode,
         tokens: f.tokens,
+        annotations: f.annotations,
     };
     doc.validate().map_err(FormatError::Invalid)?;
     Ok((
@@ -316,6 +328,41 @@ mod tests {
             },
             camera: Some(Camera::default()),
         };
+        let s = page_to_json(&p);
+        let back = page_from_json(&s).unwrap();
+        assert_eq!(back, p);
+        assert_eq!(page_to_json(&back), s);
+    }
+
+    fn page_with(doc: Document) -> PageData {
+        PageData { id: "abc".into(), name: "Plan".into(), doc, camera: None }
+    }
+
+    #[test]
+    fn annotations_roundtrip_and_old_pages_stay_byte_identical() {
+        use crate::model::annotation::{Annotation, Anchor, Side};
+        let ed = demo::showcase();
+        let plain = page_to_json(&page_with(Document { name: "Plan".into(), ..ed.doc.clone() }));
+        assert!(!plain.contains("annotations"), "empty list is not written");
+        // An old file (no field) loads and saves to the same bytes.
+        let old = page_from_json(&plain).unwrap();
+        assert!(old.doc.annotations.is_empty());
+        assert_eq!(page_to_json(&old), plain);
+
+        let mut doc = Document { name: "Plan".into(), ..ed.doc.clone() };
+        let mut a = Annotation::new(doc.root.first().copied(), "Rule", "business-rule");
+        a.id = 77;
+        a.body = "**bold**".into();
+        a.anchor = Anchor { side: Side::Top, t: 0.5 };
+        a.position = crate::geom::v2(12.0, -30.0);
+        a.created = 1234;
+        doc.annotations.push(a);
+        let mut d = Annotation::new(None, "Gone", "data");
+        d.id = 78;
+        d.point = Some(crate::geom::v2(1.0, 2.0));
+        d.detached = true;
+        doc.annotations.push(d);
+        let p = page_with(doc);
         let s = page_to_json(&p);
         let back = page_from_json(&s).unwrap();
         assert_eq!(back, p);

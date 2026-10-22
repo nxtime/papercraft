@@ -1,5 +1,6 @@
 //! The document arena: nodes keyed by id plus ordered child lists.
 
+use super::annotation::Annotation;
 use super::node::{Color, Node, NodeId};
 use crate::geom::{Rect, V2};
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,9 @@ pub struct Document {
     /// substituted for `var(--name)` when styles are written.
     #[serde(default)]
     pub tokens: BTreeMap<String, String>,
+    /// Notes that explain the design. Absent from page files when empty.
+    #[serde(default)]
+    pub annotations: Vec<Annotation>,
 }
 
 impl Default for Document {
@@ -38,6 +42,7 @@ impl Default for Document {
             modes: BTreeMap::new(),
             mode: None,
             tokens: BTreeMap::new(),
+            annotations: Vec::new(),
         }
     }
 }

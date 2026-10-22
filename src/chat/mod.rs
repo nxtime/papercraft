@@ -1,6 +1,9 @@
 //! Chat: a conversation with a coding agent (Claude Code, Codex or an API endpoint). Each chat
 //! is one JSON file under the project's `chats/` folder, see [`store`].
 
+pub mod agents;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod acp;
 pub mod anthropic;
 pub mod claude_code;
 pub mod codex;
@@ -8,6 +11,8 @@ pub mod endpoint;
 pub mod events;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod openai;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod path;
 pub mod store;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tools;
@@ -17,6 +22,9 @@ use serde_json::Value;
 
 /// Where images for CLI backends and the system prompt file are saved, under the project folder.
 pub const TMP_DIR: &str = ".papercraft-chat-tmp";
+/// Each agent's own setup page, linked from a missing agent's row.
+pub const CLAUDE_DOCS: &str = "https://docs.anthropic.com/en/docs/claude-code/setup";
+pub const CODEX_DOCS: &str = "https://github.com/openai/codex";
 const ID_MAX: usize = 64;
 
 /// Chat ids become file and folder names, so only ascii letters, digits, `-` and `_` pass: no
@@ -33,6 +41,8 @@ pub enum BackendKind {
     Codex,
     /// An API endpoint (any format); the name is kept for saved chats.
     Anthropic,
+    /// Any agent that speaks the Agent Client Protocol; [`Backend::agent`] says which.
+    Acp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -48,6 +58,9 @@ pub struct Backend {
     /// The CLI's session id, so a follow-up message resumes the same session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cli_session: Option<String>,
+    /// `Acp` chats: the registry id (`agents::AGENTS`) or custom agent id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

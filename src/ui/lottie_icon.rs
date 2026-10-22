@@ -21,12 +21,12 @@ fn rest(ui: &Ui, name: &str, rect: Rect, tint: Color32) {
             (animation.first_frame(), animation.last_frame())
         };
         paint_frame(ui, name, rect, tint, off);
-    } else if let Some(icon) = static_icon(name) {
+    } else if let Some(icon) = crate::theme::icon_by_name(name) {
         crate::theme::paint_icon(ui.painter(), rect, icon, tint);
     }
 }
 
-/// The Lucide name of an app icon, when it has one (the inverse of [`static_icon`]).
+/// The Lucide name of an app icon, when it has one (the inverse of [`crate::theme::icon_by_name`]).
 #[must_use]
 pub fn lucide_name(icon: crate::theme::Icon) -> Option<&'static str> {
     use crate::theme::Icon;
@@ -48,40 +48,6 @@ pub fn lucide_name(icon: crate::theme::Icon) -> Option<&'static str> {
         Icon::Grid => "grid-3x3",
         Icon::Export => "download",
         Icon::Question => "circle-question-mark",
-        _ => return None,
-    })
-}
-
-/// The app's hand-drawn icon for a Lucide name, when it has one.
-#[must_use]
-pub fn static_icon(name: &str) -> Option<crate::theme::Icon> {
-    use crate::theme::Icon;
-    Some(match name {
-        "chevron-right" => Icon::ChevronRight,
-        "chevron-down" => Icon::ChevronDown,
-        "chevron-up" => Icon::ChevronUp,
-        "plus" => Icon::Plus,
-        "minus" => Icon::Minus,
-        "trash-2" => Icon::Trash,
-        "lock" => Icon::Lock,
-        "unlock" => Icon::LockOpen,
-        "eye" => Icon::Eye,
-        "eye-off" => Icon::EyeSlash,
-        "panel-left" => Icon::Sidebar,
-        "hand" => Icon::Hand,
-        "mouse-pointer-2" => Icon::Pointer,
-        "pencil" => Icon::Pencil,
-        "pen" => Icon::Pen,
-        "eraser" => Icon::Eraser,
-        "type" => Icon::Text,
-        "square" => Icon::Rect,
-        "circle" => Icon::Ellipse,
-        "image" => Icon::Image,
-        "star" => Icon::Star,
-        "grid-3x3" => Icon::Grid,
-        "ellipsis" => Icon::More,
-        "download" => Icon::Export,
-        "circle-question-mark" => Icon::Question,
         _ => return None,
     })
 }
@@ -507,8 +473,8 @@ mod tests {
 
     #[test]
     fn animated_icons_without_a_hand_drawn_twin_still_resolve() {
-        assert!(static_icon("chevron-right").is_some());
-        assert!(static_icon("sparkles").is_none() && has("sparkles"));
+        assert!(crate::theme::icon_by_name("chevron-right").is_some());
+        assert!(crate::theme::icon_by_name("sparkles").is_none() && has("sparkles"));
     }
 }
 

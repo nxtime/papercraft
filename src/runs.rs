@@ -1093,6 +1093,28 @@ mod tests {
     }
 
     #[test]
+    fn annotation_only_run_is_kept_counted_reverted_and_undone() {
+        let (mut h, mut t) = (host(), Tracker::default());
+        write(&mut t, &mut h, T0);
+        t.tick(T0 + GAP + 1, Some(&dir_of(&h)), &h.ed);
+        t.take_finished().unwrap();
+        let node = h.ed.doc.root[0].0.to_string();
+        let notes = json!({"notes": [{"node": node, "text": "Rule one"}, {"node": node, "text": "Rule two"}]});
+        t.call(&mut h, "annotate", &notes, T0 + GAP + 2).unwrap();
+        assert_eq!(h.ed.doc.annotations.len(), 2);
+        assert_eq!(t.counts(&h.ed), Some((2, 0, 0, false)));
+        t.tick(T0 + 2 * GAP + 3, Some(&dir_of(&h)), &h.ed);
+        let mut run = t.take_finished().expect("annotation-only run kept");
+        assert_eq!((run.added, run.changed, run.removed), (2, 0, 0));
+        assert_eq!(run.state, RunState::Review);
+        let with_notes = h.ed.doc.annotations.clone();
+        revert(&dir_of(&h), &mut h.ed, &mut run).unwrap();
+        assert!(h.ed.doc.annotations.is_empty());
+        h.ed.undo();
+        assert_eq!(h.ed.doc.annotations, with_notes);
+    }
+
+    #[test]
     fn target_pages_resolves_nested_sources_and_destinations() {
         let mut ed = Editor::default();
         for name in ["Source", "Destination", "Third"] {

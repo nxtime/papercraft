@@ -289,6 +289,12 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "get_screenshot" => screenshot(host, &a),
                 "get_jsx" => jsx(host, &a),
                 "get_design_spec" => get_design_spec(ed, &a),
+                "annotate" => annotate(ed, &a),
+                "get_annotations" => get_annotations(ed, &a),
+                "get_annotation_template" => get_annotation_template(ed, &a),
+                "set_annotation_template" => set_annotation_template(ed, &a),
+                "update_annotation" => update_annotation(ed, &a),
+                "delete_annotations" => delete_annotations(ed, &a),
                 "verify_code" => verify_code(ed, &a),
                 "get_computed_styles" => computed_styles(ed, &a),
                 "get_fill_image" => fill_image(ed, &a),
@@ -1185,6 +1191,314 @@ fn guide(a: &Args) -> ToolResult {
     Ok(vec![Out::Text(s.into())])
 }
 
+// ------------------------------------------------------------------------------ annotations
+
+fn annotation_rows(rows: Vec<Value>) -> ToolResult {
+    Ok(vec![Out::Text(serde_json::to_string(&rows).unwrap())])
+}
+
+fn annotation_category(ed: &Editor, key: &str) -> Result<String, String> {
+    ed.design.category_by_key(key).map(|c| c.id).ok_or_else(|| {
+        format!(
+            "unknown annotation type `{key}`; valid keys: {}",
+            ed.design
+                .categories()
+                .iter()
+                .map(|c| c.key().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
+}
+
+fn annotation_node(ed: &Editor, key: &str, page: usize) -> Result<NodeId, String> {
+    if let Ok((p, id)) = resolve(ed, key, page) {
+        return if p == page {
+            Ok(id)
+        } else {
+            Err("all notes must be on the selected page".into())
+        };
+    }
+    let mut matches: Vec<_> = ed
+        .page_doc(page)
+        .nodes
+        .values()
+        .filter(|n| n.name.eq_ignore_ascii_case(key))
+        .map(|n| n.id)
+        .collect();
+    matches.sort_by_key(|id| id.0);
+    match matches.as_slice() {
+        [id] => Ok(*id),
+        [] => Err(format!("node `{key}` not found on page")),
+        _ => Err(format!(
+            "ambiguous node `{key}`; candidates: {}",
+            matches
+                .iter()
+                .take(5)
+                .map(|id| node_key(ed, page, *id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+fn annotation_text(text: &str) -> (String, String) {
+    let (label, body) = text.split_once('\n').unwrap_or((text, ""));
+    (label.trim_end_matches('\r').into(), body.into())
+}
+
+/// The category id for type `key`, if the page's active template enables it.
+fn enabled_category(ed: &Editor, page: usize, key: &str) -> Result<String, String> {
+    let category = annotation_category(ed, key)?;
+    let template = ed.active_template(page);
+    if template.enabled(key).is_none() {
+        return Err(format!(
+            "type `{key}` is not enabled by template `{}`; allowed: {}",
+            template.name,
+            template.enabled_keys().join(", ")
+        ));
+    }
+    Ok(category)
+}
+
+fn annotate(ed: &mut Editor, a: &Args) -> ToolResult {
+    use crate::model::annotation::{Annotation, Author, auto_position, numbers};
+    let page = page_arg(ed, a)?;
+    let notes = a
+        .arr("notes")?
+        .iter()
+        .map(|v| {
+            let args = Args(v.as_object().ok_or("notes must be objects")?);
+            let node = annotation_node(ed, args.req_str("node")?, page)?;
+            let key = args
+                .get("type")
+                .map(|v| v.as_str().ok_or("type must be a string"))
+                .transpose()?
+                .unwrap_or("rule");
+            let category = enabled_category(ed, page, key)?;
+            let (label, body) = annotation_text(
+                args.get("text")
+                    .and_then(Value::as_str)
+                    .ok_or("missing text string")?,
+            );
+            let mut note = Annotation::new(Some(node), &label, &category);
+            note.body = body;
+            note.author = Author::Agent;
+            Ok(note)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let ids = ed.with_page(page, |ed| {
+        ed.edit("Annotate", |tx| {
+            notes
+                .into_iter()
+                .map(|mut note| {
+                    note.position = auto_position(tx.doc(), note.target.unwrap());
+                    tx.add_annotation(note)
+                })
+                .collect::<Vec<_>>()
+        })
+    });
+    let doc = ed.page_doc(page);
+    let numbers = numbers(doc);
+    let cats = ed.design.categories();
+    annotation_rows(
+        ids.iter()
+            .map(|id| {
+                let note = doc.annotations.iter().find(|n| n.id == *id).unwrap();
+                let key = cats
+                    .iter()
+                    .find(|c| c.id == note.category)
+                    .map(|c| c.key())
+                    .unwrap_or(&note.category);
+                json!([
+                    numbers[id].1,
+                    node_key(ed, page, note.target.unwrap()),
+                    key,
+                    note.label
+                ])
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn get_annotation_template(ed: &Editor, a: &Args) -> ToolResult {
+    let t = ed.active_template(page_arg(ed, a)?);
+    text(json!({
+        "template": t.name,
+        "types": t.categories.iter().filter(|c| c.enabled)
+            .map(|c| json!([c.key, c.prompt, c.fields])).collect::<Vec<_>>(),
+    }))
+}
+
+fn set_annotation_template(ed: &mut Editor, a: &Args) -> ToolResult {
+    let page = page_arg(ed, a)?;
+    let r = a.req_str("template")?;
+    let t = ed.design.template_by_ref(r).ok_or_else(|| {
+        format!(
+            "unknown template `{r}`; available: {}",
+            ed.design.templates().iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    })?;
+    match a.str("scope").unwrap_or("page") {
+        "page" => ed.set_page_template(page, Some(&t.id)),
+        "project" => ed.set_default_template(Some(&t.id)),
+        s => return Err(format!("scope must be page or project, got `{s}`")),
+    }
+    .map_err(|e| e.to_string())?;
+    text(json!({"template": t.name, "scope": a.str("scope").unwrap_or("page")}))
+}
+
+fn get_annotations(ed: &Editor, a: &Args) -> ToolResult {
+    let default_page = page_arg(ed, a)?;
+    let scope = a
+        .str("nodeId")
+        .map(|id| resolve(ed, id, default_page))
+        .transpose()?;
+    let page = scope.map_or(default_page, |s| s.0);
+    let doc = ed.page_doc(page);
+    let subtree = scope.map(|s| doc.subtree(s.1));
+    let numbers = crate::model::annotation::numbers(doc);
+    let cats = ed.design.categories();
+    let mut notes: Vec<_> = doc
+        .annotations
+        .iter()
+        .filter(|note| {
+            subtree
+                .as_ref()
+                .is_none_or(|ids| note.target.is_some_and(|id| ids.contains(&id)))
+        })
+        .collect();
+    notes.sort_by_key(|n| (numbers[&n.id].0.map(|id| id.0), numbers[&n.id].1));
+    annotation_rows(
+        notes
+            .into_iter()
+            .map(|note| {
+                let number = numbers[&note.id].1;
+                let key = cats
+                    .iter()
+                    .find(|c| c.id == note.category)
+                    .map(|c| c.key())
+                    .unwrap_or(&note.category);
+                if a.bool("full").unwrap_or(false) {
+                    let mut value = serde_json::to_value(note).unwrap();
+                    value["number"] = json!(number);
+                    value["type"] = json!(key);
+                    value["nodeId"] = json!(note.target.map(|id| node_key(ed, page, id)));
+                    return value;
+                }
+                let name = note
+                    .target
+                    .and_then(|id| doc.get(id))
+                    .map(|n| n.name.as_str())
+                    .unwrap_or("Detached");
+                let text = if let Some(line) = note.body.lines().next() {
+                    format!("{}\n{line}", note.label)
+                } else {
+                    note.label.clone()
+                };
+                json!([
+                    number,
+                    name,
+                    key,
+                    text.chars().take(120).collect::<String>()
+                ])
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn annotation_ref(ed: &Editor, value: &Value, page: usize) -> Result<u64, String> {
+    let doc = ed.page_doc(page);
+    let key = value.as_str().map(str::trim);
+    if let Some(id) = value.as_u64().or_else(|| key.and_then(|s| s.parse().ok())) {
+        return doc
+            .annotations
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.id)
+            .ok_or_else(|| format!("annotation {id} not found"));
+    }
+    let (frame, number) = key
+        .and_then(|s| s.rsplit_once('#'))
+        .ok_or("expected annotation id or frame reference such as Sign in #3")?;
+    let number: u32 = number
+        .trim()
+        .parse()
+        .map_err(|_| "invalid annotation number")?;
+    let frame = frame.trim().strip_prefix("frame ").unwrap_or(frame.trim());
+    let numbers = crate::model::annotation::numbers(doc);
+    let matches: Vec<_> = doc
+        .annotations
+        .iter()
+        .filter(|n| {
+            let (root, num) = numbers[&n.id];
+            num == number
+                && root
+                    .and_then(|id| doc.get(id))
+                    .is_some_and(|node| node.name.eq_ignore_ascii_case(frame))
+        })
+        .collect();
+    match matches.as_slice() {
+        [note] => Ok(note.id),
+        [] => Err(format!(
+            "annotation reference `{}` not found",
+            key.unwrap_or_default()
+        )),
+        _ => Err("ambiguous annotation reference; use an annotation id".into()),
+    }
+}
+
+fn update_annotation(ed: &mut Editor, a: &Args) -> ToolResult {
+    let page = page_arg(ed, a)?;
+    let id = annotation_ref(
+        ed,
+        a.get("id")
+            .or_else(|| a.get("ref"))
+            .ok_or("missing id or ref")?,
+        page,
+    )?;
+    let text_value = a
+        .get("text")
+        .map(|v| v.as_str().ok_or("text must be a string"))
+        .transpose()?;
+    let category = a
+        .get("type")
+        .map(|v| enabled_category(ed, page, v.as_str().ok_or("type must be a string")?))
+        .transpose()?;
+    ed.with_page(page, |ed| {
+        ed.update_annotation(id, |note| {
+            if let Some(text) = text_value {
+                (note.label, note.body) = annotation_text(text);
+            }
+            if let Some(category) = category {
+                note.category = category;
+            }
+        })
+    });
+    text(json!({"id": id}))
+}
+
+fn delete_annotations(ed: &mut Editor, a: &Args) -> ToolResult {
+    let page = page_arg(ed, a)?;
+    let values = a
+        .get("ids")
+        .or_else(|| a.get("refs"))
+        .and_then(Value::as_array)
+        .ok_or("missing ids or refs array")?;
+    let ids = values
+        .iter()
+        .map(|v| annotation_ref(ed, v, page))
+        .collect::<Result<Vec<_>, _>>()?;
+    ed.with_page(page, |ed| {
+        ed.edit("Delete annotations", |tx| {
+            for id in &ids {
+                tx.delete_annotation(*id);
+            }
+        })
+    });
+    text(json!({"deleted": ids}))
+}
+
 // ------------------------------------------------------------------------------ jsx
 
 fn jsx(host: &mut dyn Host, a: &Args) -> ToolResult {
@@ -1196,15 +1510,15 @@ fn jsx(host: &mut dyn Host, a: &Args) -> ToolResult {
     let doc = ed.page_doc(page);
     match a.str("format") {
         None | Some("") | Some("inline") | Some("inline-styles") => {
-            let mut out = String::new();
+            let mut out = super::codegen::annotation_comments(doc, id, &ed.design.categories());
             jsx_node(doc, id, 0, true, assets_dir.as_deref(), &mut out);
             Ok(vec![Out::Text(out)])
         }
         Some(
             f @ ("tailwind" | "jsx" | "react" | "tsx" | "angular" | "ng" | "html" | "css" | "egui"
             | "rust"),
-        ) => Ok(vec![Out::Text(super::codegen::code_for_target(
-            doc, id, f,
+        ) => Ok(vec![Out::Text(super::codegen::code_for_target_with_categories(
+            doc, id, f, &ed.design.categories(),
         )?)]),
         Some(f) => Err(format!(
             "unknown format `{f}` (inline, tailwind, react, angular, html, or egui)"
@@ -1218,11 +1532,11 @@ fn get_design_spec(ed: &mut Editor, a: &Args) -> ToolResult {
     let target = a.str("target").filter(|s| !s.is_empty()).unwrap_or("react");
     match a.str("format").unwrap_or("markdown") {
         "" | "markdown" | "md" => {
-            let md = super::codegen::to_ai_spec_markdown(doc, id, target)?;
+            let md = super::codegen::to_ai_spec_markdown_with_categories(doc, id, target, &ed.design.categories())?;
             Ok(vec![Out::Text(md)])
         }
         "json" => {
-            let spec = super::codegen::to_ai_spec(doc, id, target)?;
+            let spec = super::codegen::to_ai_spec_with_categories(doc, id, target, &ed.design.categories())?;
             text(spec)
         }
         other => Err(format!(
@@ -2821,6 +3135,13 @@ fn clone_subtree(
     }
     let pairs = ids.iter().map(|i| (*i, map[i])).collect();
     (map[&src], pairs)
+}
+
+/// Copy the annotations on a duplicated subtree, retargeted to the new nodes.
+fn copy_annotations(tx: &mut Tx, from: &[crate::model::annotation::Annotation], pairs: &[(NodeId, NodeId)]) {
+    let map: HashMap<NodeId, NodeId> = pairs.iter().copied().collect();
+    let copies = crate::model::annotation::copies_for(from, &map);
+    tx.add_annotation_copies(copies);
 }
 
 /// A free spot for a new top-level frame: right of the existing artboards, 80 px apart.
@@ -4619,6 +4940,8 @@ fn duplicate_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                         V2::ZERO
                     };
                     let r = clone_subtree(tx, id, target, index, offset);
+                    let from = tx.doc().annotations.clone();
+                    copy_annotations(tx, &from, &r.1);
                     relayout(tx, Some(r.0));
                     r
                 })
@@ -4636,6 +4959,7 @@ fn duplicate_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                         -w.min()
                     };
                     let r = clone_subtree_from_doc(tx, &src_doc, id, target, None, offset);
+                    copy_annotations(tx, &src_doc.annotations, &r.1);
                     relayout(tx, target.or(Some(r.0)));
                     r
                 })

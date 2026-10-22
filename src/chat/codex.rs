@@ -115,16 +115,15 @@ mod process {
 
     pub(super) fn clean_env(cmd: &mut Command) -> &mut Command {
         for k in CREDENTIAL_ENV { cmd.env_remove(k); }
-        cmd
+        crate::chat::path::apply(cmd)
     }
 
     pub fn detect(binary: Option<&Path>) -> Option<(PathBuf, String)> {
-        let candidates = match binary {
-            Some(path) => vec![path.to_path_buf()],
-            None => std::env::split_paths(&std::env::var_os("PATH")?)
-                .map(|dir| dir.join(if cfg!(windows) { "codex.exe" } else { "codex" })).collect(),
+        let path = match binary {
+            Some(path) => path.to_path_buf(),
+            None => crate::chat::path::which("codex")?,
         };
-        candidates.into_iter().find_map(|path| {
+        Some(path).and_then(|path| {
             let output = clean_env(&mut Command::new(&path)).arg("--version").output().ok()?;
             if !output.status.success() { return None; }
             let version = String::from_utf8(output.stdout).ok()?.trim().to_owned();
@@ -197,7 +196,8 @@ mod process {
     }
 
     pub fn start(cfg: &TurnConfig, prompt: &str, tx: Sender<Event>) -> Result<Box<dyn Turn>, String> {
-        let mut command = Command::new(cfg.binary.as_deref().unwrap_or(Path::new("codex")));
+        let bin = cfg.binary.clone().or_else(|| crate::chat::path::which("codex")).ok_or("Codex (`codex`) was not found")?;
+        let mut command = Command::new(bin);
         clean_env(&mut command).args(build_args(cfg, prompt)).current_dir(&cfg.project_dir);
         spawn_turn(command, tx)
     }

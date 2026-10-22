@@ -1174,10 +1174,55 @@ pub fn to_egui(doc: &Document, root: NodeId) -> String {
     out
 }
 
+pub(crate) fn annotation_comments(
+    doc: &Document,
+    root: NodeId,
+    categories: &[crate::model::annotation::AnnotationCategory],
+) -> String {
+    let ids = doc.subtree(root);
+    let numbers = crate::model::annotation::numbers(doc);
+    let mut notes: Vec<_> = doc
+        .annotations
+        .iter()
+        .filter(|a| a.target.is_some_and(|id| ids.contains(&id)))
+        .collect();
+    notes.sort_by_key(|a| (numbers[&a.id].0.map(|id| id.0), numbers[&a.id].1));
+    let mut out = String::new();
+    for note in notes {
+        let category = categories
+            .iter()
+            .find(|c| c.id == note.category)
+            .map(|c| c.name.as_str())
+            .unwrap_or(&note.category);
+        out.push_str(&format!(
+            "// {} {category}: {}\n",
+            numbers[&note.id].1, note.label
+        ));
+        for line in note.body.lines() {
+            out.push_str(&format!("// {line}\n"));
+        }
+    }
+    out
+}
+
 /// Generate code for `root` in the requested `target` format (`tailwind`/`jsx`, `react`/`tsx`,
 /// `angular`/`ng`, `html`/`css`, or `egui`/`rust`).
 pub fn code_for_target(doc: &Document, root: NodeId, target: &str) -> Result<String, String> {
-    match target.trim().to_ascii_lowercase().as_str() {
+    code_for_target_with_categories(
+        doc,
+        root,
+        target,
+        &crate::model::annotation::default_categories(),
+    )
+}
+
+pub(crate) fn code_for_target_with_categories(
+    doc: &Document,
+    root: NodeId,
+    target: &str,
+    categories: &[crate::model::annotation::AnnotationCategory],
+) -> Result<String, String> {
+    let code = match target.trim().to_ascii_lowercase().as_str() {
         "tailwind" | "jsx" => Ok(to_tailwind_jsx(doc, root)),
         "react" | "tsx" => Ok(to_react_tsx(doc, root)),
         "angular" | "ng" => Ok(to_angular(doc, root)),
@@ -1186,7 +1231,11 @@ pub fn code_for_target(doc: &Document, root: NodeId, target: &str) -> Result<Str
         other => Err(format!(
             "unknown target `{other}` (expected react, tailwind, angular, html, or egui)"
         )),
-    }
+    }?;
+    Ok(format!(
+        "{}{code}",
+        annotation_comments(doc, root, categories)
+    ))
 }
 
 fn sizing_name(s: Sizing) -> &'static str {
@@ -1560,10 +1609,17 @@ fn build_spec_tree(
 
 /// Build the deterministic AI Layout & Enforcement Spec JSON for `root` and `target`.
 pub fn to_ai_spec(doc: &Document, root: NodeId, target: &str) -> Result<Value, String> {
+    to_ai_spec_with_categories(doc, root, target, &crate::model::annotation::default_categories())
+}
+
+pub(crate) fn to_ai_spec_with_categories(
+    doc: &Document, root: NodeId, target: &str,
+    categories: &[crate::model::annotation::AnnotationCategory],
+) -> Result<Value, String> {
     let Some(root_node) = doc.get(root) else {
         return Err(format!("no node #{id}", id = root.0));
     };
-    let reference_code = code_for_target(doc, root, target)?;
+    let reference_code = code_for_target_with_categories(doc, root, target, categories)?;
 
     let mut components = Vec::new();
     let mut rules = Vec::new();
@@ -1635,6 +1691,7 @@ pub fn to_ai_spec(doc: &Document, root: NodeId, target: &str) -> Result<Value, S
         "componentDefinitions": definitions,
         "layoutTree": layout_tree,
         "enforcementRules": rules,
+        "annotations": annotation_comments(doc, root, categories).lines().collect::<Vec<_>>(),
         "referenceCode": reference_code,
     }))
 }
@@ -1713,7 +1770,14 @@ fn format_hierarchy_md(node: &Value, depth: usize, out: &mut String) {
 
 /// Format the AI Layout & Enforcement Spec as a structured Markdown document.
 pub fn to_ai_spec_markdown(doc: &Document, root: NodeId, target: &str) -> Result<String, String> {
-    let spec = to_ai_spec(doc, root, target)?;
+    to_ai_spec_markdown_with_categories(doc, root, target, &crate::model::annotation::default_categories())
+}
+
+pub(crate) fn to_ai_spec_markdown_with_categories(
+    doc: &Document, root: NodeId, target: &str,
+    categories: &[crate::model::annotation::AnnotationCategory],
+) -> Result<String, String> {
+    let spec = to_ai_spec_with_categories(doc, root, target, categories)?;
     let name = spec["name"].as_str().unwrap_or("Frame");
     let mut md = format!("# AI UI Implementation Spec: {name} ({target})\n\n");
 

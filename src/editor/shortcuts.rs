@@ -60,6 +60,7 @@ pub enum Action {
     ToggleChat,
     ToggleHelp,
     ToggleGrid,
+    ToggleAnnotations,
     OpenVariables,
     SelectNext,
     SelectPrev,
@@ -135,6 +136,7 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
         (Char('l'), SHIFT, A::Tool(Tool::Arrow), "Arrow tool"),
         (Char('s'), PLAIN, A::Tool(Tool::Sticky), "Sticky note"),
         (Char('k'), PLAIN, A::Tool(Tool::Laser), "Laser pointer"),
+        (Char('n'), PLAIN, A::Tool(Tool::Annotate), "Annotate tool"),
         (Char('1'), PLAIN, A::Tool(Tool::Select), "Select tool"),
         (Char('2'), PLAIN, A::Tool(Tool::Rect), "Rectangle tool"),
         (Char('3'), PLAIN, A::Tool(Tool::Diamond), "Diamond tool"),
@@ -167,6 +169,8 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
         (Char('/'), CMD, A::ToggleHelp, "Keyboard shortcuts"),
         (Char('?'), SHIFT, A::ToggleHelp, "Keyboard shortcuts"),
         (Char('\''), CMD_SHIFT, A::ToggleGrid, "Show / hide dot grid"),
+        // Shift+A is Add auto layout, so annotations take Cmd+Shift+A.
+        (Char('a'), CMD_SHIFT, A::ToggleAnnotations, "Cycle annotations: full, badges, hidden"),
         // Cmd+Alt+V is taken by Paste properties.
         (Char('v'), CMD_ALT_SHIFT, A::OpenVariables, "Variables"),
         (Tab, PLAIN, A::SelectNext, "Select next sibling"),
@@ -424,6 +428,7 @@ pub fn category(a: Action) -> &'static str {
         | A::ZoomSelection
         | A::ToggleSnapping
         | A::ToggleGrid
+        | A::ToggleAnnotations
         | A::OpenVariables
         | A::ToggleUi
         | A::ToggleChat
@@ -608,6 +613,7 @@ pub fn menus() -> Vec<(&'static str, Vec<MenuEntry>)> {
                 S,
                 I("Snapping", A::ToggleSnapping),
                 I("Dot Grid", A::ToggleGrid),
+                I("Annotations", A::ToggleAnnotations),
                 I("Show/Hide UI", A::ToggleUi),
                 I("Design / Chat Mode", A::ToggleChat),
                 I("Keyboard Shortcuts", A::ToggleHelp),

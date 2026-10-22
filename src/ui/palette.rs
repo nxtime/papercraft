@@ -166,6 +166,10 @@ pub fn entries(ed: &Editor, st: &UiState) -> Vec<Entry> {
             "Show agent activity",
             Command::Side(super::panels::SideView::Agent),
         ),
+        (
+            "Show annotations",
+            Command::Side(super::panels::SideView::Annotations),
+        ),
     ] {
         out.push(Entry {
             label: label.into(),

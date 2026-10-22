@@ -148,7 +148,7 @@ mod process {
     pub fn detect(binary: Option<&Path>) -> Option<(PathBuf, String)> {
         let path = match binary {
             Some(p) => p.to_path_buf(),
-            None => std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join("claude")).find(|p| p.is_file())?,
+            None => crate::chat::path::which("claude")?,
         };
         let out = clean_env(&mut Command::new(&path)).arg("--version").output().ok().filter(|o| o.status.success())?;
         let version = String::from_utf8_lossy(&out.stdout).split_whitespace().next()?.to_string();
@@ -184,7 +184,7 @@ mod process {
         for k in CREDENTIAL_ENV {
             cmd.env_remove(k);
         }
-        cmd
+        crate::chat::path::apply(cmd)
     }
 
     /// Shared by the waiter thread and `stop`; only signalled while unreaped (`try_wait` is `None`),

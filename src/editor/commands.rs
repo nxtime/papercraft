@@ -15,7 +15,10 @@ pub enum UiEvent {
     ToggleChat,
     ToggleHelp,
     ToggleGrid,
+    ToggleAnnotations,
     OpenVariables,
+    /// Open the New annotation popover on this layer.
+    Annotate(NodeId),
 }
 
 impl Editor {

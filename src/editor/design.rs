@@ -61,7 +61,11 @@ impl Editor {
         // A project that never went through the session (no design.json yet) starts from what
         // its first page already holds.
         if self.design.collections.is_empty() {
+            let old = std::mem::take(&mut self.design);
             self.design = variables::migrate_from_document(self.page_doc(0));
+            self.design.annotation_categories = old.annotation_categories;
+            self.design.annotation_templates = old.annotation_templates;
+            self.design.annotation_template = old.annotation_template;
         }
         let before = self.design.clone();
         let mut next = before.clone();
@@ -206,6 +210,26 @@ impl Editor {
         });
         self.pages[page].modes = modes;
         Ok(n.values().sum())
+    }
+
+    /// Set (or clear, with `None`) page `page`'s annotation template override. One undo step.
+    pub fn set_page_template_on(&mut self, page: usize, template: Option<&str>) {
+        let old = self.pages[page].modes.clone();
+        let mut modes = old.clone();
+        match template {
+            Some(t) => modes.insert(variables::PAGE_TEMPLATE_KEY.into(), t.into()),
+            None => modes.remove(variables::PAGE_TEMPLATE_KEY),
+        };
+        if modes == old {
+            return;
+        }
+        let cache = self.design.cache_for(&modes);
+        self.with_page(page, |ed| {
+            ed.rebuild_cache("Set annotation template", &cache, &BTreeMap::new(), None, None, |rec| {
+                rec.page_modes = Some((old, modes.clone()));
+            }, true)
+        });
+        self.pages[page].modes = modes;
     }
 
     /// Bind `field` of `ids` to variable `css` (`None` detaches: the current value stays, the

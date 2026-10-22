@@ -87,6 +87,22 @@ pub fn definitions() -> Vec<Value> {
     let node_id = |d: &str| json!({"type": "string", "description": d});
     let ids = |d: &str| json!({"type": "array", "items": {"type": "string"}, "description": d});
     vec![
+        tool("annotate", "Add notes to node ids or exact layer names on a page in one undo step. First text line is label; remaining lines are body. Type is an allowed category key (default rule); put fields as \"Name: value\" lines in text. Placement is automatic. Returns [number, node, type, label] rows.",
+            json!({"pageId": page_id(), "notes": {"type": "array", "items": {
+                "type": "object", "properties": {"node": {"type": "string"},
+                "text": {"type": "string"}, "type": {"type": "string"}}, "required": ["node", "text"]}}}), &["notes"], false),
+        tool("get_annotation_template", "Read the page's annotation template: [type key, guidance, field names] for each allowed type. Call once before annotate.",
+            json!({"pageId": page_id()}), &[], true),
+        tool("set_annotation_template", "Switch the annotation template by id or name, for one page or the whole project. Annotate only accepts the template's types.",
+            json!({"template": {"type": "string"}, "scope": {"type": "string", "enum": ["page", "project"]}, "pageId": page_id()}), &["template"], false),
+        tool("get_annotations", "Read annotations as [number, nodeName, type, text] rows. Text includes label and first body line, limited to 120 characters. Use full for complete objects, nodeId for a subtree, or pageId for another page.",
+            json!({"nodeId": {"type": "string"}, "pageId": page_id(), "full": {"type": "boolean"}}), &[], true),
+        tool("update_annotation", "Update annotation text or category key by id or frame reference such as Sign in #3. First text line is label; remaining lines are body. One undo step.",
+            json!({"id": {"type": ["integer", "string"]}, "ref": {"type": "string"},
+                "text": {"type": "string"}, "type": {"type": "string"}, "pageId": page_id()}), &[], false),
+        tool("delete_annotations", "Delete annotations by ids or frame references such as Sign in #3 in one undo step.",
+            json!({"ids": {"type": "array", "items": {"type": ["integer", "string"]}},
+                "refs": {"type": "array", "items": {"type": "string"}}, "pageId": page_id()}), &[], false),
         // ------------------------------------------------------------ projects and pages
         tool(
             "list_resources",
@@ -900,14 +916,14 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         "list_resources" | "get_basic_info" | "get_selection" | "get_node_info" | "get_children"
         | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
         | "get_computed_styles" | "get_fill_image" | "find_nodes" | "get_font_family_info"
-        | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
+        | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
         | "diff_frames" | "publish_library" | "list_libraries" => false,
         "select_nodes" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"
         | "create_file" | "finish_working_on_nodes" => false,
         "lint_design" => args["fix"] == true,
         "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html"
         | "create_shape" | "update_styles" | "set_text_content" | "rename_nodes"
-        | "add_feedback" | "resolve_feedback" | "set_variables" | "set_tokens"
+        | "annotate" | "set_annotation_template" | "update_annotation" | "delete_annotations" | "add_feedback" | "resolve_feedback" | "set_variables" | "set_tokens"
         | "create_collection" | "delete_variables" | "bind_variable"
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"

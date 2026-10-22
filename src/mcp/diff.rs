@@ -402,11 +402,21 @@ pub struct PageDiff {
     pub groups: Vec<FrameGroup>,
     /// Variable, mode, active-mode and token changes, as `name: value` pairs.
     pub variables: Vec<PropChange>,
+    /// Added, removed and edited notes, paired by annotation id; each counts once like a variable.
+    pub annotations: Vec<AnnotationDiff>,
+}
+
+/// One note row in a [`PageDiff`]: `status` is "added", "removed" or "modified".
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AnnotationDiff {
+    pub id: u64,
+    pub status: &'static str,
+    pub label: String,
 }
 
 impl PageDiff {
     pub fn is_empty(&self) -> bool {
-        self.groups.is_empty() && self.variables.is_empty()
+        self.groups.is_empty() && self.variables.is_empty() && self.annotations.is_empty()
     }
 }
 
@@ -594,6 +604,7 @@ pub fn diff_pages(before: &Document, after: &Document) -> PageDiff {
         modified: 0,
         groups: Vec::new(),
         variables: Vec::new(),
+        annotations: Vec::new(),
     };
     for &id in &after.root {
         walk_page(before, after, id, &mut diff);
@@ -648,6 +659,24 @@ pub fn diff_pages(before: &Document, after: &Document) -> PageDiff {
         &mut diff.variables,
     );
     diff.modified += diff.variables.len();
+    for a in &after.annotations {
+        let status = match before.annotations.iter().find(|b| b.id == a.id) {
+            None => "added",
+            Some(b) if b != a => "modified",
+            Some(_) => continue,
+        };
+        diff.annotations.push(AnnotationDiff { id: a.id, status, label: a.label.clone() });
+    }
+    for b in before.annotations.iter().filter(|b| !after.annotations.iter().any(|a| a.id == b.id)) {
+        diff.annotations.push(AnnotationDiff { id: b.id, status: "removed", label: b.label.clone() });
+    }
+    for a in &diff.annotations {
+        match a.status {
+            "added" => diff.added += 1,
+            "removed" => diff.removed += 1,
+            _ => diff.modified += 1,
+        }
+    }
     diff
 }
 
@@ -971,6 +1000,24 @@ mod tests {
             Rect::new(20.0, 0.0, 10.0, 10.0),
         );
         (d, f, a, b)
+    }
+
+    #[test]
+    fn diff_pages_annotations_added_removed_modified() {
+        use crate::model::annotation::Annotation;
+        let mut before = Document::default();
+        let (mut keep, mut gone) = (Annotation::new(None, "keep", "rule"), Annotation::new(None, "gone", "rule"));
+        (keep.id, gone.id) = (1, 2);
+        before.annotations = vec![keep, gone];
+        let mut after = before.clone();
+        after.annotations.remove(1);
+        after.annotations[0].body = "edited".into();
+        let mut new = Annotation::new(None, "new", "rule");
+        new.id = 3;
+        after.annotations.push(new);
+        let p = diff_pages(&before, &after);
+        assert_eq!((p.added, p.removed, p.modified), (1, 1, 1));
+        assert!(diff_pages(&before, &before).is_empty());
     }
 
     #[test]

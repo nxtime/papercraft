@@ -493,6 +493,8 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 sketch_section(ui, ed, &ids, &first);
             }
             separator(ui);
+            super::annotations::inspector_section(ui, ed, st, ids[0]);
+            separator(ui);
             export_section(ui, ed, st);
         });
 }

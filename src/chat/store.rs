@@ -95,6 +95,7 @@ mod tests {
                 effort: None,
                 endpoint: None,
                 cli_session: Some("s1".into()),
+                agent: None,
             },
             messages: vec![Message {
                 role: Role::Assistant,

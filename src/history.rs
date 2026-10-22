@@ -5,6 +5,7 @@
 //! and pushes a [`Change`] that can be applied in either direction.
 
 use crate::geom::V2;
+use crate::model::annotation::{self, Annotation};
 use crate::model::{Color, Document, Node, NodeId, VarState};
 use crate::variables::{Cache, DesignSystem, PageModes};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -28,6 +29,8 @@ pub struct Change {
     design: Option<(Box<DesignSystem>, Box<DesignSystem>)>,
     /// The page's active mode per collection before/after (`Editor::set_page_mode`).
     page_modes: Option<(PageModes, PageModes)>,
+    /// The page's annotations before/after.
+    annotations: Option<(Vec<Annotation>, Vec<Annotation>)>,
     next_id: (u64, u64),
     coalesce_key: Option<String>,
 }
@@ -84,6 +87,9 @@ impl Change {
         if let Some((before, after)) = &self.variables {
             doc.restore_vars(if forward { after } else { before });
         }
+        if let Some((before, after)) = &self.annotations {
+            doc.annotations = if forward { after } else { before }.clone();
+        }
         doc.next_id = if forward {
             self.next_id.1
         } else {
@@ -102,6 +108,7 @@ pub struct Recording {
     variables_before: Option<VarState>,
     pub(crate) design: Option<(DesignSystem, DesignSystem)>,
     pub(crate) page_modes: Option<(PageModes, PageModes)>,
+    annotations_before: Option<Vec<Annotation>>,
     next_id_before: u64,
 }
 
@@ -447,11 +454,29 @@ impl<'a> Tx<'a> {
         self.doc.nodes.insert(node.id, node);
     }
 
-    /// Remove a node and its subtree.
+    pub(crate) fn snapshot_annotations(&mut self) {
+        if self.rec.annotations_before.is_none() {
+            self.rec.annotations_before = Some(self.doc.annotations.clone());
+        }
+    }
+
+    /// Remove a node and its subtree. Annotations on it stay, detached where they were.
     pub fn remove(&mut self, id: NodeId) {
         let Some(parent) = self.doc.get(id).map(|n| n.parent) else {
             return;
         };
+        let gone = self.doc.subtree(id);
+        if self.doc.annotations.iter().any(|a| a.target.is_some_and(|t| gone.contains(&t))) {
+            self.snapshot_annotations();
+            let mut list = std::mem::take(&mut self.doc.annotations);
+            for a in &mut list {
+                if a.target.is_some_and(|t| gone.contains(&t)) {
+                    let (point, card) = (annotation::anchor_world(self.doc, a), annotation::card_world(self.doc, a));
+                    (a.target, a.point, a.position, a.detached) = (None, Some(point), card, true);
+                }
+            }
+            self.doc.annotations = list;
+        }
         self.touch_parent_list(parent);
         if let Some(list) = self.doc.children_mut(parent) {
             list.retain(|c| *c != id);
@@ -533,7 +558,12 @@ impl History {
             .filter(|(b, a)| b != a)
             .map(|(b, a)| (Box::new(b), Box::new(a)));
         let page_modes = rec.page_modes.filter(|(b, a)| b != a);
+        let annotations = rec
+            .annotations_before
+            .filter(|b| *b != doc.annotations)
+            .map(|b| (b, doc.annotations.clone()));
         if entries.is_empty()
+            && annotations.is_none()
             && root.is_none()
             && variables.is_none()
             && design.is_none()
@@ -548,6 +578,7 @@ impl History {
             variables,
             design,
             page_modes,
+            annotations,
             next_id: (rec.next_id_before, doc.next_id),
             coalesce_key,
         };
@@ -643,6 +674,11 @@ fn merge(older: &mut Change, newer: Change) {
     match (&mut older.page_modes, newer.page_modes) {
         (Some((_, after)), Some((_, new_after))) => *after = new_after,
         (m @ None, Some(nm)) => *m = Some(nm),
+        _ => {}
+    }
+    match (&mut older.annotations, newer.annotations) {
+        (Some((_, after)), Some((_, new_after))) => *after = new_after,
+        (a @ None, Some(na)) => *a = Some(na),
         _ => {}
     }
     older.next_id.1 = newer.next_id.1;

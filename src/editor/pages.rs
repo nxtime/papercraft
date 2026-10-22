@@ -636,6 +636,8 @@ fn replace_content(tx: &mut crate::history::Tx, snap: &Document) {
     for root in tx.doc().root.clone() {
         tx.remove(root);
     }
+    tx.snapshot_annotations();
+    tx.doc.annotations.clone_from(&snap.annotations);
     for root in snap.root.clone() {
         for (i, id) in snap.subtree(root).into_iter().enumerate() {
             let Some(node) = snap.get(id).cloned() else {

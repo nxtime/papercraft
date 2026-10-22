@@ -2,6 +2,9 @@
 //! Pure model. `cache_for` derives the per-page `Document` fields the rest of the app reads.
 
 use crate::design_system::sanitize_name;
+use crate::model::annotation::{
+    AnnotationCategory, AnnotationTemplate, DEFAULT_TEMPLATE, builtin_templates, default_categories,
+};
 use crate::model::Color;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,12 +16,26 @@ pub const TOKENS_COLLECTION: &str = "Tokens";
 /// Active mode id per collection id (missing = the collection's default mode).
 pub type PageModes = BTreeMap<String, String>;
 
+/// Reserved `PageModes` key carrying the page's annotation template override (so it rides the
+/// same undo step and save path as the modes). Stored in the page file as `annotationTemplate`.
+pub const PAGE_TEMPLATE_KEY: &str = "$annotationTemplate";
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DesignSystem {
     #[serde(default)]
     pub collections: Vec<Collection>,
     #[serde(default)]
     pub libraries: Vec<EnabledLibrary>,
+    /// Annotation categories. Empty means the six defaults; written to `design.json` only once
+    /// edited (an empty list is skipped).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotation_categories: Vec<AnnotationCategory>,
+    /// Annotation templates. Empty means the built-ins; written once one is edited.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotation_templates: Vec<AnnotationTemplate>,
+    /// Id of the project's default annotation template (none = Product spec).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation_template: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -189,6 +206,52 @@ fn under(name: &str, group: &str) -> bool {
 // ------------------------------------------------------------------------------ lookup
 
 impl DesignSystem {
+    pub fn category_by_key(&self, key: &str) -> Option<AnnotationCategory> {
+        crate::model::annotation::category_by_key(&self.categories(), key).cloned()
+    }
+
+    /// The annotation categories in effect: the stored ones, or the defaults when none.
+    pub fn categories(&self) -> Vec<AnnotationCategory> {
+        if self.annotation_categories.is_empty() {
+            default_categories()
+        } else {
+            self.annotation_categories.clone()
+        }
+    }
+
+    /// The annotation templates in effect: the stored ones, or the built-ins when none.
+    pub fn templates(&self) -> Vec<AnnotationTemplate> {
+        if self.annotation_templates.is_empty() {
+            builtin_templates()
+        } else {
+            self.annotation_templates.clone()
+        }
+    }
+
+    /// A template by id or name (case-insensitive).
+    pub fn template_by_ref(&self, r: &str) -> Option<AnnotationTemplate> {
+        let r = r.trim();
+        let all = self.templates();
+        let found = all
+            .iter()
+            .find(|t| t.id == r)
+            .or_else(|| all.iter().find(|t| t.name.eq_ignore_ascii_case(r)))
+            .cloned();
+        found
+    }
+
+    /// The template a page uses: its own override, else the project default, else Product spec
+    /// (else the first template when that one was deleted).
+    pub fn active_template(&self, page_override: Option<&str>) -> AnnotationTemplate {
+        let all = self.templates();
+        [page_override, self.annotation_template.as_deref(), Some(DEFAULT_TEMPLATE)]
+            .into_iter()
+            .flatten()
+            .find_map(|id| all.iter().find(|t| t.id == id))
+            .unwrap_or(&all[0])
+            .clone()
+    }
+
     pub fn collection(&self, id: &str) -> Option<&Collection> {
         self.collections.iter().find(|c| c.id == id)
     }
@@ -687,6 +750,21 @@ pub fn migrate_from_document(doc: &crate::model::Document) -> DesignSystem {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn annotation_categories_default_and_are_not_written_until_edited() {
+        let mut d = DesignSystem::default();
+        assert_eq!(d.categories().len(), 6);
+        assert_eq!(d.category_by_key("A11Y").unwrap().name, "Accessibility");
+        assert!(d.category_by_key("nope").is_none());
+        assert!(!serde_json::to_string(&d).unwrap().contains("annotation_categories"));
+        let old: DesignSystem = serde_json::from_str(r#"{"collections":[]}"#).unwrap();
+        assert_eq!(old, d);
+        d.annotation_categories = default_categories();
+        d.annotation_categories[0].name = "Rule".into();
+        let back: DesignSystem = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(back.categories()[0].name, "Rule");
+    }
+
     use super::*;
     use crate::model::Document;
 

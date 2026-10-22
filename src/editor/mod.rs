@@ -2,6 +2,7 @@
 //!
 //! It consumes platform-agnostic [`InputEvent`]s, so every interaction can be scripted in tests.
 
+pub mod annotations;
 pub mod commands;
 pub mod design;
 pub mod hit;
@@ -43,10 +44,11 @@ pub enum Tool {
     Pencil,
     Eraser,
     Laser,
+    Annotate,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 16] = [
+    pub const ALL: [Tool; 17] = [
         Tool::Select,
         Tool::Hand,
         Tool::Frame,
@@ -63,6 +65,7 @@ impl Tool {
         Tool::Pencil,
         Tool::Eraser,
         Tool::Laser,
+        Tool::Annotate,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -82,6 +85,7 @@ impl Tool {
             Tool::Pencil => "Pencil",
             Tool::Eraser => "Eraser",
             Tool::Laser => "Laser pointer",
+            Tool::Annotate => "Annotate",
         }
     }
     pub fn shortcut(self) -> &'static str {
@@ -102,6 +106,7 @@ impl Tool {
             Tool::Pencil => "⇧P",
             Tool::Eraser => "E",
             Tool::Laser => "K",
+            Tool::Annotate => "N",
         }
     }
 }
@@ -810,6 +815,13 @@ impl Editor {
             }
             Tool::Arrow => self.arrow_down(if self.snapping { world.round() } else { world }),
             Tool::Sticky => self.sticky_down(world),
+            Tool::Annotate => {
+                self.end_text_edit();
+                if let Some(id) = hit::hit_test(&self.doc, world, self.camera.zoom) {
+                    self.selection = vec![id];
+                    self.ui_events.push(commands::UiEvent::Annotate(id));
+                }
+            }
             Tool::Laser => {
                 self.laser_point(world, time_ms);
                 self.gesture = Gesture::Laser;
@@ -2028,6 +2040,7 @@ impl Editor {
             A::ToggleChat => self.ui_events.push(commands::UiEvent::ToggleChat),
             A::ToggleHelp => self.ui_events.push(commands::UiEvent::ToggleHelp),
             A::ToggleGrid => self.ui_events.push(commands::UiEvent::ToggleGrid),
+            A::ToggleAnnotations => self.ui_events.push(commands::UiEvent::ToggleAnnotations),
             A::OpenVariables => self.ui_events.push(commands::UiEvent::OpenVariables),
             A::SelectNext => self.select_sibling(true),
             A::SelectPrev => self.select_sibling(false),
@@ -2451,6 +2464,10 @@ pub fn insert_subtrees_tx(
     }
     for id in map.values() {
         crate::editor::whiteboard::update_connector(tx, *id);
+    }
+    if same_page {
+        let copies = crate::model::annotation::copies_for(&tx.doc().annotations.clone(), &map);
+        tx.add_annotation_copies(copies);
     }
     new_roots
 }

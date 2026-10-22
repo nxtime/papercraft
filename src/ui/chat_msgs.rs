@@ -53,6 +53,7 @@ pub struct View<'a> {
     pub runs: &'a [Run],
     pub approvals: &'a [Approval],
     pub error: Option<&'a str>,
+    pub signin: Option<&'a super::chat::chat_agents::SignIn>,
 }
 
 // ---------------------------------------------------------------------------------- pure helpers
@@ -832,14 +833,7 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
             });
         }
         if let Some(e) = v.error {
-            let p = theme::pal(ui);
-            card(ui).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add(egui::Label::new(RichText::new(e).color(p.danger)).wrap());
-                if kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Restore), "Retry").clicked() {
-                    acts.retry_last = true;
-                }
-            });
+            error_row(ui, e, v.signin, acts);
         }
         ui.add_space(4.0);
         if jump {
@@ -860,6 +854,34 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
                 ui.request_repaint();
             }
         });
+}
+
+/// A card with a title, a hint and Retry: the sign-in state of an agent.
+pub fn notice_card(ui: &mut Ui, title: &str, hint: &str, acts: &mut Acts) {
+    let p = theme::pal(ui);
+    card(ui).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(title).font(theme::semibold(theme::BODY)).color(p.warning));
+        ui.add(egui::Label::new(RichText::new(hint).size(theme::SECONDARY).color(p.secondary)).wrap());
+        if kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Restore), "Retry").clicked() {
+            acts.retry_last = true;
+        }
+    });
+}
+
+/// The error card with Retry; an agent that is signed out gets its sign-in card instead.
+pub fn error_row(ui: &mut Ui, e: &str, signin: Option<&super::chat::chat_agents::SignIn>, acts: &mut Acts) {
+    if let Some(s) = signin {
+        return super::chat::chat_agents::signin_card(ui, s, acts);
+    }
+    let p = theme::pal(ui);
+    card(ui).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.add(egui::Label::new(RichText::new(e).color(p.danger)).wrap());
+        if kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Restore), "Retry").clicked() {
+            acts.retry_last = true;
+        }
+    });
 }
 
 /// Suggestions, shown for a chat without messages.

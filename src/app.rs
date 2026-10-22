@@ -1558,6 +1558,8 @@ fn prefer_x11(kernel_release: &str, display: Option<&std::ffi::OsStr>) -> bool {
 }
 
 pub fn run(start: Start) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::chat::path::init();
     let store = Store::open(Store::default_root())
         .map_err(|e| format!("cannot create the projects folder: {e}"))?;
     let mut builder = EventLoop::<UserEvent>::with_user_event();

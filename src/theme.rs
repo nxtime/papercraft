@@ -652,6 +652,50 @@ pub enum Icon {
     Laser,
     Library,
     Sketch,
+    Note,
+    Scale,
+    Database,
+    Accessibility,
+    Code,
+    Zap,
+}
+
+/// The app's painted icon for a Lucide name, when it has one.
+#[must_use]
+pub fn icon_by_name(name: &str) -> Option<Icon> {
+    Some(match name {
+        "chevron-right" => Icon::ChevronRight,
+        "chevron-down" => Icon::ChevronDown,
+        "chevron-up" => Icon::ChevronUp,
+        "plus" => Icon::Plus,
+        "minus" => Icon::Minus,
+        "trash-2" => Icon::Trash,
+        "lock" => Icon::Lock,
+        "unlock" => Icon::LockOpen,
+        "eye" => Icon::Eye,
+        "eye-off" => Icon::EyeSlash,
+        "panel-left" => Icon::Sidebar,
+        "hand" => Icon::Hand,
+        "mouse-pointer-2" => Icon::Pointer,
+        "pencil" => Icon::Pencil,
+        "pen" => Icon::Pen,
+        "eraser" => Icon::Eraser,
+        "type" => Icon::Text,
+        "square" => Icon::Rect,
+        "circle" => Icon::Ellipse,
+        "image" => Icon::Image,
+        "star" => Icon::Star,
+        "scale" => Icon::Scale,
+        "zap" => Icon::Zap,
+        "database" => Icon::Database,
+        "accessibility" => Icon::Accessibility,
+        "code" => Icon::Code,
+        "grid-3x3" => Icon::Grid,
+        "ellipsis" => Icon::More,
+        "download" => Icon::Export,
+        "circle-question-mark" => Icon::Question,
+        _ => return None,
+    })
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -998,6 +1042,58 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 pt(2.5, 13.5),
             ]);
             line(&[pt(13.5, 9.5), pt(9.5, 9.5), pt(9.5, 13.5)]);
+        }
+        Icon::Note => {
+            closed(&[
+                pt(2.5, 2.5),
+                pt(13.5, 2.5),
+                pt(13.5, 10.5),
+                pt(8.0, 10.5),
+                pt(5.0, 13.5),
+                pt(5.0, 10.5),
+                pt(2.5, 10.5),
+            ]);
+            line(&[pt(5.0, 5.5), pt(11.0, 5.5)]);
+            line(&[pt(5.0, 7.8), pt(9.0, 7.8)]);
+        }
+        Icon::Scale => {
+            line(&[pt(8.0, 2.0), pt(8.0, 14.0)]);
+            line(&[pt(4.7, 14.0), pt(11.3, 14.0)]);
+            line(&[pt(2.0, 4.7), pt(3.3, 4.7), pt(8.0, 3.3), pt(12.7, 4.7), pt(14.0, 4.7)]);
+            for x in [3.3, 12.7] {
+                line(&[pt(x - 2.0, 10.7), pt(x, 5.3), pt(x + 2.0, 10.7)]);
+                painter.add(egui::Shape::line(arc(pt(x, 10.7), 2.0 * u, 0.0, std::f32::consts::PI, 10), st));
+            }
+        }
+        Icon::Database => {
+            let ell = |cy: f32, a0: f32, a1: f32| -> Vec<Pos2> {
+                (0..=16)
+                    .map(|i| {
+                        let a = a0 + (a1 - a0) * i as f32 / 16.0;
+                        pt(8.0 + 5.3 * a.cos(), cy + 2.0 * a.sin())
+                    })
+                    .collect()
+            };
+            closed(&ell(4.0, 0.0, std::f32::consts::TAU - 0.4));
+            line(&ell(8.0, 0.0, std::f32::consts::PI));
+            line(&ell(12.0, 0.0, std::f32::consts::PI));
+            line(&[pt(2.7, 4.0), pt(2.7, 12.0)]);
+            line(&[pt(13.3, 4.0), pt(13.3, 12.0)]);
+        }
+        Icon::Accessibility => {
+            painter.circle_stroke(c, 6.5 * u, st);
+            painter.circle_filled(pt(8.0, 4.9), 0.9 * u, color);
+            line(&[pt(4.8, 6.9), pt(11.2, 6.9)]);
+            line(&[pt(8.0, 6.9), pt(8.0, 9.6)]);
+            line(&[pt(6.4, 12.0), pt(8.0, 9.6), pt(9.6, 12.0)]);
+        }
+        Icon::Code => {
+            line(&[pt(5.3, 4.7), pt(2.0, 8.0), pt(5.3, 11.3)]);
+            line(&[pt(10.7, 4.7), pt(14.0, 8.0), pt(10.7, 11.3)]);
+            line(&[pt(9.3, 3.0), pt(6.7, 13.0)]);
+        }
+        Icon::Zap => {
+            closed(&[pt(9.2, 1.5), pt(3.0, 8.8), pt(7.6, 8.8), pt(6.8, 14.5), pt(13.0, 7.2), pt(8.4, 7.2)]);
         }
         Icon::Diamond => {
             closed(&[pt(8.0, 1.8), pt(14.2, 8.0), pt(8.0, 14.2), pt(1.8, 8.0)]);

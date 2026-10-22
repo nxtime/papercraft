@@ -6,7 +6,11 @@
 //! theme choice), not in the project folder, so they do not sync to other people.
 
 use super::chat_msgs::{self, Acts, View};
+#[path = "chat_agents.rs"]
+pub mod chat_agents;
+use chat_agents::{Act, PanelIn};
 use crate::chat::events::{Event, ImageAttachment};
+use crate::chat::agents::{self, AgentKind, AgentState, AgentStatus};
 use crate::chat::{Backend, BackendKind, Chat, Message, Role, ToolCall, store};
 use crate::project::format::{new_id, now_ms};
 use crate::theme::{self, Icon};
@@ -34,8 +38,6 @@ pub use crate::chat::TMP_DIR;
 /// A run that started this long before the turn's first edit call or after its last still counts as its own
 /// (events reach the UI a frame after the tool ran).
 const RUN_SLACK_MS: u64 = 5_000;
-const CLAUDE_INSTALL: &str = "npm install -g @anthropic-ai/claude-code";
-const CODEX_INSTALL: &str = "npm install -g @openai/codex";
 const REPAINT: Duration = Duration::from_millis(50);
 #[cfg(not(target_arch = "wasm32"))]
 const TITLE_CHARS: usize = 40;
@@ -47,6 +49,8 @@ const WEB_NOTE: &str = "Chat needs the desktop app";
 pub enum TurnHandle {
     Cli(Box<dyn crate::chat::events::Turn>),
     #[cfg(not(target_arch = "wasm32"))]
+    Acp(crate::chat::acp::AcpTurn),
+    #[cfg(not(target_arch = "wasm32"))]
     Api(crate::chat::tools::ApiTurn),
 }
 
@@ -54,6 +58,8 @@ impl TurnHandle {
     pub fn stop(&mut self) {
         match self {
             TurnHandle::Cli(t) => t.stop(),
+            #[cfg(not(target_arch = "wasm32"))]
+            TurnHandle::Acp(t) => crate::chat::events::Turn::stop(t),
             #[cfg(not(target_arch = "wasm32"))]
             TurnHandle::Api(t) => crate::chat::events::Turn::stop(t),
         }
@@ -63,15 +69,19 @@ impl TurnHandle {
         match self {
             TurnHandle::Cli(t) => t.is_running(),
             #[cfg(not(target_arch = "wasm32"))]
+            TurnHandle::Acp(t) => crate::chat::events::Turn::is_running(t),
+            #[cfg(not(target_arch = "wasm32"))]
             TurnHandle::Api(t) => crate::chat::events::Turn::is_running(t),
         }
     }
 
-    /// Answer a `NeedsApproval` event (API backend only).
+    /// Answer a `NeedsApproval` event (API and ACP backends).
     pub fn approve(&self, id: &str, ok: bool) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let TurnHandle::Api(t) = self {
-            t.approve(id, ok);
+        match self {
+            TurnHandle::Api(t) => t.approve(id, ok),
+            TurnHandle::Acp(t) => t.approve(id, ok),
+            TurnHandle::Cli(_) => {}
         }
         #[cfg(target_arch = "wasm32")]
         let _ = (id, ok);
@@ -97,6 +107,8 @@ pub struct Detect {
     pub codex: Option<Found>,
     pub endpoints: Vec<EndpointState>,
     pub default_endpoint: String,
+    /// Every registry and custom agent (`agents::detect_all`).
+    pub agents: Vec<AgentStatus>,
 }
 
 impl Detect {
@@ -105,7 +117,29 @@ impl Detect {
             BackendKind::ClaudeCode => self.claude.is_some(),
             BackendKind::Codex => self.codex.is_some(),
             BackendKind::Anthropic => self.endpoints.iter().any(|e| e.ready),
+            BackendKind::Acp => self.first_acp().is_some(),
         }
+    }
+
+    /// The state of one agent. Claude Code and Codex use their own detection, which is what
+    /// `has` and the turn use too.
+    pub fn agent_state(&self, id: &str) -> AgentState {
+        let direct = |f: &Option<Found>| f.as_ref().map_or(AgentState::NotFound, |(p, v)| AgentState::Ready { path: p.display().to_string(), version: v.clone() });
+        match id {
+            "claude-code" => direct(&self.claude),
+            "codex" => direct(&self.codex),
+            _ => self.agents.iter().find(|s| s.id == id).map_or(AgentState::NotFound, |s| s.state.clone()),
+        }
+    }
+
+    pub fn agent_ready(&self, id: &str) -> bool {
+        matches!(self.agent_state(id), AgentState::Ready { .. })
+    }
+
+    /// The first ready agent that runs over ACP.
+    pub fn first_acp(&self) -> Option<&str> {
+        let acp = |s: &&AgentStatus| matches!(s.state, AgentState::Ready { .. }) && agents::find(&s.id).is_none_or(|d| d.kind != AgentKind::Direct);
+        self.agents.iter().find(acp).map(|s| s.id.as_str())
     }
 
     /// The endpoint with this id (None = the default one) can run.
@@ -117,6 +151,7 @@ impl Detect {
     pub fn has_backend(&self, b: &Backend) -> bool {
         match b.kind {
             BackendKind::Anthropic => self.endpoint_ready(b.endpoint.as_deref()),
+            BackendKind::Acp => b.agent.as_deref().is_some_and(|id| self.agent_ready(id)),
             k => self.has(k),
         }
     }
@@ -128,12 +163,12 @@ impl Detect {
     }
 
     pub fn any(&self) -> bool {
-        [BackendKind::ClaudeCode, BackendKind::Codex, BackendKind::Anthropic].iter().any(|k| self.has(*k))
+        [BackendKind::ClaudeCode, BackendKind::Codex, BackendKind::Anthropic, BackendKind::Acp].iter().any(|k| self.has(*k))
     }
 
     /// The default backend when available, else the first one that is.
     pub fn pick(&self, preferred: BackendKind) -> BackendKind {
-        [preferred, BackendKind::ClaudeCode, BackendKind::Codex, BackendKind::Anthropic]
+        [preferred, BackendKind::ClaudeCode, BackendKind::Codex, BackendKind::Anthropic, BackendKind::Acp]
             .into_iter()
             .find(|k| self.has(*k))
             .unwrap_or(preferred)
@@ -153,10 +188,11 @@ fn scan(prefs: &super::settings::ChatPrefs) -> Detect {
         })
         .collect();
     Detect {
-        claude: claude_code::detect(prefs.claude_path.as_deref().map(Path::new)),
-        codex: codex::detect(prefs.codex_path.as_deref().map(Path::new)),
+        claude: claude_code::detect(cli_path(prefs, "claude-code").map(Path::new)),
+        codex: codex::detect(cli_path(prefs, "codex").map(Path::new)),
         endpoints,
         default_endpoint: prefs.default_endpoint.clone(),
+        agents: agents::detect_all(prefs),
     }
 }
 
@@ -226,6 +262,11 @@ pub struct ChatState {
     pub thought_secs: Option<u64>,
     /// The last turn's error, shown as a row with Retry.
     pub error: Option<String>,
+    /// `error` is a failed start (nothing ran): Retry sends again what was typed.
+    pub start_failed: bool,
+    /// The prompt of the failed start, for Retry when the composer was cleared (suggestion chips).
+    #[cfg(not(target_arch = "wasm32"))]
+    failed_prompt: Option<String>,
     /// Project the state belongs to; a change resets it.
     pub project: Option<PathBuf>,
     pub project_name: String,
@@ -240,11 +281,15 @@ pub struct ChatState {
     /// Copy of the settings' chat prefs (endpoints), refreshed each frame, for `send`.
     pub prefs: super::settings::ChatPrefs,
     detect_rx: Option<Receiver<Detect>>,
-    /// The agent picker is open.
+    /// The agent panel is open.
     pub picker_open: bool,
+    panel: chat_agents::PanelState,
     /// Composer text, selection chip and images.
     pub draft: String,
-    pub sel: Option<SelChip>,
+    /// One chip per `@ Selection` click, oldest first.
+    pub sels: Vec<SelChip>,
+    /// Annotation lines of the chips' layers, refreshed from the editor just before a send.
+    pub sel_notes: Vec<String>,
     pub images: Vec<Attachment>,
     /// Text of the title field while renaming.
     pub renaming: Option<String>,
@@ -588,7 +633,7 @@ impl ChatState {
             chat.title = text.lines().next().unwrap_or_default().chars().take(TITLE_CHARS).collect();
         }
         let turn_chat = chat.id.clone();
-        let Backend { kind, model, effort, endpoint, cli_session } = chat.backend.clone();
+        let Backend { kind, model, effort, endpoint, cli_session, agent } = chat.backend.clone();
         let ep = self.prefs.endpoint(endpoint.as_deref()).clone();
         // Another host's model is whatever the endpoint says now; the Claude host keeps the chat's pick.
         let model = if ep.is_claude_host() { model.or_else(|| Some(ep.model.clone())) } else { Some(ep.model.clone()) };
@@ -604,6 +649,7 @@ impl ChatState {
             tools: self.tools.clone(),
             images: std::mem::take(&mut self.pending_images),
             system,
+            binary: cli_binary(&self.prefs, kind),
             ..Default::default()
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -615,8 +661,9 @@ impl ChatState {
                 ApiFormat::OpenAi => openai::start(&cfg, prompt, tx),
             }
             .map(TurnHandle::Api),
+            BackendKind::Acp => start_acp(&cfg, &self.prefs, agent.as_deref(), prompt, tx),
         };
-        self.error = None;
+        (self.error, self.start_failed, self.failed_prompt) = (None, false, None);
         match started {
             Ok(t) => {
                 self.thinking.clear();
@@ -635,7 +682,7 @@ impl ChatState {
                 if let Some(c) = self.chat.as_mut() {
                     c.messages.pop();
                 }
-                self.error = Some(e.clone());
+                (self.error, self.start_failed, self.failed_prompt) = (Some(e.clone()), true, Some(prompt.to_owned()));
                 Err(e)
             }
         }
@@ -700,12 +747,56 @@ impl ChatState {
             effort: ep.filter(|e| e.is_claude_host()).map(|_| prefs.api_effort.clone()),
             endpoint: ep.map(|e| e.id.clone()),
             cli_session: None,
+            agent: (kind == BackendKind::Acp).then(|| d.first_acp().map(str::to_owned)).flatten(),
         };
+    }
+
+    /// Signed-out agent: the error is its authentication error.
+    pub fn signin(&self) -> Option<chat_agents::SignIn> {
+        let e = self.error.as_deref()?;
+        let b = &self.chat.as_ref()?.backend;
+        let id = b.agent.as_deref().filter(|_| b.kind == BackendKind::Acp)?;
+        chat_agents::signin_for(id, &agent_name(id, &self.prefs), e)
+    }
+
+    /// Gives the open chat the backend of a panel row or a model change; another target starts a
+    /// new agent session.
+    fn set_backend(&mut self, b: Backend) {
+        let running = self.is_running();
+        let Some(c) = self.chat.as_mut().filter(|_| !running) else { return };
+        let keep = chat_agents::same_target(&c.backend, &b);
+        c.backend = Backend { cli_session: if keep { c.backend.cli_session.clone() } else { None }, ..b };
+        if !c.messages.is_empty() {
+            self.save();
+        }
+    }
+
+    /// What the user did in the panel or the setup card.
+    fn act(&mut self, ctx: &egui::Context, act: Act, settings: &mut super::settings::SettingsUi) {
+        match act {
+            Act::Select(pick) => {
+                self.set_backend(chat_agents::backend_for(&pick, &settings.chat));
+                self.picker_open = self.is_running();
+            }
+            Act::SetBackend(b) => self.set_backend(b),
+            Act::Enable(id) => {
+                settings.chat.agents.entry(id).or_default().enabled = true;
+                settings.chat.save();
+                self.rescan(ctx, &settings.chat);
+            }
+            Act::Settings => {
+                settings.open_chat();
+                self.picker_open = false;
+            }
+            Act::DetectAgain => self.rescan(ctx, &settings.chat),
+            Act::OpenPanel => (self.picker_open, self.panel.fresh) = (true, true),
+            Act::Close => self.picker_open = false,
+        }
     }
 
     fn reset_view(&mut self) {
         self.thinking.clear();
-        (self.thinking_since, self.thought_secs, self.error) = (None, None, None);
+        (self.thinking_since, self.thought_secs, self.error, self.start_failed) = (None, None, None, false);
         self.renaming = None;
     }
 
@@ -760,9 +851,29 @@ impl ChatState {
     }
 
     /// Sends the composer: context lines (selection, images), then the text. API images go as
-    /// blocks; CLI images are saved under the project and referenced by path.
+    /// blocks; CLI images are saved under the project and referenced by path. Any failure is
+    /// kept in `error` (an error row) and leaves the composer as it was.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn submit(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let r = self.submit_inner(ctx);
+        if let Err(e) = &r {
+            (self.error, self.start_failed) = (Some(e.clone()), true);
+        }
+        r
+    }
+
+    /// Retry on a failed start: what is typed, else the prompt that failed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn retry_start(&mut self, ctx: &egui::Context) {
+        if !self.draft.trim().is_empty() {
+            let _ = self.submit(ctx);
+        } else if let Some(p) = self.failed_prompt.clone() {
+            let _ = self.send(ctx, &p);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn submit_inner(&mut self, ctx: &egui::Context) -> Result<(), String> {
         let text = self.draft.trim().to_owned();
         if text.is_empty() {
             return Ok(());
@@ -772,10 +883,7 @@ impl ChatState {
             return Err("Open a project to chat".into());
         };
         let (api, chat_id) = (chat.backend.kind == BackendKind::Anthropic, chat.id.clone());
-        let mut lines = Vec::new();
-        if let Some(s) = &self.sel {
-            lines.push(format!("[Selection] {} ({})", s.label, s.keys.join(", ")));
-        }
+        let mut lines = selection_lines(&self.sels, &self.sel_notes);
         let mut pending = Vec::new();
         for a in &self.images {
             if api {
@@ -793,7 +901,7 @@ impl ChatState {
         let r = self.send(ctx, &prompt);
         self.pending_images.clear();
         if r.is_ok() {
-            (self.sel, self.images) = (None, Vec::new());
+            (self.sels, self.images) = (Vec::new(), Vec::new());
             self.draft.clear();
         }
         r
@@ -803,6 +911,9 @@ impl ChatState {
     pub fn submit(&mut self, _ctx: &egui::Context) -> Result<(), String> {
         Err(WEB_NOTE.into())
     }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn retry_start(&mut self, _ctx: &egui::Context) {}
 
     #[cfg(target_arch = "wasm32")]
     pub fn send(&mut self, _ctx: &egui::Context, _prompt: &str) -> Result<(), String> {
@@ -823,9 +934,37 @@ impl ChatState {
     }
 }
 
-/// "Not found at /opt/x/claude" when a path is set in Settings, else "Not found on PATH".
-fn not_found(custom: Option<&str>) -> String {
-    custom.map_or_else(|| "Not found on PATH".to_owned(), |p| format!("Not found at {p}"))
+/// Starts the chat's ACP agent: its launch command from the registry (or a custom agent).
+#[cfg(not(target_arch = "wasm32"))]
+fn start_acp(cfg: &crate::chat::events::TurnConfig, prefs: &super::settings::ChatPrefs, agent: Option<&str>, prompt: &str, tx: std::sync::mpsc::Sender<Event>) -> Result<TurnHandle, String> {
+    let id = agent.ok_or("No agent is chosen for this chat. Pick one from the agent chip.")?;
+    let name = agent_name(id, prefs);
+    let (program, args) = agents::launch_command(id, prefs).ok_or_else(|| format!("{name} is not available. Check it in the agent panel (Not found, or off until enabled)."))?;
+    crate::chat::acp::start(cfg, &program, &args, prompt, tx).map(TurnHandle::Acp)
+}
+
+/// The name an agent shows under: the registry's, a custom agent's, else its id.
+fn agent_name(id: &str, prefs: &super::settings::ChatPrefs) -> String {
+    prefs.custom_agents.iter().find(|c| c.id == id).map(|c| c.name.clone()).or_else(|| agents::find(id).map(|a| a.name.to_owned())).unwrap_or_else(|| id.to_owned())
+}
+
+/// The path Settings holds for a direct agent: its `agents` entry, else the old field.
+#[cfg(not(target_arch = "wasm32"))]
+fn cli_path<'a>(prefs: &'a super::settings::ChatPrefs, id: &str) -> Option<&'a str> {
+    let old = if id == "codex" { prefs.codex_path.as_deref() } else { prefs.claude_path.as_deref() };
+    prefs.agents.get(id).and_then(|a| a.path.as_deref()).or(old)
+}
+
+/// The CLI path set in Settings; detection uses it, so a turn must too (None = look on PATH).
+#[cfg(not(target_arch = "wasm32"))]
+fn cli_binary(prefs: &super::settings::ChatPrefs, kind: BackendKind) -> Option<PathBuf> {
+    match kind {
+        BackendKind::ClaudeCode => cli_path(prefs, "claude-code"),
+        BackendKind::Codex => cli_path(prefs, "codex"),
+        BackendKind::Anthropic | BackendKind::Acp => None,
+    }
+    .filter(|p| !p.trim().is_empty())
+    .map(PathBuf::from)
 }
 
 fn model_name(id: &str) -> &str {
@@ -836,6 +975,7 @@ fn backend_label(b: &Backend, prefs: &super::settings::ChatPrefs) -> String {
     match b.kind {
         BackendKind::ClaudeCode => "Claude Code".into(),
         BackendKind::Codex => "Codex".into(),
+        BackendKind::Acp => b.agent.as_deref().map_or("Agent".into(), |id| agent_name(id, prefs)),
         BackendKind::Anthropic => {
             let ep = prefs.endpoint(b.endpoint.as_deref());
             if ep.is_claude_host() {
@@ -852,7 +992,54 @@ fn fmt_tokens(n: u64) -> String {
     if n >= 1000 { format!("{}k", n / 1000) } else { n.to_string() }
 }
 
-/// The current selection becomes a chip (Cmd+L or the @ button).
+/// "Card" for one layer, "Card \u{b7} 3 layers" for several.
+fn chip_label(first: &str, count: usize) -> String {
+    if count > 1 { format!("{first} \u{b7} {count} layers") } else { first.to_owned() }
+}
+
+/// Adds a chip unless one with the same layers is already there.
+fn push_chip(chips: &mut Vec<SelChip>, chip: SelChip) {
+    if !chips.iter().any(|c| c.keys == chip.keys) {
+        chips.push(chip);
+    }
+}
+
+/// The `[Selection]` context lines of the chips, one each, with node ids.
+#[cfg(not(target_arch = "wasm32"))]
+fn selection_lines(chips: &[SelChip], notes: &[String]) -> Vec<String> {
+    chips.iter().map(|s| format!("[Selection] {} ({})", s.label, s.keys.join(", "))).chain(notes.iter().map(|n| format!("[Selection] {n}"))).collect()
+}
+
+/// One line per annotation on the chips' layers (and their children): number, type key, label,
+/// first line of the body.
+pub fn selection_notes(ed: &Editor, chips: &[SelChip]) -> Vec<String> {
+    let cats = ed.design.categories();
+    let mut seen = Vec::new();
+    let mut out = Vec::new();
+    for key in chips.iter().flat_map(|c| &c.keys) {
+        let Some((prefix, num)) = key.split_once(':') else { continue };
+        let (Ok(page), Ok(n)) = (crate::mcp::exec::find_page(ed, prefix), num.parse::<u64>()) else { continue };
+        let doc = ed.page_doc(page);
+        let id = crate::model::NodeId(n);
+        if doc.get(id).is_none() {
+            continue;
+        }
+        let (subtree, numbers) = (doc.subtree(id), crate::model::annotation::numbers(doc));
+        for a in doc.annotations.iter().filter(|a| a.target.is_some_and(|t| subtree.contains(&t))) {
+            if seen.contains(&(page, a.id)) {
+                continue;
+            }
+            seen.push((page, a.id));
+            let type_key = crate::model::annotation::category_by_key(&cats, &a.category).or_else(|| cats.iter().find(|c| c.id == a.category)).map_or(a.category.as_str(), |c| c.key());
+            let line = a.body.lines().next().unwrap_or_default().trim();
+            let sep = if line.is_empty() { "" } else { " \u{2014} " };
+            out.push(format!("note #{} [{type_key}] on {key}: {}{sep}{line}", numbers.get(&a.id).map_or(0, |n| n.1), a.label));
+        }
+    }
+    out
+}
+
+/// The current selection becomes a chip (Cmd+L or the @ button); each click adds one.
 fn add_selection(ed: &mut Editor, st: &mut ChatState) {
     let ids = ed.top_selection();
     let Some(first) = ids.first() else {
@@ -862,8 +1049,7 @@ fn add_selection(ed: &mut Editor, st: &mut ChatState) {
     let page = ed.active_page;
     let keys = ids.iter().map(|id| crate::mcp::exec::node_key(ed, page, *id)).collect();
     let name = ed.doc.get(*first).map(|n| n.name.clone()).unwrap_or_default();
-    let label = if ids.len() > 1 { format!("{name} +{}", ids.len() - 1) } else { name };
-    st.sel = Some(SelChip { label, keys });
+    push_chip(&mut st.sels, SelChip { label: chip_label(&name, ids.len()), keys });
 }
 
 /// Pans the canvas to a node the agent touched, unless the user moved the camera lately.
@@ -989,22 +1175,33 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     ui.spacing_mut().item_spacing.y = 6.0;
     let chip = header(ui, st);
     ui.add_space(6.0);
-    let setup = st.chat.detect.as_ref().is_some_and(|d| !d.any());
+    // Nothing to talk to yet: no agent is ready, or this empty chat's agent is gone.
+    let setup = st.chat.detect.as_ref().zip(st.chat.chat.as_ref()).is_some_and(|(d, c)| c.messages.is_empty() && !d.has_backend(&c.backend));
     let mut acts = Acts::default();
-    egui::Panel::bottom("chat-composer").frame(egui::Frame::NONE).resizable(false).show(ui, |ui| {
+    let composer_top = egui::Panel::bottom("chat-composer").frame(egui::Frame::NONE).resizable(false).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
         if let Some(todos) = st.chat.chat.as_ref().map(chat_msgs::latest_plan).filter(|t| !t.is_empty()) {
             chat_msgs::plan_card(ui, &todos);
         }
         composer(ui, ed, st, column_rect, setup);
-    });
+    })
+    .response
+    .rect
+    .top();
     if st.review_run.is_some() {
         super::panels::review(ui, ed, st);
     } else if setup {
-        setup_view(ui, st);
+        let act = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| chat_agents::setup(ui, st.chat.detect.as_ref().expect("setup needs a scan"), &st.settings.chat)).inner;
+        if let Some(a) = act {
+            st.chat.act(&ctx, a, &mut st.settings);
+        }
     } else if st.chat.chat.as_ref().is_none_or(|c| c.messages.is_empty()) && !st.chat.is_running() {
         chat_msgs::empty(ui, &mut acts);
+        if let Some(e) = st.chat.error.as_deref() {
+            chat_msgs::error_row(ui, e, st.chat.signin().as_ref(), &mut acts);
+        }
     } else if let Some(chat) = &st.chat.chat {
+        let signin = st.chat.signin();
         let view = View {
             running: st.chat.is_running(),
             thinking: &st.chat.thinking,
@@ -1012,11 +1209,16 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             runs: &st.runs,
             approvals: &st.chat.approvals,
             error: st.chat.error.as_deref(),
+            signin: signin.as_ref(),
         };
         chat_msgs::list(ui, chat, &view, &mut acts);
     }
-    if let Some(chip) = chip {
-        picker(&ctx, st, chip);
+    if let Some(chip) = chip.filter(|_| st.chat.picker_open) {
+        let (d, backend) = (st.chat.detect.clone().unwrap_or_default(), st.chat.chat.as_ref().map(|c| c.backend.clone()).unwrap_or_default());
+        let input = PanelIn { detect: &d, prefs: &st.settings.chat, backend: &backend, running: st.chat.is_running(), column: column_rect, chip, composer_top };
+        if let Some(a) = chat_agents::panel(&ctx, &mut st.chat.panel, &input) {
+            st.chat.act(&ctx, a, &mut st.settings);
+        }
     }
     apply_acts(&ctx, ed, st, acts);
     if let Some(dir) = st.project_dir.clone() {
@@ -1058,6 +1260,11 @@ fn apply_acts(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, acts: Acts
     if let Some(id) = acts.accept {
         super::panels::accept_run(ed, st, &id);
     }
+    if acts.retry_last && st.chat.start_failed {
+        st.chat.sel_notes = selection_notes(ed, &st.chat.sels);
+        st.chat.retry_start(ctx);
+        return;
+    }
     let again = acts.retry_last.then(|| st.chat.last_prompt()).flatten();
     if let Some(text) = acts.send.or(again) {
         let _ = st.chat.send(ctx, &text);
@@ -1096,7 +1303,7 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
         });
     });
     let label = match (&st.chat.chat, &st.chat.detect) {
-        (_, Some(d)) if !d.any() => "No agent connected".to_owned(),
+        (Some(c), Some(d)) if !d.has_backend(&c.backend) => "No agent connected".to_owned(),
         (Some(c), _) => backend_label(&c.backend, &st.settings.chat),
         _ => String::new(),
     };
@@ -1107,6 +1314,7 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
         rect = Some(r.rect);
         if r.clicked() {
             st.chat.picker_open = !st.chat.picker_open;
+            st.chat.panel.fresh = st.chat.picker_open;
         }
         let Some((used, window)) = context else { return };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1161,225 +1369,6 @@ fn chat_menu(anchor: &egui::Response, st: &mut UiState) {
     });
 }
 
-fn section_label(ui: &mut Ui, text: &str) {
-    ui.add_space(4.0);
-    ui.label(RichText::new(text).font(theme::semibold(theme::SECONDARY)).color(theme::pal(ui).tertiary));
-}
-
-/// One agent in the picker: name, status line, optional install hint, state chip. Click selects.
-fn agent_row(ui: &mut Ui, name: &str, sub: &str, hint: Option<&str>, found: bool, selected: bool) -> egui::Response {
-    let p = theme::pal(ui);
-    let r = egui::Frame::new()
-        .fill(if selected { p.field } else { egui::Color32::TRANSPARENT })
-        .corner_radius(theme::RADIUS_LG)
-        .inner_margin(egui::Margin::symmetric(10, 8))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    let ink = if found { p.text } else { p.tertiary };
-                    ui.label(RichText::new(name).font(theme::semibold(theme::BODY)).color(ink));
-                    ui.add(egui::Label::new(RichText::new(sub).size(theme::SECONDARY).color(p.secondary)).truncate());
-                    if let Some(h) = hint {
-                        ui.label(RichText::new(h).monospace().size(theme::SECONDARY).color(theme::accent()));
-                    }
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if found {
-                        kit::chip_ink(ui, if selected { "Selected" } else { "Found" }, Some(p.success));
-                    } else {
-                        kit::chip_ink(ui, "Missing", None);
-                    }
-                });
-            });
-        })
-        .response;
-    ui.interact(r.rect, r.id.with("pick"), egui::Sense::click())
-}
-
-fn picker(ctx: &egui::Context, st: &mut UiState, chip: egui::Rect) {
-    if !st.chat.picker_open {
-        return;
-    }
-    let p = theme::pal_from_ctx(ctx);
-    let running = st.chat.is_running();
-    let detect = st.chat.detect.clone().unwrap_or_default();
-    let backend = st.chat.chat.as_ref().map(|c| c.backend.clone()).unwrap_or_default();
-    let prefs = st.settings.chat.clone();
-    let picker_w = st.chat.column_width() - 2.0 * 14.0;
-    let mut choose: Option<Backend> = None;
-    let mut open_settings = false;
-    let mut again = false;
-    let area = egui::Area::new("chat-picker".into())
-        .order(egui::Order::Foreground)
-        .fade_in(false)
-        .fixed_pos(chip.left_bottom() + egui::vec2(0.0, 6.0))
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(p.popover)
-                .stroke(egui::Stroke::new(1.0, p.separator))
-                .corner_radius(theme::RADIUS_PANEL)
-                .inner_margin(10)
-                .show(ui, |ui| {
-                    ui.set_width(picker_w - 20.0);
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    section_label(ui, "LOCAL AGENTS");
-                    for (kind, name, found, install, custom) in [
-                        (BackendKind::ClaudeCode, "Claude Code", &detect.claude, CLAUDE_INSTALL, &prefs.claude_path),
-                        (BackendKind::Codex, "Codex", &detect.codex, CODEX_INSTALL, &prefs.codex_path),
-                    ] {
-                        let (sub, hint) = match found {
-                            Some((path, v)) => (format!("Found \u{b7} v{v} \u{b7} {}", path.display()), None),
-                            None => (not_found(custom.as_deref()), Some(install)),
-                        };
-                        let r = agent_row(ui, name, &sub, hint, found.is_some(), backend.kind == kind);
-                        if r.clicked() && found.is_some() && !running {
-                            choose = Some(Backend { kind, ..Default::default() });
-                        }
-                        if r.clicked() && found.is_none() {
-                            ui.ctx().copy_text(install.to_owned());
-                        }
-                    }
-                    section_label(ui, "API ENDPOINTS");
-                    let current = backend.endpoint.clone().unwrap_or_else(|| prefs.default_endpoint.clone());
-                    for ep in &prefs.endpoints {
-                        let state = detect.endpoints.iter().find(|s| s.id == ep.id);
-                        let ready = state.is_some_and(|s| s.ready);
-                        let host = crate::chat::endpoint::host(&ep.base_url).unwrap_or_else(|| ep.base_url.clone());
-                        let sub = match state {
-                            _ if !ep.is_complete() => "Set the URL and model in Settings, Chat".to_string(),
-                            Some(s) if s.key => format!("{host} \u{b7} {} \u{b7} key set", ep.model),
-                            Some(s) if ep.needs_key() && !s.key => "No key. Add one in Settings, Chat".to_string(),
-                            _ => format!("{host} \u{b7} {}", ep.model),
-                        };
-                        let on = backend.kind == BackendKind::Anthropic && current == ep.id;
-                        if agent_row(ui, &ep.name, &sub, None, ready, on).clicked() && ready && !running {
-                            choose = Some(Backend {
-                                kind: BackendKind::Anthropic,
-                                model: Some(ep.model.clone()),
-                                effort: ep.is_claude_host().then(|| prefs.api_effort.clone()),
-                                endpoint: Some(ep.id.clone()),
-                                cli_session: None,
-                            });
-                        }
-                    }
-                    let selected = prefs.endpoint(backend.endpoint.as_deref());
-                    if backend.kind == BackendKind::Anthropic && selected.is_claude_host() {
-                        let model = backend.model.clone().unwrap_or_else(|| selected.model.clone());
-                        section_label(ui, "MODEL");
-                        for (id, label) in super::settings::API_MODELS {
-                            let on = model == id;
-                            let r = ui.add(egui::Button::selectable(on, RichText::new(format!("{label}   {id}")).size(theme::SECONDARY + 1.0)).frame(false));
-                            if r.clicked() && !running {
-                                choose = Some(Backend { model: Some(id.into()), ..backend.clone() });
-                            }
-                        }
-                        section_label(ui, "EFFORT");
-                        let effort = backend.effort.clone().unwrap_or_else(|| prefs.api_effort.clone());
-                        let items: Vec<(&str, Option<&str>)> = super::settings::API_EFFORTS.iter().map(|(_, l)| (*l, None)).collect();
-                        let cur = super::settings::API_EFFORTS.iter().position(|(id, _)| *id == effort).unwrap_or(1);
-                        if let Some(i) = kit::segmented(ui, &items, cur)
-                            && !running
-                        {
-                            choose = Some(Backend { effort: Some(super::settings::API_EFFORTS[i].0.into()), ..backend.clone() });
-                        }
-                    }
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        again = kit::chip(ui, "Detect again", false).clicked();
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            open_settings = kit::chip_ink(ui, "Settings \u{2192} Chat", Some(theme::accent())).clicked();
-                        });
-                    });
-                });
-        });
-    if let Some(b) = choose
-        && let Some(c) = st.chat.chat.as_mut()
-    {
-        c.backend = Backend { cli_session: if b.kind == c.backend.kind { c.backend.cli_session.clone() } else { None }, ..b };
-        if !c.messages.is_empty() {
-            st.chat.save();
-        }
-        st.chat.picker_open = running;
-    }
-    if again {
-        st.chat.rescan(ctx, &prefs);
-    }
-    if open_settings {
-        st.settings.open_chat();
-        st.chat.picker_open = false;
-    }
-    let outside = ctx.input(|i| i.pointer.any_pressed()) && ctx.pointer_interact_pos().is_some_and(|pos| !area.response.rect.contains(pos) && !chip.contains(pos));
-    if outside {
-        st.chat.picker_open = false;
-    }
-}
-
-fn setup_view(ui: &mut Ui, st: &mut UiState) {
-    let p = theme::pal(ui);
-    let ctx = ui.ctx().clone();
-    ui.add_space(ui.available_height() * 0.08);
-    kit::badge(ui, Icon::Laser, p.warning, 40.0);
-    ui.add_space(6.0);
-    ui.label(RichText::new("Connect an agent to start").font(theme::semibold(18.0)));
-    ui.add(egui::Label::new(RichText::new("Chat needs a local agent CLI or an API key. Pick one, it takes a minute.").color(p.secondary)));
-    ui.add_space(8.0);
-    let step = |ui: &mut Ui, n: u8, title: &str, body: &str, add: &mut dyn FnMut(&mut Ui)| {
-        egui::Frame::new().fill(p.popover).corner_radius(theme::RADIUS_LG).inner_margin(12).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(n.to_string()).font(theme::semibold(theme::BODY)).color(theme::accent()));
-                ui.label(RichText::new(title).font(theme::semibold(theme::BODY)));
-            });
-            ui.label(RichText::new(body).size(theme::SECONDARY).color(p.secondary));
-            add(ui);
-        });
-    };
-    step(ui, 1, "Install a local agent", "Uses your own login. PaperCraft passes no keys.", &mut |ui| {
-        for cmd in [CLAUDE_INSTALL, CODEX_INSTALL] {
-            egui::Frame::new().fill(p.field).corner_radius(theme::RADIUS_MD).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(cmd).monospace().size(theme::SECONDARY).color(theme::accent()));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if kit::lottie_button(ui, "copy", "Copy", 22.0).clicked() {
-                            ui.ctx().copy_text(cmd.to_owned());
-                        }
-                    });
-                });
-            });
-        }
-    });
-    #[cfg(not(target_arch = "wasm32"))]
-    step(ui, 2, "Or add an API key", "For the default endpoint. Stored in the system keychain, never in the project. More endpoints are in Settings.", &mut |ui| {
-        ui.add(egui::TextEdit::singleline(&mut st.chat.key_draft).password(true).margin(theme::INPUT_MARGIN).hint_text("sk-ant-\u{2026}").desired_width(f32::INFINITY));
-        if let Some(e) = &st.chat.key_error {
-            ui.label(RichText::new(e).size(theme::SECONDARY).color(p.danger));
-        }
-        if kit::button(ui, kit::ButtonKind::Primary, None, "Save key").clicked() && !st.chat.key_draft.trim().is_empty() {
-            match crate::chat::endpoint::set_key(st.settings.chat.default_endpoint(), &st.chat.key_draft) {
-                Ok(()) => {
-                    st.chat.key_draft.clear();
-                    st.chat.key_error = None;
-                    st.chat.rescan(&ctx, &st.settings.chat);
-                }
-                Err(e) => st.chat.key_error = Some(e),
-            }
-        }
-    });
-    step(ui, 3, "Check again", "PaperCraft looks for claude and codex on your PATH.", &mut |ui| {
-        ui.horizontal(|ui| {
-            if kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Restore), "Detect again").clicked() {
-                st.chat.rescan(&ctx, &st.settings.chat);
-            }
-            if kit::button(ui, kit::ButtonKind::Secondary, None, "Open settings").clicked() {
-                st.settings.open_chat();
-            }
-        });
-    });
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn image_mime(name: &str) -> Option<&'static str> {
     let ext = name.rsplit('.').next()?.to_ascii_lowercase();
@@ -1419,6 +1408,31 @@ fn clipboard_png() -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
+/// One selection chip: "@ Name  3 layers  x". True when clicked (removes it).
+fn sel_chip(ui: &mut Ui, label: &str) -> bool {
+    let p = theme::pal(ui);
+    let (name, rest) = label.split_once(" \u{b7} ").unwrap_or((label, ""));
+    let paint = |text: &str, font: egui::FontId, color| ui.painter().layout_no_wrap(text.to_owned(), font, color);
+    let parts = [
+        paint("@", theme::semibold(theme::SECONDARY), theme::accent()),
+        paint(name, theme::semibold(theme::SECONDARY), p.text),
+        paint(rest, egui::FontId::proportional(theme::SECONDARY), p.secondary),
+        paint("\u{d7}", egui::FontId::proportional(theme::BODY), p.secondary),
+    ];
+    const GAP: f32 = 6.0;
+    let shown = if rest.is_empty() { &parts[..2] } else { &parts[..3] };
+    let w = 2.0 * GAP + shown.iter().chain([&parts[3]]).map(|g| g.size().x + GAP).sum::<f32>();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, kit::CHIP_H), egui::Sense::click());
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(255), theme::blend(p.field, p.hover.gamma_multiply(f32::from(u8::from(resp.hovered())))));
+    let mut x = rect.left() + GAP + 2.0;
+    for g in shown.iter().chain([&parts[3]]) {
+        let pos = egui::pos2(x, rect.center().y - g.size().y / 2.0);
+        x += g.size().x + GAP;
+        ui.painter().galley(pos, g.clone(), p.text);
+    }
+    resp.on_hover_text("Remove from the chat").clicked()
+}
+
 fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, setup: bool) {
     let p = theme::pal(ui);
     let no_project = st.project_dir.is_none();
@@ -1438,12 +1452,11 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
     egui::Frame::new().fill(p.popover).corner_radius(theme::RADIUS_PANEL).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 6.0;
-        if st.chat.sel.is_some() || !st.chat.images.is_empty() {
+        if !st.chat.sels.is_empty() || !st.chat.images.is_empty() {
             ui.horizontal_wrapped(|ui| {
-                if let Some(s) = &st.chat.sel
-                    && kit::chip_ink(ui, &format!("@ Selection \u{b7} {} \u{d7}", s.label), Some(theme::accent())).clicked()
-                {
-                    st.chat.sel = None;
+                let clicked = st.chat.sels.iter().position(|s| sel_chip(ui, &s.label));
+                if let Some(i) = clicked {
+                    st.chat.sels.remove(i);
                 }
                 let mut drop = None;
                 for (i, a) in st.chat.images.iter().enumerate() {
@@ -1508,6 +1521,7 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
     });
     if (submit || enter) && !running && backend_ok && !no_project {
         let ctx = ui.ctx().clone();
+        st.chat.sel_notes = selection_notes(ed, &st.chat.sels);
         let _ = st.chat.submit(&ctx);
     }
 }
@@ -1689,12 +1703,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_agent_wording_names_the_custom_path() {
-        assert_eq!(not_found(None), "Not found on PATH");
-        assert_eq!(not_found(Some("/opt/x/claude")), "Not found at /opt/x/claude");
-    }
-
-    #[test]
     fn error_ends_the_turn_and_is_kept() {
         let mut st = ChatState { chat: Some(new_chat()), ..Default::default() };
         assert!(!st.apply(Event::Text("hi".into())));
@@ -1795,5 +1803,115 @@ mod tests {
         c.follow = Some(key);
         follow(&mut ed, &mut c);
         assert_eq!(ed.camera.pan, V2::ZERO);
+    }
+
+    fn chip(label: &str, keys: &[&str]) -> SelChip {
+        SelChip { label: label.into(), keys: keys.iter().map(|k| (*k).into()).collect() }
+    }
+
+    #[test]
+    fn selections_stack_dedupe_and_become_context_lines() {
+        assert_eq!(chip_label("Card", 1), "Card");
+        assert_eq!(chip_label("Card", 3), "Card \u{b7} 3 layers");
+        let mut chips = vec![];
+        push_chip(&mut chips, chip("Card", &["a:1"]));
+        push_chip(&mut chips, chip("Hero \u{b7} 2 layers", &["a:2", "a:3"]));
+        push_chip(&mut chips, chip("Card", &["a:1"]));
+        assert_eq!(chips.len(), 2, "an identical selection is not added twice");
+        chips.remove(0);
+        push_chip(&mut chips, chip("Card", &["a:1"]));
+        assert_eq!(selection_lines(&chips, &[]), ["[Selection] Hero \u{b7} 2 layers (a:2, a:3)", "[Selection] Card (a:1)"]);
+        let prompt = format!("{}\n\nMake it blue", selection_lines(&chips, &[]).join("\n"));
+        assert_eq!(chat_msgs::split_context(&prompt).0.len(), 2);
+    }
+
+    #[test]
+    fn selection_notes_list_the_annotations_of_selected_layers() {
+        use crate::geom::Rect;
+        use crate::model::{annotation::Annotation, Node, NodeId, NodeKind};
+        let mut ed = Editor::default();
+        let page = ed.active_page;
+        let id = ed.add_node(Node::new(NodeId(0), NodeKind::Rect, Rect::new(0.0, 0.0, 10.0, 10.0)), None);
+        let mut a = Annotation::new(Some(id), "Use 8pt grid", "rule");
+        a.id = 1;
+        a.body = "first line\nsecond".into();
+        ed.doc.annotations.push(a);
+        let chips = [SelChip { label: "x".into(), keys: vec![crate::mcp::exec::node_key(&ed, page, id)] }];
+        let notes = selection_notes(&ed, &chips);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("[rule]") && notes[0].contains("Use 8pt grid \u{2014} first line") && !notes[0].contains("second"), "{notes:?}");
+        let lines = selection_lines(&chips, &notes);
+        assert_eq!(chat_msgs::split_context(&format!("{}\n\nhi", lines.join("\n"))).0.len(), 2);
+        assert_eq!(selection_notes(&ed, &[]), Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    fn fake_claude(dir: &std::path::Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let bin = dir.join("claude");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 9.9.9; exit 0; fi\ncat >/dev/null\n\
+             echo '{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"fake-ran\"}}}'\n\
+             echo '{\"type\":\"result\",\"session_id\":\"s\"}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    /// Root cause of "Send does nothing": detection used the path set in Settings, `send` did not,
+    /// so with the Dock's bare PATH the turn failed with "not found" although the row said Ready.
+    #[test]
+    fn cli_paths_come_from_the_agents_map_first() {
+        use super::super::settings::{AgentPrefs, ChatPrefs};
+        let mut prefs = ChatPrefs { codex_path: Some("/old/codex".into()), ..Default::default() };
+        assert_eq!(cli_binary(&prefs, BackendKind::Codex), Some(PathBuf::from("/old/codex")));
+        prefs.agents.insert("codex".into(), AgentPrefs { path: Some("/new/codex".into()), ..Default::default() });
+        assert_eq!(cli_binary(&prefs, BackendKind::Codex), Some(PathBuf::from("/new/codex")));
+        assert_eq!(cli_binary(&prefs, BackendKind::ClaudeCode), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn send_runs_the_claude_path_set_in_settings() {
+        let dir = std::env::temp_dir().join(format!("papercraft-chat-bin-{:016x}", fastrand::u64(..)));
+        let bin = fake_claude(&dir.join("bin"));
+        let prefs = super::super::settings::ChatPrefs { claude_path: Some(bin.display().to_string()), ..Default::default() };
+        assert_eq!(cli_binary(&prefs, BackendKind::ClaudeCode), Some(bin));
+        assert_eq!(cli_binary(&prefs, BackendKind::Codex), None);
+        let mut st = ChatState { project: Some(dir.clone()), prefs, mcp_url: "http://127.0.0.1:1/mcp".into(), ..Default::default() };
+        st.draft = "hello".into();
+        let ctx = egui::Context::default();
+        st.submit(&ctx).expect("starts with the configured binary");
+        assert!(st.draft.is_empty() && st.error.is_none());
+        let t = std::time::Instant::now();
+        while st.is_running() && t.elapsed() < Duration::from_secs(10) {
+            st.pump(&ctx);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        st.pump(&ctx);
+        let chat = st.chat.as_ref().unwrap();
+        assert!(chat.messages.iter().any(|m| m.text == "fake-ran"), "{:?}", chat.messages);
+        assert_eq!(store::list(&dir).len(), 1, "the chat is saved");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_failed_start_keeps_the_text_and_shows_an_error() {
+        let dir = std::env::temp_dir().join(format!("papercraft-chat-fail-{:016x}", fastrand::u64(..)));
+        let prefs = super::super::settings::ChatPrefs { claude_path: Some("/nonexistent/claude".into()), ..Default::default() };
+        let mut st = ChatState { project: Some(dir.clone()), prefs, ..Default::default() };
+        st.draft = "draw a card".into();
+        st.sels = vec![chip("Card", &["a:1"])];
+        let ctx = egui::Context::default();
+        assert!(st.submit(&ctx).is_err());
+        assert_eq!(st.draft, "draw a card", "the typed text stays in the composer");
+        assert_eq!(st.sels.len(), 1);
+        assert!(st.error.is_some() && st.start_failed, "an error row, never a silent no-op");
+        assert!(st.chat.as_ref().unwrap().messages.is_empty(), "no message that never went anywhere");
+        assert!(!st.is_running());
+        std::fs::remove_dir_all(dir).ok();
     }
 }

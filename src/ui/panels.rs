@@ -12,6 +12,7 @@ pub enum SideView {
     History,
     Comments,
     Agent,
+    Annotations,
 }
 
 /// Which comments the Comments view shows.
@@ -1036,6 +1037,22 @@ pub(super) fn review(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                                 variable_row(ui, &n);
                             }
                         }
+                        if !d.annotations.is_empty() {
+                            ui.add_space(8.0);
+                            kit::section_header(ui, &format!("Notes · {}", d.annotations.len()), None);
+                            for a in &d.annotations {
+                                let n = crate::mcp::diff::NodeDiff {
+                                    id_a: None,
+                                    id_b: None,
+                                    path: String::new(),
+                                    name: a.label.clone(),
+                                    kind: "annotation",
+                                    status: a.status,
+                                    changes: Vec::new(),
+                                };
+                                variable_row(ui, &n);
+                            }
+                        }
                     }
                 }
             }
@@ -1089,8 +1106,13 @@ fn variable_row(ui: &mut Ui, n: &crate::mcp::diff::NodeDiff) {
     let p = theme::pal(ui);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 48.0), egui::Sense::hover());
     let badge = egui::Rect::from_min_size(rect.left_center() - egui::vec2(0.0, 14.0), egui::vec2(28.0, 28.0));
-    ui.painter().rect_filled(badge, theme::RADIUS_MD, p.warning.gamma_multiply(0.18));
-    theme::paint_icon(ui.painter(), badge.shrink(6.0), Icon::Pencil, p.warning);
+    let (tint, icon) = match n.status {
+        "added" => (p.success, Icon::Plus),
+        "removed" => (p.danger, Icon::Minus),
+        _ => (p.warning, Icon::Pencil),
+    };
+    ui.painter().rect_filled(badge, theme::RADIUS_MD, tint.gamma_multiply(0.18));
+    theme::paint_icon(ui.painter(), badge.shrink(6.0), icon, tint);
     let x = rect.left() + 40.0;
     let clip = ui.painter().with_clip_rect(rect);
     clip.text(egui::pos2(x, rect.center().y - 9.0), egui::Align2::LEFT_CENTER, &n.name, egui::FontId::proportional(theme::BODY), p.text);

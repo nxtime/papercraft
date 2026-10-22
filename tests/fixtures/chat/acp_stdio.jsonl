@@ -1,0 +1,6 @@
+> "method":"initialize"
+< {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}
+> "method":"session/new"
+< {"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-1"}}
+> "method":"session/prompt"
+< {"jsonrpc":"2.0","id":2,"result":{"stopReason":"max_tokens"}}

@@ -1,0 +1,8 @@
+> "method":"initialize"
+< {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true}}}}
+> "method":"session/load"
+< {"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"no such session"}}
+> "method":"session/new"
+< {"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-new"}}
+> "method":"session/prompt"
+< {"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}

@@ -1,0 +1,4 @@
+> "method":"initialize"
+< {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{"http":true}}}}
+> "method":"session/new"
+< {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}
