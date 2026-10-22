@@ -642,8 +642,20 @@ fn runs_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     ui.add_space(10.0);
 }
 
+/// Marks a run Accepted (the run card's Accept in Chat mode).
+pub(super) fn accept_run(ed: &mut Editor, st: &mut UiState, id: &str) {
+    let (Some(dir), Some(mut run)) = (st.project_dir.clone(), st.runs.iter().find(|r| r.id == id).cloned()) else {
+        return;
+    };
+    run.state = RunState::Accepted;
+    if let Err(e) = crate::runs::save(&dir, &run) {
+        ed.status = format!("Could not save the run: {e}");
+    }
+    st.runs_key = None;
+}
+
 /// Confirm, then put every page of the run back to how it was before it.
-fn revert_dialog(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, dir: &std::path::Path) {
+pub(super) fn revert_dialog(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, dir: &std::path::Path) {
     let Some(id) = st.pending_run_revert.clone() else {
         return;
     };
@@ -667,6 +679,37 @@ fn revert_dialog(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, dir: &s
     ed.status = match crate::runs::revert(dir, ed, &mut run) {
         Ok(()) => format!("Reverted agent run {}", run.number),
         Err(e) => format!("Could not revert the run: {e}"),
+    };
+    st.runs_key = None;
+}
+
+/// One confirm for "Restore to here": reverts the run and every later run, newest first.
+pub(super) fn restore_dialog(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, dir: &std::path::Path) {
+    let Some(id) = st.pending_restore.clone() else {
+        return;
+    };
+    let runs = crate::runs::runs_from(&st.runs, &id);
+    let body = format!(
+        "This reverts {}, newest first, on every page they touched. Edits you made to those pages since are lost.",
+        count(runs.len(), "agent run")
+    );
+    let Some(yes) = super::confirm::dialog(ctx, "run-restore", "Restore to here?", &body, "Restore") else {
+        return;
+    };
+    st.pending_restore = None;
+    if !yes || runs.is_empty() {
+        return;
+    }
+    if st.run_open.is_some() {
+        ed.status = "Wait for the agent run in progress to finish".into();
+        return;
+    }
+    if st.review_run.as_ref().is_some_and(|r| runs.iter().any(|x| &x.id == r)) {
+        st.review_run = None;
+    }
+    ed.status = match crate::runs::revert_all(dir, ed, runs) {
+        Ok(n) => format!("Reverted {}", count(n, "agent run")),
+        Err(e) => format!("Could not restore: {e}"),
     };
     st.runs_key = None;
 }
@@ -879,7 +922,7 @@ fn diff_row(
 }
 
 /// The run review: changes by frame, per-row revert, Revert run and Accept all.
-fn review(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+pub(super) fn review(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     let (Some(dir), Some(id)) = (st.project_dir.clone(), st.review_run.clone()) else {
         st.review_run = None;

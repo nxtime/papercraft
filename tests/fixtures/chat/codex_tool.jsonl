@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a16076-27b1-7291-8bd3-f47391424c74"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll call `get_basic_info` once and return file name."}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"papercraft","tool":"get_basic_info","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"papercraft","tool":"get_basic_info","arguments":{},"result":{"content":[{"type":"text","text":"No project is open in papercraft (the home screen is showing). Call list_resources and open_file, or create_file then open_file."}],"structured_content":null},"error":null,"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"No file open in PaperCraft."}}
+{"type":"turn.completed","usage":{"input_tokens":79922,"cached_input_tokens":64896,"cache_write_input_tokens":0,"output_tokens":111,"reasoning_output_tokens":0}}

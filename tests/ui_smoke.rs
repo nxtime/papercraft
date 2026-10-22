@@ -5,6 +5,10 @@ use craft_ui::theme::catppuccin::Flavor;
 use egui::{Pos2, Rect, Vec2};
 use papercraft::editor::Editor;
 use papercraft::theme::{self, Choice};
+use papercraft::chat::events::{Event, Turn};
+use papercraft::chat::{Message, Role};
+use papercraft::runs::{Run, RunState};
+use papercraft::ui::chat::{Approval, Detect, EndpointState, TurnHandle};
 use papercraft::ui::{self, UiState, home};
 
 fn frame(ctx: &egui::Context, mut f: impl FnMut(&mut egui::Ui)) {
@@ -173,4 +177,131 @@ fn interface_scale_changes_the_point_size_and_still_draws() {
     });
     assert!((ctx.pixels_per_point() / before - 1.25).abs() < 1e-3);
     theme::apply_ui_scale(&ctx, 1.0, false);
+}
+
+#[test]
+fn chat_mode_draws_with_inspector_overlay() {
+    let dir = std::env::temp_dir().join(format!("papercraft-chat-ui-{:016x}", fastrand::u64(..)));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (w, h) in [(1280.0, 800.0), (2560.0, 1440.0)] {
+        let ctx = egui::Context::default();
+        ui::setup_style(&ctx);
+        let mut ed = Editor::default();
+        let mut st = UiState { project_dir: Some(dir.clone()), ..UiState::default() };
+        st.chat.project = Some(dir.clone()); // as if the project was already seen
+        st.chat.detect = Some(Detect::default()); // no scan (it starts CLIs and reads the keychain)
+        for inspector in [false, true] {
+            // Set the fields, not `set_chat_mode`: that would write the user's chat prefs.
+            st.chat_mode = true;
+            st.chat.inspector = inspector;
+            for _ in 0..3 {
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(w, h))),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    ui::draw(ui, &mut ed, &mut st);
+                });
+                out.textures_delta.clear();
+            }
+        }
+        assert!(st.chat.chat.is_some(), "an empty chat is opened");
+        assert!(papercraft::chat::store::list(&dir).is_empty(), "nothing saved before the first message");
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
+struct FakeTurn;
+
+impl Turn for FakeTurn {
+    fn stop(&mut self) {}
+    fn is_running(&self) -> bool {
+        true
+    }
+}
+
+fn chat_ui(dir: &std::path::Path) -> UiState {
+    let mut st = UiState { project_dir: Some(dir.to_path_buf()), ..UiState::default() };
+    st.chat.project = Some(dir.to_path_buf());
+    st.chat.detect = Some(Detect { claude: Some(("/bin/claude".into(), "2.3.1".into())), endpoints: vec![EndpointState { id: "anthropic".into(), key: true, ready: true }], default_endpoint: "anthropic".into(), ..Detect::default() });
+    st.chat_mode = true;
+    st
+}
+
+fn draw_chat(st: &mut UiState, w: f32, h: f32) {
+    let ctx = egui::Context::default();
+    ui::setup_style(&ctx);
+    let mut ed = Editor::default();
+    for _ in 0..3 {
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(w, h))), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            ui::draw(ui, &mut ed, st);
+        });
+        out.textures_delta.clear();
+    }
+}
+
+fn tool(st: &mut UiState, id: &str, name: &str, args: serde_json::Value, done: Option<Result<serde_json::Value, &str>>) {
+    st.chat.apply(Event::ToolStart { id: id.into(), name: name.into(), args });
+    match done {
+        Some(Ok(r)) => st.chat.apply(Event::ToolEnd { id: id.into(), result: Some(r), error: None }),
+        Some(Err(e)) => st.chat.apply(Event::ToolEnd { id: id.into(), result: None, error: Some(e.into()) }),
+        None => false,
+    };
+}
+
+#[test]
+fn chat_states_draw_from_recorded_events() {
+    use serde_json::json;
+    let dir = std::env::temp_dir().join(format!("papercraft-chat-states-{:016x}", fastrand::u64(..)));
+    std::fs::create_dir_all(&dir).unwrap();
+    // The 1x1 PNG a screenshot tool would return.
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    let shot = json!([{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": png}}]);
+
+    // empty, setup, picker
+    let mut st = chat_ui(&dir);
+    draw_chat(&mut st, 1280.0, 800.0);
+    st.chat.picker_open = true;
+    draw_chat(&mut st, 1280.0, 800.0);
+    st.chat.detect = Some(Detect::default());
+    draw_chat(&mut st, 1280.0, 800.0);
+
+    // streaming: reasoning, grouped tool cards (one running, one failed), a screenshot, the plan
+    let mut st = chat_ui(&dir);
+    st.chat.ensure_chat();
+    st.chat.chat.as_mut().unwrap().messages.push(Message { role: Role::User, text: "[Selection] Card (ab12cd:3)\n\nBuild it".into(), at: 10, ..Default::default() });
+    st.chat.apply(Event::Thinking("Planning the card".into()));
+    st.chat.apply(Event::Text("I will build **the card**:\n- one\n- two `x`\n```html\n<div/>\n```".into()));
+    tool(&mut st, "1", "create_artboard", json!({"name": "Test"}), Some(Ok(json!([{"type": "text", "text": "{\"nodeId\":\"ab12cd:4\"}"}]))));
+    tool(&mut st, "2", "get_screenshot", json!({"nodeId": "ab12cd:4"}), Some(Ok(shot)));
+    tool(&mut st, "3", "update_styles", json!({"nodeId": "ab12cd:5"}), Some(Err("Node ab12cd:5 not found")));
+    tool(&mut st, "4", "TodoWrite", json!({"todos": [{"content": "A", "status": "completed"}, {"content": "B", "status": "in_progress"}, {"content": "C", "status": "pending"}]}), Some(Ok(json!("ok"))));
+    tool(&mut st, "5", "write_html", json!({"html": "x ".repeat(900)}), None);
+    st.chat.turn = Some(TurnHandle::Cli(Box::new(FakeTurn)));
+    draw_chat(&mut st, 1280.0, 800.0);
+    draw_chat(&mut st, 2560.0, 1440.0);
+
+    // waiting for approval
+    st.chat.approvals.push(Approval { id: "5".into(), name: "delete_pages".into(), args: json!({"name": "Landing"}) });
+    draw_chat(&mut st, 1280.0, 800.0);
+
+    // finished: usage line, checkpoint, run card, suggestions, error row
+    let mut st = chat_ui(&dir);
+    st.chat.ensure_chat();
+    st.chat.chat.as_mut().unwrap().messages.push(Message { role: Role::User, text: "Build it".into(), at: 10, ..Default::default() });
+    st.chat.apply(Event::Text("Done.".into()));
+    tool(&mut st, "1", "create_artboard", json!({"name": "Test"}), Some(Ok(json!("ok"))));
+    tool(&mut st, "2", "lint_design", json!({}), Some(Ok(json!("ok"))));
+    st.chat.apply(Event::TurnEnd {
+        usage: Some(papercraft::chat::Usage { input: 12_400, output: 1_100, cache_read: 9_800, cache_write: 0, cost_usd: Some(0.06) }),
+        session: None,
+        stop_reason: None,
+    });
+    st.runs.push(Run { id: "r1".into(), number: 3, started: 20, ended: Some(12_020), calls: 2, added: 6, state: RunState::Review, ..Default::default() });
+    st.runs_key = Some(dir.clone());
+    draw_chat(&mut st, 1280.0, 800.0);
+    st.chat.apply(Event::Error("boom".into()));
+    draw_chat(&mut st, 1280.0, 800.0);
+    std::fs::remove_dir_all(dir).ok();
 }

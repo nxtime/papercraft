@@ -421,6 +421,7 @@ impl Editor {
             let s = slot.stash.as_ref().expect("inactive page has a stash");
             (s.doc.clone(), (!s.needs_fit).then_some(s.camera))
         };
+        let camera = camera.filter(|_| !self.headless);
         PageData {
             id: slot.id.clone(),
             name: slot.name.clone(),

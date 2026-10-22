@@ -93,6 +93,10 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 tokio-util = "0.7"
 # Shared-project sync; the system TLS stack so https servers work without bundling one.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
+# Anthropic API key in the OS keychain (chat API backend). Linux uses the Secret Service (persistent; keyutils is not).
+# libc: SIGINT to the spawned chat CLIs.
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+libc = "0.2"
 
 # Browser build (`src/web.rs`): canvas + WebGPU/WebGL surface, DOM events instead of winit.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -3,6 +3,9 @@
 
 pub mod agent;
 pub mod bind;
+pub mod chat;
+pub mod chat_md;
+pub mod chat_msgs;
 pub mod confirm;
 pub mod design;
 pub mod home;
@@ -131,6 +134,8 @@ pub struct UiState {
     pub review_diff: Option<panels::ReviewDiff>,
     /// Run (id) waiting for the "Revert agent run?" confirm.
     pub pending_run_revert: Option<String>,
+    /// Run (id) waiting for the "Restore to here" confirm: it and every later run get reverted.
+    pub pending_restore: Option<String>,
     /// Where an agent connects (MCP URL natively, the relay URL in the browser); empty until known.
     pub agent_endpoint: String,
     /// An extra sidebar view: history, comments or the agent log. None shows layers, library or design.
@@ -142,6 +147,9 @@ pub struct UiState {
     pub toast: Option<(String, bool)>,
     /// Selected codegen target in the inspector's Code & AI Handoff section.
     pub code_target: String,
+    /// Chat mode: the chat column replaces the layers and inspector.
+    pub chat_mode: bool,
+    pub chat: chat::ChatState,
 }
 
 /// Where a dragged layer lands relative to a row.
@@ -248,6 +256,9 @@ impl UiState {
     pub fn sync_runs(&mut self, t: &mut crate::runs::Tracker) -> bool {
         self.run_open = t.open_run().cloned();
         let finished = t.take_finished();
+        if let Some(run) = &finished {
+            self.chat.note_run(run);
+        }
         if finished.is_some() {
             self.runs_key = None;
         }
@@ -376,6 +387,8 @@ pub(crate) const PANEL_GAP: f32 = 12.0;
 
 /// Canvas width under which the top bar drops the zoom pill (it is also on the keyboard).
 const TIGHT_BAR_W: f32 = 520.0;
+/// Room the Design | Chat switch takes in the top bar.
+const CHAT_SWITCH_W: f32 = 140.0;
 
 /// Canvas width under which the egui menu bar folds into a single "Menu" button.
 const MENU_BAR_W: f32 = 1100.0;
@@ -600,7 +613,27 @@ fn round_corners(painter: &egui::Painter, rect: egui::Rect, r: f32, colour: Colo
 }
 
 /// Lay out the chrome and return the remaining canvas rectangle (logical px).
+impl UiState {
+    /// Switch Design | Chat and remember it for the open project. Chat needs the desktop app
+    /// and an open project.
+    pub fn set_chat_mode(&mut self, on: bool) {
+        let on = on && !cfg!(target_arch = "wasm32") && self.project_dir.is_some();
+        self.chat_mode = on;
+        if let Some(dir) = &self.project_dir {
+            chat::remember_mode(dir, on);
+        }
+    }
+}
+
 pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
+    if st.chat.project != st.project_dir {
+        st.chat_mode = st.chat.switch_project(st.project_dir.clone());
+    }
+    if st.chat.mcp_url != st.agent_endpoint {
+        st.chat.mcp_url.clone_from(&st.agent_endpoint);
+    }
+    st.chat.project_name.clone_from(&st.project_name);
+    st.chat.pump(ui.ctx());
     if st.custom_titlebar {
         let p = theme::pal(ui);
         egui::Panel::top("titlebar")
@@ -636,6 +669,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
                 }
             }
             UiEvent::ToggleUi => st.hide_ui = !st.hide_ui,
+            UiEvent::ToggleChat => st.set_chat_mode(!st.chat_mode),
             UiEvent::ToggleHelp => st.show_help = !st.show_help,
             UiEvent::ToggleGrid => st.show_grid_off = !st.show_grid_off,
             UiEvent::OpenVariables => st.variables.open = !st.variables.open,
@@ -677,58 +711,75 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     // Narrow windows keep the canvas usable: the side panels never take more than 30% each.
     let window_w = ui.max_rect().width();
     let side_max = |min: f32| (window_w * SIDE_MAX_SHARE).clamp(min, 430.0);
-    egui::Panel::left("layers")
-        .resizable(true)
-        .default_size(252.0 + 2.0 * gap)
-        .size_range(190.0..=side_max(190.0))
-        .frame(if floating {
-            side_frame(gap as i8, gap as i8, gap as i8, gap as i8)
-        } else {
-            egui::Frame::NONE
-                .fill(sidebar_fill)
-                .inner_margin(egui::Margin::symmetric(10, 8))
-        })
-        .show(ui, |ui| {
-            let mut body = |ui: &mut Ui| {
+    if st.chat_mode {
+        chat::panel(
+            ui,
+            ed,
+            st,
+            if floating {
+                side_frame(gap as i8, gap as i8, gap as i8, gap as i8)
+            } else {
+                egui::Frame::NONE
+                    .fill(sidebar_fill)
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+            },
+            floating,
+            sidebar_fill,
+        );
+    } else {
+        egui::Panel::left("layers")
+            .resizable(true)
+            .default_size(252.0 + 2.0 * gap)
+            .size_range(190.0..=side_max(190.0))
+            .frame(if floating {
+                side_frame(gap as i8, gap as i8, gap as i8, gap as i8)
+            } else {
+                egui::Frame::NONE
+                    .fill(sidebar_fill)
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+            })
+            .show(ui, |ui| {
+                let mut body = |ui: &mut Ui| {
+                    if floating {
+                        egui::Panel::bottom("side-footer")
+                            .exact_size(48.0)
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| account_footer(ui, st));
+                        ui.horizontal(|ui| {
+                            kit::badge(ui, Icon::Pen, theme::accent(), 28.0);
+                            ui.label(RichText::new("PaperCraft").font(theme::semibold(16.0)));
+                        });
+                        ui.add_space(10.0);
+                    }
+                    layers(ui, ed, st)
+                };
                 if floating {
-                    egui::Panel::bottom("side-footer")
-                        .exact_size(48.0)
-                        .frame(egui::Frame::NONE)
-                        .show(ui, |ui| account_footer(ui, st));
-                    ui.horizontal(|ui| {
-                        kit::badge(ui, Icon::Pen, theme::accent(), 28.0);
-                        ui.label(RichText::new("PaperCraft").font(theme::semibold(16.0)));
-                    });
-                    ui.add_space(10.0);
+                    floating_panel(ui, sidebar_fill, egui::Margin::symmetric(14, 12), body);
+                } else {
+                    body(ui);
                 }
-                layers(ui, ed, st)
-            };
-            if floating {
-                floating_panel(ui, sidebar_fill, egui::Margin::symmetric(14, 12), body);
+            });
+        egui::Panel::right("design")
+            .resizable(true)
+            .default_size(272.0 + 2.0 * gap)
+            .size_range(230.0..=side_max(230.0))
+            .frame(if floating {
+                side_frame(gap as i8, gap as i8, gap as i8, gap as i8)
             } else {
-                body(ui);
-            }
-        });
-    egui::Panel::right("design")
-        .resizable(true)
-        .default_size(272.0 + 2.0 * gap)
-        .size_range(230.0..=side_max(230.0))
-        .frame(if floating {
-            side_frame(gap as i8, gap as i8, gap as i8, gap as i8)
-        } else {
-            egui::Frame::NONE
-                .fill(p.inspector)
-                .inner_margin(egui::Margin::symmetric(14, 10))
-        })
-        .show(ui, |ui| {
-            if floating {
-                floating_panel(ui, p.inspector, egui::Margin::symmetric(14, 12), |ui| {
+                egui::Frame::NONE
+                    .fill(p.inspector)
+                    .inner_margin(egui::Margin::symmetric(14, 10))
+            })
+            .show(ui, |ui| {
+                if floating {
+                    floating_panel(ui, p.inspector, egui::Margin::symmetric(14, 12), |ui| {
+                        inspector::panel(ui, ed, st)
+                    });
+                } else {
                     inspector::panel(ui, ed, st)
-                });
-            } else {
-                inspector::panel(ui, ed, st)
-            }
-        });
+                }
+            });
+    }
     egui::Panel::top("toolbar")
         .exact_size(if floating {
             theme::TOOLBAR_H + gap * 2.0
@@ -770,6 +821,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         );
     }
     toolbar(ui.ctx(), ed, canvas);
+    if st.chat_mode && st.chat.inspector {
+        chat::inspector_overlay(ui.ctx(), ed, st, canvas);
+    }
+    if st.chat_mode {
+        chat::canvas_pill(ui.ctx(), st, canvas);
+    }
     agent_glow(ui.ctx(), st, canvas);
     status(ui.ctx(), ed, canvas);
     review_overlay(ui.ctx(), ed, st, canvas);
@@ -853,7 +910,11 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         if home.on_hover_text("All projects").clicked() {
             ed.requests.push(crate::editor::AppRequest::Home);
         }
-        ui.add_space(4.0);
+        ui.add_space(8.0);
+        if let Some(on) = chat::mode_switch(ui, st.chat_mode) {
+            st.set_chat_mode(on);
+        }
+        ui.add_space(8.0);
         let title = if st.project_name.is_empty() {
             ed.doc.name.clone()
         } else {
@@ -869,7 +930,8 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         300.0
                     } else {
                         420.0
-                    })
+                    }
+                    - CHAT_SWITCH_W)
                 .max(40.0),
             );
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -941,6 +1003,14 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             }
             if kit::play_button(ui, "Present").clicked() {
                 start_present(ed, st);
+            }
+            if st.chat_mode
+                && !compact
+                && theme::icon_button(ui, theme::Icon::Sidebar, 26.0, st.chat.inspector)
+                    .on_hover_text("Inspector")
+                    .clicked()
+            {
+                st.chat.inspector = !st.chat.inspector;
             }
             if !compact {
                 if kit::history_button(ui, true, ed.history.redo_len() > 0).clicked() {

@@ -1,0 +1,14 @@
+data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Creating it."},"finish_reason":null}]}
+
+data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_A","type":"function","function":{"name":"create_artboard","arguments":"{\"name\":\"Home\","}}]},"finish_reason":null}]}
+
+data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_B","type":"function","function":{"name":"get_basic_info","arguments":"{}"}}]},"finish_reason":null}]}
+
+data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"styles\":{\"width\":\"1440px\",\"height\":\"900px\"}}"}}]},"finish_reason":null}]}
+
+data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"c1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":30,"prompt_tokens_details":{"cached_tokens":20}}}
+
+data: [DONE]
+

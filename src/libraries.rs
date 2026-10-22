@@ -10,6 +10,7 @@ use crate::editor::Editor;
 use crate::model::{Document, Node, NodeId, Source};
 use crate::project::{Project, Store};
 use crate::variables::{self, Collection, EnabledLibrary, PageModes, Value, stable_id};
+#[cfg(not(target_arch = "wasm32"))]
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
@@ -19,6 +20,7 @@ use std::path::{Path, PathBuf};
 pub const LIBRARY_FILE: &str = "library.json";
 pub const LIBRARIES_DIR: &str = "libraries";
 /// Longest side of a component preview, in px.
+#[cfg(not(target_arch = "wasm32"))]
 const PREVIEW_PX: f64 = 256.0;
 /// Node ids stay below 2^53 so they survive a JSON round trip in any reader.
 const ID_MASK: u64 = (1 << 53) - 1;

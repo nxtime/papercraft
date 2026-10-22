@@ -18,7 +18,7 @@ USAGE:
   papercraft PROJECT_DIR                     open a project folder
   papercraft FILE.papercraft                 open a PaperCraft document (not autosaved)
   papercraft --demo                          open the app with a sample board
-  papercraft --screenshot OUT.png [--home | PROJECT|FILE|--demo] [--size WxH] [--scale S]
+  papercraft --screenshot OUT.png [--home | PROJECT|FILE|--demo] [--size WxH] [--scale S] [--chat]
                                            render the full UI headlessly to a PNG
   papercraft --export-png OUT.png PROJECT|FILE [--page N] [--scale S] [--transparent]
   papercraft --export-svg OUT.svg PROJECT|FILE [--page N]
@@ -126,6 +126,20 @@ fn run(args: Vec<String>) -> Result<(), String> {
     if let Some(out) = value("--screenshot") {
         let mut ed = load_editor(input, flag("--demo"))?;
         let mut st = UiState::default();
+        if flag("--chat") {
+            st.chat_mode = true;
+            st.project_dir = input.map(std::path::PathBuf::from).filter(|p| p.is_dir());
+            // As if the project was already seen, so `draw` keeps Chat mode on.
+            st.chat.project.clone_from(&st.project_dir);
+            st.chat.picker_open = flag("--chat-picker");
+            if let Some(dir) = &st.project_dir {
+                st.runs = papercraft::runs::list(dir);
+                st.runs_key.clone_from(&st.project_dir);
+            }
+        }
+        if flag("--dark") {
+            papercraft::theme::apply_choice(&egui::Context::default(), papercraft::theme::Choice::Dark);
+        }
         if flag("--home") {
             let store = Store::open(Store::default_root()).map_err(|e| e.to_string())?;
             st.home = Some(HomeView::load(&store, papercraft::project::now_ms()));

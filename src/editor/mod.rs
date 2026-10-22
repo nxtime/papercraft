@@ -250,6 +250,8 @@ pub struct Editor {
     pub project_stamp: u64,
     /// Fit the camera to the content once the real viewport size is known.
     pub pending_fit: bool,
+    /// No window: `viewport` is a stand-in, so cameras are not saved (the app fits on open).
+    pub headless: bool,
     /// Pages of the open project; the active one's content is `doc`/`history`/`camera`.
     pub pages: Vec<PageSlot>,
     pub active_page: usize,
@@ -343,6 +345,7 @@ impl Editor {
             doc_stamp: next_stamp(),
             project_stamp: next_stamp(),
             pending_fit: false,
+            headless: false,
             pages: vec![PageSlot::new(&name)],
             active_page: 0,
             page_groups: BTreeMap::new(),
@@ -493,6 +496,7 @@ impl Editor {
     pub fn load(&mut self, doc: Document, camera: Option<Camera>, path: Option<PathBuf>) {
         *self = Editor {
             viewport: self.viewport,
+            headless: self.headless,
             ink_width: self.ink_width,
             ink_smoothing: self.ink_smoothing,
             ink_color: self.ink_color,
@@ -2021,6 +2025,7 @@ impl Editor {
                 }
             }
             A::ToggleUi => self.ui_events.push(commands::UiEvent::ToggleUi),
+            A::ToggleChat => self.ui_events.push(commands::UiEvent::ToggleChat),
             A::ToggleHelp => self.ui_events.push(commands::UiEvent::ToggleHelp),
             A::ToggleGrid => self.ui_events.push(commands::UiEvent::ToggleGrid),
             A::OpenVariables => self.ui_events.push(commands::UiEvent::OpenVariables),

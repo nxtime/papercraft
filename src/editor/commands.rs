@@ -12,6 +12,7 @@ pub enum UiEvent {
     TogglePalette,
     Rename(NodeId),
     ToggleUi,
+    ToggleChat,
     ToggleHelp,
     ToggleGrid,
     OpenVariables,

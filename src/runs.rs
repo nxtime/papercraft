@@ -124,6 +124,28 @@ pub fn revert(project: &Path, ed: &mut Editor, run: &mut Run) -> Result<(), Stri
     Ok(())
 }
 
+/// The run `id` and every later run of the project (all chats, all pages) that can still be
+/// reverted, newest first. `runs` is in `list` order (newest first).
+pub fn runs_from(runs: &[Run], id: &str) -> Vec<Run> {
+    let Some(from) = runs.iter().find(|r| r.id == id) else { return Vec::new() };
+    let key = (from.started, from.number);
+    runs.iter()
+        .filter(|r| (r.started, r.number) >= key && ![RunState::Reverted, RunState::Running].contains(&r.state))
+        .cloned()
+        .collect()
+}
+
+/// "Restore to here": reverts `runs` (newest first, see [`runs_from`]) one by one, so each page
+/// ends as it was before the oldest of them. Stops at the first failure. Returns how many were reverted.
+pub fn revert_all(project: &Path, ed: &mut Editor, runs: Vec<Run>) -> Result<usize, String> {
+    let mut done = 0;
+    for mut run in runs {
+        revert(project, ed, &mut run).map_err(|e| format!("run {}: {e}", run.number))?;
+        done += 1;
+    }
+    Ok(done)
+}
+
 /// Undoes one row of a run's diff on `page_id`, as one undo step on that page. A modified node gets
 /// its snapshot properties back (children stay as they are now), a removed subtree returns under its
 /// old parent at its old index (page root when the parent is gone), an added subtree is deleted.
@@ -357,6 +379,12 @@ impl Tracker {
             self.end(now, Some(ed), title);
         }
         r
+    }
+
+    /// Closes the open run now (a chat turn is over), the way `finish_working_on_nodes` does,
+    /// instead of waiting `RUN_IDLE_SECS`.
+    pub fn finish(&mut self, now: u64, ed: &Editor) {
+        self.end(now, Some(ed), None);
     }
 
     /// Per frame: closes the run after `RUN_IDLE_SECS` idle or when the user switched project.
@@ -698,6 +726,43 @@ mod tests {
             assert_eq!(ed.doc.nodes, after[i].nodes);
             assert_eq!(ed.doc.root, after[i].root);
         }
+    }
+
+    #[test]
+    fn restore_to_here_reverts_this_run_and_every_later_one_across_pages() {
+        use crate::geom::Rect;
+        use crate::model::{Node, NodeKind};
+
+        let dir = temp();
+        let mut ed = Editor::default();
+        ed.add_page_in_background(Some("Second"));
+        let add = |ed: &mut Editor, page: usize, name: &str| {
+            ed.switch_page(page);
+            let mut n = Node::new(NodeId(0), NodeKind::Rect, Rect::new(0.0, 0.0, 10.0, 10.0));
+            n.name = name.into();
+            ed.add_node(n, None);
+        };
+        // Run 1 touches page 0, run 2 page 1, run 3 page 0 again; each snapshots before it edits.
+        let mut runs = Vec::new();
+        let originals: Vec<_> = (0..2).map(|i| ed.page_data(i).doc.nodes.len()).collect();
+        for (n, page) in [(1, 0), (2, 1), (3, 0)] {
+            let mut r = run(n);
+            r.state = RunState::Review;
+            r.pages.push(snapshot_page(&dir, &ed, page));
+            save(&dir, &r).unwrap();
+            add(&mut ed, page, &format!("run{n}"));
+            runs.push(r);
+        }
+        runs.reverse();
+        let picked = runs_from(&runs, "r2");
+        assert_eq!(picked.iter().map(|r| r.number).collect::<Vec<_>>(), [3, 2], "this run and the later ones, newest first");
+        assert_eq!(revert_all(&dir, &mut ed, picked).unwrap(), 2);
+        assert_eq!(ed.page_data(1).doc.nodes.len(), originals[1], "page 1 is back before run 2");
+        assert_eq!(ed.page_data(0).doc.nodes.len(), originals[0] + 1, "run 1 stays");
+        let states: Vec<_> = list(&dir).iter().map(|r| (r.number, r.state)).collect();
+        assert_eq!(states, [(3, RunState::Reverted), (2, RunState::Reverted), (1, RunState::Review)]);
+        assert!(runs_from(&list(&dir), "r2").is_empty(), "already reverted runs are not offered again");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

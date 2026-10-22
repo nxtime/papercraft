@@ -58,8 +58,10 @@ pub struct SessionHost {
 
 impl SessionHost {
     pub fn new(store: Store) -> SessionHost {
+        let mut ed = Editor::default();
+        ed.headless = true;
         SessionHost {
-            ed: Editor::default(),
+            ed,
             session: Session::new(store),
             gpu: None,
             gpu_tried: false,
@@ -3075,6 +3077,9 @@ fn create_shape(ed: &mut Editor, a: &Args) -> ToolResult {
     };
     let sides = a.num("sides").map(|s| s.clamp(3.0, 64.0) as u32);
     let txt = a.str("text").unwrap_or("").to_string();
+    // A top-level shape with no position goes where a new artboard would, not on top of
+    // the first one at the origin.
+    let free = parent.is_none() && a.num("x").is_none() && a.num("y").is_none();
     let (x, y) = (a.num("x").unwrap_or(0.0), a.num("y").unwrap_or(0.0));
     let (w, h) = (a.num("width"), a.num("height"));
     let route = match a.str("route") {
@@ -3092,6 +3097,12 @@ fn create_shape(ed: &mut Editor, a: &Args) -> ToolResult {
     let (id, ignored) = ed.with_page(page, |ed| {
         ed.edit("Add shape", |tx| -> Result<(NodeId, Vec<String>), String> {
             let o = tx.doc().parent_origin(parent);
+            let (x, y) = if free {
+                let p = free_spot(tx.doc(), w.unwrap_or(160.0));
+                (p.x, p.y)
+            } else {
+                (x, y)
+            };
             let rect = Rect::new(x, y, w.unwrap_or(160.0), h.unwrap_or(100.0));
             let kind = match ty.as_str() {
                 "rectangle" | "rect" => NodeKind::Rect,

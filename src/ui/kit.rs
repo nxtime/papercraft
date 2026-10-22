@@ -623,3 +623,61 @@ pub fn play_button(ui: &mut Ui, tip: &str) -> Response {
             .add(egui::Shape::closed_line(pts, Stroke::new(1.6, tint)));
     })
 }
+
+/// Height of [`segmented`].
+pub const SEGMENTED_H: f32 = 28.0;
+
+/// A pill-shaped segmented control. Each item is `(label, disabled tooltip)`; an item with a
+/// tooltip is disabled and shows it on hover. Returns the index the user picked this frame.
+pub fn segmented(ui: &mut Ui, items: &[(&str, Option<&str>)], selected: usize) -> Option<usize> {
+    let p = theme::pal(ui);
+    let font = theme::semibold(theme::SECONDARY + 1.0);
+    let pad = 12.0;
+    let widths: Vec<f32> = items
+        .iter()
+        .map(|(l, _)| galley_width(ui, l, font.clone()) + 2.0 * pad)
+        .collect();
+    let inset = 2.0;
+    let total = widths.iter().sum::<f32>() + 2.0 * inset;
+    let (outer, _) = ui.allocate_exact_size(vec2(total, SEGMENTED_H), Sense::hover());
+    ui.painter()
+        .rect_filled(outer, CornerRadius::same(PILL), p.field);
+    let mut x = outer.left() + inset;
+    let mut picked = None;
+    for (i, ((label, off), w)) in items.iter().zip(&widths).enumerate() {
+        let rect = Rect::from_min_size(
+            egui::pos2(x, outer.top() + inset),
+            vec2(*w, SEGMENTED_H - 2.0 * inset),
+        );
+        x += w;
+        let sense = if off.is_some() { Sense::hover() } else { Sense::click() };
+        let resp = ui.interact(rect, ui.id().with(("segmented", i)), sense);
+        let on = i == selected;
+        let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("seg"), &resp);
+        if on {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(PILL), theme::accent());
+        } else if off.is_none() {
+            ui.painter().rect_filled(
+                rect,
+                CornerRadius::same(PILL),
+                p.hover.gamma_multiply(hover),
+            );
+        }
+        let ink = if on {
+            on_accent(p)
+        } else if off.is_some() {
+            p.tertiary
+        } else {
+            p.secondary
+        };
+        ui.painter()
+            .text(rect.center(), Align2::CENTER_CENTER, label, font.clone(), ink);
+        if let Some(tip) = off {
+            resp.on_hover_text(*tip);
+        } else if resp.clicked() && !on {
+            picked = Some(i);
+        }
+    }
+    picked
+}

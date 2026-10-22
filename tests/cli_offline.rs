@@ -176,3 +176,68 @@ fn refusal_compares_canonical_paths() {
     assert!(refuse_if_open(&items, Some(via_dots.to_str().unwrap())).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The same tool sequence on a headless host and on one set up like the app window gives the
+/// same node rects, and the headless one saves no camera (the app fits the page when opened).
+#[test]
+fn offline_matches_app_placement_and_saves_no_camera() {
+    use papercraft::mcp::exec::{self, SessionHost};
+    use papercraft::geom::V2;
+
+    fn run(app_like: bool) -> (Vec<String>, std::path::PathBuf, SessionHost) {
+        let root = std::env::temp_dir().join(format!(
+            "pc-cli-parity-{app_like}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut h = SessionHost::new(Store::open(&root).unwrap());
+        if app_like {
+            h.ed.headless = false;
+            h.ed.viewport = V2 { x: 1123.0, y: 860.0 };
+        }
+        let mut call = |n: &str, a: Value| json_of(exec::call(&mut h, n, &a).unwrap());
+        let f = call("create_file", json!({"name": "Demo"}));
+        call("open_file", json!({"fileId": f["fileId"]}));
+        let ab = call(
+            "create_artboard",
+            json!({"name": "Home", "styles": {"width": "390px", "height": "600px"}}),
+        );
+        call(
+            "write_html",
+            json!({"targetNodeId": ab["id"], "mode": "insert-children",
+                   "html": "<div style=\"font-size:24px\">Hello</div>"}),
+        );
+        call("create_shape", json!({"type": "rectangle", "styles": {"width": "50px", "height": "50px"}}));
+        call("create_artboard", json!({"name": "Two", "styles": {"width": "300px", "height": "300px"}}));
+        let p = call("create_page", json!({"name": "Second"}));
+        call(
+            "create_artboard",
+            json!({"name": "Other", "pageId": p["pageId"], "styles": {"width": "200px", "height": "200px"}}),
+        );
+        exec::call(&mut h, "finish_working_on_nodes", &json!({})).unwrap();
+        let rects = (0..h.ed.pages.len())
+            .flat_map(|i| {
+                let d = h.ed.page_data(i).doc;
+                d.nodes.values().map(|n| format!("{i} {} {:?}", n.name, n.rect)).collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let dir = h.session.project.as_ref().unwrap().dir.clone();
+        (rects, dir, h)
+    }
+
+    let (mut headless, dir_a, _a) = run(false);
+    let (mut app, dir_b, _b) = run(true);
+    headless.sort();
+    app.sort();
+    assert_eq!(headless, app);
+    let cams = |d: &std::path::Path| {
+        std::fs::read_dir(d.join("pages"))
+            .unwrap()
+            .filter(|e| std::fs::read_to_string(e.as_ref().unwrap().path()).unwrap().contains("\"camera\""))
+            .count()
+    };
+    assert_eq!(cams(&dir_a), 0, "headless camera must not be saved");
+    assert_eq!(cams(&dir_b), 1, "app saves the active page camera");
+    let _ = std::fs::remove_dir_all(dir_a.parent().unwrap());
+    let _ = std::fs::remove_dir_all(dir_b.parent().unwrap());
+}

@@ -57,6 +57,7 @@ pub enum Action {
     CommandPalette,
     Rename,
     ToggleUi,
+    ToggleChat,
     ToggleHelp,
     ToggleGrid,
     OpenVariables,
@@ -158,6 +159,7 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
         (Char('k'), CMD, A::CommandPalette, "Command palette"),
         (Char('p'), CMD_ALT, A::ExportPdf, "Export PDF"),
         (Char('c'), CMD_SHIFT, A::CopyAsPng, "Copy as PNG"),
+        (Char('j'), CMD, A::ToggleChat, "Design / Chat mode"),
         (Char('c'), CMD_ALT_SHIFT, A::CopyAsSvg, "Copy as SVG"),
         (Char('/'), CMD_SHIFT, A::CommandPalette, "Command palette"),
         (Char('r'), CMD, A::Rename, "Rename layer"),
@@ -424,6 +426,7 @@ pub fn category(a: Action) -> &'static str {
         | A::ToggleGrid
         | A::OpenVariables
         | A::ToggleUi
+        | A::ToggleChat
         | A::ToggleHelp
         | A::NextPage
         | A::PrevPage => "View",
@@ -606,6 +609,7 @@ pub fn menus() -> Vec<(&'static str, Vec<MenuEntry>)> {
                 I("Snapping", A::ToggleSnapping),
                 I("Dot Grid", A::ToggleGrid),
                 I("Show/Hide UI", A::ToggleUi),
+                I("Design / Chat Mode", A::ToggleChat),
                 I("Keyboard Shortcuts", A::ToggleHelp),
             ],
         ),

@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"synthetic-thread"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"Plan the frame first."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":"a.txt\n","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"papercraft","tool":"create_artboard","arguments":{"name":"Home"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"papercraft","tool":"create_artboard","arguments":{"name":"Home"},"result":null,"error":{"message":"denied"},"status":"failed"}}
+{"type":"error","message":"stream disconnected, retrying"}
+{"type":"turn.failed","error":{"message":"rate limited"}}

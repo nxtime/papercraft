@@ -51,6 +51,7 @@ pub struct App {
     mcp: Option<(
         std::sync::mpsc::Receiver<crate::mcp::Call>,
         crate::mcp::server::Running,
+        crate::mcp::server::Dispatch,
     )>,
     /// Groups the agent's editing calls into reviewable runs.
     runs: crate::runs::Tracker,
@@ -715,7 +716,12 @@ impl App {
             dir.map(|p| p.dir.as_path()),
             &self.ed,
         );
+        if self.st.chat.take_finish_run() {
+            // A chat turn that edited is over: close its run now, not after the 30 s idle timeout.
+            self.runs.finish(crate::project::format::now_ms(), &self.ed);
+        }
         self.st.sync_runs(&mut self.runs);
+        self.st.chat.tools = self.tool_dispatch().map(crate::chat::events::ToolDispatch);
         let Some(g) = self.gfx.as_mut() else { return };
         let input = g.egui.take_egui_input(&g.window);
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
@@ -1436,10 +1442,16 @@ fn physical_char(c: winit::keyboard::KeyCode) -> Option<char> {
 }
 
 impl App {
+    /// Sends a tool call to the UI thread like an MCP request (runs, undo and the agent log
+    /// behave the same); for the chat's API backend (`TurnConfig::tools`).
+    pub fn tool_dispatch(&self) -> Option<crate::mcp::server::Dispatch> {
+        self.mcp.as_ref().map(|(_, _, d)| d.clone())
+    }
+
     /// Run the MCP tool calls that arrived since the last wake-up, then repaint.
     fn run_mcp_calls(&mut self) {
         let calls: Vec<crate::mcp::Call> = match &self.mcp {
-            Some((rx, _)) => rx.try_iter().collect(),
+            Some((rx, _, _)) => rx.try_iter().collect(),
             None => return,
         };
         if calls.is_empty() {
@@ -1517,6 +1529,7 @@ fn start_mcp(
 ) -> Option<(
     std::sync::mpsc::Receiver<crate::mcp::Call>,
     crate::mcp::server::Running,
+    crate::mcp::server::Dispatch,
 )> {
     if std::env::var("PAPERCRAFT_MCP").is_ok_and(|v| matches!(v.as_str(), "0" | "off" | "false")) {
         return None;
@@ -1526,10 +1539,10 @@ fn start_mcp(
     let dispatch: crate::mcp::server::Dispatch = std::sync::Arc::new(move |call| {
         tx.lock().unwrap().send(call).is_ok() && proxy.send_event(UserEvent::Mcp).is_ok()
     });
-    match crate::mcp::server::spawn(crate::mcp::port(), dispatch) {
+    match crate::mcp::server::spawn(crate::mcp::port(), dispatch.clone()) {
         Ok(running) => {
             log::info!("MCP server listening on {}", running.url());
-            Some((rx, running))
+            Some((rx, running, dispatch))
         }
         Err(e) => {
             log::warn!("MCP server not started: {e}");
@@ -1570,7 +1583,7 @@ pub fn run(start: Start) -> Result<(), String> {
     }
     let mut app = App::new(start, store);
     app.mcp = start_mcp(event_loop.create_proxy());
-    app.st.agent_endpoint = app.mcp.as_ref().map(|(_, r)| r.url()).unwrap_or_default();
+    app.st.agent_endpoint = app.mcp.as_ref().map(|(_, r, _)| r.url()).unwrap_or_default();
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }
 
