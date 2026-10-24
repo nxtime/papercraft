@@ -21,6 +21,10 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
 * `pageId` defaults to the page the user is viewing, which can change between calls: pass it explicitly. Node ids look like `3fa9c1:14`; never show them to the user.
 * App closed (server, CI)? `papercraft-cli call --offline ... --project <name>` runs the same tools on the project store and saves after every editing call; `papercraft-cli shell` keeps one session for many calls and reads scripts from stdin. It is refused while the app has that project open. See `docs/agents.md`.
 * With MCP tools you do not need the CLI; with a shell, `papercraft-cli list` and `papercraft-cli schema <tool>` give the schemas on demand. Pass big JSON on stdin: `... | papercraft-cli call write_html -`.
+* **Working in the user's open project: use `papercraft-cli --online call …`** (or `PAPERCRAFT_CLI_NO_OFFLINE=1`). Without it, a call made while the app is starting or stuck silently falls back to offline writes on the files. `stderr` warns when the CLI and app versions differ: tell the user, don't ignore it.
+* **One call at a time per agent.** No background loops or parallel batches against the app; a backlog of screenshot calls makes the app unresponsive for every agent.
+* **App stops answering** ("did not answer in time", 0% CPU): usually a macOS dialog (a privacy prompt such as "access files on a removable volume") or a modal in the app. Tell the user and wait; never kill, quit or restart their PaperCraft.
+* **See what the user sees**: `get_basic_info` / `get_selection` include `viewport {pageId, rect, zoom}`. `set_viewport {pageId, nodeIds | rect, zoom?}` switches page and frames things for the user; it refuses while they are moving the canvas (pass `force` only when they asked you to show something).
 
 ## 2. The loop: build, look, lint, fix
 
@@ -33,6 +37,23 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
 7. **Finish.** `finish_working_on_nodes` (saves). Tell the user what you made in a sentence or two, with artboard names, not ids.
 
 Lint passes are necessary, not sufficient: contrast and grids say nothing about composition. The screenshot is the real test.
+
+## 2b. Big jobs and several agents on one project
+
+Lessons from redesigning a 3-page, 130-screen project with up to six agents at once:
+
+* **Split by section, not by page.** Give each agent named sections (frame ids) and forbid the rest. New sections go below the current lowest one; re-read positions right before creating, since another agent may have just added one.
+* **Section layout**: a section frame holds a title and rows of screen slots (a route label above a fixed-size screen). Keep 640 px between screens and rows and 1600 px between sections, so notes fit beside screens. Stack sections in one column.
+* **Recreate, then delete.** Build the new screen next to the old one, finish it, then delete the old one, and record the deleted ids and names in the report. A cleanup agent once deleted buttons and lost icons by editing in place.
+* **Reuse the design system across pages**: `create_instance` / `swap_instance` / `<x-paper-instance>` take a main from any page and stay linked. Never `import_components` to use a component: that copies mains onto the page, and instances made from the copies stop following the design system. `lint_design` flags hand-made look-alikes as `not-an-instance` (with the component key to use).
+* **QA pass after a build** (screen by screen at scale 1, one call at a time): text layers with stale fixed widths clip labels ("In prog", "New sess"): set `width: fit-content`. Sidebars and panels fixed at 900 px stop short on taller screens: make them fill the height and let the screen hug with a 900 px minimum. Tags and chips overflowing their box, cards overlapping buttons, footers not pinned, leftover `Text` / `Frame` names, gendered copy about people whose gender is unknown (use their name or neutral wording).
+* **Report per agent** in `specs/<feature>/<agent>-report.md`: what changed (ids), why (playbook rule ids from `playbook search`), open questions. Unknown product facts are written as questions for the team, never invented.
+
+## 2c. Annotations
+
+* Read the page's template first (`get_annotation_template {pageId}`), then one batched `annotate {pageId, notes:[{node, text, type}]}` per section, then `annotate {pageId, frame: <section id>, tidy: true}` (returns `{tidied: n}`; 0 means already placed).
+* Content: the first line is the complete rule in 60 characters or fewer; the body is condition → outcome with values as `Field: value` lines; attach to the exact element, not the screen; few high-value notes; unknowns as `? (team)`. Rules: `playbook rule ANN`.
+* Check placement with `get_screenshot {nodeId: <screen slot>, annotations: true, scale: 0.5}`; plain screenshots do not show notes. Cards must sit beside their target off any screen, lines must not cross other screens. Below 60% zoom the canvas shows notes as badges.
 
 ## 3. Naming
 
@@ -79,8 +100,11 @@ Full flows: [recipes.md](references/recipes.md).
 | Know the project, pages, artboards | `get_basic_info`, `get_tree_summary`, `get_children` |
 | Know what is selected | `get_selection` |
 | Inspect one node | `get_node_info`, `get_computed_styles`, `get_jsx` |
-| Find nodes by text or style | `find_nodes` |
-| See it | `get_screenshot` (`nodeId`, `scale` 1 or 2) |
+| Find nodes by text or style | `find_nodes` (text contains the phrase, any case, every page) |
+| Read all copy in a subtree | `get_tree_summary {nodeId, fullText: true}` (depth counts from the node: rows under a "Screens" frame need depth 3) |
+| See it | `get_screenshot` (`nodeId`, `scale` 1 or 2, `annotations: true` to include notes) |
+| Show the user something | `set_viewport` (page switch, fit, zoom) |
+| Document rules on the design | `annotate`, `get_annotation_template`, `get_annotations`, `update_annotation`, `delete_annotations` |
 | New screen | `create_artboard` (`width` and `height` required) |
 | Add content | `write_html` (`insert-children` or `replace`) |
 | Change styles or text | `update_styles`, `set_text_content`, `rename_nodes` |
@@ -113,8 +137,9 @@ Full flows: [recipes.md](references/recipes.md).
 * **Text inside nested frames**: `set_text_content` needs the Text node id. Walk `get_children` down from the instance; instances copy the main's structure (`Meta > Label`, not a flat list).
 * **No icon-colour follow for stroke sets** (Lucide, Tabler): the colour is frozen at write time, so a mode switch (Mocha to Latte) leaves icons as they were. Use a fill set (Phosphor, Material) when a design must switch modes.
 * **Pages**: `create_page`, `rename_pages`, `delete_pages` (needs `confirm: true` when the page has layers; the last page stays). `move_nodes` accepts `toPageId` to copy between pages.
-* **`get_screenshot` of `root` on a wide page** is scaled to fit and unreadable. Screenshot one artboard at a time. Hoisted components are not inside an artboard screenshot.
-* **CLI saves images to the cwd** as `<tool>.png`; newer builds take `-o FILE`. Run the CLI from a scratch directory, or pass `-o`, and rename after.
+* **`get_screenshot` of `root` on a wide page** is scaled to fit and unreadable. Screenshot one artboard (or one screen slot) at a time. Hoisted components are not inside an artboard screenshot.
+* **CLI saves images to the cwd** as `<tool>.png`, or to `-o FILE`. The CLI writes the file itself; on older builds an `out` path made the app write it and could freeze the app behind a macOS privacy prompt, so update the CLI with the app (`tools/install-local.sh` installs both).
+* **`swap_instance` renames the instance root to the new main's name** unless the name was overridden. Re-apply custom layer names after a batch swap (`rename_nodes`).
 
 ## 7. Troubleshooting
 
@@ -125,7 +150,10 @@ Full flows: [recipes.md](references/recipes.md).
 | `write_html` reports `ignoredStyles` | You used a CSS property that has no equivalent (`margin`, `box-shadow`, `transform`...). Replace it, see [html-subset.md](references/html-subset.md). |
 | Content is cut off | The artboard height is fixed. `update_styles` with `height: "fit-content"` or a larger number. |
 | A color did not change with the theme | It was written as hex, or it is a stroke or gradient. Use `var(--name)` on fills and text; strokes need `update_styles` after a mode switch. |
-| `create_instance` fails | The component is on another page. Instances must be on the component's page. |
+| `create_instance` fails | Wrong `componentId` / `componentKey` (read `get_components`). Mains on other pages and enabled libraries work; no import needed. |
+| A page is full of copied components at y=0 | Something imported mains onto the page (`import_components`, or old `write_html` builds). Swap their instances to the design-system mains (`swap_instance {componentKey}`), check a screenshot, then delete the unused copies. |
+| `papercraft-cli --online` says "did not answer in time" | The app is blocked: look for a macOS dialog or an in-app modal and ask the user to answer it. Don't retry in a loop and don't restart the app. |
+| A tool name is unknown, or the docs list tools the CLI lacks | The CLI is stale. `papercraft-cli list` reads the app's live list; reinstall the CLI with the app. |
 | Icon does not appear | The set is not installed: `papercraft-cli icons add phosphor`, then `papercraft-cli icons search <words>` for the exact `set:name`. |
 | Layer panel is a pile of `Frame` | You skipped `layer-name`. Fix with `rename_nodes` (batch) before finishing. |
 | Text looks tiny in the screenshot | Screenshots default to scale 1. Use `scale: 2`. |
