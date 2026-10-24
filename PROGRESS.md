@@ -76,7 +76,7 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
-### 2026-10-24: unreleased (UI kits, code links, issues from the app)
+### 2026-10-24: 0.7.2 (UI kits, code links, issues from the app, design playbook)
 
 * Code links (Figma Code Connect style): a main component carries its library import and a React and an egui template (`set_code_link`). The React, Tailwind, inline JSX and egui exports write linked instances as that code, with overrides filled in and imports gathered once; the AI spec lists them as Library Components with a "use it, do not rebuild it" rule and stops describing their inner layers.
 * UI kits (`src/ui_kits.rs`, `apply_ui_kit`): shadcn/ui, Ant Design, React Bits and egui, each with Light and Dark variables, tokens and components in its look and density, all linked. The chat brief asks for the code library and starts from its kit.
