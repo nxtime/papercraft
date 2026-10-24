@@ -76,6 +76,10 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-24: 0.7.1 (rename fix)
+
+* Enter, Escape and clicking away end a rename again (projects on the home screen, library assets, versions). The fields took focus back before checking whether they had lost it.
+
 ### 2026-10-24: 0.7.0 (images, research, plugins, fewer tokens)
 
 * Images in chat: paste from the clipboard (Cmd/Ctrl+V with an image-only clipboard now reaches the composer), thumbnails in the composer and in sent messages, a lightbox, image-only messages. Attachments are sent at most 1568 px (originals kept); `zoom_image` reads a region of the original.
