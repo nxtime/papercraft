@@ -13,6 +13,8 @@ pub mod editor;
 pub mod geom;
 pub mod history;
 pub mod icons;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod issues;
 pub mod ink;
 pub mod io;
 pub mod layout;
@@ -33,6 +35,7 @@ pub mod sync;
 pub mod text;
 pub mod theme;
 pub mod ui;
+pub mod ui_kits;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
 pub mod variables;

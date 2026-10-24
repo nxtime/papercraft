@@ -58,7 +58,7 @@ fn tool(name: &str, desc: &str, props: Value, required: &[&str], read_only: bool
         && !m.contains_key("fileId")
         && !matches!(
             name,
-            "list_resources" | "create_file" | "get_font_family_info" | "get_guide" | "open_file" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image"
+            "list_resources" | "create_file" | "get_font_family_info" | "get_guide" | "open_file" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules"
         )
     {
         m.insert("fileId".into(), file_id());
@@ -307,7 +307,7 @@ pub fn definitions() -> Vec<Value> {
             "ask_user",
             "Ask the user a few questions as a card with clickable answers (in-app chat). Use it \
              for the brief before a new design (platform and frame size, density, palette, type, \
-             references, scope) and for next steps after one. One to five questions, two to six \
+             references, scope) and for next steps after one. One to seven questions, two to six \
              options each, the option you recommend first. A palette option lists its hex colors \
              in `colors` (shown as swatches); a reference option gives its saved `image` path. The user can also type their own answer. After \
              calling it, end your turn: the answers come as the user's next message.",
@@ -323,6 +323,60 @@ pub fn definitions() -> Vec<Value> {
             }, "required": ["question", "options"]}}}),
             &["questions"],
             true,
+        ),
+        tool(
+            "report_issue",
+            "Draft an issue about PaperCraft itself (a tool that misbehaved, docs that disagree \
+             with the app, a capability you had to work around). The user sees the draft and \
+             sends it to PaperCraft's repository or discards it. Use a minimal synthetic repro: \
+             never the user's own content, names or files.",
+            json!({
+                "kind": {"type": "string", "enum": ["bug", "docs", "feature"]},
+                "title": {"type": "string", "description": "Short, specific: the tool and what goes wrong."},
+                "body": {"type": "string", "description": "**Expected:** … **Actual:** … **Repro:** the smallest tool call that shows it. **Workaround:** … **Impact:** …"},
+            }),
+            &["kind", "title", "body"],
+            true,
+        ),
+        tool(
+            "design_rules",
+            "Look up design-playbook rules (interaction, accessibility, motion, forms, tokens, \
+             component patterns, handoff annotations; each with a stable id like A11Y-09) through \
+             the `playbook` CLI. Use only when the user agreed to follow the playbook. Give \
+             `query` for ranked matches or `rule` for an id or prefix (\"ANN\"). Cite the ids \
+             you applied in your report.",
+            json!({
+                "query": {"type": "string", "description": "Words to search, e.g. \"confirm vs undo delete\"."},
+                "rule": {"type": "string", "description": "A rule id (\"INT-06\") or prefix (\"MOT\")."},
+            }),
+            &[],
+            true,
+        ),
+        tool(
+            "apply_ui_kit",
+            "Start a design in a UI library's look and code: builds a \"UI Kit / <name>\" page \
+             with the kit's variables (Light and Dark modes), tokens and components, each a main \
+             component linked to the library (so the code export and the AI spec write \
+             <Button variant=\"outline\"> instead of rebuilding divs). Kits: shadcn (shadcn/ui), \
+             antd (Ant Design), reactbits (React Bits animated pieces), egui (native Rust widgets).",
+            json!({"kit": {"type": "string", "enum": ["shadcn", "antd", "reactbits", "egui"]}}),
+            &["kit"],
+            false,
+        ),
+        tool(
+            "set_code_link",
+            "Link a main component (or an instance's main) to its code in a library, used by the \
+             code export and the AI spec. In templates {Name} is the text of the instance's layer \
+             named Name. Empty import, react and egui remove the link.",
+            json!({
+                "nodeId": node_id("A main component or one of its instances."),
+                "kit": {"type": "string", "description": "Library, like shadcn, antd, mui, chakra, reactbits, egui."},
+                "import": {"type": "string", "description": "React import line."},
+                "react": {"type": "string", "description": "JSX, like <Button variant=\"outline\">{Label}</Button>."},
+                "egui": {"type": "string", "description": "Rust on `ui`, like ui.button({Label});"},
+            }),
+            &["nodeId"],
+            false,
         ),
         tool(
             "generate_image",
@@ -1018,7 +1072,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
     Some(match name {
         "list_resources" | "get_basic_info" | "get_selection" | "get_node_info" | "get_children"
         | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
-        | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "find_nodes" | "get_font_family_info"
+        | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "find_nodes" | "get_font_family_info"
         | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
         | "diff_frames" | "publish_library" | "list_libraries" => false,
         "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"
@@ -1030,7 +1084,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "create_collection" | "delete_variables" | "bind_variable"
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
-        | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes"
+        | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "apply_ui_kit" | "set_code_link"
         | "duplicate_nodes" | "move_nodes" | "undo" | "redo" => true,
         _ => return None,
     })

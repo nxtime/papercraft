@@ -19,6 +19,9 @@ const LIGHTBOX_MAX: u32 = 2048;
 /// The tool whose calls are drawn as a question card instead of a tool card.
 const ASK_TOOL: &str = "ask_user";
 const REFS_TOOL: &str = "fetch_reference_images";
+const ISSUE_TOOL: &str = "report_issue";
+/// Lines of an issue draft's body shown on its card.
+const ISSUE_PREVIEW_LINES: usize = 6;
 const GEN_TOOL: &str = "generate_image";
 const REF_THUMB_H: f32 = 96.0;
 /// Opacity of a fetched image the agent did not keep.
@@ -62,6 +65,9 @@ pub struct Acts {
     pub revert: Option<String>,
     pub accept: Option<String>,
     pub approve: Option<(String, bool)>,
+    /// File this issue draft (its key and contents).
+    pub send_issue: Option<(String, super::chat::IssueDraft)>,
+    pub discard_issue: Option<String>,
 }
 
 pub struct View<'a> {
@@ -75,6 +81,8 @@ pub struct View<'a> {
     pub stopped: bool,
     /// The last turn was stopped by the turn budget: the budget, in tokens read.
     pub budget: Option<u64>,
+    /// Issue drafts being filed or filed, by `report_issue` call id.
+    pub issues: &'a std::collections::HashMap<String, super::chat::IssueState>,
     pub signin: Option<&'a super::chat::chat_agents::SignIn>,
     /// The chat's run while it is being recorded, for the live count on the step group.
     pub live_run: Option<&'a Run>,
@@ -892,7 +900,8 @@ fn assistant_segment(ui: &mut Ui, md_id: Id, m: &Message, v: &View, offered: &[S
     }
     // A call waiting for approval is shown by its approval card instead.
     let waiting = |t: &ToolCall| v.approvals.iter().any(|a| a.id == t.id);
-    let tools: Vec<ToolCall> = m.tools.iter().filter(|t| !is_question(t)).cloned().collect();
+    let issues: Vec<&ToolCall> = m.tools.iter().filter(|t| t.name == ISSUE_TOOL && t.error.is_none()).collect();
+    let tools: Vec<ToolCall> = m.tools.iter().filter(|t| !is_question(t) && !(t.name == ISSUE_TOOL && t.error.is_none())).cloned().collect();
     let (refs, tools): (Vec<ToolCall>, Vec<ToolCall>) = tools.into_iter().partition(|t| [REFS_TOOL, GEN_TOOL].contains(&t.name.as_str()) && t.result.is_some());
     // Finished calls stay folded in their group while the turn runs and only the live ones show
     // as cards, so the list does not grow and shrink (and the scroll jump) on every call.
@@ -911,6 +920,54 @@ fn assistant_segment(ui: &mut Ui, md_id: Id, m: &Message, v: &View, offered: &[S
     for t in &refs {
         reference_gallery(ui, t, offered, acts);
     }
+    for t in issues {
+        issue_card(ui, t, v.issues.get(&t.id), acts);
+    }
+}
+
+/// An issue the agent drafted about PaperCraft: what it says, and Send or Discard.
+fn issue_card(ui: &mut Ui, t: &ToolCall, state: Option<&super::chat::IssueState>, acts: &mut Acts) {
+    use super::chat::IssueState;
+    let p = theme::pal(ui);
+    let s = |k: &str| t.args[k].as_str().unwrap_or_default().to_owned();
+    let draft = super::chat::IssueDraft { kind: s("kind"), title: s("title"), body: s("body") };
+    card(ui).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            theme::paint_icon(ui.painter(), r, Icon::Note, theme::accent());
+            ui.label(RichText::new("Issue for PaperCraft").font(theme::semibold(theme::BODY)));
+            kit::chip_ink(ui, &draft.kind, None);
+        });
+        ui.label(RichText::new(&draft.title).font(theme::semibold(theme::BODY)));
+        ui.add(egui::Label::new(RichText::new(draft.body.lines().take(ISSUE_PREVIEW_LINES).collect::<Vec<_>>().join("\n")).size(theme::SECONDARY).color(p.secondary)).wrap());
+        match state {
+            Some(IssueState::Sending) => {
+                ui.horizontal(|ui| {
+                    spinner(ui, 12.0, theme::accent());
+                    muted(ui, "Sending\u{2026}");
+                });
+            }
+            Some(IssueState::Filed { number, url, existing }) => {
+                ui.hyperlink_to(if *existing { format!("Already reported as #{number}") } else { format!("Filed as #{number}") }, url);
+            }
+            Some(IssueState::Discarded) => muted(ui, "Discarded"),
+            failed => {
+                if let Some(IssueState::Failed(e)) = failed {
+                    ui.label(RichText::new(e).size(theme::SECONDARY).color(p.danger));
+                }
+                ui.horizontal(|ui| {
+                    if kit::button(ui, kit::ButtonKind::Primary, None, if failed.is_some() { "Try again" } else { "Send issue" }).clicked() {
+                        acts.send_issue = Some((t.id.clone(), draft.clone()));
+                    }
+                    if kit::chip(ui, "Discard", false).clicked() {
+                        acts.discard_issue = Some(t.id.clone());
+                    }
+                });
+            }
+        }
+    });
 }
 
 /// An `ask_user` call that went through: drawn as a question card, not a tool card.

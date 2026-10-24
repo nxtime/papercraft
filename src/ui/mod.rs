@@ -524,8 +524,6 @@ pub(crate) const PANEL_GAP: f32 = 12.0;
 
 /// Canvas width under which the top bar drops the zoom pill (it is also on the keyboard).
 const TIGHT_BAR_W: f32 = 520.0;
-/// Room the Design | Chat switch takes in the top bar.
-const CHAT_SWITCH_W: f32 = 140.0;
 /// Tallest the top bar's page menu grows before it scrolls.
 const PAGE_MENU_MAX_H: f32 = 360.0;
 
@@ -1046,22 +1044,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             ui.separator();
             ui.add_space(6.0);
         }
-        // The title column sits at the top of the bar while the bar centres single widgets, so
-        // place the home icon on the column's centre (measured last frame) instead.
-        let column_id = egui::Id::new("title-column-centre");
-        let cy = ui
-            .ctx()
-            .data(|d| d.get_temp::<f32>(column_id))
-            .unwrap_or(ui.max_rect().center().y);
-        let slot = egui::Rect::from_center_size(
-            egui::pos2(ui.cursor().left() + 13.0, cy),
-            egui::vec2(26.0, 26.0),
-        );
-        let home = ui
-            .scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
-                theme::icon_button(ui, theme::Icon::Grid, 26.0, false)
-            })
-            .inner;
+        let home = theme::icon_button(ui, theme::Icon::Grid, 26.0, false);
         if home.on_hover_text("All projects").clicked() {
             ed.requests.push(crate::editor::AppRequest::Home);
         }
@@ -1075,7 +1058,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         } else {
             st.project_name.clone()
         };
-        let column = ui.vertical(|ui| {
+        ui.horizontal(|ui| {
             // Leave room for the zoom pill and icons on the right; long titles truncate.
             ui.set_max_width(
                 (ui.available_width()
@@ -1085,11 +1068,9 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         300.0
                     } else {
                         420.0
-                    }
-                    - CHAT_SWITCH_W)
+                    })
                 .max(40.0),
             );
-            ui.spacing_mut().item_spacing.y = 0.0;
             let state = if !st.save_state.is_empty() {
                 st.save_state.clone()
             } else if ed.is_dirty() {
@@ -1097,55 +1078,47 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             } else {
                 String::new()
             };
-            // The text, not its row: the row is button height with the title low in it.
-            let top = ui
-                .horizontal(|ui| {
-                    let t = ui.add(egui::Label::new(title_text(title)).truncate());
-                    if !state.is_empty() {
-                        kit::chip(ui, &state, state == "Saved");
-                    }
-                    t.rect.top()
-                })
-                .inner;
+            // Title and page share one row: two rows outgrow the bar and spill onto the canvas.
             // The page name opens a page menu: Chat mode has no Pages panel to switch with.
             let many = ed.pages.len() > 1;
-            let row = ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                let label = ui.add(
-                    egui::Label::new(RichText::new(ed.page_name()).size(theme::SECONDARY).color(p.secondary))
-                        .truncate()
-                        .sense(egui::Sense::click()),
-                );
-                if many {
-                    let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                    theme::paint_icon(ui.painter(), r, Icon::ChevronDown, p.secondary);
-                }
-                label
-            });
-            let page = row.inner;
-            let bottom = page.rect.bottom();
-            if many {
-                let page = page.on_hover_text("Switch page").on_hover_cursor(egui::CursorIcon::PointingHand);
-                egui::Popup::menu(&page).show(|ui| {
-                    ui.set_min_width(180.0);
-                    egui::ScrollArea::vertical().max_height(PAGE_MENU_MAX_H).show(ui, |ui| {
-                        for i in 0..ed.pages.len() {
-                            let name = ed.pages[i].name.clone();
-                            if ui.selectable_label(i == ed.active_page, name).clicked() {
-                                ed.switch_page(i);
-                                ui.close();
-                            }
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(title_text(title)).truncate());
+                ui.label(RichText::new("/").size(theme::SECONDARY).color(p.secondary));
+                let page = ui
+                    .scope(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        let label = ui.add(
+                            egui::Label::new(RichText::new(ed.page_name()).size(theme::SECONDARY).color(p.secondary))
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                        );
+                        if many {
+                            let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                            theme::paint_icon(ui.painter(), r, Icon::ChevronDown, p.secondary);
                         }
+                        label
+                    })
+                    .inner;
+                if many {
+                    let page = page.on_hover_text("Switch page").on_hover_cursor(egui::CursorIcon::PointingHand);
+                    egui::Popup::menu(&page).show(|ui| {
+                        ui.set_min_width(180.0);
+                        egui::ScrollArea::vertical().max_height(PAGE_MENU_MAX_H).show(ui, |ui| {
+                            for i in 0..ed.pages.len() {
+                                let name = ed.pages[i].name.clone();
+                                if ui.selectable_label(i == ed.active_page, name).clicked() {
+                                    ed.switch_page(i);
+                                    ui.close();
+                                }
+                            }
+                        });
                     });
-                });
-            }
-            (top + bottom) / 2.0
+                }
+                if !state.is_empty() {
+                    kit::chip(ui, &state, state == "Saved");
+                }
+            });
         });
-        let centre = column.inner;
-        if (centre - cy).abs() > 0.5 {
-            ui.ctx().data_mut(|d| d.insert_temp(column_id, centre));
-            ui.ctx().request_repaint();
-        }
         agent_pill(ui, st, !tight);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;

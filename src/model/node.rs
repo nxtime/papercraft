@@ -429,6 +429,27 @@ pub struct Node {
     /// Stable key of a main component (set on `create_component`), used by instances on other pages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_key: Option<String>,
+    /// A main component's code in a UI library, used by the code export and the AI spec
+    /// (`set_code_link`, `apply_ui_kit`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<CodeLink>,
+}
+
+/// What a component is in code: its library, the import, and a usage template per target.
+/// `{Name}` in a template is the text of the instance's layer named `Name`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CodeLink {
+    /// The kit or library, like `shadcn`, `antd`, `reactbits`, `egui`.
+    pub kit: String,
+    /// The React import line, like `import { Button } from "@/components/ui/button"`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub import: String,
+    /// JSX for React and Tailwind exports.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub react: String,
+    /// Rust for the egui export (statements on `ui`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub egui: String,
 }
 
 /// A note attached to a layer: what to change, from the user to an agent or back.
@@ -533,6 +554,7 @@ impl Node {
             link: None,
             bindings: BTreeMap::new(),
             component_key: None,
+            code: None,
         }
     }
 

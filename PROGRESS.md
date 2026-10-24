@@ -76,6 +76,15 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-24: unreleased (UI kits, code links, issues from the app)
+
+* Code links (Figma Code Connect style): a main component carries its library import and a React and an egui template (`set_code_link`). The React, Tailwind, inline JSX and egui exports write linked instances as that code, with overrides filled in and imports gathered once; the AI spec lists them as Library Components with a "use it, do not rebuild it" rule and stops describing their inner layers.
+* UI kits (`src/ui_kits.rs`, `apply_ui_kit`): shadcn/ui, Ant Design, React Bits and egui, each with Light and Dark variables, tokens and components in its look and density, all linked. The chat brief asks for the code library and starts from its kit.
+* Issues from the app (`src/issues.rs`): the agent's `report_issue` draft card (Send or Discard) and a Report a PaperCraft issue form, filed on the repository in Settings (token in the keychain, else the `tea` login), de-duplicated by title against open and closed issues.
+* design-playbook in the chat: with the `playbook` CLI installed, the brief asks whether to follow the playbook and the agent looks rules up with `design_rules`, citing ids in its report.
+* Top bar: project name and page picker on one centred row; the two-row title had outgrown the bar and covered the canvas.
+* Evidence: `src/ui_kits.rs`, `src/issues.rs`, `src/mcp/codegen.rs` (`linked_components_export_as_library_code`), `specs/ui-kits/spec.md`.
+
 ### 2026-10-24: 0.7.1 (rename fix)
 
 * Enter, Escape and clicking away end a rename again (projects on the home screen, library assets, versions). The fields took focus back before checking whether they had lost it.

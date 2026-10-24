@@ -927,6 +927,18 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 st.code_target = v.into();
             }
         });
+        // A component linked to a library (`set_code_link`, `apply_ui_kit`) is written as its code.
+        if let Some(link) = ed.doc.get(root_id).and_then(|n| crate::mcp::codegen::code_link(&ed.doc, n)) {
+            let egui = st.code_target == "egui";
+            let usage = if egui { &link.egui } else { &link.react };
+            row(ui, "Library", |ui| {
+                ui.label(RichText::new(if usage.is_empty() { format!("{} (no {} code)", link.kit, st.code_target) } else { link.kit.clone() }).size(theme::SECONDARY));
+            });
+            if !usage.is_empty() {
+                ui.add(egui::Label::new(RichText::new(usage.lines().next().unwrap_or(usage)).monospace().size(theme::SECONDARY)).truncate())
+                    .on_hover_text(if egui { usage.clone() } else { format!("{}\n{usage}", link.import) });
+            }
+        }
         ui.horizontal(|ui| {
             let w = half(ui);
             if ui

@@ -52,13 +52,17 @@ const RESEARCH_LINE: &str = "[Research] Web research is on";
 /// How the in-app chat differs from an agent in a terminal: the user is right here, and every
 /// token is theirs (specs/chat-tokens).
 #[cfg(not(target_arch = "wasm32"))]
+/// Added when the design-playbook CLI is installed: the agent reaches it through `design_rules`.
+const PLAYBOOK_RULE: &str = "\n\nDesign playbook: the design-playbook rules are available through design_rules. Add a seventh question to the brief: follow the playbook (recommended) or not. If yes, before building look up the rules for what you design (for example the screen's patterns, forms, states, accessibility, motion) with one or two design_rules calls, follow them, and cite the rule ids you applied in the finish report. Thresholds (contrast, target sizes, durations) come from the playbook, not memory.";
+
 const CHAT_RULES: &str = "In-app chat: the user is watching and can answer at once.
 
 Brief. Before the first design in a project or on an empty page, ask first, even when the request looks specific, unless the user said to go ahead:
-* Call ask_user once, up to five questions, your recommended option first: platform and frame size (desktop 1440x900, laptop 1280x800, 1440p 2560x1440, tablet 768x1024, phone 390x844); density (compact, 32px controls for a desktop pointer UI; comfortable, 40px; touch, 44px and up); palette (two or three palettes that suit the request, with their hex colors, plus \"my brand colors\"); type (a pairing that suits it, or Inter only); scope (one screen to judge the look, or a flow).
+* Call ask_user once, up to six questions, your recommended option first: platform and frame size (desktop 1440x900, laptop 1280x800, 1440p 2560x1440, tablet 768x1024, phone 390x844); density (compact, 32px controls for a desktop pointer UI; comfortable, 40px; touch, 44px and up); palette (two or three palettes that suit the request, with their hex colors, plus \"my brand colors\"); type (a pairing that suits it, or Inter only); scope (one screen to judge the look, or a flow); code library (shadcn/ui, Ant Design, React Bits on top of either, egui for a Rust app, or none).
 * In the same message invite references: they can paste or drop screenshots and images in the chat. Then end your turn. Never restate a card in text: one short sentence at most next to it.
 
 Build.
+* A code library chosen: call apply_ui_kit with it first and build screens from its components (<x-paper-instance>), restyling its variables to the agreed palette, so the code handoff writes the library's components. A component of your own that maps to a library one: set_code_link it.
 * Variables first: colors (light and dark modes) with set_variables, spacing, radius and type sizes with set_tokens, then write every style with var(--name), no literal colors or off-scale sizes. For more than one screen put them and the components on a Design System page first.
 * Anything that repeats (a card, a row, a button, a slot) is a component, built once and placed as instances, with variants for its states. Once a component exists, place it inside write_html with <x-paper-instance component=\"Name\" overrides='{\"Label\":\"Text\"}'/> instead of writing its markup again: rewritten markup is most of what a turn costs.
 * Sizes follow the agreed density. WCAG 2.2 AA asks 24px targets for a pointer, so compact desktop controls are fine; touch screens need 44px.
@@ -68,6 +72,7 @@ Finish. Report in at most 80 words, flat bullets: what you built, what is a comp
 
 Research. When a message carries the [Research] line, web search is on. If a researcher agent is available, hand all reference research to it (one Agent call with what the design is and the brief): it searches and fetches on a cheaper model and returns only the kept images; then skip to asking which to follow. Otherwise, after the brief is answered (or when asked), find three to six references that show an interface, not marketing. Sources that work: nicelydone.club/apps/<app> (real screenshots of 500+ SaaS web apps: linear, notion, slack, jira...), banani.co/references/apps and screenlane.com (mobile screens), App Store and Google Play listings (app screenshots), godly.website and awwwards.com/websites (marketing sites). Dribbble, Behance, Figma Community, Mobbin, Land-book and Lapa block automated fetching; a homepage's image is marketing art. Bring them in with one fetch_reference_images call, then look at what came back: keep only images that show an interface like the one you are designing (a screen, its layout or its components). A social card, a logo, an app icon or an illustration is not a reference. If fewer than two qualify, search again once with better sources (the product name plus \"screenshot\", its App Store listing, a help-center article) before building. Say in one line each what you take from a kept one (layout, density, color, type), then ask_user which to follow with only the kept ones as options, each with its `image` path, even when the user took your defaults. Take ideas, never a brand's logo or artwork.
 
+* When PaperCraft itself gets in the way (a tool misbehaves, its docs disagree with what it does, or you had to work around a missing capability), call report_issue once per problem with a minimal synthetic repro, never the user's content, then go on. The user decides whether it is sent.
 * Less common tools (annotations, pages, files, export, libraries, design-system and component edits) may not be loaded yet: find them with tool search.
 * Attached images are scaled down to send. To read small text or detail in one, call zoom_image with its attached path and a region instead of guessing.";
 const SELF_FOLLOW_QUIET: Duration = Duration::from_secs(10);
@@ -256,6 +261,28 @@ pub struct SelChip {
     pub image: Option<Vec<u8>>,
 }
 
+/// An issue for PaperCraft: kind (`bug`, `docs`, `feature`), title and body.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct IssueDraft {
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+}
+
+/// Where an issue draft stands.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IssueState {
+    Sending,
+    /// Filed as #number; `existing` when an issue with a matching title was there already.
+    Filed { number: u64, url: String, existing: bool },
+    Failed(String),
+    Discarded,
+}
+
+/// The key of the form's issue in `ChatState::issues`.
+pub const FORM_ISSUE: &str = "form";
+const ISSUE_TEMPLATE: &str = "**Expected:** \n**Actual:** \n**Repro:** \n**Workaround:** \n**Impact:** ";
+
 /// An image waiting in the composer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Attachment {
@@ -317,6 +344,12 @@ pub struct ChatState {
     turn_read: u64,
     /// The last turn was stopped by the turn budget (`ChatPrefs::turn_budget`).
     pub budget_hit: bool,
+    /// Issues being filed or filed, by key (a `report_issue` call's id, or `FORM_ISSUE`).
+    pub issues: std::collections::HashMap<String, IssueState>,
+    #[cfg(not(target_arch = "wasm32"))]
+    issue_rx: Vec<(String, std::sync::mpsc::Receiver<Result<crate::issues::Filed, String>>)>,
+    /// The "Report a PaperCraft issue" form, while open.
+    pub issue_form: Option<IssueDraft>,
     pub approvals: Vec<Approval>,
     /// Streamed thinking of the last turn (the "Thinking" row; not saved).
     pub thinking: String,
@@ -704,11 +737,12 @@ impl ChatState {
         let skill = include_str!("../../skills/papercraft/SKILL.md");
         let dir = self.project.as_deref().map(|d| d.display().to_string()).unwrap_or_default();
         let art = if self.prefs.image_provider() == crate::mcp::imagegen::Provider::Off { "" } else { ART_RULE };
+        let playbook = if crate::chat::path::which("playbook").is_some() { PLAYBOOK_RULE } else { "" };
         // Plugins the user turned on, one usage line each.
         let on: Vec<&str> = crate::plugins::PLUGINS.iter().filter(|p| self.prefs.plugins.iter().any(|id| id == p.id)).map(|p| p.hint).collect();
         let plugins = if on.is_empty() { String::new() } else { format!("\n\nPlugins on, placed inside write_html (prefer them to drawn placeholders: avatars for people, real icons):\n- {}", on.join("\n- ")) };
         format!(
-            "{skill}\n\n{CHAT_RULES}{art}{plugins}\n\nProject context: the open project is \"{}\" (folder {dir}). Read and edit it only through the papercraft tools.",
+            "{skill}\n\n{CHAT_RULES}{art}{playbook}{plugins}\n\nProject context: the open project is \"{}\" (folder {dir}). Read and edit it only through the papercraft tools.",
             self.project_name
         )
     }
@@ -850,6 +884,39 @@ impl ChatState {
 }
 
 impl ChatState {
+    /// Files an issue on a worker thread; `issues[key]` follows it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn file_issue(&mut self, key: String, d: IssueDraft, repo: String) {
+        self.issues.insert(key.clone(), IssueState::Sending);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let draft = crate::issues::Draft { kind: d.kind, title: d.title, body: d.body };
+            let _ = tx.send(crate::issues::file(&repo, &draft));
+        });
+        self.issue_rx.push((key, rx));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_issues(&mut self, ctx: &egui::Context) {
+        use crate::issues::Filed;
+        let issues = &mut self.issues;
+        self.issue_rx.retain(|(key, rx)| match rx.try_recv() {
+            Ok(r) => {
+                issues.insert(key.clone(), match r {
+                    Ok(Filed::New { number, url }) => IssueState::Filed { number, url, existing: false },
+                    Ok(Filed::Duplicate { number, url, .. }) => IssueState::Filed { number, url, existing: true },
+                    Err(e) => IssueState::Failed(e),
+                });
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(_) => false,
+        });
+        if !self.issue_rx.is_empty() {
+            ctx.request_repaint_after(REPAINT);
+        }
+    }
+
     /// Reads the background scan's answer; starts the first scan.
     pub fn poll_detect(&mut self, ctx: &egui::Context, prefs: &super::settings::ChatPrefs) {
         if self.prefs != *prefs {
@@ -1202,6 +1269,63 @@ fn image_offer(ui: &mut Ui, st: &mut UiState) {
     }
 }
 
+/// The "Report a PaperCraft issue" form: kind, title, description, then Send (filed on the
+/// repository in Settings, Updates) and the link to what was filed.
+#[cfg(not(target_arch = "wasm32"))]
+fn issue_form(ctx: &egui::Context, st: &mut UiState) {
+    let Some(draft) = st.chat.issue_form.as_mut() else { return };
+    let mut close = false;
+    let mut send = false;
+    let state = st.chat.issues.get(FORM_ISSUE).cloned();
+    egui::Modal::new(egui::Id::new("issue-form")).show(ctx, |ui| {
+        ui.set_width(ISSUE_FORM_W);
+        ui.spacing_mut().item_spacing.y = 8.0;
+        ui.label(RichText::new("Report a PaperCraft issue").font(theme::semibold(theme::BODY + 3.0)));
+        ui.label(RichText::new(format!("Goes to {}. Leave out private content.", st.settings.chat.issue_repo)).size(theme::SECONDARY).color(theme::pal(ui).secondary));
+        let kinds = [("bug", "Bug"), ("docs", "Docs"), ("feature", "Feature")];
+        if let Some(k) = kit::segmented(ui, &kinds.map(|(_, l)| (l, None)), kinds.iter().position(|(k, _)| *k == draft.kind).unwrap_or(0)) {
+            draft.kind = kinds[k].0.into();
+        }
+        ui.add(egui::TextEdit::singleline(&mut draft.title).hint_text("What goes wrong, in a line").desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
+        ui.add(egui::TextEdit::multiline(&mut draft.body).desired_rows(7).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
+        match &state {
+            Some(IssueState::Sending) => {
+                ui.label(RichText::new("Sending\u{2026}").color(theme::pal(ui).secondary));
+            }
+            Some(IssueState::Filed { number, url, existing }) => {
+                ui.hyperlink_to(if *existing { format!("Already reported as #{number}") } else { format!("Filed as #{number}") }, url);
+            }
+            Some(IssueState::Failed(e)) => {
+                ui.label(RichText::new(e).color(theme::pal(ui).danger));
+            }
+            _ => {}
+        }
+        ui.horizontal(|ui| {
+            let filed = matches!(state, Some(IssueState::Filed { .. }));
+            if !filed {
+                let ready = !draft.title.trim().is_empty() && state != Some(IssueState::Sending);
+                if ui.add_enabled_ui(ready, |ui| kit::button(ui, kit::ButtonKind::Primary, None, "Send").clicked()).inner {
+                    send = true;
+                }
+            }
+            if kit::button(ui, kit::ButtonKind::Secondary, None, if filed { "Done" } else { "Cancel" }).clicked() {
+                close = true;
+            }
+        });
+    });
+    if send {
+        let d = draft.clone();
+        let repo = st.settings.chat.issue_repo.clone();
+        st.chat.file_issue(FORM_ISSUE.into(), d, repo);
+    }
+    if close {
+        st.chat.issue_form = None;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const ISSUE_FORM_W: f32 = 520.0;
+
 /// What a fresh session needs from a chat that grew long: the user's recent requests and the
 /// agent's last report. The canvas itself is read with the tools.
 fn recap(messages: &[Message]) -> String {
@@ -1425,6 +1549,11 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let ctx = ui.ctx().clone();
     let column_rect = ui.max_rect();
     chat_msgs::lightbox(&ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        st.chat.poll_issues(&ctx);
+        issue_form(&ctx, st);
+    }
     st.chat.ensure_chat();
     if std::mem::take(&mut st.settings.chat_changed) {
         // Paths, key or Re-scan changed in Settings: what was detected is stale.
@@ -1478,6 +1607,7 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             error: st.chat.error.as_deref(),
             stopped: st.chat.stopped,
             budget: st.chat.budget_hit.then_some(st.settings.chat.turn_budget),
+            issues: &st.chat.issues,
             signin: signin.as_ref(),
             live_run: st.run_open.iter().find(|r| r.client.split(" \u{b7} ").next() == Some(crate::mcp::CHAT_CLIENT)),
         };
@@ -1520,6 +1650,14 @@ fn apply_acts(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, acts: Acts
     }
     if let Some(id) = acts.revert {
         st.pending_run_revert = Some(id);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some((key, d)) = acts.send_issue {
+        let repo = st.settings.chat.issue_repo.clone();
+        st.chat.file_issue(key, d, repo);
+    }
+    if let Some(key) = acts.discard_issue {
+        st.chat.issues.insert(key, IssueState::Discarded);
     }
     if let Some(id) = acts.restore {
         st.pending_restore = Some(id);
@@ -1632,6 +1770,11 @@ fn chat_menu(anchor: &egui::Response, st: &mut UiState) {
         ui.spacing_mut().item_spacing.y = 2.0;
         if kit::button_wide(ui, kit::ButtonKind::Primary, Some(Icon::Plus), "New chat").clicked() && !running {
             st.chat.start_new_chat();
+            ui.close();
+        }
+        if ui.add(egui::Button::new(RichText::new("Report a PaperCraft issue\u{2026}").size(theme::SECONDARY + 1.0)).frame(false)).clicked() {
+            st.chat.issues.remove(FORM_ISSUE);
+            st.chat.issue_form = Some(IssueDraft { kind: "bug".into(), title: String::new(), body: ISSUE_TEMPLATE.into() });
             ui.close();
         }
         ui.add_space(4.0);

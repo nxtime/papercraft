@@ -35,6 +35,7 @@ fn modal_height(ctx: &egui::Context) -> f32 {
 }
 const DEFAULT_MODEL: &str = "claude-opus-5-5";
 const DEFAULT_EFFORT: &str = "medium";
+const ISSUE_REPO: &str = "https://git.marcospaulo.dev.br/masi/papercraft";
 /// Generous: a long build (eight screens) read about 5M tokens.
 const DEFAULT_TURN_BUDGET: u64 = 10_000_000;
 pub const TURN_BUDGETS: [(u64, &str); 5] = [(0, "No limit"), (2_000_000, "2M tokens"), (5_000_000, "5M tokens"), (10_000_000, "10M tokens"), (20_000_000, "20M tokens")];
@@ -110,6 +111,8 @@ pub struct ChatPrefs {
     pub image_offer_seen: bool,
     /// Plugins turned on (`plugins::PLUGINS` ids); all off by default.
     pub plugins: Vec<String>,
+    /// Where PaperCraft's own issues go (the form and the agent's drafts).
+    pub issue_repo: String,
 }
 
 impl Default for ChatPrefs {
@@ -132,6 +135,7 @@ impl Default for ChatPrefs {
             image_command: String::new(),
             image_offer_seen: false,
             plugins: Vec::new(),
+            issue_repo: ISSUE_REPO.into(),
         }
     }
 }
@@ -231,6 +235,9 @@ pub struct SettingsUi {
     pub chat_changed: bool,
     #[cfg(not(target_arch = "wasm32"))]
     chat_page: native::ChatPage,
+    /// A token typed on the Updates page, until saved to the keychain.
+    issue_token: String,
+    issue_note: Option<String>,
 }
 
 impl SettingsUi {
@@ -250,6 +257,8 @@ impl Default for SettingsUi {
             chat_changed: false,
             #[cfg(not(target_arch = "wasm32"))]
             chat_page: native::ChatPage::default(),
+            issue_token: String::new(),
+            issue_note: None,
         }
     }
 }
@@ -496,6 +505,34 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
                     ui.label("Reload the page to get the latest version.");
                 },
             );
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.add_space(16.0);
+                kit::section_header(ui, "Issues", None);
+                ui.label(RichText::new("Where \"Report a PaperCraft issue\" and the agent's issue drafts go. Nothing is sent without your Send.").color(theme::pal(ui).secondary));
+                ui.add_space(6.0);
+                let s = &mut st.settings;
+                kit::setting_row(ui, "Repository", "Gitea or GitHub repository URL.", |ui| {
+                    if ui.add(egui::TextEdit::singleline(&mut s.chat.issue_repo).desired_width(320.0).margin(theme::INPUT_MARGIN)).lost_focus() {
+                        s.chat.save();
+                    }
+                });
+                let saved = crate::issues::token().is_some();
+                let desc = if saved { "Saved in the keychain." } else { "Optional: without one, your tea login for this server is used." };
+                kit::setting_row(ui, "Access token", desc, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut s.issue_token).password(true).hint_text(if saved { "•••• saved" } else { "token" }).desired_width(200.0).margin(theme::INPUT_MARGIN));
+                    if kit::button(ui, kit::ButtonKind::Secondary, None, if s.issue_token.is_empty() && saved { "Remove" } else { "Save" }).clicked() {
+                        s.issue_note = Some(match crate::issues::set_token(&s.issue_token) {
+                            Ok(()) => if s.issue_token.is_empty() { "Token removed".into() } else { "Token saved".into() },
+                            Err(e) => e,
+                        });
+                        s.issue_token.clear();
+                    }
+                });
+                if let Some(n) = &st.settings.issue_note {
+                    ui.label(RichText::new(n).size(theme::SECONDARY).color(theme::pal(ui).secondary));
+                }
+            }
         }
     }
 }
@@ -1237,6 +1274,7 @@ mod tests {
             image_command: "my-tool {prompt} {out}".into(),
             image_offer_seen: true,
             plugins: vec!["avataaars".into()],
+            issue_repo: "https://example.com/me/repo".into(),
         };
         assert_eq!(ChatPrefs::from_json(&prefs.to_json()), prefs);
         assert_eq!(ChatPrefs::from_json(&ChatPrefs::default().to_json()), ChatPrefs::default());
@@ -1332,7 +1370,7 @@ mod tests {
             open: ["agent:claude-code", "agent:qwen", "agent:mine", "ep:anthropic", "ep:ep-1"].into_iter().map(String::from).collect(),
             ..Default::default()
         };
-        st.settings = SettingsUi { open: true, page: Page::Chat, chat, chat_changed: false, chat_page: page };
+        st.settings = SettingsUi { open: true, page: Page::Chat, chat, chat_changed: false, chat_page: page, issue_token: String::new(), issue_note: None };
         let mut ed = crate::editor::Editor::default();
         for _ in 0..3 {
             let input = egui::RawInput {

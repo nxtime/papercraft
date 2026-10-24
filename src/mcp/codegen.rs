@@ -397,9 +397,68 @@ fn instance_comp_attr(doc: &Document, n: &Node) -> String {
         .unwrap_or_default()
 }
 
+/// The code link of a node: its own (a main component) or its main component's (an instance).
+pub(crate) fn code_link<'a>(doc: &'a Document, n: &'a Node) -> Option<&'a crate::model::CodeLink> {
+    n.code.as_ref().or_else(|| n.instance.as_ref().and_then(|l| doc.get(l.main)).and_then(|m| m.code.as_ref()))
+}
+
+/// A code link template with `{Name}` replaced by the text of the layer named `Name` under `id`
+/// (the instance's own text, overrides included). An unknown name stays as written.
+fn fill_template(doc: &Document, id: NodeId, template: &str, escape: fn(&str) -> String) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(i) = rest.find('{') {
+        let Some(j) = rest[i..].find('}').map(|j| i + j) else { break };
+        let name = &rest[i + 1..j];
+        let text = (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || " _-".contains(c)))
+            .then(|| doc.subtree(id).into_iter().filter_map(|d| doc.get(d)).find(|d| d.name == name).and_then(|d| d.kind.text().map(|t| t.to_string())))
+            .flatten();
+        out.push_str(&rest[..i]);
+        match text {
+            Some(t) => out.push_str(&escape(&t)),
+            None => out.push_str(&rest[i..=j]),
+        }
+        rest = &rest[j + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A linked component's JSX, filled in from the instance (None when it has no React link).
+pub(crate) fn linked_react(doc: &Document, id: NodeId) -> Option<String> {
+    let n = doc.get(id)?;
+    code_link(doc, n).filter(|l| !l.react.is_empty()).map(|l| fill_template(doc, id, &l.react, jsx_text))
+}
+
+/// The distinct import lines of the linked components under `root`, in order of first use.
+pub(crate) fn code_imports(doc: &Document, root: NodeId) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for id in doc.subtree(root) {
+        if let Some(link) = doc.get(id).and_then(|n| code_link(doc, n))
+            && !link.import.is_empty()
+            && !out.contains(&link.import)
+        {
+            out.push(link.import.clone());
+        }
+    }
+    out
+}
+
+/// Each line of a (possibly multi-line) snippet, indented.
+pub(crate) fn push_indented(out: &mut String, ind: &str, snippet: &str) {
+    for line in snippet.lines() {
+        out.push_str(&format!("{ind}{line}\n"));
+    }
+}
+
 fn tailwind_node(doc: &Document, id: NodeId, depth: usize, is_root: bool, out: &mut String) {
     let Some(n) = doc.get(id) else { return };
     let ind = "  ".repeat(depth);
+    // A linked component is written as its library usage, not rebuilt from its layers.
+    if let Some(link) = code_link(doc, n).filter(|l| !l.react.is_empty()) {
+        push_indented(out, &ind, &fill_template(doc, id, &link.react, jsx_text));
+        return;
+    }
     let cls = tw_classes(doc, n, is_root);
     let name = n.name.replace('"', "'");
     let comp_attr = instance_comp_attr(doc, n);
@@ -467,6 +526,12 @@ fn tailwind_node(doc: &Document, id: NodeId, depth: usize, is_root: bool, out: &
 /// Serialize `root` and its descendants into clean React JSX with Tailwind CSS utility classes.
 pub fn to_tailwind_jsx(doc: &Document, root: NodeId) -> String {
     let mut out = String::new();
+    for import in code_imports(doc, root) {
+        out.push_str(&format!("{import}\n"));
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
     tailwind_node(doc, root, 0, true, &mut out);
     out
 }
@@ -835,10 +900,14 @@ pub fn to_react_tsx(doc: &Document, root: NodeId) -> String {
         .get(root)
         .map(|n| pascal_ident(&n.name))
         .unwrap_or_else(|| "Component".into());
-    let jsx = to_tailwind_jsx(doc, root);
+    for import in code_imports(doc, root) {
+        out.push_str(&format!("{import}\n"));
+    }
+    let mut jsx = String::new();
+    tailwind_node(doc, root, 0, true, &mut jsx);
     let body: String = jsx.lines().map(|line| format!("    {line}\n")).collect();
     out.push_str(&format!(
-        "export function {comp_name}() {{\n  return (\n{body}  );\n}}\n"
+        "\nexport function {comp_name}() {{\n  return (\n{body}  );\n}}\n"
     ));
     out
 }
@@ -1007,6 +1076,11 @@ fn egui_node(doc: &Document, id: NodeId, depth: usize, is_root: bool, out: &mut 
         return;
     }
     let ind = "    ".repeat(depth);
+    // A linked component is the widget call it stands for.
+    if let Some(link) = code_link(doc, n).filter(|l| !l.egui.is_empty()) {
+        push_indented(out, &ind, &fill_template(doc, id, &link.egui, |t| format!("{t:?}")));
+        return;
+    }
     if let Some((set, icon)) = icon_of(doc, n) {
         let (hex, var) = icon_tint(doc, n);
         let tint = hex
@@ -1307,6 +1381,17 @@ fn build_spec_tree(
     let in_flow = is_root || (pl.is_some() && !n.layout_child.absolute);
     if !is_root && in_flow {
         *flow_count += 1;
+    }
+    // A linked component is one library call: no rules for the layers that draw it (the
+    // "MUST use the <kit> component" rule covers it).
+    if !is_root && let Some(link) = code_link(doc, n) {
+        return Some(json!({
+            "id": n.id.0, "name": n.name, "kind": "library",
+            "library": {"kit": link.kit, "import": link.import, "react": link.react, "egui": link.egui,
+                "usage": fill_template(doc, id, &link.react, jsx_text), "eguiUsage": fill_template(doc, id, &link.egui, |t| format!("{t:?}"))},
+            "bounds": {"width": n.rect.w, "height": n.rect.h},
+            "sizing": {"horizontal": "fixed", "vertical": "fixed", "inFlow": in_flow},
+        }));
     }
 
     let mut instance_of: Option<Value> = None;
@@ -1640,6 +1725,19 @@ pub(crate) fn to_ai_spec_with_categories(
             "MUST NOT use `position: absolute` (or Tailwind `absolute`) on in-flow children ({flow_count} flow nodes under root)"
         ),
     );
+    let library = library_components(doc, root);
+    for l in &library {
+        let usage = if matches!(target.trim().to_ascii_lowercase().as_str(), "egui" | "rust") { &l["egui"] } else { &l["react"] };
+        if let Some(u) = usage.as_str().filter(|u| !u.is_empty()) {
+            rules.push(format!(
+                "MUST use the {} component for `{}` ({} uses: `{}`), not rebuild it from its layers",
+                l["kit"].as_str().unwrap_or(""),
+                l["name"].as_str().unwrap_or(""),
+                l["usedBy"].as_array().map_or(0, Vec::len),
+                u.lines().next().unwrap_or(u)
+            ));
+        }
+    }
 
     let colors: Map<String, Value> = doc
         .variables
@@ -1689,11 +1787,33 @@ pub(crate) fn to_ai_spec_with_categories(
         },
         "components": components,
         "componentDefinitions": definitions,
+        "libraryComponents": library,
         "layoutTree": layout_tree,
         "enforcementRules": rules,
         "annotations": annotation_comments(doc, root, categories).lines().collect::<Vec<_>>(),
         "referenceCode": reference_code,
     }))
+}
+
+/// The linked components used under `root`: one entry per main component, with the layers
+/// that use it. Nested layers of a linked component are not looked into.
+fn library_components(doc: &Document, root: NodeId) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        let Some(n) = doc.get(id) else { continue };
+        let Some(link) = code_link(doc, n) else {
+            stack.extend(n.children.iter().rev());
+            continue;
+        };
+        let main = n.instance.as_ref().map_or(id, |l| l.main);
+        let name = doc.get(main).map_or_else(|| n.name.clone(), |m| m.name.clone());
+        match out.iter_mut().find(|e| e["mainId"] == json!(main.0)) {
+            Some(e) => e["usedBy"].as_array_mut().unwrap().push(json!(id.0)),
+            None => out.push(json!({"name": name, "mainId": main.0, "kit": link.kit, "import": link.import, "react": link.react, "egui": link.egui, "usedBy": [id.0]})),
+        }
+    }
+    out
 }
 
 fn format_hierarchy_md(node: &Value, depth: usize, out: &mut String) {
@@ -1744,6 +1864,10 @@ fn format_hierarchy_md(node: &Value, depth: usize, out: &mut String) {
             details.push(format!("line-height={}px", px_num(lh)));
         }
     }
+    if let Some(lib) = node.get("library") {
+        let usage = lib["usage"].as_str().filter(|u| !u.is_empty()).or(lib["eguiUsage"].as_str()).unwrap_or("");
+        details.push(format!("use `{}`", usage.lines().next().unwrap_or(usage)));
+    }
     if let Some(ic) = node.get("icon") {
         details.push(format!(
             "icon={}:{} tint={}",
@@ -1766,6 +1890,10 @@ fn format_hierarchy_md(node: &Value, depth: usize, out: &mut String) {
             format_hierarchy_md(c, depth + 1, out);
         }
     }
+}
+
+fn lang_is_egui(target: &str) -> bool {
+    matches!(target.trim().to_ascii_lowercase().as_str(), "egui" | "rust")
 }
 
 /// Format the AI Layout & Enforcement Spec as a structured Markdown document.
@@ -1808,7 +1936,27 @@ pub(crate) fn to_ai_spec_markdown_with_categories(
         md.push('\n');
     }
 
-    md.push_str("## 3. Structured Layout Hierarchy\n\n");
+    // Sections are numbered as they appear: the library one only shows when there is one.
+    let mut section = 2;
+    let mut next = || {
+        section += 1;
+        section
+    };
+    if let Some(lib) = spec["libraryComponents"].as_array().filter(|l| !l.is_empty()) {
+        let egui = lang_is_egui(target);
+        md.push_str(&format!("## {}. Library Components\n\nUse these components; the layers under them are only how they look.\n\n", next()));
+        for l in lib {
+            let usage = if egui { l["egui"].as_str() } else { l["react"].as_str() }.unwrap_or("");
+            md.push_str(&format!("- **`{}`** ({}), used {}×", l["name"].as_str().unwrap_or(""), l["kit"].as_str().unwrap_or(""), l["usedBy"].as_array().map_or(0, Vec::len)));
+            if !egui && let Some(i) = l["import"].as_str().filter(|i| !i.is_empty()) {
+                md.push_str(&format!(": `{i}`"));
+            }
+            md.push_str(&format!("\n  ```{}\n  {}\n  ```\n", if egui { "rust" } else { "tsx" }, usage.replace('\n', "\n  ")));
+        }
+        md.push('\n');
+    }
+
+    md.push_str(&format!("## {}. Structured Layout Hierarchy\n\n", next()));
     format_hierarchy_md(&spec["layoutTree"], 0, &mut md);
     md.push('\n');
 
@@ -1821,7 +1969,8 @@ pub(crate) fn to_ai_spec_markdown_with_categories(
     };
     let ref_code = spec["referenceCode"].as_str().unwrap_or("");
     md.push_str(&format!(
-        "## 4. Reference Implementation ({target})\n\n```{lang_tag}\n{}\n```\n",
+        "## {}. Reference Implementation ({target})\n\n```{lang_tag}\n{}\n```\n",
+        next(),
         ref_code.trim_end()
     ));
 
@@ -2045,5 +2194,56 @@ mod tests {
             md.contains("## 4. Reference Implementation (angular)"),
             "{md}"
         );
+    }
+
+    #[test]
+    fn linked_components_export_as_library_code() {
+        let mut doc = Document::default();
+        let frame = |doc: &mut Document, name: &str| {
+            let id = doc.alloc_id();
+            let mut n = Node::new(id, NodeKind::Frame { clip: false }, Rect::new(0.0, 0.0, 90.0, 36.0));
+            n.name = name.into();
+            doc.nodes.insert(id, n);
+            id
+        };
+        let label = |doc: &mut Document, parent: NodeId, text: &str| {
+            let id = doc.alloc_id();
+            let mut t = Node::new(id, NodeKind::Text { text: text.into(), font_size: 14.0, auto_width: true, align: TextAlign::Left }, Rect::new(0.0, 0.0, 50.0, 20.0));
+            t.name = "Label".into();
+            t.parent = Some(parent);
+            doc.nodes.insert(id, t);
+            doc.nodes.get_mut(&parent).unwrap().children.push(id);
+        };
+        let main = frame(&mut doc, "Button / Outline");
+        label(&mut doc, main, "Button");
+        {
+            let m = doc.nodes.get_mut(&main).unwrap();
+            m.component = true;
+            m.code = Some(crate::model::CodeLink {
+                kit: "shadcn".into(),
+                import: r#"import { Button } from "@/components/ui/button""#.into(),
+                react: r#"<Button variant="outline">{Label}</Button>"#.into(),
+                egui: "ui.button({Label});".into(),
+            });
+        }
+        let screen = frame(&mut doc, "Screen");
+        doc.root.push(screen);
+        for text in ["Save", "Cancel"] {
+            let inst = frame(&mut doc, "Button / Outline");
+            label(&mut doc, inst, text);
+            let n = doc.nodes.get_mut(&inst).unwrap();
+            n.instance = Some(InstanceLink { main, overrides: Vec::new(), source: None });
+            n.parent = Some(screen);
+            doc.nodes.get_mut(&screen).unwrap().children.push(inst);
+        }
+        let tsx = to_react_tsx(&doc, screen);
+        assert_eq!(tsx.matches("import { Button }").count(), 1, "{tsx}");
+        assert!(tsx.contains(r#"<Button variant="outline">Save</Button>"#) && tsx.contains(r#"<Button variant="outline">Cancel</Button>"#), "{tsx}");
+        assert!(!tsx.contains("data-name=\"Label\""), "the layers under a linked component are not rebuilt: {tsx}");
+        let rs = to_egui(&doc, screen);
+        assert!(rs.contains(r#"ui.button("Save");"#), "{rs}");
+        let spec = to_ai_spec(&doc, screen, "react").unwrap();
+        assert_eq!(spec["libraryComponents"][0]["usedBy"].as_array().unwrap().len(), 2);
+        assert!(spec["enforcementRules"].as_array().unwrap().iter().any(|r| r.as_str().unwrap().contains("MUST use the shadcn component")));
     }
 }

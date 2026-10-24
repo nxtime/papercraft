@@ -306,6 +306,9 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "get_fill_image" => fill_image(ed, &a),
                 "zoom_image" => zoom_image(host, &a),
                 "ask_user" => ask_user(&a),
+                "report_issue" => report_issue(&a),
+                #[cfg(not(target_arch = "wasm32"))]
+                "design_rules" => design_rules(&a),
                 #[cfg(not(target_arch = "wasm32"))]
                 "fetch_reference_images" => super::refs::fetch(host.project().map(|p| p.dir.clone()).as_deref(), None, &Value::Object(a.0.clone())),
                 #[cfg(not(target_arch = "wasm32"))]
@@ -343,6 +346,8 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "diff_frames" => diff_frames(ed, &a),
                 "search_icons" => search_icons(&a),
                 "rename_nodes" => rename_nodes(ed, &a),
+                "set_code_link" => set_code_link(ed, &a),
+                "apply_ui_kit" => apply_ui_kit(host, &a),
                 "delete_nodes" => delete_nodes(ed, &a),
                 "duplicate_nodes" => duplicate_nodes(ed, &a),
                 "move_nodes" => move_nodes(ed, &a),
@@ -1245,8 +1250,37 @@ fn ask_user(a: &Args) -> ToolResult {
     text(json!({"shown": true, "next": "End your turn now. The answers arrive as the user's next message."}))
 }
 
-const ASK_MAX_QUESTIONS: usize = 5;
+const ASK_MAX_QUESTIONS: usize = 7;
+
+/// An issue draft: the chat shows it with Send and Discard; nothing is filed from here.
+fn report_issue(a: &Args) -> ToolResult {
+    let kind = a.req_str("kind")?;
+    if !["bug", "docs", "feature"].contains(&kind) {
+        return Err("kind must be bug, docs or feature".into());
+    }
+    if a.req_str("title")?.is_empty() || a.req_str("body")?.is_empty() {
+        return Err("an issue needs a title and a body".into());
+    }
+    text(json!({"draft": true, "next": "The user sees the draft and sends or discards it. Do not repeat it in text; go on with the task."}))
+}
 const ASK_MAX_OPTIONS: usize = 6;
+
+/// design-playbook rules through its CLI: `playbook search` or `playbook rule`.
+#[cfg(not(target_arch = "wasm32"))]
+fn design_rules(a: &Args) -> ToolResult {
+    let bin = crate::chat::path::which("playbook").ok_or("the design-playbook CLI (`playbook`) is not installed")?;
+    let args = match (a.str("rule"), a.str("query")) {
+        (Some(r), _) if !r.trim().is_empty() => vec!["rule", r.trim()],
+        (_, Some(q)) if !q.trim().is_empty() => vec!["search", "-n", "5", q.trim()],
+        _ => return Err("give query or rule".into()),
+    };
+    let out = std::process::Command::new(bin).args(&args).output().map_err(|e| e.to_string())?;
+    let found = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    if found.is_empty() {
+        return Err(format!("no playbook match: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    text(json!({"rules": found}))
+}
 
 /// A region of a chat attachment at full resolution: the `.full` original kept next to the sent
 /// image when it was scaled down, else the image itself. Only files in the project's chat folder.
@@ -1907,6 +1941,9 @@ fn jsx(host: &mut dyn Host, a: &Args) -> ToolResult {
     match a.str("format") {
         None | Some("") | Some("inline") | Some("inline-styles") => {
             let mut out = super::codegen::annotation_comments(doc, id, &ed.design.categories());
+            for import in super::codegen::code_imports(doc, id) {
+                out.push_str(&format!("{import}\n"));
+            }
             jsx_node(doc, id, 0, true, assets_dir.as_deref(), &mut out);
             Ok(vec![Out::Text(out)])
         }
@@ -1978,6 +2015,11 @@ fn jsx_node(
 ) {
     let n = doc.get(id).unwrap();
     let ind = "  ".repeat(depth);
+    // A linked component is written as its library usage.
+    if let Some(jsx) = super::codegen::linked_react(doc, id) {
+        super::codegen::push_indented(out, &ind, &jsx);
+        return;
+    }
     let mut st = css::computed(n, parent_layout(doc, n).as_ref(), n.parent.is_none());
     if root {
         for k in ["position", "left", "top"] {
@@ -5293,6 +5335,72 @@ fn search_icons(a: &Args) -> ToolResult {
         }
     }
     text(v)
+}
+
+/// Link a main component (or the main of an instance) to its code in a UI library.
+fn set_code_link(ed: &mut Editor, a: &Args) -> ToolResult {
+    let (page, id) = resolve(ed, a.req_str("nodeId")?, page_arg(ed, a)?)?;
+    let doc = ed.page_doc(page);
+    let n = doc.get(id).ok_or("no such node")?;
+    let main = match (&n.instance, n.component) {
+        (_, true) => id,
+        (Some(l), false) if doc.get(l.main).is_some() => l.main,
+        (Some(_), false) => return Err("the main component is on another page: link it there".into()),
+        (None, false) => return Err("set_code_link needs a main component or an instance of one (create_component first)".into()),
+    };
+    let s = |k: &str| a.str(k).unwrap_or("").to_owned();
+    let link = crate::model::CodeLink { kit: s("kit"), import: s("import"), react: s("react"), egui: s("egui") };
+    let clear = link.import.is_empty() && link.react.is_empty() && link.egui.is_empty();
+    let name = doc.get(main).map(|m| m.name.clone()).unwrap_or_default();
+    ed.with_page(page, |ed| {
+        ed.edit("Set code link", |tx| {
+            tx.node_mut(main).unwrap().code = (!clear).then_some(link);
+        })
+    });
+    text(json!({"component": node_key(ed, page, main), "name": name, "linked": !clear}))
+}
+
+/// The JSON a tool call answers with (its first text block).
+fn call_json(host: &mut dyn Host, name: &str, args: Value) -> Result<Value, String> {
+    let outs = call(host, name, &args)?;
+    let t = outs.iter().find_map(|o| if let Out::Text(t) = o { Some(t.as_str()) } else { None }).ok_or_else(|| format!("{name} answered no text"))?;
+    serde_json::from_str(t).map_err(|e| format!("{name}: {e}"))
+}
+
+/// Build a "UI Kit / <name>" page from a kit (`crate::ui_kits`): its variables (Light and Dark),
+/// tokens, and its components, each a main component linked to the library's code.
+fn apply_ui_kit(host: &mut dyn Host, a: &Args) -> ToolResult {
+    let id = a.req_str("kit")?;
+    let Some(kit) = crate::ui_kits::kit(id) else {
+        let all: Vec<&str> = crate::ui_kits::KITS.iter().map(|k| k.id).collect();
+        return Err(format!("no kit `{id}` (kits: {})", all.join(", ")));
+    };
+    let map = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), json!(v))).collect::<Map<String, Value>>();
+    let page = call_json(host, "create_page", json!({"name": format!("UI Kit / {}", kit.name)}))?;
+    let pid = page["pageId"].as_str().ok_or("create_page gave no page")?.to_owned();
+    call_json(host, "set_variables", json!({"pageId": pid, "variables": map(kit.light), "mode": "Light"}))?;
+    call_json(host, "set_variables", json!({"pageId": pid, "variables": map(kit.dark), "mode": "Dark"}))?;
+    call_json(host, "set_tokens", json!({"pageId": pid, "tokens": map(kit.tokens)}))?;
+    let body: String = kit.components.iter().map(|c| c.html).collect();
+    let html = format!(
+        r#"<div layer-name="UI Kit / {}" style="display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start;padding:48px;width:1200px;background:var(--{})">{body}</div>"#,
+        kit.name, kit.surface
+    );
+    let written = call_json(host, "write_html", json!({"pageId": pid, "targetNodeId": "root", "html": html}))?;
+    let board = written["createdNodeIds"][0].as_str().ok_or("write_html made no frame")?.to_owned();
+    let kids = call_json(host, "get_children", json!({"pageId": pid, "nodeId": board}))?;
+    let mut made = Vec::new();
+    for c in kit.components {
+        let Some(node) = kids["children"].as_array().into_iter().flatten().find(|k| k["name"] == c.name).and_then(|k| k["id"].as_str()) else { continue };
+        let comp = call_json(host, "create_component", json!({"pageId": pid, "nodeId": node}))?;
+        let cid = comp["id"].as_str().unwrap_or(node).to_owned();
+        call_json(host, "set_code_link", json!({"pageId": pid, "nodeId": cid, "kit": kit.id, "import": c.import, "react": c.react, "egui": c.egui}))?;
+        made.push(json!({"name": c.name, "id": cid}));
+    }
+    text(json!({
+        "pageId": pid, "frame": board, "kit": kit.id, "components": made,
+        "next": "Place these with <x-paper-instance component=\"Name\" overrides='{\"Label\":\"Text\"}'/>; the code export and the AI spec use the library components for them. Use the kit's variables (var(--primary) and so on) for everything else."
+    }))
 }
 
 fn rename_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
