@@ -60,14 +60,14 @@ Delete one or more pages. The last page of a project cannot be deleted. A page t
 
 ### `get_basic_info` (read-only)
 
-Essential context about the open project: project name, the page, node count, artboards (top-level frames) with ids, sizes and world positions, other top-level layers, fonts, and `pages` with the active one marked isActive.
+Essential context about the open project: project name, the page, node count, artboards (top-level frames) with ids, sizes and world positions, other top-level layers, fonts, `pages` with the active one marked isActive, and `viewport` ({pageId, rect: [x, y, w, h] world, zoom}: what the user sees).
 - worldX/worldY are world positions; x/y are relative to the parent.
 - Pass pageId to inspect another page without switching the user's view.
 
 
 ### `get_selection` (read-only)
 
-The selected layers on the page the user is viewing: ids, names, types, sizes, positions and the artboard each belongs to.
+The selected layers on the page the user is viewing: ids, names, types, sizes, positions and the artboard each belongs to, plus `viewport` ({pageId, rect: [x, y, w, h] world, zoom}).
 
 
 ### `get_node_info` (read-only)
@@ -94,8 +94,19 @@ Compact indented text tree of a subtree: type, name, id and size per node. Much 
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `depth` | number |  | Maximum depth (default 3, max 10). |
+| `depth` | number |  | Levels shown, counting nodeId (or each top-level layer for "root") as level 1 (default 3, max 10). Deeper levels collapse to "… N children". |
+| `fullText` | boolean |  | Show each text layer's complete text instead of its first 40 characters (for copy review). |
 | `nodeId` | string | yes | Root of the summary, or "root". |
+
+Depth counts from the node you pass, not from the page. For an artboard `Home` with a `Screens` frame holding rows, `{"nodeId": "<Home id>", "depth": 2}` stops at `Screens`:
+
+```
+frame "Home" [3fa9c1:1] 1440×900
+  frame "Screens" [3fa9c1:2] fill(1440)×hug(820)
+    … 3 children
+```
+
+The rows inside `Screens` are level 3, so they need `depth: 3` from `Home` (the default), or `depth: 2` from `Screens` itself. With `nodeId: "root"` every artboard is level 1, so the same rows also need `depth: 3`.
 
 
 ### `get_jsx` (read-only)
@@ -151,7 +162,7 @@ CSS styles (camelCase) of one or more nodes, as {nodeId: styles}.
 
 ### `find_nodes` (read-only)
 
-Find nodes by text content and/or computed style. Searches the whole project by default; pass pageId for one page or nodeId for a subtree. `textValue` matches text case-insensitively with * wildcards anchored to the whole value. `filters` are {styleName, styleValue} pairs (AND), values may use * wildcards; colors match by value.
+Find nodes by text content and/or computed style. Searches the whole project by default; pass pageId for one page or nodeId for a subtree. `textValue` finds text containing it, ignoring case and line breaks; with * wildcards it must match the whole value ("Get *"). `filters` are {styleName, styleValue} pairs (AND), values may use * wildcards; colors match by value.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -195,6 +206,7 @@ Render a node (or the whole page when nodeId is omitted or "root") to a PNG and 
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
+| `annotations` | boolean |  | Also draw the note cards, badges and leader lines of notes on the captured layers; the image grows to include the cards. |
 | `nodeId` | string |  | The node to capture; omit for the whole page. |
 | `out` | string |  | Optional file path to save the PNG to (also used by papercraft-cli). |
 | `scale` | number |  | Render scale: 1 (default) or 2. |
@@ -426,7 +438,7 @@ Main components of every page (or one with `pageId`): id, name, `componentKey` (
 
 ### `import_components`
 
-Copy the main components anywhere on `fromPageId` (including inside artboards, typically on a `Design System` page) onto this one, so you can place instances here with create_instance or <x-paper-instance component="Name"/> / component-id="ID". Components with the same name already here are skipped. Variables and tokens are already shared by every page; components are copies, not live links.
+Copies mains onto this page (detached from the source); only for moving a design system, not for using components: create_instance and swap_instance take a main on any page or an enabled library directly, with no import. Copies the main components anywhere on `fromPageId` (including inside artboards); components with the same name already here are skipped. Variables and tokens are already shared by every page.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -446,7 +458,7 @@ Turn a frame or artboard into a main component. Build reusable parts (button, ro
 
 ### `create_instance`
 
-Place an instance of a component. Edit text and styles on the instance's descendants with set_text_content / update_styles (they become overrides); edits to the main component flow to every instance. Returns the instance id and its text layers.
+Place an instance of a component. componentKey may be a component on any page or an enabled library; no import needed (the instance stays linked to that main). Edit text and styles on the instance's descendants with set_text_content / update_styles (they become overrides); edits to the main component flow to every instance. Returns the instance id and its text layers.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -461,7 +473,7 @@ Place an instance of a component. Edit text and styles on the instance's descend
 
 ### `swap_instance`
 
-Swap an instance root to point at a different main component (any page), preserving overrides on descendants matched by name and layer type.
+Swap an instance root to point at a different main component, preserving overrides on descendants matched by name and layer type. componentKey may be a component on any page or an enabled library; no import needed.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -544,6 +556,62 @@ Stop using a library: bindings to its variables are detached (values kept), its 
 | `libraryId` | string | yes |  |
 
 
+## Annotations
+
+### `annotate`
+
+Add notes to node ids or exact layer names on a page in one undo step. First text line is label; remaining lines are body. Type is an allowed category key (default rule); put fields as "Name: value" lines in text. Placement is automatic (tidy re-lays-out). Returns [number, node, type, label] rows; tidy alone returns {tidied: moved}.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `frame` | string |  | With tidy: only the notes on this frame. |
+| `notes` | array of object |  | `{node, text, type?}`. |
+| `pageId` | string |  |  |
+| `tidy` | boolean |  | Re-layout all notes (of frame, else the page) as part of this undo step; notes may then be omitted. |
+
+Check the placement with `get_screenshot {"nodeId": "<frame>", "annotations": true}`.
+
+### `get_annotation_template` (read-only)
+
+Read the page's annotation template: [type key, guidance, field names] for each allowed type. Call once before annotate.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `pageId` | string |  |  |
+
+
+### `set_annotation_template`
+
+Switch the annotation template by id or name, for one page or the whole project. Annotate only accepts the template's types.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `pageId` | string |  |  |
+| `scope` | string |  | `page` or `project`. |
+| `template` | string | yes |  |
+
+
+### `upsert_annotation_template`
+
+Create or replace an annotation template, optionally defining new categories (key, name, #hex color, icon name) first. Reuse existing keys freely. One undo step for the edit; setAs page adds a second. Returns {id, name, types}.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `categories` | array of object |  | Category styles `{key, name, color, icon}`; an existing key is updated, a new key needs all four. |
+| `pageId` | string |  |  |
+| `setAs` | string |  | `project` or `page`. |
+| `template` | object | yes | `{id?, name, display?: full or badges, categories: [{key, enabled?, guidance?, fields?}]}`. |
+
+
+### `delete_annotation_template`
+
+Delete an annotation template by id or name. The last template cannot be deleted; a project default pointing at it reverts to Product spec.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `template` | string | yes |  |
+
+
 ## Session
 
 ### `get_feedback` (read-only)
@@ -581,12 +649,26 @@ Mark notes on a layer resolved, with a short reply saying what you changed. With
 
 ### `select_nodes`
 
-Select nodes on the page the user is viewing so they can see what you mean; zoom: true also frames them in the viewport. An empty list clears the selection.
+Select nodes on the page the user is viewing so they can see what you mean; zoom: true also frames them in the viewport (at most 100%). An empty list clears the selection. For another page or a closer zoom use set_viewport.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `nodeIds` | array of string | yes | Nodes to select. |
 | `zoom` | boolean |  |  |
+
+
+### `set_viewport`
+
+Move the user's view: switch to pageId (as clicking it in the page list does) and fit nodeIds or a world rect, optionally at an explicit zoom (0.01 to 256). With only zoom it zooms about the view's centre. Refused while the user is moving the canvas (within 10 s of their last pan or zoom) unless force: true. Returns the new viewport ({pageId, rect: [x, y, w, h] in world units, zoom}); get_basic_info and get_selection report the current one.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `force` | boolean |  | Move the view even if the user is panning or zooming. |
+| `nodeIds` | array of string |  | Nodes to fit in the view. |
+| `padding` | number |  | Screen margin when fitting, in px (default 64). |
+| `pageId` | string |  | Page to show; defaults to the page of nodeIds, else the current one. |
+| `rect` | array of number |  | World rect [x, y, width, height] to fit, instead of nodeIds. |
+| `zoom` | number |  | Explicit zoom level (1 = 100%); centres the nodes or rect at this zoom instead of fitting. |
 
 
 ### `undo`

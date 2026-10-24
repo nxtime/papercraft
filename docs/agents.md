@@ -1,12 +1,12 @@
 # Driving PaperCraft with agents
 
-PaperCraft exposes one set of 67 tools three ways. They all run the same code inside the app, so an agent sees what you see and every call is one undo step.
+PaperCraft exposes one set of 70 tools three ways. They all run the same code inside the app, so an agent sees what you see and every call is one undo step.
 
 | Way | Use it when | Needs the app running |
 |---|---|---|
 | MCP over HTTP, `http://127.0.0.1:29980/mcp` | the agent client speaks MCP (Claude Code, Codex, pi) | yes |
 | MCP over stdio, `papercraft-mcp` | the client only starts stdio servers | for calls; `tools/list` works offline |
-| Shell, `papercraft-cli` | the agent has a terminal and you want no tool schemas in its context | for `call`; `list`, `schema` and `icons` work offline |
+| Shell, `papercraft-cli` | the agent has a terminal and you want no tool schemas in its context | for `call`; `list`, `schema` and `icons` work offline (with the app running, `list` and `schema` show the app's tools) |
 
 If you would rather talk to the agent inside the app, Chat mode (⌘J, or `Design | Chat` in the top bar) is the in-app alternative. It runs Claude Code or Codex through their CLIs against the same MCP server, ACP agents such as OpenCode or Gemini CLI, or the Anthropic API with your own key, and keeps the conversation next to the canvas, with the same runs, review and revert. The setup and the thread are in [chat.md](chat.md). The rest of this guide covers driving the app from your own terminal or agent client.
 
@@ -91,6 +91,8 @@ papercraft-cli call get_screenshot '{"nodeId":"abc123:1"}' --project Demo -o car
 
 ### Shell and scripts
 
+When `call` or `shell` reaches the app and the app is another version, the CLI prints once on stderr, for example `papercraft-cli 0.6.1 ≠ app 0.6.2; reinstall the CLI`. `list` and `schema` read the running app's tool list, so tools newer than the CLI still show; with the app closed they use the CLI's built-in list.
+
 `papercraft-cli shell [--project X] [--offline]` keeps one session open (offline, one in-process project; otherwise the app). A line is `<tool> <json>` (JSON may span lines until its braces close) or a command: `:help :tools :schema <tool> :open <project> :pages :page <name|id> :shot [nodeId] [file] :undo :redo :save :watch on|off :quit`. `:watch on` renders the artboard last edited to `preview.png` after each editing call, shown inline on iTerm2, WezTerm and kitty. Input is plain stdin (no line editing or history; use `rlwrap` for that). Piped input prints no prompt and exits 1 if any line failed, listing the line numbers on stderr.
 
 ```sh
@@ -112,11 +114,19 @@ EOF
 * Components: `get_components` lists mains of every page and enabled library with a `componentKey`; `create_instance` and `swap_instance` accept a main from any page or library (`componentId` or `componentKey`).
 * Libraries: `publish_library`, `list_libraries`, `enable_library`, `update_library`, `disable_library`. They work offline too, on the project store.
 
+## Seeing what the user sees
+
+* `get_basic_info` and `get_selection` include `viewport: {pageId, rect: [x, y, w, h], zoom}`: the page the user is viewing and the world rect on screen.
+* `set_viewport {pageId?, nodeIds? | rect?, zoom?, padding?, force?}` switches the user's page (as the page list does) and fits the nodes or rect, or centres them at an explicit `zoom` (0.01 to 256; `select_nodes {zoom: true}` stops at 100%). While the user is panning or zooming (10 s after their last camera move) it is refused with "user is moving the canvas", unless `force: true`.
+* `find_nodes {textValue}` finds text layers containing the phrase on every page (or `pageId`), ignoring case and line breaks; `*` wildcards match the whole value instead. `get_tree_summary {nodeId, fullText: true}` prints every text layer's complete text, for copy review across screens.
+* `get_screenshot {nodeId, annotations: true}` draws the notes on the captured layers (cards, number badges, leader lines), so an agent can check note placement.
+
 ## Annotation tools
 
-* `annotate {pageId?, notes: [{node, text, type?}]}` adds many notes in one undo step. `node` is a node id or an exact layer name; the first line of `text` is the label and the rest the body; `type` is a category key (default `rule`) that the page's template must enable. Placement is automatic.
+* `annotate {pageId?, notes: [{node, text, type?}]}` adds many notes in one undo step. `node` is a node id or an exact layer name; the first line of `text` is the label and the rest the body; `type` is a category key (default `rule`) that the page's template must enable. Placement is automatic. `annotate {tidy: true, frame?}` with no notes re-lays-out the existing notes and returns `{"tidied": n}`, the number of notes it moved.
 * `get_annotation_template {pageId?}` returns the allowed types with their guidance and fields. Call it once before `annotate`.
 * `set_annotation_template {template, scope?: "page" | "project", pageId?}` switches the template by id or name.
+* `upsert_annotation_template {template: {id?, name, display?, categories: [{key, enabled?, guidance?, fields?}]}, categories?: [{key, name, color, icon}], setAs?: "project" | "page", pageId?}` creates or replaces a template and its category styles in one undo step. `delete_annotation_template {template}` removes one (the last stays).
 * `get_annotations {nodeId?, pageId?, full?}` reads notes as `[number, node, type, text]` rows.
 * `update_annotation {id | ref, text?, type?}` and `delete_annotations {ids}` take ids or references such as `Sign in #3`.
 

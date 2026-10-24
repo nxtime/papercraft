@@ -96,9 +96,48 @@ Replies are markdown: paragraphs, lists, code blocks with a copy button, inline 
 * **Plan**: when the agent keeps a todo list (Claude Code's `TodoWrite`, or an ACP plan), the latest list is pinned above the composer with a "done of total" count.
 * **Approval**: on the API backend and for ACP agents, the destructive tools (`delete_pages`, `disable_library`, `import_design_system`, and `delete_nodes` on more than 20 layers) wait for Approve or Deny before they run. Deny returns an error to the model, which can then carry on. For ACP agents, any non-PaperCraft tool the agent asks for shows the same card. The Claude Code and Codex CLIs do not show this card. They use the CLI's own permission rules, and in non-interactive mode a tool that needs permission is denied. The papercraft tools are pre-allowed on both CLIs.
 * **Checkpoint**: when an agent run starts, the thread shows "Checkpoint · before run N". "Restore to here" reverts that run and every run after it, through the same revert as the Agent view.
-* **Run card**: when a run ends, "Agent finished, N changes" with Review, Revert and Accept. These are the same actions as the run review on the canvas.
+* **Run card**: when a run ends, "Agent finished, N changes" with Review, Revert and Accept. These are the same actions as the run review on the canvas. The card names the client that made the run ("Chat", "Claude Code · 2") and refreshes after an undo.
+* **Progress**: while a run is open, the step group and the Working pill count calls and touched layers ("Styling · 212 calls · 1,340 changes"). The pill clears when the turn ends.
 * **Errors**: a failed turn shows a red row with Retry. A sign-in problem shows the sign-in card (see Setup).
 * **Canvas follow**: when a tool call targets a node, the canvas pans to it, unless you moved the camera in the last 10 seconds.
+* **Agent presence**: after each agent call, the layers it pointed at or changed get an accent outline that fades over 3 seconds, and the newest carries a label with the verb and the client ("Styling · Claude Code"). This works for chat turns and for any MCP client. When the agent works on another page, a chip "Agent on page X →" switches to it.
+
+## Design-system context
+
+Every turn carries a summary of the project's design system, so the agent reuses what exists instead of drawing look-alikes:
+
+* variables by collection and group with their modes (colors as `name=#light/#dark`), tokens as scales;
+* main components on every page and in enabled libraries, as `componentKey · name · w×h · uses`, most used first;
+* enabled libraries and their update status, and the page's annotation template;
+* a reuse rule: place components with `create_instance` / `swap_instance`, colors as `var(--…)`, spacing on tokens.
+
+The summary is capped at about 1,500 tokens. A large system keeps its most used components and collapses variable groups to counts, with a pointer to `get_components` / `get_variables` for the rest. It is rebuilt only when the design system changes. The API backends get it as a separate system block (cached on `api.anthropic.com`); CLI and ACP agents get it in their first prompt, and again as `[Design system changed] …` on the next message after a change. The context meter includes it. Turn it off in Settings → Chat → **Send design-system summary**.
+
+`lint_design` has a matching rule, `not-an-instance`: a frame built by hand that matches a component (same structure, size within 4 px, same fill, radius and stroke) is flagged with the component to use.
+
+## Pointing at the canvas
+
+* **Pick**: the Pick chip next to `@ Selection` turns the canvas into a picker without changing your selection. Click a layer to add it, or Shift+drag an area; Esc cancels. Each pick types `@Name` at the composer cursor and adds a chip.
+* **⌥-click**: in Chat mode, ⌥-click a layer on the canvas to add it the same way.
+* **Area chips** are sent as `[Area] page P, rect x,y,w,h, contains: <ids…>` (the top layers wholly inside the area, up to 40).
+* **Crops**: layer, area and `@ Selection` chips carry an image of that part of the page with its notes drawn (1024 px max). The API backend gets it as an image block; CLI and ACP agents get a file under `.papercraft-chat-tmp/`.
+* **Ask (⌘K)**: with a selection, ⌘K opens a prompt box anchored above it. Enter sends to the chat with the selection chip and its crop, and the reply streams in the chat column without leaving Design mode. With nothing selected, ⌘K opens the command palette (also ⌘⇧/).
+
+## Actions on a selection
+
+The **Actions** menu opens from the canvas right-click menu, from the Actions chip in the composer and from the command palette ("Actions: …"). It works in Design and Chat modes.
+
+Instant actions run in the app with no model. Each one is a single undo step and its own run (client "Actions"), and a toast reports what it did with Review and Revert:
+
+* **Fix lint here**: `lint_design {fix: true}` on the selection.
+* **Bind to tokens**: binds hard-coded colors to the nearest variable (within 12 RGB) and gaps, padding and radii to the nearest spacing or radius token (within 2 px). Values with no close match are listed.
+* **Use components**: replaces each `not-an-instance` hit with an instance of its component in the same place, keeping the texts.
+* **Rename layers**: names default layers (`Frame 12`, `Text`) from their text or role.
+* **Annotate**: opens the annotation popover.
+
+Agent actions send a prompt with a selection chip to the chat and switch to Chat mode: **Optimize** (tighten layout and spacing to the token scale, fix contrast, keep the content, prefer components), **Make consistent with the design system**, **Write states** (empty, loading, error), **Variations ×3** and **Annotate with AI**.
+
+**Send open notes to chat**, in the inspector's Annotations section for a top-level frame, sends the frame's open feedback and its `todo` / `question` notes as one prompt with a chip.
 
 ## Composer and attachments
 
@@ -110,7 +149,7 @@ Type in the composer, ⏎ sends and ⇧⏎ adds a line. The empty state offers s
 
 For the API backend, images are sent as image blocks, so the model sees them. For the CLIs and ACP agents, each image is saved under `.papercraft-chat-tmp/` in the project and its path is added to the prompt for the agent to read.
 
-While a turn runs, the send button becomes **Stop**. Stop asks the backend to interrupt: the CLIs get an interrupt, or SIGINT, then a kill after 3 seconds; ACP agents get `session/cancel`, then a kill if they do not exit. Every backend ends within 3 seconds. Tools that already ran stay applied, and the partial run can be reviewed or reverted like any other.
+While a turn runs, the send button becomes **Stop**. Stop asks the backend to interrupt: the CLIs get an interrupt, or SIGINT, then a kill after 3 seconds; ACP agents get `session/cancel`, then a kill if they do not exit. Every backend ends within 3 seconds. The thread shows a muted "Stopped" line, not an error. Tools that already ran stay applied, and the partial run can be reviewed or reverted like any other.
 
 ## Storage
 
@@ -128,7 +167,9 @@ Prompts, project content and tool results go to whichever backend you chose: the
 
 * One turn per project at a time. Sending while a turn runs is refused with "A turn is already running"; use Stop first. Switching to another project stops a running turn.
 * The web build has no Chat mode.
-* The canvas shows the run's outlines after the turn ends, when the run is reviewed. They are not drawn live while the agent works.
+* While the agent works, the canvas shows fading outlines of the layers it touches; the full change review (added, changed, removed) comes after the turn, when the run is reviewed.
+* Variations ×3 is a prompt for now: the agent makes the variants; there is no side-by-side Keep tag yet.
+* Over the ACP stdio bridge the chat id does not reach the server, so those runs show under the agent's client name and close after 30 seconds idle instead of at turn end.
 * The API backend stops after 40 tool rounds in one message and says so.
 * Codex reports no per-call usage, so the context meter is hidden for it.
 * Agents need to be installed and signed in with their own tools. Chat does not install them or sign them in for you.

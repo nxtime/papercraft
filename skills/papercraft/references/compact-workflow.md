@@ -13,7 +13,7 @@ How to keep designs small, keep design and code in step, and spend few tokens do
 
 * Build every repeated thing once: `create_component`, then `create_instance` or `<x-paper-instance>`. Never paste markup twice. A screen is mostly instances plus layout frames.
 * No raw colours, radii, spacing or shadows in `write_html`: `var(--token)` only. Changing a token then updates every page, and `get_design_spec` reports token names, which is what code needs.
-* Reuse across pages with `import_components` (instances stay linked) or `<x-paper-clone node-id="page:id">`. Do not rebuild a component per page.
+* Reuse across pages with `create_instance {componentKey}` or `<x-paper-instance component="Name"/>` in `write_html`: a main on any page (or an enabled library, for `create_instance`) works directly and the instance stays linked to it. Do not `import_components` for that (it makes detached copies; it is for moving a design system). Do not rebuild a component per page.
 * One design system per brand: `export_design_system` writes an OpenDesign package (variables, modes, tokens); `import_design_system` loads it into another project. That is the sync path between files and apps.
 * Write one visual group per `write_html` (a header, a row), with `layer-name` on every box. Fewer, larger writes cost fewer round trips; groups that are too big make one bad style hard to find.
 

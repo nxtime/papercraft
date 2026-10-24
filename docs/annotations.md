@@ -45,7 +45,7 @@ The Annotate popover offers only the enabled categories of the active template, 
 
 Three levels, all view state. They are not saved in the design and not undoable.
 
-* **Full**: every note shows its label and the first lines of its body.
+* **Full**: every note shows its label and the first lines of its body. Below 60% zoom notes show as badges, so cards never spill over the design; zoom in to read them.
 * **Badges**: only the number badges are shown.
 * **Hidden**: nothing is drawn.
 
@@ -98,10 +98,26 @@ Agents work with notes through six MCP tools, all in `src/mcp/tools.rs`. They ar
 |---|---|
 | `get_annotation_template` | Reads the template: `[type key, guidance, field names]` for each enabled type. Call it once before `annotate`. |
 | `set_annotation_template` | Switches the template by id or name, for one page (default) or the project (`scope: "project"`). |
+| `upsert_annotation_template` | Creates or replaces a template, and creates or restyles categories in the same call (`categories: [{key, name, color, icon}]`). `setAs: "project"` or `"page"` makes it the default or the page override. Returns `{id, name, types}`. |
+| `delete_annotation_template` | Deletes a template by id or name. The last template stays. |
 | `annotate` | Adds many notes at once. Each note names a node id or an exact layer name on the page, a `text` and a `type` (default `rule`). |
 | `get_annotations` | Reads notes as `[number, nodeName, type, text]` rows (text capped at 120 characters). `full: true` returns complete objects; `nodeId` limits to a subtree; `pageId` picks another page. |
 | `update_annotation` | Changes the text or type of one note, by `id` or by reference such as `Sign in #3`. |
 | `delete_annotations` | Deletes notes by ids or references such as `Sign in #3`. |
+
+Custom template with a new category, used on the current page:
+
+```json
+{
+  "template": {"name": "Legal review", "categories": [
+    {"key": "legal", "guidance": "Legal risk this part carries.", "fields": ["Owner", "Law"]},
+    {"key": "rule"}]},
+  "categories": [{"key": "legal", "name": "Legal", "color": "#aa3355", "icon": "scale"}],
+  "setAs": "page"
+}
+```
+
+`icon` must be one of the built-in icon names (an unknown name lists them). Every key in the template must exist, either already or in `categories`. The template and category edit is one undo step; `setAs: "page"` adds a second.
 
 For `annotate` and `update_annotation`, the first line of `text` is the label and the rest is the body. There are no positions, icons or colours: PaperCraft places each note beside its target, outside the frame, stacked so none overlap. `annotate` is all or nothing: if one note is refused (an unknown layer, or a type the template disables), none is added and the error lists the allowed keys.
 
@@ -118,6 +134,10 @@ Batched call, on a page whose template is Product spec:
 ```
 
 The reply is one row per note, `[number, node, type, label]`. Then `get_annotations {}` reads them back, and `delete_annotations {"ids":["Sign in #3"]}` removes one by its frame reference.
+
+`annotate {"tidy": true}` with no notes re-runs placement for every note on the page (or on `frame`) in one undo step and returns `{"tidied": n}`, the number of notes it moved; `0` means the layout was already tidy.
+
+To see the notes, `get_screenshot {"nodeId": "<frame>", "annotations": true}` draws the cards, number badges and leader lines of the notes whose target is inside the captured layers, placed and routed as on the canvas (full cards, scale 1). The image grows to include the cards. Without `annotations`, or with `false`, the screenshot is the same as before.
 
 **Handoff.** `get_design_spec` and the code exports (`get_jsx`) include the notes of the frame as comments. Each note is one line, `// 1 Business rule: Lock after 5 failed tries`, with its body lines as more `//` lines, so code generated from a frame carries the rules next to the markup.
 
