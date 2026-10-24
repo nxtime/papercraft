@@ -215,12 +215,14 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                             .desired_width(f32::INFINITY)
                             .margin(theme::INPUT_MARGIN),
                     );
-                    r.request_focus();
+                    // Check before taking focus back (see `home::project_card`).
                     if r.lost_focus() {
                         if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                             rename = Some((id.clone(), draft.clone()));
                         }
                         st.version_renaming = None;
+                    } else {
+                        r.request_focus();
                     }
                     continue;
                 }

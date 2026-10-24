@@ -452,10 +452,11 @@ fn name_label(ui: &mut Ui, lib: &mut LibraryUi, key: &str, name: &str, w: f32) -
                 .margin(theme::INPUT_MARGIN)
                 .desired_width(w),
         );
-        r.request_focus();
+        // Check before taking focus back (see `home::project_card`).
         if r.lost_focus() {
             return lib.renaming.take().map(|r| r.1);
         }
+        r.request_focus();
         return None;
     }
     ui.add(egui::Label::new(RichText::new(name).size(theme::SECONDARY)).truncate());

@@ -579,13 +579,16 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
                     .margin(crate::theme::INPUT_MARGIN)
                     .desired_width(CARD_W),
             );
-            r.request_focus();
+            // Check before taking focus back: `lost_focus` reads the focus as it is now, so
+            // requesting it first would hide Enter, Escape and a click elsewhere.
             if r.lost_focus() {
                 let (dir, name) = hv.renaming.take().unwrap();
                 if !ui.input(|i| i.key_pressed(egui::Key::Escape)) && name.trim() != e.manifest.name
                 {
                     hv.actions.push(HomeAction::Rename(dir, name));
                 }
+            } else {
+                r.request_focus();
             }
         } else {
             ui.horizontal(|ui| {
