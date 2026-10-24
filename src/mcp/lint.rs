@@ -79,7 +79,7 @@ fn backdrop(doc: &Document, id: NodeId) -> Color {
         .fold(Color::rgb(255, 255, 255), blend)
 }
 
-fn is_default_name(name: &str) -> bool {
+pub(crate) fn is_default_name(name: &str) -> bool {
     let base = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ');
     matches!(
         base,
@@ -219,8 +219,11 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
             );
         }
         // ---- colors that should be variables
+        // A `text-color` binding (bind_variable) follows its variable without a fill link.
+        let bound_text = n.kind.text().is_some() && n.bindings.contains_key("text-color");
         if let Some((c, var)) = solid(n)
             && var.is_none()
+            && !bound_text
             && c.a == 255
         {
             if let Some((name, _)) = vars.iter().find(|(_, v)| **v == c) {
@@ -243,6 +246,68 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
             node: first,
             message: format!("{hex} is used {count}× and is not a variable"),
             fix: "add it with set_variables, or use an existing variable".into(),
+        });
+    }
+    out
+}
+
+/// Largest width or height difference at which a frame still counts as a copy of a component.
+const COPY_SIZE_TOLERANCE: f64 = 4.0;
+/// Text size difference at which two texts still have the same role.
+const TEXT_SIZE_TOLERANCE: f64 = 0.5;
+
+/// Corner radius difference at which two frames still look the same.
+const COPY_RADIUS_TOLERANCE: f64 = 1.0;
+
+/// Same kinds and child counts all the way down (children in order, as `diff_frames` pairs
+/// them), frames that look alike (fill, radius, stroke), and texts with the same role (size
+/// and weight). Without the look a tab strip and a button of the same size would match.
+fn same_shape(a: &Document, ia: NodeId, b: &Document, ib: NodeId) -> bool {
+    let (Some(na), Some(nb)) = (a.get(ia), b.get(ib)) else { return false };
+    if na.kind.type_name() != nb.kind.type_name() || na.children.len() != nb.children.len() {
+        return false;
+    }
+    if na.is_frame()
+        && (na.style.fills.first() != nb.style.fills.first()
+            || (na.style.corner_radius - nb.style.corner_radius).abs() > COPY_RADIUS_TOLERANCE
+            || (na.style.stroke.is_some() != nb.style.stroke.is_some()))
+    {
+        return false;
+    }
+    if let (Some(sa), Some(sb)) = (na.kind.font_size(), nb.kind.font_size())
+        && ((sa - sb).abs() > TEXT_SIZE_TOLERANCE || na.text_style.bold != nb.text_style.bold)
+    {
+        return false;
+    }
+    na.children.iter().zip(&nb.children).all(|(ca, cb)| same_shape(a, *ca, b, *cb))
+}
+
+/// Every main component the editor knows: on any page and in enabled libraries.
+pub fn component_mains(ed: &crate::editor::Editor) -> Vec<(&Document, NodeId)> {
+    let docs = (0..ed.pages.len()).map(|p| ed.page_doc(p)).chain(ed.library_docs.values());
+    docs.flat_map(|d| d.nodes.values().filter(|n| n.component).map(move |n| (d, n.id))).collect()
+}
+
+/// `not-an-instance`: frames under `roots` built by hand to look like one of `mains` (same
+/// structure, size within 4px) instead of being an instance of it. `lint_design {fix}` leaves
+/// these alone; swapping is the user's call.
+pub fn not_an_instance(doc: &Document, roots: &[NodeId], mains: &[(&Document, NodeId)]) -> Vec<Issue> {
+    let mut out = Vec::new();
+    for id in roots.iter().flat_map(|r| doc.subtree(*r)) {
+        let Some(n) = doc.get(id) else { continue };
+        if !n.visible || !n.is_frame() || n.component || n.instance.is_some() || n.children.is_empty() {
+            continue;
+        }
+        let near = |m: &Node| (m.rect.w - n.rect.w).abs() <= COPY_SIZE_TOLERANCE && (m.rect.h - n.rect.h).abs() <= COPY_SIZE_TOLERANCE;
+        let hit = mains.iter().find(|(d, m)| d.get(*m).is_some_and(near) && same_shape(doc, id, d, *m));
+        let Some(m) = hit.and_then(|(d, m)| d.get(*m)) else { continue };
+        let key = m.component_key.as_deref().unwrap_or(&m.name);
+        out.push(Issue {
+            rule: "not-an-instance",
+            severity: "warning",
+            node: id,
+            message: format!("`{}` looks like component `{}` but is not an instance of it", n.name, m.name),
+            fix: format!("swap_instance with componentKey {key}"),
         });
     }
     out
@@ -381,6 +446,57 @@ mod tests {
         );
         assert!(off_grid(13.0) && !off_grid(12.0) && !off_grid(0.0));
         assert!(is_default_name("Frame 12") && !is_default_name("Task Row"));
+    }
+
+    #[test]
+    fn text_colour_binding_is_not_hard_coded() {
+        let mut doc = Document::default();
+        let c = Color::rgb(0x8a, 0x6d, 0);
+        doc.variables.insert("tag-text".into(), c);
+        let id = doc.alloc_id();
+        let mut n = Node::new(
+            id,
+            crate::model::NodeKind::Text { text: "Hi".into(), font_size: 16.0, auto_width: true, align: Default::default() },
+            crate::geom::Rect::new(0.0, 0.0, 40.0, 20.0),
+        );
+        n.name = "Label".into();
+        n.style.fills = vec![Paint::solid(c)];
+        doc.nodes.insert(id, n);
+        doc.root.push(id);
+        let hard = |d: &Document| lint(d, &[id], &DEFAULT_SCALE).iter().filter(|i| i.rule == "hard-coded-color").count();
+        assert_eq!(hard(&doc), 1);
+        doc.nodes.get_mut(&id).unwrap().bindings.insert("text-color".into(), "tag-text".into());
+        assert_eq!(hard(&doc), 0);
+    }
+
+    #[test]
+    fn hand_made_copy_of_a_component_is_flagged_and_an_instance_is_not() {
+        use crate::mcp::{Out, exec};
+        use serde_json::{Value, json};
+        let dir = std::env::temp_dir().join(format!("papercraft-lint-{:016x}", fastrand::u64(..)));
+        let mut h = exec::SessionHost::new(crate::project::Store::open(dir).unwrap());
+        h.session.create(&mut h.ed, "Lint").unwrap();
+        let mut call = |name: &str, args: Value| match exec::call(&mut h, name, &args).unwrap_or_else(|e| panic!("{name}: {e}")).remove(0) {
+            Out::Text(t) => serde_json::from_str::<Value>(&t).unwrap(),
+            _ => Value::Null,
+        };
+        let button = |name: &str, label: &str| format!("<div layer-name=\"{name}\" style=\"display:flex;padding:12px 16px\"><div style=\"font-size:16px\">{label}</div></div>");
+        let ab = call("create_artboard", json!({"name": "Screen", "styles": {"width": "400px", "height": "400px", "display": "flex", "gap": "8px"}}));
+        let r = call("write_html", json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": button("Button", "Save")}));
+        let main = call("create_component", json!({"nodeId": r["createdNodeIds"][0], "name": "Button"}));
+        call("create_instance", json!({"componentId": main["id"], "parentId": ab["id"]}));
+        let copy = call("write_html", json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": button("Save copy", "Send")}));
+        call("write_html", json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": "<div layer-name=\"Other\" style=\"display:flex;padding:12px 16px\"><div style=\"font-size:24px\">Big</div></div>"}));
+        // Same structure and size but a different look (a filled tab): not a copy of Button.
+        call("write_html", json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": "<div layer-name=\"Tab\" style=\"display:flex;padding:12px 16px;background:#1677ff\"><div style=\"font-size:16px\">Code</div></div>"}));
+        let hits = |r: &Value| r["issues"].as_array().unwrap().iter().filter(|i| i["rule"] == "not-an-instance").cloned().collect::<Vec<_>>();
+        let r = call("lint_design", json!({}));
+        let found = hits(&r);
+        assert_eq!(found.len(), 1, "only the hand-made copy: {r}");
+        assert_eq!(found[0]["node"], copy["createdNodeIds"][0]);
+        assert!(found[0]["fix"].as_str().unwrap().starts_with("swap_instance with componentKey "), "{}", found[0]);
+        let r = call("lint_design", json!({"fix": true}));
+        assert_eq!(hits(&r).len(), 1, "fix does not swap: {r}");
     }
 
     #[test]

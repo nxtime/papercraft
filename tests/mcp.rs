@@ -422,6 +422,10 @@ fn screenshot_returns_png() {
 
 // ------------------------------------------------------------------------------ end to end
 
+/// Held while a test relies on a port staying unused, and while `spawn_app` binds one: the OS
+/// may hand a just-freed ephemeral port to the next `bind(0)` in this process.
+static PORT_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Serve MCP on a free port from a thread that owns a headless session, like the app does.
 /// The worker hands back the final document and undo depth when the server stops.
 fn spawn_app() -> (
@@ -435,6 +439,7 @@ fn spawn_app() -> (
         (h.ed.doc.clone(), h.ed.history.undo_len())
     });
     let tx = std::sync::Mutex::new(tx);
+    let _bind = PORT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     let running = mcp::server::spawn(
         0,
         std::sync::Arc::new(move |c| tx.lock().unwrap().send(c).is_ok()),
@@ -615,7 +620,8 @@ fn stdio_bridge_results_carry_result_type_for_2026_clients() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_bridge_lists_tools_without_the_app() {
-    // A port nothing listens on.
+    // A port nothing listens on: no other test may bind one until this test is done.
+    let _guard = PORT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -776,4 +782,64 @@ fn delete_pages_guards_layers_and_the_last_page() {
     )
     .unwrap_err();
     assert!(err.contains("at least one"), "{err}");
+}
+
+/// Two MCP sessions editing at once, plus a chat's CLI backend (`?chat=<id>` on the URL): each
+/// gets its own run with its own counts, and reverting one leaves the others' nodes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_sessions_get_their_own_runs() {
+    use papercraft::runs::{self, RUN_IDLE_SECS};
+    let (tx, rx) = std::sync::mpsc::channel::<mcp::Call>();
+    let worker = std::thread::spawn(move || {
+        let mut h = host();
+        let mut t = runs::Tracker::default();
+        while let Ok(c) = rx.recv() {
+            let now = papercraft::project::format::now_ms();
+            let _ = c.reply.send(t.call(&mut h, &c.client, &c.name, &c.args, now));
+        }
+        let dir = h.session.project.as_ref().unwrap().dir.clone();
+        let later = papercraft::project::format::now_ms() + RUN_IDLE_SECS * 1000 + 1;
+        t.tick(later, Some(&dir), &h.ed);
+        let all = runs::list(&dir);
+        // Revert B's run alone.
+        if let Some(mut rb) = all.iter().find(|r| r.client == "Agent B").cloned() {
+            runs::revert(&dir, &mut h.ed, &mut rb).unwrap();
+        }
+        let names: Vec<String> = h.ed.doc.root.iter().map(|id| h.ed.doc.get(*id).unwrap().name.clone()).collect();
+        (all, names)
+    });
+    let tx = std::sync::Mutex::new(tx);
+    let running = {
+        let _bind = PORT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        mcp::server::spawn(0, std::sync::Arc::new(move |c| tx.lock().unwrap().send(c).is_ok())).unwrap()
+    };
+    let connect = |name: &'static str, url: String| async move {
+        let info = rmcp::model::ClientConfig::new(
+            Default::default(),
+            rmcp::model::Implementation::new(name, "1"),
+        );
+        info.serve(rmcp::transport::StreamableHttpClientTransport::from_uri(url))
+            .await
+            .unwrap()
+    };
+    let a = connect("Agent A", running.url()).await;
+    let b = connect("Agent B", running.url()).await;
+    let chat = connect("Claude Code", format!("{}?chat=c1", running.url())).await;
+    let frame = |name: &str| tool("create_artboard", json!({"name": name, "styles": {"width": "100px", "height": "100px"}}));
+    // Interleaved: A, B, A, chat.
+    for (client, name) in [(&a, "A1"), (&b, "B1"), (&a, "A2"), (&chat, "C1")] {
+        text_of(&client.call_tool(frame(name)).await.unwrap());
+    }
+    for c in [a, b, chat] {
+        c.cancel().await.unwrap();
+    }
+    running.stop();
+    let (all, names) = worker.join().unwrap();
+    let by = |client: &str| all.iter().find(|r| r.client == client).unwrap_or_else(|| panic!("no run of {client}: {all:?}")).clone();
+    let (ra, rb, rc) = (by("Agent A"), by("Agent B"), by("Chat"));
+    assert_eq!(all.len(), 3);
+    assert_eq!((ra.calls, ra.added, ra.changed, ra.removed), (2, 2, 0, 0));
+    assert_eq!((rb.calls, rb.added), (1, 1));
+    assert_eq!((rc.calls, rc.added), (1, 1));
+    assert_eq!(names, ["A1", "A2", "C1"], "only B's frame is gone");
 }

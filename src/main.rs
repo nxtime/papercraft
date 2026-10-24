@@ -51,6 +51,8 @@ fn load_editor(path: Option<&str>, demo: bool) -> Result<Editor, String> {
         Session::new(store)
             .open(&mut ed, &p)
             .map_err(|e| format!("{}: {e}", p.display()))?;
+        // The commands that use this look at every page.
+        ed.finish_loading();
         return Ok(ed);
     }
     let (doc, cam) = file::load(&p).map_err(|e| format!("{}: {e}", p.display()))?;

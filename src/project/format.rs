@@ -226,9 +226,30 @@ pub fn page_from_json(s: &str) -> Result<PageData, FormatError> {
 
 /// Like [`page_from_json`], plus the page's active mode per collection.
 pub fn page_from_json_modes(s: &str) -> Result<(PageData, PageModes), FormatError> {
-    let v: Value = serde_json::from_str(s).map_err(FormatError::Json)?;
-    let v = migrate(v, PAGE_FORMAT, PAGE_VERSION, PAGE_ALIASES, PAGE_STEPS)?;
-    let mut f: PageFile = serde_json::from_value(v).map_err(FormatError::Json)?;
+    // A current page is read straight into its types; going through a `Value` tree first
+    // (needed only to migrate old files) doubles the parse time of a large page.
+    let f: PageFile = if is_current_page(s) {
+        serde_json::from_str(s).map_err(FormatError::Json)?
+    } else {
+        let v: Value = serde_json::from_str(s).map_err(FormatError::Json)?;
+        let v = migrate(v, PAGE_FORMAT, PAGE_VERSION, PAGE_ALIASES, PAGE_STEPS)?;
+        serde_json::from_value(v).map_err(FormatError::Json)?
+    };
+    page_from_file(f)
+}
+
+/// The file's format tag and version are the current ones (nothing to migrate).
+fn is_current_page(s: &str) -> bool {
+    #[derive(Deserialize)]
+    struct Head {
+        format: Option<String>,
+        version: Option<u32>,
+    }
+    serde_json::from_str::<Head>(s)
+        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && h.version == Some(PAGE_VERSION))
+}
+
+fn page_from_file(mut f: PageFile) -> Result<(PageData, PageModes), FormatError> {
     if let Some(t) = f.annotation_template.take() {
         f.modes_by_collection.insert(PAGE_TEMPLATE_KEY.into(), t);
     }

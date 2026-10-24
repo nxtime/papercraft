@@ -573,8 +573,7 @@ fn runs_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         ui.add_space(10.0);
     }
     revert_dialog(ui.ctx(), ed, st, &dir);
-    let open_id = st.run_open.as_ref().map(|r| r.id.clone());
-    let saved = st.runs.iter().filter(|r| open_id.as_ref() != Some(&r.id));
+    let saved = st.runs.iter().filter(|r| !st.run_open.iter().any(|o| o.id == r.id));
     let all: Vec<_> = st.run_open.iter().chain(saved).cloned().collect();
     if all.is_empty() {
         return;
@@ -584,7 +583,10 @@ fn runs_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     for run in &all {
         let selected = st.review_run.as_ref() == Some(&run.id);
         let changes = run.added + run.changed + run.removed;
-        let calls = count(run.calls as usize, "call");
+        let calls = match run.client.as_str() {
+            "" => count(run.calls as usize, "call"),
+            client => format!("{client} \u{b7} {}", count(run.calls as usize, "call")),
+        };
         let (label, sub) = match run.state {
             RunState::Running => ("Running", format!("{calls} · in progress")),
             state => {
@@ -660,17 +662,31 @@ pub(super) fn revert_dialog(ctx: &egui::Context, ed: &mut Editor, st: &mut UiSta
     let Some(id) = st.pending_run_revert.clone() else {
         return;
     };
-    let answer = super::confirm::dialog(
-        ctx,
-        "run-revert",
-        "Revert agent run?",
-        "Every page the agent changed goes back to how it was before the run, including any edits you made to those pages since.",
-        "Revert",
-    );
+    // A later run changed the same layers: this one only goes back together with it.
+    let blocker = st.runs.iter().find(|r| r.id == id).and_then(|r| crate::runs::blocker(&st.runs, r));
+    let answer = match blocker {
+        Some(n) => super::confirm::dialog(
+            ctx,
+            "run-revert",
+            "Revert agent run?",
+            &format!("Run {n} changed the same layers afterwards, so this run cannot be reverted on its own. Restore to here reverts it and every later run."),
+            "Restore to here",
+        ),
+        None => super::confirm::dialog(
+            ctx,
+            "run-revert",
+            "Revert agent run?",
+            "Every page the agent changed goes back to how it was before the run, including any edits you made to those pages since.",
+            "Revert",
+        ),
+    };
     let Some(yes) = answer else {
         return;
     };
     st.pending_run_revert = None;
+    if yes && blocker.is_some() {
+        return restore_to(ed, st, dir, &id);
+    }
     let Some(mut run) = st.runs.iter().find(|r| r.id == id).cloned().filter(|_| yes) else {
         return;
     };
@@ -698,10 +714,18 @@ pub(super) fn restore_dialog(ctx: &egui::Context, ed: &mut Editor, st: &mut UiSt
         return;
     };
     st.pending_restore = None;
-    if !yes || runs.is_empty() {
+    if yes {
+        restore_to(ed, st, dir, &id);
+    }
+}
+
+/// Reverts run `id` and every later run, newest first.
+fn restore_to(ed: &mut Editor, st: &mut UiState, dir: &std::path::Path, id: &str) {
+    let runs = crate::runs::runs_from(&st.runs, id);
+    if runs.is_empty() {
         return;
     }
-    if st.run_open.is_some() {
+    if !st.run_open.is_empty() {
         ed.status = "Wait for the agent run in progress to finish".into();
         return;
     }
@@ -769,7 +793,8 @@ pub struct ReviewPage {
 /// document only re-runs the in-memory diff.
 pub struct ReviewDiff {
     pub run: String,
-    stamp: u64,
+    /// `doc_stamp` and history generation it was built at: an undo refreshes it too.
+    stamp: (u64, u64),
     pub snaps: Vec<Option<crate::model::Document>>,
     pub pages: Vec<ReviewPage>,
 }
@@ -790,7 +815,7 @@ fn build_review(ed: &Editor, run: &crate::runs::Run, dir: &std::path::Path) -> R
         .collect();
     let mut r = ReviewDiff {
         run: run.id.clone(),
-        stamp: 0,
+        stamp: (0, 0),
         snaps,
         pages: Vec::new(),
     };
@@ -799,7 +824,7 @@ fn build_review(ed: &Editor, run: &crate::runs::Run, dir: &std::path::Path) -> R
 }
 
 fn refresh_review(r: &mut ReviewDiff, ed: &Editor, run: &crate::runs::Run) {
-    r.stamp = ed.doc_stamp;
+    r.stamp = (ed.doc_stamp, ed.history.generation());
     r.pages = run
         .pages
         .iter()
@@ -813,7 +838,13 @@ fn refresh_review(r: &mut ReviewDiff, ed: &Editor, run: &crate::runs::Run) {
             ReviewPage {
                 page_id: rp.page_id.clone(),
                 name,
-                review: page_review(rp.version.is_some(), snap.as_ref(), live_doc(ed, &rp.page_id)),
+                review: match page_review(rp.version.is_some(), snap.as_ref(), live_doc(ed, &rp.page_id)) {
+                    PageReview::Diff(mut d) => {
+                        crate::runs::keep_own(&mut d, rp);
+                        PageReview::Diff(d)
+                    }
+                    other => other,
+                },
             }
         })
         .collect();
@@ -937,7 +968,7 @@ pub(super) fn review(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     };
     match &mut st.review_diff {
         Some(r) if r.run == id => {
-            if r.stamp != ed.doc_stamp {
+            if r.stamp != (ed.doc_stamp, ed.history.generation()) {
                 refresh_review(r, ed, &run);
             }
         }

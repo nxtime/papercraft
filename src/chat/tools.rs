@@ -188,7 +188,7 @@ impl Ctl<'_> {
         }
         let Some(d) = self.dispatch else { return Some(Err("tools are not available".into())) };
         let (reply, mut rx) = tokio::sync::oneshot::channel();
-        if !(d.0)(crate::mcp::Call { name: name.into(), args: args.clone(), reply }) {
+        if !(d.0)(crate::mcp::Call { name: name.into(), args: args.clone(), client: Default::default(), reply }) {
             return Some(Err("the app is not accepting tool calls".into()));
         }
         loop {

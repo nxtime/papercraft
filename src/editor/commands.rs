@@ -19,6 +19,8 @@ pub enum UiEvent {
     OpenVariables,
     /// Open the New annotation popover on this layer.
     Annotate(NodeId),
+    /// Open the chat's Ask box on the selection (⌘K).
+    Ask,
 }
 
 impl Editor {

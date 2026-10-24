@@ -26,6 +26,13 @@ pub struct PageSlot {
     pub stash: Option<Box<PageStash>>,
     /// History generation at the last save.
     pub saved_gen: u64,
+    /// The project was opened without reading this page yet: `stash` holds an empty stand-in
+    /// that is never saved. The loader installs the real page (`Editor::poll_loading`), or code
+    /// that needs it now reads it first (`Editor::ensure_loaded`).
+    pub pending: bool,
+    /// Why a pending page could not be read. Such a page stays a stand-in: not shown, not saved,
+    /// so the file on disk is left for the user to repair.
+    pub failed: Option<String>,
     /// Active mode id per collection id on this page.
     pub modes: crate::variables::PageModes,
 }
@@ -37,6 +44,8 @@ impl PageSlot {
             name: name.into(),
             stash: None,
             saved_gen: 0,
+            pending: false,
+            failed: None,
             modes: Default::default(),
         }
     }
@@ -80,6 +89,8 @@ impl Editor {
                     })
                 }),
                 saved_gen: 0,
+                pending: false,
+                failed: None,
                 modes: Default::default(),
             })
             .collect();
@@ -100,6 +111,9 @@ impl Editor {
     /// Make page `i` active, parking the current one.
     pub fn switch_page(&mut self, i: usize) {
         if i == self.active_page || i >= self.pages.len() {
+            return;
+        }
+        if !self.ensure_loaded(i) {
             return;
         }
         self.cancel_gesture();
@@ -180,6 +194,8 @@ impl Editor {
                 needs_fit: true,
             })),
             saved_gen: u64::MAX,
+            pending: false,
+            failed: None,
             modes: Default::default(),
         });
         self.meta_dirty = true;
@@ -233,7 +249,7 @@ impl Editor {
     }
 
     pub fn duplicate_page(&mut self, i: usize) -> usize {
-        if i >= self.pages.len() {
+        if i >= self.pages.len() || !self.ensure_loaded(i) {
             return self.active_page;
         }
         self.commit();
@@ -396,7 +412,7 @@ impl Editor {
     /// Pages whose content changed since their last save.
     pub fn dirty_pages(&self) -> Vec<usize> {
         (0..self.pages.len())
-            .filter(|i| self.page_gen(*i) != self.pages[*i].saved_gen)
+            .filter(|i| !self.pages[*i].pending && self.page_gen(*i) != self.pages[*i].saved_gen)
             .collect()
     }
 
@@ -440,6 +456,7 @@ impl Editor {
         if i == self.active_page || i >= self.pages.len() {
             return f(self);
         }
+        self.ensure_loaded(i);
         self.commit();
         let mut s = self.pages[i]
             .stash
@@ -472,6 +489,8 @@ impl Editor {
         if self.cross_busy || self.edit_page.is_some() {
             return;
         }
+        // Instances on a page that is still being read must follow the change too.
+        self.finish_loading();
         self.cross_busy = true;
         for _ in 0..MAX_ROUNDS {
             let Some((src, mains)) = (!self.cross_pending.is_empty())
@@ -508,6 +527,115 @@ impl Editor {
         }
         self.cross_pending.clear();
         self.cross_busy = false;
+    }
+
+    /// Hand over the pages `open_pages` got as stand-ins (`pending`: indexes into the page list)
+    /// to a background reader for the project in `dir`.
+    pub fn load_pages_in_background(&mut self, dir: &std::path::Path, pending: &[usize]) {
+        if pending.is_empty() {
+            return;
+        }
+        let refs = pending
+            .iter()
+            .map(|&i| crate::project::PageRef {
+                id: self.pages[i].id.clone(),
+                name: self.pages[i].name.clone(),
+            })
+            .collect();
+        for &i in pending {
+            self.pages[i].pending = true;
+        }
+        self.loader = Some(crate::project::loader::PageLoader::spawn(dir.to_path_buf(), refs));
+    }
+
+    /// Pages are still being read in the background.
+    pub fn loading(&self) -> bool {
+        self.pages.iter().any(|s| s.pending && s.failed.is_none())
+    }
+
+    /// Install the pages the background reader finished. Never blocks.
+    pub fn poll_loading(&mut self) {
+        while let Some(got) = self.loader.as_ref().and_then(|l| l.rx.try_recv().ok()) {
+            self.install_page(&got.0, got.1);
+        }
+    }
+
+    /// Wait for every page to be read. Call before anything that looks at or changes all pages
+    /// (agent tools, design edits, cross-page syncing).
+    pub fn finish_loading(&mut self) {
+        while self.loading() {
+            match self.loader.as_ref().and_then(|l| l.rx.recv().ok()) {
+                Some(got) => self.install_page(&got.0, got.1),
+                None => {
+                    // The reader is gone: read what is left here.
+                    for i in 0..self.pages.len() {
+                        if self.pages[i].pending && self.pages[i].failed.is_none() {
+                            self.read_page_now(i);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Make sure page `i` is read. False when it could not be (the reason is in the status).
+    pub fn ensure_loaded(&mut self, i: usize) -> bool {
+        if !self.pages[i].pending {
+            return true;
+        }
+        self.poll_loading();
+        if self.pages[i].pending && self.pages[i].failed.is_none() {
+            self.read_page_now(i);
+        }
+        !self.pages[i].pending
+    }
+
+    /// Read page `i` here, ahead of the background reader (whose copy is dropped on arrival).
+    fn read_page_now(&mut self, i: usize) {
+        let Some(dir) = self.loader.as_ref().map(|l| l.dir.clone()) else {
+            self.pages[i].failed = Some("the project folder is unknown".into());
+            return;
+        };
+        let r = crate::project::PageRef {
+            id: self.pages[i].id.clone(),
+            name: self.pages[i].name.clone(),
+        };
+        let path = dir.join(crate::project::PAGES_DIR).join(format!("{}.json", r.id));
+        let read = crate::project::read_page_file(&path, &r);
+        self.install_page(&r.id, read);
+    }
+
+    fn install_page(
+        &mut self,
+        id: &str,
+        read: Result<crate::project::loader::ReadPage, crate::project::FormatError>,
+    ) {
+        let Some(i) = self.pages.iter().position(|s| s.id == id && s.pending) else {
+            return;
+        };
+        let (mut p, mut modes) = match read {
+            Ok(x) => x,
+            Err(e) => {
+                let msg = format!("Could not read page {}: {e}", self.pages[i].name);
+                self.status.clone_from(&msg);
+                self.pages[i].failed = Some(msg);
+                return;
+            }
+        };
+        let changed = crate::project::finalize_page(&self.design, &mut p, &mut modes);
+        let slot = &mut self.pages[i];
+        let Some(stash) = slot.stash.as_mut() else { return };
+        // The manifest owns the name, and it may have been renamed meanwhile.
+        p.doc.name.clone_from(&slot.name);
+        stash.doc = p.doc;
+        stash.camera = p.camera.unwrap_or_default();
+        stash.needs_fit = p.camera.is_none();
+        slot.modes = modes;
+        slot.pending = false;
+        // Read from disk is saved by definition, unless the load itself changed the page.
+        slot.saved_gen = if changed { u64::MAX } else { stash.history.generation() };
+        self.revision += 1;
     }
 
     /// The document of page `i` (active or parked).

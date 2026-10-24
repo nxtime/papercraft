@@ -123,6 +123,11 @@ const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4); //
 #[cfg(not(target_arch = "wasm32"))]
 const HELP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 #[cfg(not(target_arch = "wasm32"))]
+const PROBE_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+/// How long a probe's output may lag behind the program's exit.
+#[cfg(not(target_arch = "wasm32"))]
+const PROBE_DRAIN: std::time::Duration = std::time::Duration::from_millis(200);
+#[cfg(not(target_arch = "wasm32"))]
 const PROBE_MAX_BYTES: u64 = 64 * 1024;
 
 /// The override from Settings, if any. The old `claude_path`/`codex_path` fields win for their
@@ -220,20 +225,38 @@ fn probe(bin: &std::path::Path, arg: &str, path: &std::ffi::OsStr, timeout: std:
     for pipe in [child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>), child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>)].into_iter().flatten() {
         let tx = tx.clone();
         std::thread::spawn(move || {
-            let mut s = String::new();
-            let _ = pipe.take(PROBE_MAX_BYTES).read_to_string(&mut s);
-            let _ = tx.send(s);
+            // Chunks, not one read to EOF: a pipe end can leak into an unrelated process
+            // spawned at the same moment (macOS has no atomic pipe+CLOEXEC) and then never
+            // reaches EOF until that process exits.
+            let (mut pipe, mut buf) = (pipe.take(PROBE_MAX_BYTES), [0u8; 4096]);
+            while let Ok(n @ 1..) = pipe.read(&mut buf) {
+                if tx.send(String::from_utf8_lossy(&buf[..n]).into_owned()).is_err() {
+                    break;
+                }
+            }
         });
     }
     drop(tx);
-    // Both pipes close when the program exits; a hung program hits the deadline and is killed.
+    // Done when the program exits (its output then gets a short grace to arrive) or when both
+    // pipes close; a hung program hits the deadline and is killed.
     let deadline = std::time::Instant::now() + timeout;
+    let mut exited_at = None;
     let mut out = String::new();
     let done = loop {
-        match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+        let now = std::time::Instant::now();
+        if exited_at.is_none() && child.try_wait().ok().flatten().is_some() {
+            exited_at = Some(now);
+        }
+        if exited_at.is_some_and(|t| now >= t + PROBE_DRAIN) {
+            break true;
+        }
+        if now >= deadline {
+            break false;
+        }
+        match rx.recv_timeout(PROBE_POLL.min(deadline - now)) {
             Ok(s) => out.push_str(&s),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break true,
-            Err(_) => break false,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
     };
     let _ = child.kill();

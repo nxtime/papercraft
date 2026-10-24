@@ -6,7 +6,7 @@ FROM rust:slim AS build
 # Must match the wasm-bindgen crate in Cargo.lock.
 ARG WASM_BINDGEN=0.2.129
 RUN rustup target add wasm32-unknown-unknown \
- && apt-get update && apt-get install -y --no-install-recommends binaryen pkg-config libssl-dev \
+ && apt-get update && apt-get install -y --no-install-recommends binaryen pkg-config libssl-dev libdbus-1-dev \
  && rm -rf /var/lib/apt/lists/* \
  && cargo install wasm-bindgen-cli --version ${WASM_BINDGEN} --locked
 COPY --from=vendor crates /vendor
@@ -21,7 +21,7 @@ COPY . .
 RUN sh web/build.sh && cargo build --release --locked --bin papercraft-relay
 
 FROM debian:stable-slim
-RUN apt-get update && apt-get install -y --no-install-recommends libssl3 ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends libssl3 libdbus-1-3 ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 papercraft
 COPY --from=build /src/target/release/papercraft-relay /usr/local/bin/papercraft-relay

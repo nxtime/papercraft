@@ -116,3 +116,26 @@ fn duplicating_keeps_cross_page_links_and_gives_copied_mains_fresh_keys() {
     assert_eq!(keys.len(), 2);
     assert_ne!(keys[0], keys[1], "copied main gets its own key");
 }
+
+#[test]
+fn write_html_instance_of_another_pages_main_links_instead_of_copying() {
+    use papercraft::model::Source;
+    let mut h = host();
+    let (a, b, comp) = setup(&mut h);
+    let screen = call(&mut h, "create_artboard", json!({"pageId": b, "name": "Screen",
+        "styles": {"width": "300px", "height": "200px", "display": "flex"}}));
+    let before = h.ed.page_doc(1).nodes.len();
+    call(&mut h, "write_html", json!({"pageId": b, "targetNodeId": screen["id"], "mode": "insert-children",
+        "html": "<x-paper-instance component=\"Pill\" layer-name=\"Pill / Here\"/>"}));
+    let doc = h.ed.page_doc(1);
+    assert!(doc.nodes.values().all(|n| !n.component), "no main copied onto B");
+    assert_eq!(doc.nodes.len(), before + 1, "only the instance root was added");
+    let inst = doc.nodes.values().find(|n| n.name == "Pill / Here").unwrap();
+    let link = inst.instance.as_ref().unwrap();
+    assert_eq!(link.main, num(&comp));
+    assert_eq!(link.source, Some(Source::Page(a.as_str().unwrap().to_string())));
+    let key = Value::String(format!("{}:{}", &b.as_str().unwrap()[..6], inst.id.0));
+    assert!(bg_red(&h, 1, &key));
+    call(&mut h, "update_styles", json!({"pageId": a, "updates": [{"nodeIds": [comp], "styles": {"background": "#0000ff"}}]}));
+    assert!(!bg_red(&h, 1, &key), "the instance follows the main on A");
+}

@@ -660,6 +660,14 @@ pub enum Icon {
     Zap,
 }
 
+/// Every Lucide name [`icon_by_name`] knows.
+pub const ICON_NAMES: &[&str] = &[
+    "chevron-right", "chevron-down", "chevron-up", "plus", "minus", "trash-2", "lock", "unlock", "eye",
+    "eye-off", "panel-left", "hand", "mouse-pointer-2", "pencil", "pen", "eraser", "type", "square",
+    "circle", "image", "star", "scale", "zap", "database", "accessibility", "code", "grid-3x3",
+    "ellipsis", "download", "circle-question-mark",
+];
+
 /// The app's painted icon for a Lucide name, when it has one.
 #[must_use]
 pub fn icon_by_name(name: &str) -> Option<Icon> {

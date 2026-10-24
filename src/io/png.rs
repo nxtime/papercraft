@@ -1,7 +1,7 @@
 //! PNG export through the offscreen GPU renderer.
 
 use super::svg::export_bounds;
-use crate::geom::{Camera, V2, v2};
+use crate::geom::{Camera, Rect, V2, v2};
 use crate::model::{Color, Document, NodeId};
 use crate::render::gpu::Headless;
 use crate::render::scene::{self, View};
@@ -22,11 +22,16 @@ fn plan(
     roots: Option<&[NodeId]>,
     scale: f64,
     background: Option<Color>,
+    clip: Option<Rect>,
 ) -> Result<Plan, String> {
     let roots: Vec<NodeId> = roots
         .map(|r| r.to_vec())
         .unwrap_or_else(|| doc.root.clone());
     let b = export_bounds(doc, &roots).ok_or("nothing to export")?;
+    let b = match clip {
+        Some(c) => b.intersection(&c).ok_or("nothing to export")?,
+        None => b,
+    };
     let scale = scale.min(MAX_EDGE / b.w.max(b.h)).max(1e-3);
     let size = [
         (b.w * scale).ceil().max(1.0) as u32,
@@ -66,7 +71,19 @@ pub fn render(
     scale: f64,
     background: Option<Color>,
 ) -> Result<image::RgbaImage, String> {
-    let p = plan(doc, roots, scale, background)?;
+    render_clip(gpu, doc, roots, scale, background, None)
+}
+
+/// [`render`] limited to `clip` (world units): only the part of the roots inside it is drawn.
+pub fn render_clip(
+    gpu: &Headless,
+    doc: &Document,
+    roots: Option<&[NodeId]>,
+    scale: f64,
+    background: Option<Color>,
+    clip: Option<Rect>,
+) -> Result<image::RgbaImage, String> {
+    let p = plan(doc, roots, scale, background, clip)?;
     let mut img = gpu.render_frame(&p.frame, p.size, 1.0, p.clear);
     if p.transparent {
         unpremultiply_edges(&mut img);
@@ -82,7 +99,7 @@ pub async fn render_async(
     scale: f64,
     background: Option<Color>,
 ) -> Result<image::RgbaImage, String> {
-    let p = plan(doc, roots, scale, background)?;
+    let p = plan(doc, roots, scale, background, None)?;
     let mut img = gpu
         .render_frame_async(&p.frame, p.size, 1.0, p.clear)
         .await?;

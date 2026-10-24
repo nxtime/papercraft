@@ -6,8 +6,9 @@ use crate::editor::Editor;
 use crate::editor::shortcuts;
 use crate::geom::V2;
 use crate::model::annotation::{
-    Annotation, AnnotationCategory, CARD_H, CARD_W, Display, Side, anchor_world, card_world, numbers,
+    Annotation, AnnotationCategory, CARD_W, Display, Side, anchor_world, card_world, numbers,
 };
+use crate::model::annotation_layout::{self as layout, BADGE, BODY_LH, BODY_LINES, HEAD_GAP, LABEL_LINES, LABEL_W};
 use crate::theme::{self, Icon};
 use egui::{Align2, Color32, Galley, Pos2, Rect, Sense, Stroke, vec2};
 use std::collections::{HashMap, HashSet};
@@ -41,7 +42,10 @@ impl From<Display> for Mode {
     }
 }
 
-type GalleyKey = (u64, u64, u32, bool);
+/// (annotation, text hash, scale bucket, kind): 0 label, 1 label in full, 2 body in full,
+/// 3 body capped at [`BODY_LINES`] rows.
+type GalleyKey = (u64, u64, u32, u8);
+type RouteKey = (u64, u64);
 
 /// View state (never saved): global mode, hidden categories, collapsed notes, the drag in
 /// progress and the text layout cache.
@@ -51,9 +55,14 @@ pub struct AnnotationsView {
     pub mode: Option<Mode>,
     pub hidden_categories: HashSet<String>,
     pub collapsed: HashSet<u64>,
+    /// Notes showing every body line instead of "+N more lines".
+    pub expanded: HashSet<u64>,
     drag: Option<(u64, V2)>,
     galleys: HashMap<GalleyKey, Arc<Galley>>,
     nums: Option<(u64, Arc<Numbers>)>,
+    /// Leader routes in world space, keyed by annotation; valid while the key (doc revision,
+    /// card rects around it) is unchanged.
+    routes: HashMap<u64, (RouteKey, Vec<V2>)>,
 }
 
 pub type Numbers = HashMap<u64, (Option<crate::model::NodeId>, u32)>;
@@ -86,11 +95,10 @@ const SCALE_MAX: f64 = 1.5;
 const SCALE_STEP: f64 = 0.1;
 const GALLEY_CACHE_MAX: usize = 512;
 const PAD: f32 = 12.0;
-const BADGE_R: f32 = 9.0;
+const BADGE_R: f32 = BADGE as f32 / 2.0;
 const BADGE_ONLY: f32 = 22.0;
 const LABEL_PT: f32 = 13.0;
 const BODY_PT: f32 = 11.0;
-const BODY_ROWS: usize = 2;
 const ICON_PX: f32 = 14.0;
 const RADIUS: f32 = 10.0;
 const LINE_W: f32 = 1.5;
@@ -108,34 +116,6 @@ fn scale_bucket(zoom: f64) -> u32 {
 
 fn bucket_scale(b: u32) -> f32 {
     (f64::from(b) * SCALE_STEP) as f32
-}
-
-/// Orthogonal leader line from a note card (or badge) rect to `anchor`: straight down/up when the
-/// anchor is above or below the card, else out of the facing side with one elbow.
-pub fn leader_route(card: Rect, anchor: Pos2) -> Vec<Pos2> {
-    if anchor.x >= card.left() && anchor.x <= card.right() {
-        let y = if anchor.y < card.top() { card.top() } else { card.bottom() };
-        return vec![Pos2::new(anchor.x, y), anchor];
-    }
-    let sx = if anchor.x > card.right() { card.right() } else { card.left() };
-    let s = Pos2::new(sx, card.center().y);
-    if (s.y - anchor.y).abs() < 0.5 {
-        return vec![s, anchor];
-    }
-    let mx = (s.x + anchor.x) / 2.0;
-    vec![s, Pos2::new(mx, s.y), Pos2::new(mx, anchor.y), anchor]
-}
-
-/// Point on `target`'s edge facing `from`: the side `from` lies beside, level with it (clamped).
-fn edge_toward(target: Rect, from: Pos2) -> Pos2 {
-    if from.x > target.right() {
-        Pos2::new(target.right(), from.y.clamp(target.top(), target.bottom()))
-    } else if from.x < target.left() {
-        Pos2::new(target.left(), from.y.clamp(target.top(), target.bottom()))
-    } else {
-        let y = if from.y < target.top() { target.top() } else { target.bottom() };
-        Pos2::new(from.x, y)
-    }
 }
 
 fn near_line(pts: &[Pos2], p: Pos2) -> bool {
@@ -161,6 +141,12 @@ struct Item<'a> {
     badge_only: bool,
     route: Vec<Pos2>,
     target: Option<Rect>,
+    label: Option<Arc<Galley>>,
+    body: Option<Arc<Galley>>,
+    /// Body rows cut off by the cap (shown as "+N more lines").
+    more: usize,
+    /// Head row height (screen): the taller of badge and label.
+    head_h: f32,
 }
 
 fn text_hash(a: &Annotation) -> u64 {
@@ -171,7 +157,7 @@ fn text_hash(a: &Annotation) -> u64 {
 }
 
 fn galley(
-    ui: &egui::Ui,
+    ctx: &egui::Context,
     cache: &mut HashMap<GalleyKey, Arc<Galley>>,
     key: GalleyKey,
     text: &str,
@@ -188,10 +174,20 @@ fn galley(
             let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, Color32::WHITE, wrap);
             job.wrap.max_rows = rows;
             job.wrap.break_anywhere = false;
-            job.wrap.overflow_character = Some('…');
-            ui.fonts_mut(|f| f.layout_job(job))
+            job.wrap.overflow_character = (key.3 == 0).then_some('…');
+            ctx.fonts_mut(|f| f.layout_job(job))
         })
         .clone()
+}
+
+fn to_pos(canvas: Rect, cam: &crate::geom::Camera, w: V2) -> Pos2 {
+    let v = cam.world_to_screen(w);
+    canvas.min + vec2(v.x as f32, v.y as f32)
+}
+
+fn world_rect(canvas: Rect, cam: &crate::geom::Camera, r: Rect) -> crate::geom::Rect {
+    let min = cam.screen_to_world(V2 { x: f64::from(r.min.x - canvas.min.x), y: f64::from(r.min.y - canvas.min.y) });
+    crate::geom::Rect::new(min.x, min.y, f64::from(r.width()) / cam.zoom, f64::from(r.height()) / cam.zoom)
 }
 
 /// Draw the overlay and the bottom pill; apply a finished drag as one undo step.
@@ -212,7 +208,13 @@ pub fn draw(
     }
     pill(ctx, ed, view, canvas, mode);
     if let Some((id, off)) = commit {
-        ed.update_annotation(id, |a| a.position = a.position + off);
+        let doc = ed.doc.clone();
+        ed.update_annotation(id, |a| {
+            a.position = a.position + off;
+            let (Some(t), Some(at)) = (a.target.and_then(|t| doc.world_rect(t)), Some(card_world(&doc, a) + off)) else { return };
+            let s = layout::card_size(a);
+            a.anchor = layout::anchor_toward(t, crate::geom::Rect::new(at.x, at.y, s.x, s.y));
+        });
     }
 }
 
@@ -229,10 +231,7 @@ fn cards(
     let s = bucket_scale(bucket);
     let cats: Vec<AnnotationCategory> = ed.design.categories();
     let nums = view.numbers(ed);
-    let to_screen = |w: V2| {
-        let v = cam.world_to_screen(w);
-        canvas.min + vec2(v.x as f32, v.y as f32)
-    };
+    let to_screen = |w: V2| to_pos(canvas, &cam, w);
     let drag = view.drag;
     let mut items: Vec<Item> = Vec::new();
     for a in &ed.doc.annotations {
@@ -244,15 +243,37 @@ fn cards(
             (c32(c.color), theme::icon_by_name(&c.icon).unwrap_or(Icon::Sticky))
         });
         let mut at = card_world(&ed.doc, a);
-        if let Some((id, off)) = drag.filter(|(id, _)| *id == a.id) {
-            let _ = id;
+        if let Some((_, off)) = drag.filter(|(id, _)| *id == a.id) {
             at = at + off;
         }
-        let badge_only = mode == Mode::Badges || view.collapsed.contains(&a.id);
+        // Below SCALE_MIN a full card would outgrow the footprint placement kept free for it.
+        let badge_only = mode == Mode::Badges || view.collapsed.contains(&a.id) || cam.zoom < SCALE_MIN;
+        let (mut label, mut body, mut more, mut head_h) = (None, None, 0, BADGE as f32 * s);
         let size = if badge_only {
             vec2(BADGE_ONLY * s, BADGE_ONLY * s)
         } else {
-            vec2(CARD_W as f32 * s, CARD_H as f32 * s)
+            let th = text_hash(a);
+            let expanded = view.expanded.contains(&a.id);
+            let lw = LABEL_W as f32 * s;
+            let (lk, lrows) = if expanded { (1, usize::MAX) } else { (0, LABEL_LINES) };
+            let lg = galley(ctx, &mut view.galleys, (a.id, th, bucket, lk), &a.label, theme::semibold(LABEL_PT * s), lw, lrows);
+            head_h = head_h.max(lg.size().y);
+            let mut h = (layout::PAD * 2.0) as f32 * s + head_h;
+            if !a.body.is_empty() {
+                let bw = (CARD_W - 2.0 * layout::PAD) as f32 * s;
+                let font = egui::FontId::proportional(BODY_PT * s);
+                let full = galley(ctx, &mut view.galleys, (a.id, th, bucket, 2), &a.body, font.clone(), bw, usize::MAX);
+                let bg = if expanded || full.rows.len() <= BODY_LINES {
+                    full
+                } else {
+                    more = full.rows.len() - BODY_LINES;
+                    galley(ctx, &mut view.galleys, (a.id, th, bucket, 3), &a.body, font, bw, BODY_LINES)
+                };
+                h += HEAD_GAP as f32 * s + bg.size().y + if more > 0 { BODY_LH as f32 * s } else { 0.0 };
+                body = Some(bg);
+            }
+            label = Some(lg);
+            vec2(CARD_W as f32 * s, h)
         };
         let rect = Rect::from_min_size(to_screen(at), size);
         let lineless = a.detached || (a.target.is_none() && a.point.is_none());
@@ -263,14 +284,7 @@ fn cards(
                 vec2(r.w as f32, r.h as f32),
             )
         });
-        let mut anchor = to_screen(anchor_world(&ed.doc, a));
-        if a.anchor.side == Side::Center
-            && let Some(t) = target
-        {
-            anchor = edge_toward(t, rect.center());
-        }
-        let route = if lineless { Vec::new() } else { leader_route(rect, anchor) };
-        let bounds = route.iter().fold(rect, |r, p| r.union(Rect::from_min_max(*p, *p)));
+        let bounds = target.map_or(rect, |t| rect.union(t));
         if !canvas.intersects(bounds) {
             continue;
         }
@@ -281,10 +295,15 @@ fn cards(
             icon,
             rect,
             badge_only,
-            route,
+            route: if lineless { Vec::new() } else { vec![Pos2::ZERO] },
             target,
+            label,
+            body,
+            more,
+            head_h,
         });
     }
+    route_items(ed, view, &mut items, canvas);
 
     let mut commit = None;
     let pointer = ctx.pointer_hover_pos();
@@ -325,7 +344,7 @@ fn cards(
                 if resp.hovered() || on_line {
                     ctx.set_cursor_icon(if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::PointingHand });
                 }
-                if !it.badge_only {
+                if let Some(lg) = &it.label {
                     painter.rect_filled(it.rect, RADIUS * s, p.popover);
                     let stroke = if is_sel {
                         Stroke::new(LINE_W, it.color)
@@ -333,24 +352,36 @@ fn cards(
                         Stroke::new(1.0, p.separator)
                     };
                     painter.rect_stroke(it.rect, RADIUS * s, stroke, egui::StrokeKind::Inside);
-                    let th = text_hash(a);
                     let text_x = badge_rect.right() + 8.0 * s;
                     let icon_rect = Rect::from_center_size(
                         Pos2::new(it.rect.right() - (PAD + ICON_PX / 2.0) * s, badge_rect.center().y),
                         vec2(ICON_PX, ICON_PX) * s,
                     );
-                    let label_w = (icon_rect.left() - 6.0 * s - text_x).max(10.0);
-                    let lg = galley(ui, &mut view.galleys, (a.id, th, bucket, true), &a.label,
-                        theme::semibold(LABEL_PT * s), label_w, 1);
+                    let head_top = it.rect.top() + PAD * s;
                     painter.galley_with_override_text_color(
-                        Pos2::new(text_x, badge_rect.center().y - lg.size().y / 2.0), lg, p.text);
+                        Pos2::new(text_x, head_top + (it.head_h - lg.size().y) / 2.0), lg.clone(), p.text);
                     theme::paint_icon(&painter, icon_rect, it.icon, it.color);
-                    if !a.body.is_empty() {
-                        let bw = it.rect.width() - PAD * 2.0 * s;
-                        let bg = galley(ui, &mut view.galleys, (a.id, th, bucket, false), &a.body,
-                            egui::FontId::proportional(BODY_PT * s), bw, BODY_ROWS);
+                    let body_top = head_top + it.head_h + HEAD_GAP as f32 * s;
+                    if let Some(bg) = &it.body {
                         painter.galley_with_override_text_color(
-                            Pos2::new(it.rect.left() + PAD * s, badge_rect.bottom() + 6.0 * s), bg, p.secondary);
+                            Pos2::new(it.rect.left() + PAD * s, body_top), bg.clone(), p.secondary);
+                        if it.more > 0 {
+                            let more_rect = Rect::from_min_size(
+                                Pos2::new(it.rect.left() + PAD * s, body_top + bg.size().y),
+                                vec2(it.rect.width() - PAD * 2.0 * s, BODY_LH as f32 * s),
+                            );
+                            let r = ui.interact(more_rect, egui::Id::new(("annotation-more", a.id)), Sense::click());
+                            let text = format!("+{} more lines", it.more);
+                            painter.text(more_rect.left_center(), Align2::LEFT_CENTER, text,
+                                theme::semibold(BODY_PT * s), if r.hovered() { p.text } else { it.color });
+                            if r.hovered() {
+                                ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if r.clicked() {
+                                *selected = Some(a.id);
+                                view.expanded.insert(a.id);
+                            }
+                        }
                     }
                 }
                 let detached = a.detached || (a.target.is_none() && a.point.is_none());
@@ -386,6 +417,66 @@ fn cards(
             }
         });
     commit
+}
+
+/// Fill each item's screen-space leader route. Routes go around the page's nodes and the other
+/// cards, are computed in world space from each card's layout size (so they do not change with
+/// zoom) and cached until the document or a nearby card changes. The drawn card or badge joins
+/// the route with an elbow from its centre, hidden under a full card.
+fn route_items(ed: &Editor, view: &mut AnnotationsView, items: &mut [Item], canvas: Rect) {
+    let cam = ed.camera;
+    let cards: Vec<(u64, crate::geom::Rect)> = items
+        .iter()
+        .map(|it| {
+            let at = world_rect(canvas, &cam, it.rect).min();
+            let s = layout::card_size(it.a);
+            (it.a.id, crate::geom::Rect::new(at.x, at.y, s.x, s.y))
+        })
+        .collect();
+    view.routes.retain(|id, _| items.iter().any(|it| it.a.id == *id));
+    for (i, it) in items.iter_mut().enumerate() {
+        if it.route.is_empty() {
+            continue;
+        }
+        let a = it.a;
+        let card = cards[i].1;
+        let Some(trect) = a.target.and_then(|t| ed.doc.world_rect(t)) else {
+            let end = anchor_world(&ed.doc, a);
+            it.route = layout::elbow(card, end).into_iter().map(|w| to_pos(canvas, &cam, w)).collect();
+            continue;
+        };
+        let end = if a.anchor.side == Side::Center {
+            layout::anchor_point(trect, layout::anchor_toward(trect, card))
+        } else {
+            anchor_world(&ed.doc, a)
+        };
+        let win = card.union(&trect).inflate(300.0);
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (card.x.to_bits(), card.y.to_bits(), card.w.to_bits(), card.h.to_bits(), end.x.to_bits(), end.y.to_bits()).hash(&mut h);
+        let others: Vec<crate::geom::Rect> = cards
+            .iter()
+            .enumerate()
+            .filter(|(j, (_, r))| *j != i && r.intersects(&win))
+            .map(|(_, (_, r))| *r)
+            .collect();
+        for r in &others {
+            (r.x.to_bits(), r.y.to_bits(), r.w.to_bits(), r.h.to_bits()).hash(&mut h);
+        }
+        let key = (ed.doc_stamp, h.finish());
+        let world = match view.routes.get(&a.id) {
+            Some((k, r)) if *k == key => r.clone(),
+            _ => {
+                let mut obs = layout::route_obstacles(&ed.doc, a.target.unwrap());
+                obs.extend(others);
+                let r = layout::route(card, trect, end, &obs);
+                view.routes.insert(a.id, (key, r.clone()));
+                r
+            }
+        };
+        let route: Vec<Pos2> = world.into_iter().map(|w| to_pos(canvas, &cam, w)).collect();
+        let c = it.rect.center();
+        it.route = [c, Pos2::new(route[0].x, c.y)].into_iter().chain(route).collect();
+    }
 }
 
 fn pill(ctx: &egui::Context, ed: &Editor, view: &mut AnnotationsView, canvas: Rect, mode: Mode) {
@@ -444,38 +535,10 @@ mod tests {
     }
 
     #[test]
-    fn route_shapes() {
-        let card = Rect::from_min_size(Pos2::new(0.0, 0.0), vec2(100.0, 40.0));
-        // Anchor right of the card, different y: H-V-H elbow from the right edge.
-        let r = leader_route(card, Pos2::new(300.0, 100.0));
-        assert_eq!(r.len(), 4);
-        assert_eq!(r[0], Pos2::new(100.0, 20.0));
-        assert_eq!(r[3], Pos2::new(300.0, 100.0));
-        assert_eq!(r[1].y, r[0].y);
-        assert_eq!(r[2].x, r[1].x);
-        assert_eq!(r[2].y, 100.0);
-        // Level anchor: straight.
-        assert_eq!(leader_route(card, Pos2::new(300.0, 20.0)).len(), 2);
-        // Left of the card: leaves the left edge.
-        assert_eq!(leader_route(card, Pos2::new(-50.0, 90.0))[0].x, 0.0);
-        // Below the card: vertical from the bottom.
-        let r = leader_route(card, Pos2::new(40.0, 200.0));
-        assert_eq!(r, vec![Pos2::new(40.0, 40.0), Pos2::new(40.0, 200.0)]);
-    }
-
-    #[test]
     fn scale_is_bucketed_and_clamped() {
         assert_eq!(scale_bucket(0.01), scale_bucket(0.6));
         assert_eq!(scale_bucket(50.0), scale_bucket(1.5));
         assert_eq!(scale_bucket(1.0), 10);
-    }
-
-    #[test]
-    fn edge_anchor_faces_card() {
-        let t = Rect::from_min_size(Pos2::new(100.0, 100.0), vec2(200.0, 50.0));
-        assert_eq!(edge_toward(t, Pos2::new(400.0, 500.0)), Pos2::new(300.0, 150.0));
-        assert_eq!(edge_toward(t, Pos2::new(0.0, 120.0)), Pos2::new(100.0, 120.0));
-        assert_eq!(edge_toward(t, Pos2::new(150.0, 0.0)), Pos2::new(150.0, 100.0));
     }
 
     #[test]

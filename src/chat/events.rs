@@ -28,6 +28,18 @@ pub enum Event {
 pub struct ToolDispatch(pub std::sync::Arc<dyn Fn(crate::mcp::Call) -> bool + Send + Sync>);
 
 #[cfg(not(target_arch = "wasm32"))]
+impl ToolDispatch {
+    /// Tags every call with the chat, so the turn's edits land in that chat's own run.
+    pub fn for_chat(self, chat: &str) -> ToolDispatch {
+        let client = crate::mcp::Client::chat(chat);
+        ToolDispatch(std::sync::Arc::new(move |mut c: crate::mcp::Call| {
+            c.client = client.clone();
+            (self.0)(c)
+        }))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl std::fmt::Debug for ToolDispatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ToolDispatch")
@@ -51,6 +63,9 @@ pub struct TurnConfig {
     pub mcp_url: String,
     /// PaperCraft skill text and project context, appended to the system prompt.
     pub system: String,
+    /// API backend: the design-system summary, sent after `system` as its own block. CLI and ACP
+    /// backends get it inside `system` or in front of the prompt instead.
+    pub ds_digest: String,
     /// Model id; None = the backend's default (API: the endpoint's model).
     pub model: Option<String>,
     /// `low` | `medium` | `high`; None = the backend's default.

@@ -52,6 +52,8 @@ pub enum Command {
     ReviewRun(String),
     /// Revert a saved agent run.
     RevertRun(String),
+    /// An Actions-menu action on the selection.
+    Act(super::actions::Act),
 }
 
 pub struct Entry {
@@ -195,6 +197,15 @@ pub fn entries(ed: &Editor, st: &UiState) -> Vec<Entry> {
             });
         }
     }
+    if !ed.selection.is_empty() {
+        for (act, label) in super::actions::items() {
+            out.push(Entry {
+                label: format!("Actions: {label}"),
+                detail: "Selection".into(),
+                cmd: Command::Act(act),
+            });
+        }
+    }
     out.push(Entry {
         label: "Libraries…".into(),
         detail: "Publish and enable".into(),
@@ -314,6 +325,7 @@ pub fn run(ed: &mut Editor, st: &mut UiState, cmd: Command) {
             st.show_library = false;
             st.show_design = false;
         }
+        Command::Act(a) => super::actions::dispatch(ed, st, a),
         Command::Settings => st.settings.open = true,
         Command::Variables => st.variables.open = true,
         Command::Libraries => st.libraries.open = true,

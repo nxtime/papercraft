@@ -363,7 +363,13 @@ fn page_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, i: usize) {
         };
         let g = ui
             .painter()
-            .layout(ed.pages[i].name.clone(), font, p.text, f32::INFINITY);
+            .layout(
+                ed.pages[i].name.clone(),
+                font,
+                // Dimmed while the page is still being read in the background.
+                if ed.pages[i].pending { p.secondary } else { p.text },
+                f32::INFINITY,
+            );
         ui.painter()
             .with_clip_rect(name_rect.intersect(ui.clip_rect()))
             .galley(

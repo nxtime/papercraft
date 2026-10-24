@@ -26,6 +26,13 @@ pub const SUGGESTIONS: [(Icon, &str); 3] = [
     (Icon::Text, "Lint this page and fix warnings"),
     (Icon::Eye, "Make a dark mode"),
 ];
+/// The Actions menu's intent lane: label and the prompt sent with a chip of the selection.
+pub const ACTION_PROMPTS: [(&str, &str); 4] = [
+    ("Optimize", "Tighten layout and spacing to the token scale, fix contrast to AA, keep the content. Prefer existing components."),
+    ("Make consistent with DS", "Replace hand-made parts with instances of the listed components, bind every color and space to variables."),
+    ("Write states", "Add the empty, loading and error states of the selection as frames next to it. Reuse its components and variables."),
+    ("Variations \u{d7}3", "Make 3 variations of the selection side by side: compact, spacious and bold. Duplicate it to the right (offset by its width + 80), name them `<Frame> \u{b7} Variant A/B/C`, keep the content."),
+];
 const AFTER_RUN: [(&str, &str); 3] = [
     ("Lint this", "Lint this page and fix warnings"),
     ("Make a dark mode", "Make a dark mode"),
@@ -53,7 +60,11 @@ pub struct View<'a> {
     pub runs: &'a [Run],
     pub approvals: &'a [Approval],
     pub error: Option<&'a str>,
+    /// The last turn was stopped by the user.
+    pub stopped: bool,
     pub signin: Option<&'a super::chat::chat_agents::SignIn>,
+    /// The chat's run while it is being recorded, for the live count on the step group.
+    pub live_run: Option<&'a Run>,
 }
 
 // ---------------------------------------------------------------------------------- pure helpers
@@ -524,13 +535,18 @@ fn step_row(ui: &mut Ui, t: &ToolCall, state: ToolState) {
     });
 }
 
-fn tool_group(ui: &mut Ui, calls: &[&ToolCall], running: bool, approvals: &[Approval], acts: &mut Acts) {
+fn tool_group(ui: &mut Ui, calls: &[&ToolCall], v: &View, acts: &mut Acts) {
+    let (running, approvals) = (v.running, v.approvals);
     let p = theme::pal(ui);
     let states: Vec<ToolState> = calls.iter().map(|t| tool_state(t, running, approvals)).collect();
     let live = states.iter().any(|s| matches!(s, ToolState::Running | ToolState::Pending));
     let id = Id::new(("chat-group", &calls[0].id));
     let open = get_open(ui, id, live);
-    let title = group_title(calls, live);
+    let mut title = group_title(calls, live);
+    if let Some(r) = v.live_run.filter(|r| live && r.touched() > 0) {
+        let n = r.touched();
+        title = format!("{title} \u{b7} {} change{}", super::grouped(n), if n == 1 { "" } else { "s" });
+    }
     if header(
         ui,
         id.with("hdr"),
@@ -641,7 +657,8 @@ fn run_card(ui: &mut Ui, run: &Run, acts: &mut Acts) {
                 ui.spacing_mut().item_spacing.y = 1.0;
                 ui.label(RichText::new(format!("Agent finished, {}", super::panels::count(changes, "change"))).font(theme::semibold(theme::BODY)));
                 let secs = run.ended.unwrap_or(run.started).saturating_sub(run.started) / 1000;
-                muted(ui, format!("Snapshot saved before run {} \u{b7} {secs} s", run.number));
+                let by = if run.client.is_empty() { String::new() } else { format!("{} \u{b7} ", run.client) };
+                muted(ui, format!("{by}Snapshot saved before run {} \u{b7} {secs} s", run.number));
             });
         });
         ui.add_space(4.0);
@@ -775,7 +792,7 @@ fn assistant_segment(ui: &mut Ui, md_id: Id, m: &Message, v: &View, acts: &mut A
                     tool_card(ui, t, tool_state(t, v.running, v.approvals), acts);
                 }
             }
-            calls => tool_group(ui, calls, v.running, v.approvals, acts),
+            calls => tool_group(ui, calls, v, acts),
         }
     }
 }
@@ -834,6 +851,8 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
         }
         if let Some(e) = v.error {
             error_row(ui, e, v.signin, acts);
+        } else if v.stopped && !v.running {
+            muted(ui, "Stopped");
         }
         ui.add_space(4.0);
         if jump {

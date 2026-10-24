@@ -1,6 +1,7 @@
 //! egui chrome: menu bar, layers panel, design (properties) panel, floating toolbar, and the
 //! projects home screen.
 
+pub mod actions;
 pub mod agent;
 pub mod annotations;
 pub mod annotations_canvas;
@@ -30,7 +31,7 @@ use crate::editor::{Editor, Tool};
 use crate::model::{Color, NodeId, NodeKind};
 use crate::theme::{self, Icon};
 use egui::{Align2, Color32, RichText, Ui};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy)]
 pub enum WinCmd {
@@ -106,6 +107,11 @@ pub struct UiState {
     pub layer_drag: Option<(NodeId, Option<LayerDrop>)>,
     /// Row rects of the last layers-panel frame (for drop targeting).
     pub layer_rows: Vec<(NodeId, egui::Rect, usize)>,
+    /// Scroll offset of the layers list at the last frame, and whether rows may pop in now.
+    pub layer_offset: f32,
+    pub layer_animate: bool,
+    /// `layer_subtree_height` of the rows seen this frame, so each subtree is measured once.
+    pub layer_heights: HashMap<NodeId, f32>,
     /// Selection seen by the last layers-panel frame, to notice changes made on the canvas.
     pub last_selection: Vec<NodeId>,
     /// A layer the layers panel should scroll into view (and unfold its parents for).
@@ -120,16 +126,23 @@ pub struct UiState {
     pub agent: Option<(String, web_time::Instant)>,
     /// Recent agent tool calls, oldest first (the Agent view).
     pub agent_log: Vec<AgentCall>,
+    /// Layers agents touched in the last [`AGENT_MARK_SECS`], oldest first: the live outlines and
+    /// the agent cursor.
+    pub agent_marks: Vec<AgentMark>,
     /// Saved agent runs of the open project, newest first; re-read when `runs_key` stops matching
     /// the project folder (run finished, project changed).
     pub runs: Vec<crate::runs::Run>,
     pub runs_key: Option<std::path::PathBuf>,
-    /// The run being recorded now, copied from the tracker each frame.
-    pub run_open: Option<crate::runs::Run>,
+    /// The runs being recorded now (one per agent client), copied from the tracker each frame.
+    pub run_open: Vec<crate::runs::Run>,
+    /// (active page, history generation) when the review runs were last recounted.
+    pub runs_gen: Option<(usize, u64)>,
     /// The run that just ended with changes: the Agent view's "Agent finished" banner.
     pub run_banner: Option<crate::runs::Run>,
-    /// Canvas toast for the same run: (run id, change count, shown at).
-    pub run_toast: Option<(String, usize, web_time::Instant)>,
+    /// Canvas toast for the same run: (run id, text, shown at).
+    pub run_toast: Option<(String, String, web_time::Instant)>,
+    /// An Actions-menu action and the layers it runs on, for the host to run as one run.
+    pub pending_action: Option<(actions::Act, Vec<String>)>,
     /// Run (id) the user chose to review; the review view draws it.
     pub review_run: Option<String>,
     /// Diff of the open review, cached until the document changes; the canvas overlay reads it.
@@ -247,6 +260,8 @@ fn account_footer(ui: &mut Ui, st: &mut UiState) {
     });
 }
 
+/// Review runs recounted after an edit (newest first).
+const RECOUNT_MAX: usize = 3;
 /// Most calls the Agent view keeps.
 const AGENT_LOG_MAX: usize = 60;
 
@@ -258,11 +273,64 @@ pub struct AgentCall {
     pub error: Option<String>,
 }
 
+/// A layer an agent just touched, outlined on the canvas while it fades.
+pub struct AgentMark {
+    pub page_id: String,
+    pub node: NodeId,
+    pub verb: &'static str,
+    /// The run's client label ("Claude Code · 2", "Chat"); empty for unnamed clients.
+    pub client: String,
+    pub at: web_time::Instant,
+}
+
+/// How long an agent's outline stays on the canvas, fading out.
+const AGENT_MARK_SECS: f32 = 3.0;
+/// Outlines kept from one call (its topmost changed layers) and in all.
+const AGENT_MARKS_PER_CALL: usize = 12;
+const AGENT_MARKS_MAX: usize = 48;
+
 impl UiState {
-    /// Per frame, after `Tracker::tick`: mirrors the open run and picks up a finished one.
+    /// Records the layers a successful agent call pointed at (`follow_node`) or changed
+    /// (`touched`, the tracker's per-call log) for the live outlines.
+    pub fn mark_agent(
+        &mut self,
+        ed: &Editor,
+        client: String,
+        name: &str,
+        args: &serde_json::Value,
+        touched: &[(String, NodeId)],
+    ) {
+        let key = chat_msgs::follow_node(args).and_then(|k| {
+            let (prefix, num) = k.trim_start_matches('#').split_once(':')?;
+            let page = crate::mcp::exec::find_page(ed, prefix).ok()?;
+            Some((ed.pages[page].id.clone(), NodeId(num.parse().ok()?)))
+        });
+        // Topmost changed layers only: a write_html of 500 nodes is one outline, not 500.
+        let roots = touched.iter().filter(|(page, id)| {
+            let Some(i) = ed.pages.iter().position(|p| &p.id == page) else { return false };
+            let parent = ed.page_doc(i).get(*id).and_then(|n| n.parent);
+            parent.is_none_or(|par| !touched.iter().any(|(pg, t)| pg == page && *t == par))
+        });
+        let at = web_time::Instant::now();
+        let verb = agent_verb(name);
+        for (page_id, node) in key.into_iter().chain(roots.cloned()).take(AGENT_MARKS_PER_CALL) {
+            self.agent_marks.retain(|m| (&m.page_id, m.node) != (&page_id, node));
+            self.agent_marks.push(AgentMark { page_id, node, verb, client: client.clone(), at });
+        }
+        let over = self.agent_marks.len().saturating_sub(AGENT_MARKS_MAX);
+        self.agent_marks.drain(..over);
+    }
+
+    /// Drops faded marks; true while any is still showing.
+    fn live_marks(&mut self) -> bool {
+        self.agent_marks.retain(|m| m.at.elapsed().as_secs_f32() < AGENT_MARK_SECS);
+        !self.agent_marks.is_empty()
+    }
+
+    /// Per frame, after `Tracker::tick`: mirrors the open runs and picks up a finished one.
     /// Returns true when a run just ended with changes.
-    pub fn sync_runs(&mut self, t: &mut crate::runs::Tracker) -> bool {
-        self.run_open = t.open_run().cloned();
+    pub fn sync_runs(&mut self, t: &mut crate::runs::Tracker, ed: &Editor) -> bool {
+        self.run_open = t.open_runs().cloned().collect();
         let finished = t.take_finished();
         if let Some(run) = &finished {
             self.chat.note_run(run);
@@ -276,15 +344,44 @@ impl UiState {
             self.runs = crate::runs::list(&dir);
             self.runs_key = Some(dir);
         }
+        self.recount_runs(ed);
         let Some(run) = finished else {
             return false;
         };
         let changed = run.added + run.changed + run.removed > 0;
         if changed {
-            self.run_toast = Some((run.id.clone(), run.added + run.changed + run.removed, web_time::Instant::now()));
+            let text = if run.client == crate::mcp::ACTIONS_CLIENT {
+                run.title.clone()
+            } else {
+                format!("Agent finished \u{b7} {}", panels::count(run.added + run.changed + run.removed, "change"))
+            };
+            self.run_toast = Some((run.id.clone(), text, web_time::Instant::now()));
             self.run_banner = Some(run);
         }
         changed
+    }
+
+    /// After undo, redo or an edit on the page, the review runs on it get their counts again, so
+    /// their cards do not keep showing changes that are gone. Saved, so a reload agrees.
+    fn recount_runs(&mut self, ed: &Editor) {
+        let key = (ed.active_page, ed.history.generation());
+        if !self.run_open.is_empty() || self.runs_gen == Some(key) {
+            return;
+        }
+        self.runs_gen = Some(key);
+        let Some(dir) = &self.project_dir else { return };
+        let page = ed.active_page_id();
+        let review = self.runs.iter_mut().filter(|r| {
+            r.state == crate::runs::RunState::Review && r.pages.iter().any(|p| p.page_id == page)
+        });
+        // ponytail: newest few only, each recount reads its snapshots from disk.
+        for r in review.take(RECOUNT_MAX) {
+            let (added, changed, removed, _) = crate::runs::count(dir, ed, r);
+            if (added, changed, removed) != (r.added, r.changed, r.removed) {
+                (r.added, r.changed, r.removed) = (added, changed, removed);
+                let _ = crate::runs::save(dir, r);
+            }
+        }
     }
 
     /// Records an agent's tool call for the toolbar hint and the Agent view.
@@ -304,6 +401,8 @@ impl UiState {
 
 /// How long after its last tool call an agent still counts as working.
 const AGENT_WORKING_SECS: u64 = 6;
+/// Repaint interval of the activity pill's dots.
+const AGENT_PILL_FRAME_MS: u64 = 33;
 
 /// What an agent's tool call means in plain words, for the activity pill.
 pub(crate) fn agent_verb(tool: &str) -> &'static str {
@@ -341,7 +440,8 @@ fn agent_pill(ui: &mut Ui, st: &UiState, with_text: bool) {
     let Some(verb) = st.agent_working() else {
         return;
     };
-    ui.ctx().request_repaint();
+    // The dots bounce at 30 fps: a full-canvas frame per vsync for this alone burns CPU.
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(AGENT_PILL_FRAME_MS));
     let p = theme::pal(ui);
     let t = ui.ctx().input(|i| i.time) as f32;
     let accent = theme::accent();
@@ -361,14 +461,43 @@ fn agent_pill(ui: &mut Ui, st: &UiState, with_text: bool) {
                         .circle_filled(egui::pos2(x, r.center().y - hop), 2.5, accent);
                 }
                 if with_text {
+                    let text = match run_progress(&st.run_open) {
+                        Some(n) => format!("{verb} \u{b7} {n}"),
+                        None => format!("{verb}…"),
+                    };
                     ui.label(
-                        RichText::new(format!("{verb}…"))
+                        RichText::new(text)
                             .size(theme::SECONDARY)
                             .color(p.text),
                     );
                 }
             });
         });
+}
+
+/// `1340` as `1,340`.
+pub(crate) fn grouped(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Live size of the open runs, all clients together: "212 calls · 1,340 changes". None when no
+/// run is open.
+pub(crate) fn run_progress(open: &[crate::runs::Run]) -> Option<String> {
+    if open.is_empty() {
+        return None;
+    }
+    let calls: usize = open.iter().map(|r| r.calls as usize).sum();
+    let changes: usize = open.iter().map(crate::runs::Run::touched).sum();
+    let unit = |n: usize, u: &str| format!("{} {u}{}", grouped(n), if n == 1 { "" } else { "s" });
+    Some(format!("{} \u{b7} {}", unit(calls, "call"), unit(changes, "change")))
 }
 
 /// A soft accent ring around the canvas while an agent works.
@@ -641,7 +770,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         st.chat.mcp_url.clone_from(&st.agent_endpoint);
     }
     st.chat.project_name.clone_from(&st.project_name);
+    let turn = st.chat.turn.is_some();
     st.chat.pump(ui.ctx());
+    if turn && st.chat.turn.is_none() {
+        // The turn is over: the "Working" pill goes with it, not 6 s after its last tool call.
+        st.agent = None;
+    }
     if st.custom_titlebar {
         let p = theme::pal(ui);
         egui::Panel::top("titlebar")
@@ -686,9 +820,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             }
             UiEvent::OpenVariables => st.variables.open = !st.variables.open,
             UiEvent::Annotate(id) => annotations::open_popover(ed, &mut st.ann_ui, id),
+            UiEvent::Ask => chat::open_ask(ed, st),
         }
     }
-    if st.run_open.is_some() {
+    if !st.run_open.is_empty() {
         // So the tracker's idle timeout fires even when nothing else repaints.
         ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
     }
@@ -835,6 +970,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     }
     toolbar(ui.ctx(), ed, canvas);
     annotations::overlays(ui.ctx(), ed, st, canvas);
+    chat::chat_pick::overlay(ui.ctx(), ed, st, canvas);
+    chat::chat_pick::ask_popover(ui.ctx(), ed, st, canvas);
     if st.chat_mode && st.chat.inspector {
         chat::inspector_overlay(ui.ctx(), ed, st, canvas);
     }
@@ -844,6 +981,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     agent_glow(ui.ctx(), st, canvas);
     status(ui.ctx(), ed, canvas);
     review_overlay(ui.ctx(), ed, st, canvas);
+    agent_overlay(ui.ctx(), ed, st, canvas);
     annotations_canvas::draw(ui.ctx(), ed, &mut st.annotations, &mut st.selected_annotation, canvas);
     run_toast(ui.ctx(), st, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
@@ -1448,11 +1586,14 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 );
             }
             st.layer_rows.clear();
+            st.layer_heights.clear();
+            // Rows that come into view by scrolling just appear; the pop-in is for a list that
+            // was not on screen, or rows that were unfolded.
+            let offset = ui.clip_rect().top() - ui.min_rect().top();
+            st.layer_animate = (offset - st.layer_offset).abs() < 0.5;
+            st.layer_offset = offset;
             for id in roots.iter().rev() {
-                let index = st.layer_rows.len();
-                motion::pop_in(ui, ("layer-pop", *id), index, |ui| {
-                    layer_row(ui, ed, st, *id, 0)
-                });
+                layer_item(ui, ed, st, *id, 0);
             }
             layer_drag(ui, ed, st);
         });
@@ -1589,6 +1730,55 @@ fn kind_icon(k: &NodeKind) -> Icon {
     }
 }
 
+/// Height of a layer row.
+const LAYER_ROW_HEIGHT: f32 = 30.0;
+/// Space between layer rows (and between a row and the rows below it).
+const LAYER_ROW_GAP: f32 = 1.0;
+/// Rows this far outside the visible list are still built, so a scroll never shows a gap.
+const LAYER_OFFSCREEN_MARGIN: f32 = 200.0;
+
+/// Height of the layer rows of `id` and everything unfolded below it, as `layer_row` lays them
+/// out (each child is drawn in its own scope, followed by one gap).
+fn layer_subtree_height(
+    doc: &crate::model::Document,
+    collapsed: &HashSet<NodeId>,
+    id: NodeId,
+    memo: &mut HashMap<NodeId, f32>,
+) -> f32 {
+    if let Some(h) = memo.get(&id) {
+        return *h;
+    }
+    let Some(n) = doc.get(id) else {
+        return 0.0;
+    };
+    let mut h = LAYER_ROW_HEIGHT;
+    if !collapsed.contains(&id) {
+        for c in &n.children {
+            h += LAYER_ROW_GAP + layer_subtree_height(doc, collapsed, *c, memo);
+        }
+    }
+    memo.insert(id, h);
+    h
+}
+
+/// A layer row and its unfolded children. A page can hold thousands of layers, but only a
+/// screenful is visible: rows far outside the list are not built, their space is just reserved.
+fn layer_item(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: usize) {
+    // A filter builds the whole tree (matches can be anywhere), and so does scrolling to a layer.
+    if st.layer_filter.trim().is_empty() && st.reveal.is_none() {
+        let h = layer_subtree_height(&ed.doc, &st.collapsed, id, &mut st.layer_heights);
+        let top = ui.cursor().top();
+        let view = ui.clip_rect();
+        if top + h < view.top() - LAYER_OFFSCREEN_MARGIN || top > view.bottom() + LAYER_OFFSCREEN_MARGIN {
+            ui.add_space(h + LAYER_ROW_GAP);
+            return;
+        }
+    }
+    let index = st.layer_rows.len();
+    let animate = st.layer_animate;
+    motion::pop_in_if(ui, ("layer-pop", id), index, animate, |ui| layer_row(ui, ed, st, id, depth));
+}
+
 /// One sidebar row, drawn like an NSOutlineView row: 24pt tall, 6pt radius selection in the
 /// accent colour, subtle hover, disclosure chevron, symbol, name, and eye/lock on hover.
 /// Whether `id` or anything below it has a name containing `needle` (lowercase).
@@ -1614,7 +1804,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     let selected = ed.selection.contains(&id);
     let width = ui.available_width();
     let (row, resp) =
-        ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click_and_drag());
+        ui.allocate_exact_size(egui::vec2(width, LAYER_ROW_HEIGHT), egui::Sense::click_and_drag());
     st.layer_rows.push((id, row, depth));
     if st.reveal == Some(id) {
         ui.scroll_to_rect(row, None);
@@ -1764,10 +1954,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     }
     if !needle.is_empty() || !st.collapsed.contains(&id) {
         for c in n.children.iter().rev() {
-            let index = st.layer_rows.len();
-            motion::pop_in(ui, ("layer-pop", *c), index, |ui| {
-                layer_row(ui, ed, st, *c, depth + 1)
-            });
+            layer_item(ui, ed, st, *c, depth + 1);
         }
     }
 }
@@ -1937,9 +2124,72 @@ fn review_overlay(ctx: &egui::Context, ed: &Editor, st: &UiState, canvas: egui::
         });
 }
 
+const AGENT_OUTLINE: f32 = 2.0;
+/// Size of the agent cursor's arrow (screen px).
+const AGENT_CURSOR: f32 = 12.0;
+
+/// While agents work: accent outlines on the layers they just touched, fading over
+/// [`AGENT_MARK_SECS`], and an agent cursor (verb and client) on the newest. When the newest is
+/// on another page, a chip "Agent on page X →" switches to it. Repaints only while a mark fades.
+fn agent_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect) {
+    if !st.live_marks() {
+        return;
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(AGENT_PILL_FRAME_MS));
+    let accent = theme::accent();
+    let page = ed.active_page_id().to_string();
+    let to_screen = |r: &crate::geom::Rect| {
+        let s = ed.camera.world_rect_to_screen(r);
+        egui::Rect::from_min_size(
+            canvas.min + egui::vec2(s.x as f32, s.y as f32),
+            egui::vec2(s.w as f32, s.h as f32),
+        )
+    };
+    let fade = |m: &AgentMark| (1.0 - m.at.elapsed().as_secs_f32() / AGENT_MARK_SECS).clamp(0.0, 1.0);
+    egui::Area::new("agent-overlay".into())
+        .order(egui::Order::Foreground)
+        .fixed_pos(canvas.min)
+        .interactable(false)
+        .show(ctx, |ui| {
+            let painter = ui.painter().with_clip_rect(canvas);
+            let rect = |m: &AgentMark| (m.page_id == page).then(|| ed.doc.world_rect(m.node)).flatten().map(|r| to_screen(&r));
+            for m in &st.agent_marks {
+                let Some(r) = rect(m) else { continue };
+                let stroke = egui::Stroke::new(AGENT_OUTLINE, accent.gamma_multiply(fade(m)));
+                painter.rect_stroke(r, REVIEW_RADIUS, stroke, egui::StrokeKind::Outside);
+            }
+            let Some((m, r)) = st.agent_marks.last().and_then(|m| Some((m, rect(m)?))) else { return };
+            let a = fade(m);
+            let tip = r.left_top();
+            let arrow = vec![tip, tip + egui::vec2(0.0, AGENT_CURSOR), tip + egui::vec2(AGENT_CURSOR * 0.75, AGENT_CURSOR * 0.75)];
+            painter.add(egui::Shape::convex_polygon(arrow, accent.gamma_multiply(a), egui::Stroke::NONE));
+            let text = if m.client.is_empty() { m.verb.to_string() } else { format!("{} \u{b7} {}", m.verb, m.client) };
+            let ink = kit::ink_on(accent);
+            let galley = painter.layout_no_wrap(text, theme::semibold(theme::SECONDARY), ink.gamma_multiply(a));
+            let at = tip + egui::vec2(AGENT_CURSOR * 0.6, AGENT_CURSOR * 0.9);
+            let tag = egui::Rect::from_min_size(at, galley.size() + egui::vec2(12.0, 4.0));
+            painter.rect_filled(tag, 255, accent.gamma_multiply(a));
+            painter.galley(tag.min + egui::vec2(6.0, 2.0), galley, ink);
+        });
+    let Some(m) = st.agent_marks.last().filter(|m| m.page_id != page) else { return };
+    let Some(i) = ed.pages.iter().position(|p| p.id == m.page_id) else { return };
+    let text = format!("Agent on page {} \u{2192}", ed.pages[i].name);
+    let mut go = false;
+    egui::Area::new("agent-elsewhere".into())
+        .order(egui::Order::Foreground)
+        .pivot(Align2::CENTER_TOP)
+        .fixed_pos(canvas.center_top() + egui::vec2(0.0, 14.0))
+        .show(ctx, |ui| {
+            go = kit::chip(ui, &text, true).clicked();
+        });
+    if go {
+        ed.switch_page(i);
+    }
+}
+
 /// Bottom-centre toast when an agent run ends with changes: Review, Revert, auto-hides.
 fn run_toast(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
-    let Some((id, changes, at)) = st.run_toast.clone() else {
+    let Some((id, text, at)) = st.run_toast.clone() else {
         return;
     };
     if at.elapsed().as_secs_f32() > RUN_TOAST_SECS {
@@ -1970,13 +2220,7 @@ fn run_toast(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
                         let (r, _) =
                             ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
                         theme::paint_icon(ui.painter(), r, Icon::Pen, p.secondary);
-                        ui.label(
-                            RichText::new(format!(
-                                "Agent finished · {}",
-                                panels::count(changes, "change")
-                            ))
-                            .font(theme::semibold(theme::BODY)),
-                        );
+                        ui.label(RichText::new(text).font(theme::semibold(theme::BODY)));
                         ui.add_space(8.0);
                         if kit::button(ui, kit::ButtonKind::Primary, None, "Review").clicked() {
                             act = Some(false);
@@ -2109,5 +2353,202 @@ fn help(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
         });
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         st.show_help = false;
+    }
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+    use crate::geom::Rect;
+    use crate::model::Node;
+
+    fn frame(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, i: u32, h: f32) -> std::time::Duration {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, h))),
+            time: Some(f64::from(i) / 60.0),
+            predicted_dt: 1.0 / 60.0,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            draw(ui, ed, st);
+        });
+        out.textures_delta.clear();
+        out.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    }
+
+    fn rect(ed: &mut Editor, parent: Option<NodeId>, frame: bool) -> NodeId {
+        let kind = if frame { NodeKind::Frame { clip: false } } else { NodeKind::Rect };
+        ed.add_node(Node::new(NodeId(0), kind, Rect::new(0.0, 0.0, 10.0, 10.0)), parent)
+    }
+
+    fn many_roots(n: usize) -> Editor {
+        let mut ed = Editor::default();
+        for _ in 0..n {
+            rect(&mut ed, None, false);
+        }
+        ed
+    }
+
+    #[test]
+    fn a_resting_layers_list_does_not_repaint() {
+        let ctx = egui::Context::default();
+        setup_style(&ctx);
+        let mut ed = many_roots(300);
+        let mut st = UiState::default();
+        let mut last = std::time::Duration::ZERO;
+        for i in 0..180 {
+            last = frame(&ctx, &mut ed, &mut st, i, 800.0);
+        }
+        assert!(!last.is_zero(), "rows keep asking for frames after their pop-in");
+    }
+
+    #[test]
+    fn an_agent_pill_is_the_only_thing_repainting_while_it_works() {
+        let ctx = egui::Context::default();
+        setup_style(&ctx);
+        let mut ed = many_roots(300);
+        let mut st = UiState::default();
+        st.log_agent("get_basic_info", None);
+        for i in 0..180 {
+            frame(&ctx, &mut ed, &mut st, i, 800.0);
+        }
+        let causes: Vec<String> = ctx.repaint_causes().iter().map(|c| c.to_string()).collect();
+        assert!(causes.iter().all(|c| !c.contains("motion.rs")), "{causes:?}");
+    }
+
+    fn shown(ctx: &egui::Context, area: &str) -> bool {
+        ctx.memory(|m| m.areas().visible_last_frame(&egui::LayerId::new(egui::Order::Foreground, egui::Id::new(area))))
+    }
+
+    #[test]
+    fn agent_outlines_show_after_a_call_and_go_after_three_seconds_without_repainting() {
+        let ctx = egui::Context::default();
+        setup_style(&ctx);
+        let mut ed = many_roots(3);
+        let mut st = UiState::default();
+        let mut idle = std::time::Duration::ZERO;
+        for i in 0..120 {
+            idle = frame(&ctx, &mut ed, &mut st, i, 800.0);
+        }
+        let quiet = std::time::Duration::from_millis(AGENT_PILL_FRAME_MS);
+        assert!(idle > quiet, "settled canvas still repaints: {idle:?}");
+        let page = ed.active_page_id().to_string();
+        let id = ed.doc.root[0];
+        st.mark_agent(&ed, "Claude Code".into(), "update_styles", &serde_json::json!({}), &[(page, id)]);
+        assert!(frame(&ctx, &mut ed, &mut st, 120, 800.0) <= quiet);
+        frame(&ctx, &mut ed, &mut st, 121, 800.0);
+        assert!(shown(&ctx, "agent-overlay"));
+        assert!(!shown(&ctx, "agent-elsewhere"));
+        assert_eq!((st.agent_marks[0].verb, st.agent_marks[0].client.as_str()), ("Styling", "Claude Code"));
+        let old = web_time::Instant::now() - std::time::Duration::from_secs_f32(AGENT_MARK_SECS + 0.1);
+        st.agent_marks[0].at = old;
+        let mut last = std::time::Duration::ZERO;
+        for i in 122..240 {
+            last = frame(&ctx, &mut ed, &mut st, i, 800.0);
+        }
+        assert!(st.agent_marks.is_empty());
+        assert!(!shown(&ctx, "agent-overlay"));
+        assert!(last > quiet, "faded outlines keep repainting: {last:?}");
+    }
+
+    #[test]
+    fn agent_on_another_page_shows_a_chip_that_switches_to_it() {
+        let ctx = egui::Context::default();
+        setup_style(&ctx);
+        let mut ed = many_roots(1);
+        let other = ed.add_page();
+        ed.switch_page(other);
+        let id = rect(&mut ed, None, true);
+        let page = ed.active_page_id().to_string();
+        ed.switch_page(0);
+        let mut st = UiState::default();
+        let key = crate::mcp::exec::node_key(&ed, other, id);
+        st.mark_agent(&ed, String::new(), "get_screenshot", &serde_json::json!({ "nodeId": key }), &[]);
+        assert_eq!((st.agent_marks.len(), st.agent_marks[0].page_id.as_str()), (1, page.as_str()));
+        for i in 0..2 {
+            frame(&ctx, &mut ed, &mut st, i, 800.0);
+        }
+        assert!(shown(&ctx, "agent-elsewhere"));
+    }
+
+    #[test]
+    fn write_html_outlines_only_its_top_layer_and_counts_group_digits() {
+        let mut ed = many_roots(0);
+        let top = rect(&mut ed, None, true);
+        let kids: Vec<_> = (0..5).map(|_| rect(&mut ed, Some(top), false)).collect();
+        let page = ed.active_page_id().to_string();
+        let touched: Vec<_> = std::iter::once(top).chain(kids).map(|id| (page.clone(), id)).collect();
+        let mut st = UiState::default();
+        st.mark_agent(&ed, "Chat".into(), "write_html", &serde_json::json!({}), &touched);
+        assert_eq!(st.agent_marks.iter().map(|m| m.node).collect::<Vec<_>>(), [top]);
+        assert_eq!((grouped(7), grouped(1340), grouped(1_234_567)), ("7".into(), "1,340".into(), "1,234,567".into()));
+        let run = crate::runs::Run {
+            calls: 212,
+            pages: vec![crate::runs::RunPage { nodes: (0..1340).map(NodeId).collect(), ..Default::default() }],
+            ..Default::default()
+        };
+        assert_eq!(run_progress(&[run]).unwrap(), "212 calls \u{b7} 1,340 changes");
+        assert!(run_progress(&[]).is_none());
+    }
+
+    #[test]
+    fn only_the_visible_layer_rows_are_built() {
+        let ctx = egui::Context::default();
+        setup_style(&ctx);
+        let mut ed = many_roots(3000);
+        let mut st = UiState::default();
+        for i in 0..3 {
+            frame(&ctx, &mut ed, &mut st, i, 600.0);
+        }
+        assert!(!st.layer_rows.is_empty());
+        assert!(st.layer_rows.len() < 60, "{} rows built", st.layer_rows.len());
+    }
+
+    /// Measuring the tree walks each unfolded node once (a row's subtree is a memo hit for
+    /// the rows below it), not once per ancestor.
+    #[test]
+    fn layer_heights_measure_each_node_once() {
+        let mut ed = Editor::default();
+        let mut parent = rect(&mut ed, None, true);
+        let top = parent;
+        for _ in 0..200 {
+            parent = rect(&mut ed, Some(parent), true);
+        }
+        let mut memo = HashMap::new();
+        let h = layer_subtree_height(&ed.doc, &HashSet::new(), top, &mut memo);
+        assert_eq!(memo.len(), 201);
+        assert!((h - (201.0 * LAYER_ROW_HEIGHT + 200.0 * LAYER_ROW_GAP)).abs() < 0.01);
+    }
+
+    /// Rows that are not built are replaced by space computed from `layer_subtree_height`; it
+    /// must match what drawing them would take, or the list's scroll range drifts.
+    #[test]
+    fn skipped_layer_space_matches_drawn_rows() {
+        let ctx = egui::Context::default();
+        setup_style(&ctx);
+        let mut ed = Editor::default();
+        for _ in 0..3 {
+            let f = rect(&mut ed, None, true);
+            let inner = rect(&mut ed, Some(f), true);
+            rect(&mut ed, Some(inner), false);
+            rect(&mut ed, Some(inner), false);
+            rect(&mut ed, Some(f), false);
+        }
+        let mut st = UiState::default();
+        // Fold the middle frame, so the model has to honour it.
+        let middle = ed.doc.root[1];
+        st.collapsed.insert(middle);
+        // Long enough for the pop-in to settle: rows are displaced while it runs.
+        for i in 0..90 {
+            frame(&ctx, &mut ed, &mut st, i, 2000.0);
+        }
+        let tops: HashMap<NodeId, f32> =
+            st.layer_rows.iter().map(|(id, r, _)| (*id, r.top())).collect();
+        let roots: Vec<NodeId> = ed.doc.root.iter().rev().copied().collect();
+        let mut expected = tops[&roots[0]];
+        for r in &roots {
+            assert!((tops[r] - expected).abs() < 0.6, "root {r:?} at {} not {expected}", tops[r]);
+            expected += layer_subtree_height(&ed.doc, &st.collapsed, *r, &mut HashMap::new()) + LAYER_ROW_GAP;
+        }
     }
 }

@@ -57,6 +57,24 @@ impl Editor {
         self.edit("Edit annotation", |tx| tx.update_annotation(id, f))
     }
 
+    /// Re-run placement for the notes on `frame` (the whole page for `None`) as one undo step.
+    /// Returns how many notes moved.
+    pub fn tidy_annotations(&mut self, frame: Option<crate::model::NodeId>) -> usize {
+        let moves = crate::model::annotation_layout::tidy(&self.doc, frame);
+        if moves.is_empty() {
+            return 0;
+        }
+        self.edit("Tidy notes", |tx| {
+            for (id, p) in &moves {
+                tx.update_annotation(*id, |a| {
+                    a.position = p.position;
+                    a.anchor = p.anchor;
+                });
+            }
+        });
+        moves.len()
+    }
+
     pub fn delete_annotation(&mut self, id: u64) -> bool {
         self.edit("Delete annotation", |tx| tx.delete_annotation(id))
     }
@@ -292,20 +310,23 @@ mod tests {
     }
 
     #[test]
-    fn auto_position_sits_right_of_frame_and_stacks() {
+    fn auto_place_stays_clear_of_nodes_and_stacks() {
         let mut e = Editor::default();
         let f = frame(&mut e, Rect::new(100.0, 100.0, 400.0, 400.0));
         let c = child(&mut e, f, Rect::new(10.0, 20.0, 100.0, 50.0));
-        let p1 = annotation::auto_position(&e.doc, c);
-        let mut a = Annotation::new(Some(c), "1", "rule");
-        a.position = p1;
-        e.add_annotation(a);
-        let w1 = annotation::card_world(&e.doc, &e.doc.annotations[0]);
-        assert_eq!(w1, v2(524.0, 120.0));
-        let p2 = annotation::auto_position(&e.doc, c);
-        let w2 = v2(110.0, 120.0) + p2;
-        assert_eq!(w2.x, w1.x);
-        assert!(w2.y >= w1.y + annotation::CARD_H, "stacked below, no overlap");
+        let mut cards = Vec::new();
+        for i in 0..2 {
+            let mut a = Annotation::new(Some(c), &format!("note {i}"), "rule");
+            annotation::auto_place(&e.doc, &mut a);
+            e.add_annotation(a);
+            let a = e.doc.annotations.last().unwrap();
+            let at = annotation::card_world(&e.doc, a);
+            let s = crate::model::annotation_layout::card_size(a);
+            cards.push(Rect::new(at.x, at.y, s.x, s.y));
+        }
+        let target = e.doc.world_rect(c).unwrap();
+        assert!(cards.iter().all(|r| !r.intersects(&target)));
+        assert!(!cards[0].intersects(&cards[1]), "stacked without overlap");
     }
 
     #[test]

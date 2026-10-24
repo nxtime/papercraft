@@ -10,8 +10,9 @@ use super::css::{self, Context, Styles};
 use super::html::{self, Element, Html};
 use super::{Out, ToolResult, tools};
 use crate::editor::{Editor, design};
-use crate::geom::{Rect, V2, v2};
+use crate::geom::{MAX_ZOOM, MIN_ZOOM, Rect, V2, v2};
 use crate::history::Tx;
+use crate::model::annotation::AnnotationCategory;
 use crate::model::{
     AutoLayout, Binding, Color, Direction, Document, Head, ImageMode, Node, NodeId, NodeKind,
     Paint, PathPoint, Route, Sizing, Source, SubPath, TextAlign,
@@ -267,12 +268,15 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
         | "disable_library" => {
             check_file(host, &a)?;
             host.editor().commit_pending();
+            host.editor().finish_loading();
             library_tool(host, name, &a)
         }
         _ => {
             check_file(host, &a)?;
             let ed = host.editor();
             ed.commit_pending();
+            // Tools may name any page, and a call must see the whole project.
+            ed.finish_loading();
             let scope = page_arg(ed, &a).unwrap_or(ed.active_page);
             css::set_variables_in_scope(&ed.page_doc(scope).variables, &ed.page_doc(scope).tokens);
             // The first content on the page the user is looking at is brought into view.
@@ -293,6 +297,8 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "get_annotations" => get_annotations(ed, &a),
                 "get_annotation_template" => get_annotation_template(ed, &a),
                 "set_annotation_template" => set_annotation_template(ed, &a),
+                "upsert_annotation_template" => upsert_annotation_template(ed, &a),
+                "delete_annotation_template" => delete_annotation_template(ed, &a),
                 "update_annotation" => update_annotation(ed, &a),
                 "delete_annotations" => delete_annotations(ed, &a),
                 "verify_code" => verify_code(ed, &a),
@@ -332,6 +338,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "duplicate_nodes" => duplicate_nodes(ed, &a),
                 "move_nodes" => move_nodes(ed, &a),
                 "select_nodes" => select_nodes(ed, &a),
+                "set_viewport" => set_viewport(ed, &a),
                 "undo" | "redo" => undo_redo(ed, &a, name == "undo"),
                 "finish_working_on_nodes" => {
                     host.save()?;
@@ -340,7 +347,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 _ => Err(format!("unknown tool `{name}`")),
             };
             let ed = host.editor();
-            if r.is_ok() && was_empty && !ed.doc.root.is_empty() {
+            if r.is_ok() && was_empty && !ed.doc.root.is_empty() && name != "set_viewport" {
                 ed.zoom_to_fit();
             }
             r
@@ -544,6 +551,8 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
         )
     });
     let ed = host.editor();
+    // Reports every page's node count (also reached right after `open_file`).
+    ed.finish_loading();
     let page = page_arg(ed, a)?;
     let doc = ed.page_doc(page);
     let mut artboards = Vec::new();
@@ -594,7 +603,18 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
             .map(|p| ed.page_doc(p).nodes.values().map(|n| n.resolved_comments()).sum::<usize>())
             .sum::<usize>(),
         "nodeIdFormat": "\"<page>:<n>\", e.g. \"".to_string() + &node_key(ed, page, NodeId(1)) + "\"",
+        "viewport": viewport_json(ed),
     }))
+}
+
+/// What the user sees: the active page, the visible world rect and the zoom.
+fn viewport_json(ed: &Editor) -> Value {
+    let v = ed.camera.visible_world(ed.viewport);
+    json!({
+        "pageId": ed.pages[ed.active_page].id,
+        "rect": [r2(v.x), r2(v.y), r2(v.w), r2(v.h)],
+        "zoom": (ed.camera.zoom * 1000.0).round() / 1000.0,
+    })
 }
 
 fn comments_json(n: &Node, with_resolved: bool) -> Vec<Value> {
@@ -770,7 +790,7 @@ fn selection(ed: &mut Editor) -> ToolResult {
             v
         })
         .collect();
-    text(json!({"pageId": ed.pages[page].id, "selection": items}))
+    text(json!({"pageId": ed.pages[page].id, "selection": items, "viewport": viewport_json(ed)}))
 }
 
 fn node_info(ed: &mut Editor, a: &Args) -> ToolResult {
@@ -822,17 +842,21 @@ fn children(ed: &mut Editor, a: &Args) -> ToolResult {
     text(json!({"children": kids}))
 }
 
+/// Text shown per text layer in `get_tree_summary` unless `fullText` is set.
+const TREE_TEXT_CHARS: usize = 40;
+
 fn tree_summary(ed: &mut Editor, a: &Args) -> ToolResult {
     let def = page_arg(ed, a)?;
     let key = a.req_str("nodeId")?;
     let depth = a.num("depth").unwrap_or(3.0).clamp(1.0, 10.0) as usize;
+    let full = a.bool("fullText").unwrap_or(false);
     let (page, roots) = if key == ROOT {
         (def, ed.page_doc(def).root.clone())
     } else {
         let (p, id) = resolve(ed, key, def)?;
         (p, vec![id])
     };
-    fn walk(ed: &Editor, page: usize, id: NodeId, d: usize, max: usize, out: &mut String) {
+    fn walk(ed: &Editor, page: usize, id: NodeId, d: usize, max: usize, full: bool, out: &mut String) {
         let doc = ed.page_doc(page);
         let n = doc.get(id).unwrap();
         let size = if matches!(n.kind, NodeKind::Text { .. }) {
@@ -854,7 +878,7 @@ fn tree_summary(ed: &mut Editor, a: &Args) -> ToolResult {
             size
         );
         if let Some(t) = n.kind.text() {
-            let short: String = t.chars().take(40).collect();
+            let short: String = if full { t.clone() } else { t.chars().take(TREE_TEXT_CHARS).collect() };
             line += &format!(" {:?}", short);
         }
         if !n.visible {
@@ -871,12 +895,12 @@ fn tree_summary(ed: &mut Editor, a: &Args) -> ToolResult {
             return;
         }
         for c in &n.children {
-            walk(ed, page, *c, d + 1, max, out);
+            walk(ed, page, *c, d + 1, max, full, out);
         }
     }
     let mut out = String::new();
     for r in roots {
-        walk(ed, page, r, 0, depth, &mut out);
+        walk(ed, page, r, 0, depth, full, &mut out);
     }
     if out.is_empty() {
         out = "(empty page)".into();
@@ -897,6 +921,9 @@ pub struct ShotRequest {
     pub page: usize,
     pub roots: Vec<NodeId>,
     pub scale: f64,
+    /// Draw the notes on the captured roots (see [`with_notes`]).
+    #[serde(default)]
+    pub annotations: bool,
 }
 
 impl ShotRequest {
@@ -950,19 +977,24 @@ fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
         }
         None => (def, ed.page_doc(def).root.clone()),
     };
-    let doc = ed.page_doc(page);
-    let b = crate::io::svg::export_bounds(doc, &roots).ok_or("nothing to capture (empty)")?;
+    let annotations = a.bool("annotations").unwrap_or(false);
+    let noted = annotations.then(|| with_notes(ed.page_doc(page), &roots, &ed.design.categories()));
+    let (doc, shot_roots) = match &noted {
+        Some((d, r)) => (d, r),
+        None => (ed.page_doc(page), &roots),
+    };
+    let b = crate::io::svg::export_bounds(doc, shot_roots).ok_or("nothing to capture (empty)")?;
     let want = a.num("scale").unwrap_or(1.0).clamp(0.1, 4.0);
     let mut scale = want.min(SHOT_MAX_EDGE / b.w.max(b.h).max(1.0));
     let Some(gpu) = gpu else {
-        let req = ShotRequest { page, roots, scale };
+        let req = ShotRequest { page, roots, scale, annotations };
         return Err(format!(
             "{NEEDS_RENDER}{}",
             serde_json::to_string(&req).map_err(|e| e.to_string())?
         ));
     };
     loop {
-        let img = crate::io::png::render(&gpu, doc, Some(&roots), scale, Some(Color::WHITE))?;
+        let img = crate::io::png::render(&gpu, doc, Some(shot_roots), scale, Some(Color::WHITE))?;
         if let Some(mut out) = shot_out(&img, &mut scale)? {
             if let Some(p) = &out_path {
                 if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
@@ -985,16 +1017,161 @@ fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
 
 /// Finish a deferred screenshot: the same rendering as [`screenshot`], awaiting the readback.
 /// `doc` is the page the [`ShotRequest`] named, as it is now.
-pub async fn screenshot_async(gpu: &Headless, doc: &Document, req: &ShotRequest) -> ToolResult {
+pub async fn screenshot_async(
+    gpu: &Headless,
+    doc: &Document,
+    cats: &[AnnotationCategory],
+    req: &ShotRequest,
+) -> ToolResult {
+    let noted = req.annotations.then(|| with_notes(doc, &req.roots, cats));
+    let (doc, roots) = match &noted {
+        Some((d, r)) => (d, r),
+        None => (doc, &req.roots),
+    };
     let mut scale = req.scale;
     loop {
-        let img =
-            crate::io::png::render_async(gpu, doc, Some(&req.roots), scale, Some(Color::WHITE))
-                .await?;
+        let img = crate::io::png::render_async(gpu, doc, Some(roots), scale, Some(Color::WHITE))
+            .await?;
         if let Some(out) = shot_out(&img, &mut scale)? {
             return Ok(out);
         }
     }
+}
+
+/// A copy of `doc` with the note cards, badges and leader lines of the notes on `roots` added
+/// as ordinary layers (placed and routed as the canvas draws them), and the roots to render:
+/// `roots`, then the lines, then the cards. The renderer needs nothing else.
+pub fn with_notes(
+    doc: &Document,
+    roots: &[NodeId],
+    cats: &[AnnotationCategory],
+) -> (Document, Vec<NodeId>) {
+    use crate::model::annotation::{Side, anchor_world, card_world, numbers};
+    use crate::model::annotation_layout::{self as layout, BADGE, BODY_LH, BODY_PT, BODY_W, HEAD_GAP, LABEL_LH, LABEL_PT, LABEL_W, PAD};
+    const RADIUS: f64 = 10.0;
+    const LINE_W: f64 = 1.5;
+    const DOT_R: f64 = 3.5;
+    const NUMBER_PT: f64 = 11.0;
+    let card_fill = Color::WHITE;
+    let card_border = Color::rgb(0xe0, 0xe0, 0xe0);
+    let body_color = Color::rgb(0x6b, 0x72, 0x80);
+    let notes: Vec<&crate::model::annotation::Annotation> = doc
+        .annotations
+        .iter()
+        .filter(|a| !a.detached)
+        .filter(|a| a.target.is_some_and(|t| roots.iter().any(|r| *r == t || doc.is_ancestor(*r, t))))
+        .collect();
+    let mut out = doc.clone();
+    let mut shot = roots.to_vec();
+    if notes.is_empty() {
+        return (out, shot);
+    }
+    let nums = numbers(doc);
+    let cards: Vec<Rect> = notes
+        .iter()
+        .map(|a| {
+            let at = card_world(doc, a);
+            let s = layout::card_size(a);
+            Rect::new(at.x, at.y, s.x, s.y)
+        })
+        .collect();
+    let add = |out: &mut Document, mut n: Node, parent: Option<NodeId>| {
+        n.parent = parent;
+        let id = n.id;
+        if let Some(p) = parent.and_then(|p| out.nodes.get_mut(&p)) {
+            p.children.push(id);
+        }
+        out.nodes.insert(id, n);
+        id
+    };
+    let text_node = |out: &mut Document, s: &str, pt: f64, lh: f64, color: Color, r: Rect| {
+        let mut n = Node::new(
+            out.alloc_id(),
+            NodeKind::Text { text: s.into(), font_size: pt, auto_width: false, align: TextAlign::Left },
+            r,
+        );
+        n.style = crate::model::Style::with_fill(color);
+        n.text_style.line_height = Some(lh / pt);
+        n
+    };
+    let mut card_ids = Vec::new();
+    for (i, a) in notes.iter().enumerate() {
+        let target = a.target.unwrap();
+        let Some(t) = doc.world_rect(target) else { continue };
+        let card = cards[i];
+        let color = cats
+            .iter()
+            .find(|c| c.id == a.category)
+            .or(cats.first())
+            .map_or(Color::rgb(0x88, 0x88, 0x88), |c| c.color);
+        // Leader line, routed like the canvas does it.
+        let end = if a.anchor.side == Side::Center {
+            layout::anchor_point(t, layout::anchor_toward(t, card))
+        } else {
+            anchor_world(doc, a)
+        };
+        let mut obs = layout::route_obstacles(doc, target);
+        obs.extend(cards.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, r)| *r));
+        let pts = layout::route(card, t, end, &obs);
+        let bb = Rect::from_points(pts[0], pts[0]);
+        let bb = pts.iter().fold(bb, |b, p| b.union(&Rect::from_points(*p, *p)));
+        let mut line = Node::new(
+            out.alloc_id(),
+            NodeKind::Path {
+                subpaths: vec![SubPath {
+                    points: pts.iter().map(|p| PathPoint::corner(*p - bb.min())).collect(),
+                    closed: false,
+                }],
+                fill_rule: Default::default(),
+            },
+            bb,
+        );
+        line.style = crate::model::Style { stroke: Some(color), stroke_width: LINE_W, ..Default::default() };
+        shot.push(add(&mut out, line, None));
+        let mut dot = Node::new(
+            out.alloc_id(),
+            NodeKind::Ellipse,
+            Rect::new(end.x - DOT_R, end.y - DOT_R, DOT_R * 2.0, DOT_R * 2.0),
+        );
+        dot.style = crate::model::Style::with_fill(color);
+        shot.push(add(&mut out, dot, None));
+        // Card: frame, number badge, label, body.
+        let mut frame = Node::new(out.alloc_id(), NodeKind::Frame { clip: true }, card);
+        frame.name = format!("Note {}", nums.get(&a.id).map_or(0, |n| n.1));
+        frame.style = crate::model::Style {
+            stroke: Some(card_border),
+            stroke_width: 1.0,
+            corner_radius: RADIUS,
+            ..crate::model::Style::with_fill(card_fill)
+        };
+        let f = add(&mut out, frame, None);
+        card_ids.push(f);
+        let mut badge = Node::new(out.alloc_id(), NodeKind::Ellipse, Rect::new(PAD, PAD, BADGE, BADGE));
+        badge.style = crate::model::Style::with_fill(color);
+        add(&mut out, badge, Some(f));
+        let n = nums.get(&a.id).map_or(0, |n| n.1).to_string();
+        let mut num = text_node(&mut out, &n, NUMBER_PT, BADGE, Color::WHITE, Rect::new(PAD, PAD, BADGE, BADGE));
+        num.text_style.bold = true;
+        if let NodeKind::Text { align, .. } = &mut num.kind {
+            *align = TextAlign::Center;
+        }
+        add(&mut out, num, Some(f));
+        let l = layout::card_lines(&a.label, &a.body, false);
+        let head = BADGE.max(l.label as f64 * LABEL_LH);
+        let label_r = Rect::new(PAD + BADGE + 8.0, PAD, LABEL_W, l.label as f64 * LABEL_LH);
+        let mut label = text_node(&mut out, &a.label, LABEL_PT, LABEL_LH, Color::INK, label_r);
+        label.text_style.bold = true;
+        add(&mut out, label, Some(f));
+        if !a.body.is_empty() {
+            // ponytail: a long body is cut by the card's clip, without the canvas's "+N more lines".
+            let body_r = Rect::new(PAD, PAD + head + HEAD_GAP, BODY_W, (l.body + usize::from(l.more > 0)) as f64 * BODY_LH);
+            let b = text_node(&mut out, &a.body, BODY_PT, BODY_LH, body_color, body_r);
+            add(&mut out, b, Some(f));
+        }
+    }
+    shot.extend(card_ids);
+    out.root.extend(shot[roots.len()..].iter().copied());
+    (out, shot)
 }
 
 fn parent_layout(doc: &Document, n: &Node) -> Option<AutoLayout> {
@@ -1118,7 +1295,7 @@ fn find_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
             let mut matched = Vec::new();
             if let Some(q) = text_q {
                 match n.kind.text() {
-                    Some(t) if glob(q, t) => matched.push(json!({"textValue": t})),
+                    Some(t) if text_matches(q, t) => matched.push(json!({"textValue": t})),
                     _ => continue,
                 }
             }
@@ -1151,6 +1328,22 @@ fn find_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
         }
     }
     text(json!({"count": results.len(), "results": results}))
+}
+
+/// Case- and spacing-insensitive text match: a substring unless `q` has `*` wildcards, which
+/// match the whole value. Line breaks, non-breaking spaces and curly quotes compare as typed.
+fn text_matches(q: &str, t: &str) -> bool {
+    let norm = |s: &str| {
+        s.split(|c: char| c.is_whitespace() || c == '\u{a0}')
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace(['\u{2018}', '\u{2019}'], "'")
+            .replace(['\u{201c}', '\u{201d}'], "\"")
+            .to_lowercase()
+    };
+    let (q, t) = (norm(q), norm(t));
+    if q.contains('*') { glob(&q, &t) } else { t.contains(&q) }
 }
 
 fn font_info(a: &Args) -> ToolResult {
@@ -1262,10 +1455,17 @@ fn enabled_category(ed: &Editor, page: usize, key: &str) -> Result<String, Strin
 }
 
 fn annotate(ed: &mut Editor, a: &Args) -> ToolResult {
-    use crate::model::annotation::{Annotation, Author, auto_position, numbers};
+    use crate::model::annotation::{Annotation, Author, auto_place, numbers};
     let page = page_arg(ed, a)?;
-    let notes = a
-        .arr("notes")?
+    let tidy = a.get("tidy").and_then(Value::as_bool).unwrap_or(false);
+    let frame = a
+        .str("frame")
+        .filter(|_| tidy)
+        .map(|f| annotation_node(ed, f, page))
+        .transpose()?;
+    let none = Vec::new();
+    let raw = if tidy && a.get("notes").is_none() { &none } else { a.arr("notes")? };
+    let notes = raw
         .iter()
         .map(|v| {
             let args = Args(v.as_object().ok_or("notes must be objects")?);
@@ -1287,17 +1487,34 @@ fn annotate(ed: &mut Editor, a: &Args) -> ToolResult {
             Ok(note)
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let ids = ed.with_page(page, |ed| {
+    let only_tidy = tidy && notes.is_empty();
+    let (ids, moved) = ed.with_page(page, |ed| {
         ed.edit("Annotate", |tx| {
-            notes
+            let ids = notes
                 .into_iter()
                 .map(|mut note| {
-                    note.position = auto_position(tx.doc(), note.target.unwrap());
+                    auto_place(tx.doc(), &mut note);
                     tx.add_annotation(note)
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            let mut moved = 0;
+            if tidy {
+                for (id, p) in crate::model::annotation_layout::tidy(tx.doc(), frame) {
+                    let same = tx.doc().annotations.iter().any(|n| {
+                        n.id == id && n.position == p.position && n.anchor == p.anchor
+                    });
+                    if !same {
+                        tx.update_annotation(id, |n| (n.position, n.anchor) = (p.position, p.anchor));
+                        moved += 1;
+                    }
+                }
+            }
+            (ids, moved)
         })
     });
+    if only_tidy {
+        return text(json!({"tidied": moved}));
+    }
     let doc = ed.page_doc(page);
     let numbers = numbers(doc);
     let cats = ed.design.categories();
@@ -1346,6 +1563,129 @@ fn set_annotation_template(ed: &mut Editor, a: &Args) -> ToolResult {
     }
     .map_err(|e| e.to_string())?;
     text(json!({"template": t.name, "scope": a.str("scope").unwrap_or("page")}))
+}
+
+fn template_types(t: &crate::model::annotation::AnnotationTemplate) -> Value {
+    json!({"id": t.id, "name": t.name, "types": t.categories.iter().filter(|c| c.enabled)
+        .map(|c| json!([c.key, c.prompt, c.fields])).collect::<Vec<_>>()})
+}
+
+fn upsert_annotation_template(ed: &mut Editor, a: &Args) -> ToolResult {
+    use crate::model::annotation::{AnnotationCategory, AnnotationTemplate, Display, TemplateCategory, category_by_key};
+    use crate::model::Color;
+    let spec = a.get("template").and_then(Value::as_object).ok_or("missing required object argument `template`")?;
+    let t = Args(spec);
+    let name = t.req_str("name")?;
+    let page = page_arg(ed, a)?;
+    let mut cats = ed.design.categories();
+    for v in a.get("categories").map(|v| v.as_array().ok_or("categories must be an array")).transpose()?.into_iter().flatten() {
+        let c = Args(v.as_object().ok_or("categories must be objects")?);
+        let key = c.req_str("key")?.to_lowercase();
+        if key.is_empty() || !key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-') {
+            return Err(format!("category key `{key}` must be letters, digits and dashes"));
+        }
+        let color = c.str("color").map(|s| Color::from_hex(s).ok_or(format!("bad color `{s}`; use #rrggbb"))).transpose()?;
+        let icon = c.str("icon").map(|i| {
+            if crate::theme::icon_by_name(i).is_some() { Ok(i.to_string()) }
+            else { Err(format!("unknown icon `{i}`; valid: {}", crate::theme::ICON_NAMES.join(", "))) }
+        }).transpose()?;
+        let existing = cats.iter().position(|x| x.key().eq_ignore_ascii_case(&key));
+        match existing {
+            Some(i) => {
+                let x = &mut cats[i];
+                if let Some(n) = c.str("name") { x.name = n.into(); }
+                if let Some(col) = color { x.color = col; }
+                if let Some(ic) = icon { x.icon = ic; }
+            }
+            None => cats.push(AnnotationCategory {
+                id: key.clone(),
+                key: key.clone(),
+                name: c.req_str("name")?.into(),
+                color: color.ok_or("new category needs `color`")?,
+                icon: icon.ok_or("new category needs `icon`")?,
+            }),
+        }
+    }
+    let all = ed.design.templates();
+    let id = match t.str("id") {
+        Some(id) => id.to_string(),
+        None => match all.iter().find(|x| x.name.eq_ignore_ascii_case(name)) {
+            Some(x) => x.id.clone(),
+            None => {
+                let base = match crate::design_system::slug(name) { s if s.is_empty() => "template".into(), s => s };
+                let mut id = base.clone();
+                let mut n = 1;
+                while all.iter().any(|x| x.id == id) { n += 1; id = format!("{base}-{n}"); }
+                id
+            }
+        },
+    };
+    let display = match t.str("display") {
+        None | Some("full") => Display::Full,
+        Some("badges") => Display::Badges,
+        Some(d) => return Err(format!("display must be full or badges, got `{d}`")),
+    };
+    let mut tcats: Vec<TemplateCategory> = Vec::new();
+    for v in t.arr("categories")? {
+        let c = Args(v.as_object().ok_or("template categories must be objects")?);
+        let key = c.req_str("key")?;
+        let Some(cat) = category_by_key(&cats, key) else {
+            return Err(format!(
+                "unknown category key `{key}`; known: {} (add it in `categories`)",
+                cats.iter().map(AnnotationCategory::key).collect::<Vec<_>>().join(", ")
+            ));
+        };
+        if tcats.iter().any(|x| x.key == cat.key()) {
+            return Err(format!("category `{key}` listed twice"));
+        }
+        tcats.push(TemplateCategory {
+            key: cat.key().into(),
+            enabled: c.bool("enabled").unwrap_or(true),
+            prompt: c.str("guidance").unwrap_or_default().into(),
+            fields: if c.get("fields").is_some() { c.strs("fields")? } else { Vec::new() },
+        });
+    }
+    let tpl = AnnotationTemplate { id: id.clone(), name: name.into(), categories: tcats, display };
+    let set_as = match a.str("setAs") {
+        None => None,
+        Some(s @ ("project" | "page")) => Some(s),
+        Some(s) => return Err(format!("setAs must be project or page, got `{s}`")),
+    };
+    let out = template_types(&tpl);
+    let project = set_as == Some("project");
+    ed.edit_design("Edit annotation template", |d| {
+        let mut list = d.templates();
+        match list.iter_mut().find(|x| x.id == id) {
+            Some(x) => *x = tpl,
+            None => list.push(tpl),
+        }
+        d.annotation_templates = list;
+        d.annotation_categories = cats;
+        if project {
+            d.annotation_template = Some(id.clone());
+        }
+        Ok(())
+    })
+    .map_err(|e| e.to_string())?;
+    if set_as == Some("page") {
+        ed.set_page_template(page, Some(&id)).map_err(|e| e.to_string())?;
+    }
+    text(out)
+}
+
+fn delete_annotation_template(ed: &mut Editor, a: &Args) -> ToolResult {
+    let r = a.req_str("template")?;
+    let t = ed.design.template_by_ref(r).ok_or_else(|| {
+        format!(
+            "unknown template `{r}`; available: {}",
+            ed.design.templates().iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    })?;
+    if ed.design.templates().len() < 2 {
+        return Err("cannot delete the last template".into());
+    }
+    ed.delete_template(&t.id).map_err(|e| e.to_string())?;
+    text(json!({"deleted": t.name}))
 }
 
 fn get_annotations(ed: &Editor, a: &Args) -> ToolResult {
@@ -2715,16 +3055,18 @@ impl Builder<'_, '_> {
                 named.sort_by_key(|n| n.id);
                 named.first().map(|n| n.id)
             });
-        // If not on this page, look across other pages and auto-import a copy.
+        // Not on this page: link to the main on another page, like create_instance does.
+        let mut ext = None;
         if main.is_none() {
-            let ext = self.all_pages.iter().find_map(|(pid, pname, doc)| {
+            ext = self.all_pages.iter().find_map(|(pid, pname, doc)| {
                 if pid == &self.page_id {
                     return None;
                 }
-                if let (Some(p), Some(id)) = (page_part, num_part) {
-                    if match_page_key(pid, pname, p) && doc.get(id).is_some_and(|n| n.component) {
-                        return Some((doc, id));
-                    }
+                if let (Some(p), Some(id)) = (page_part, num_part)
+                    && match_page_key(pid, pname, p)
+                    && doc.get(id).is_some_and(|n| n.component)
+                {
+                    return Some((pid, doc, id));
                 }
                 let mut named: Vec<&Node> = doc
                     .nodes
@@ -2732,35 +3074,9 @@ impl Builder<'_, '_> {
                     .filter(|n| n.component && n.name.eq_ignore_ascii_case(key))
                     .collect();
                 named.sort_by_key(|n| n.id);
-                named.first().map(|n| (doc, n.id))
+                named.first().map(|n| (pid, doc, n.id))
             });
-            if let Some((src_doc, src_comp)) = ext {
-                let right = self
-                    .tx
-                    .doc()
-                    .root
-                    .iter()
-                    .filter_map(|r| self.tx.doc().world_rect(*r))
-                    .map(|r| r.right())
-                    .fold(f64::MIN, f64::max);
-                let x = if right == f64::MIN {
-                    0.0
-                } else {
-                    right + 160.0
-                };
-                let w = src_doc
-                    .world_rect(src_comp)
-                    .unwrap_or_else(|| src_doc.get(src_comp).unwrap().rect);
-                let (imported_id, _) = clone_subtree_from_doc(
-                    self.tx,
-                    src_doc,
-                    src_comp,
-                    None,
-                    None,
-                    v2(x, 0.0) - w.min(),
-                );
-                main = Some(imported_id);
-            }
+            main = ext.map(|(_, _, id)| id);
         }
         let Some(main) = main else {
             self.warnings.push(format!(
@@ -2769,7 +3085,15 @@ impl Builder<'_, '_> {
             ));
             return None;
         };
-        let id = crate::editor::structure::instantiate(self.tx, main, parent.id, *index, None);
+        let id = crate::editor::structure::instantiate_from(
+            self.tx,
+            ext.map(|(_, d, _)| d),
+            ext.map(|(pid, _, _)| Source::Page(pid.clone())),
+            main,
+            parent.id,
+            *index,
+            None,
+        );
         if let Some(i) = index {
             *i += 1;
         }
@@ -4114,7 +4438,8 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
         0
     };
     let doc = ed.page_doc(page);
-    let issues = super::lint::lint(doc, &roots, &scale);
+    let mut issues = super::lint::lint(doc, &roots, &scale);
+    issues.extend(super::lint::not_an_instance(doc, &roots, &super::lint::component_mains(ed)));
     let count = |sev: &str| issues.iter().filter(|i| i.severity == sev).count();
     let mut by_rule: Map<String, Value> = Map::new();
     for i in &issues {
@@ -5124,7 +5449,11 @@ fn select_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
     let page = ed.active_page;
     let (p, ids) = resolve_all(ed, &a.strs("nodeIds")?, page)?;
     if p != page {
-        return Err("only nodes on the page the user is viewing can be selected".into());
+        return Err(
+            "only nodes on the page the user is viewing can be selected; call set_viewport \
+             with that pageId first to switch the user's page"
+                .into(),
+        );
     }
     ed.select(ids.clone());
     if a.get("zoom").and_then(Value::as_bool).unwrap_or(false)
@@ -5138,6 +5467,64 @@ fn select_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
     }
     ed.revision += 1;
     text(json!({"selected": ids.len()}))
+}
+
+/// How long after the user moved the camera agents leave it alone (as chat's follow does).
+pub const USER_CAMERA_QUIET: std::time::Duration = std::time::Duration::from_secs(10);
+/// Screen margin around what `set_viewport` fits, and the most it zooms in to fit.
+const FIT_PADDING: f64 = 64.0;
+const FIT_MAX_ZOOM: f64 = 8.0;
+
+fn set_viewport(ed: &mut Editor, a: &Args) -> ToolResult {
+    let force = a.bool("force").unwrap_or(false);
+    if !force && ed.cam_moved.is_some_and(|t| t.elapsed() < USER_CAMERA_QUIET) {
+        return Err("user is moving the canvas; try again later, or pass force: true".into());
+    }
+    let page = page_arg(ed, a)?;
+    let target = match (a.get("nodeIds"), a.get("rect")) {
+        (Some(_), _) => {
+            let (p, ids) = resolve_all(ed, &a.strs("nodeIds")?, page)?;
+            if p != page && a.str("pageId").is_some_and(|s| !s.is_empty()) {
+                return Err("nodeIds are on another page than pageId".into());
+            }
+            let doc = ed.page_doc(p);
+            let rects: Vec<Rect> = ids.iter().filter_map(|i| doc.world_rect(*i)).collect();
+            Some((p, Rect::union_all(&rects).ok_or("no nodes to fit")?))
+        }
+        (None, Some(r)) => {
+            let n: Vec<f64> = r
+                .as_array()
+                .map(|v| v.iter().filter_map(Value::as_f64).collect())
+                .unwrap_or_default();
+            let [x, y, w, h] = n[..] else {
+                return Err("rect must be [x, y, width, height] in world units".into());
+            };
+            Some((page, Rect::new(x, y, w.max(1.0), h.max(1.0))))
+        }
+        (None, None) => None,
+    };
+    let page = target.map_or(page, |(p, _)| p);
+    ed.switch_page(page);
+    if ed.active_page != page {
+        return Err("cannot switch to that page".into());
+    }
+    let zoom = a.num("zoom").map(|z| z.clamp(MIN_ZOOM, MAX_ZOOM));
+    let pad = a.num("padding").unwrap_or(FIT_PADDING).max(0.0);
+    match (target, zoom) {
+        (Some((_, r)), Some(z)) => {
+            ed.camera.zoom = z;
+            ed.camera.pan = r.center() - ed.viewport / (2.0 * z);
+        }
+        (Some((_, r)), None) => ed.camera.fit(&r, ed.viewport, pad, FIT_MAX_ZOOM),
+        (None, Some(z)) => ed.camera.zoom_about(ed.viewport * 0.5, z),
+        (None, None) => {}
+    }
+    if target.is_some() || zoom.is_some() {
+        // A page opened for the first time would refit on the next frame.
+        ed.pending_fit = false;
+    }
+    ed.revision += 1;
+    text(json!({"viewport": viewport_json(ed)}))
 }
 
 fn undo_redo(ed: &mut Editor, a: &Args, undo: bool) -> ToolResult {

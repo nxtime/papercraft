@@ -227,6 +227,7 @@ impl Editor {
             }
             if let Some(c) = probe.color {
                 n.style.set_fill(Some(c));
+                n.bindings.remove("text-color");
             }
             if let Some(z) = probe.size
                 && let NodeKind::Text { font_size, .. } | NodeKind::Sticky { font_size, .. } =

@@ -619,6 +619,23 @@ impl History {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    /// Folds the steps committed since the stack held `len` into one step named `label`, so an
+    /// action made of several tool calls undoes at once.
+    // ponytail: counts steps, so a stack trimmed at MAX_DEPTH meanwhile folds one step too many.
+    pub fn squash_since(&mut self, len: usize, label: &str) {
+        if self.undo.len() <= len {
+            return;
+        }
+        let mut steps = self.undo.split_off(len).into_iter();
+        let mut first = steps.next().expect("at least one step");
+        for c in steps {
+            merge(&mut first, c);
+        }
+        first.label = label.into();
+        first.coalesce_key = None;
+        self.undo.push(first);
+    }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

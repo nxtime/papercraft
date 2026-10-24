@@ -1,4 +1,5 @@
 pub mod annotation;
+pub mod annotation_layout;
 pub mod document;
 pub mod node;
 pub mod paint;

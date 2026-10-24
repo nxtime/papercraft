@@ -315,6 +315,8 @@ fn draw(ctx: &egui::Context, ed: &mut Editor, st: &UiState, lib: &mut LibrariesU
 }
 
 fn apply(act: Act, ed: &mut Editor, lib: &mut LibrariesUi, dir: Option<&Path>) {
+    // Publishing, enabling and disabling look at every page.
+    ed.finish_loading();
     lib.error = None;
     lib.note = None;
     let Some(dir) = dir else { return };

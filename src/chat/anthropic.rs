@@ -244,10 +244,15 @@ mod api {
             "messages": messages,
         });
         if !cfg.system.is_empty() {
-            body["system"] = if claude {
-                json!([{"type": "text", "text": cfg.system, "cache_control": {"type": "ephemeral"}}])
-            } else {
-                json!(cfg.system)
+            // The digest changes more often than the skill: its own breakpoint keeps the skill cached.
+            body["system"] = match (claude, cfg.ds_digest.is_empty()) {
+                (true, true) => json!([{"type": "text", "text": cfg.system, "cache_control": {"type": "ephemeral"}}]),
+                (true, false) => json!([
+                    {"type": "text", "text": cfg.system, "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": cfg.ds_digest, "cache_control": {"type": "ephemeral"}},
+                ]),
+                (false, true) => json!(cfg.system),
+                (false, false) => json!(format!("{}\n\n{}", cfg.system, cfg.ds_digest)),
             };
         }
         if claude {
@@ -619,6 +624,11 @@ mod api {
                 assert!(b.get(k).is_some(), "{k}");
             }
             assert_eq!(b["system"][0]["cache_control"], json!({"type": "ephemeral"}));
+            let c = TurnConfig { system: "S".into(), ds_digest: "DS".into(), ..Default::default() };
+            let b = build_body(&c, &tools_json(true), &[]);
+            assert_eq!(b["system"][1], json!({"type": "text", "text": "DS", "cache_control": {"type": "ephemeral"}}), "the digest is its own block");
+            let other = TurnConfig { endpoint: crate::chat::endpoint::Endpoint { base_url: "http://h".into(), ..Default::default() }, ..c };
+            assert_eq!(build_body(&other, &[], &[])["system"], "S\n\nDS");
         }
 
         #[test]

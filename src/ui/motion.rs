@@ -225,13 +225,32 @@ pub fn pop_in<R>(
     index: usize,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
+    pop_in_if(ui, id, index, true, add)
+}
+
+/// [`pop_in`], or with `animate` false the same row already in place (and counted as seen, so
+/// it does not pop in later): for rows that come into view by scrolling.
+pub fn pop_in_if<R>(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    index: usize,
+    animate: bool,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     if !enabled(ui.ctx()) {
         return add(ui);
     }
     let delay = STAGGER * f32::from(u8::try_from(index.min(STAGGER_ROWS)).unwrap_or(0));
-    let raw = appear(ui.ctx(), id, delay + SLOW, |t| t);
-    let t = ((raw * (delay + SLOW) - delay) / SLOW).clamp(0.0, 1.0);
-    if t < 1.0 {
+    let key = Id::new(&id);
+    let mut raw = appear(ui.ctx(), id, delay + SLOW, |t| t);
+    if !animate {
+        ui.ctx().animate_value_with_time(key, 1.0, 0.0);
+        raw = 1.0;
+    }
+    // `raw` reaching 1 is the end: `t` below can land a hair under 1 from rounding and would
+    // repaint forever.
+    let t = if raw >= 1.0 { 1.0 } else { ((raw * (delay + SLOW) - delay) / SLOW).clamp(0.0, 1.0) };
+    if raw < 1.0 {
         ui.ctx().request_repaint();
     }
     let drop = (1.0 - ease_out_back(t)) * POP_DROP;

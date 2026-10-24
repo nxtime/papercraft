@@ -8,6 +8,9 @@
 use super::chat_msgs::{self, Acts, View};
 #[path = "chat_agents.rs"]
 pub mod chat_agents;
+#[path = "chat_pick.rs"]
+pub mod chat_pick;
+pub use chat_pick::{layer_chip, open_ask};
 use chat_agents::{Act, PanelIn};
 use crate::chat::events::{Event, ImageAttachment};
 use crate::chat::agents::{self, AgentKind, AgentState, AgentStatus};
@@ -39,6 +42,8 @@ pub use crate::chat::TMP_DIR;
 /// (events reach the UI a frame after the tool ran).
 const RUN_SLACK_MS: u64 = 5_000;
 const REPAINT: Duration = Duration::from_millis(50);
+/// How often the column checks the design system for changes (the summary's key).
+const DS_CHECK: Duration = Duration::from_secs(1);
 #[cfg(not(target_arch = "wasm32"))]
 const TITLE_CHARS: usize = 40;
 const MAX_IMAGES: usize = 4;
@@ -197,10 +202,16 @@ fn scan(prefs: &super::settings::ChatPrefs) -> Detect {
 }
 
 /// The current selection as a composer chip.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SelChip {
     pub label: String,
     pub keys: Vec<String>,
+    /// An area chip (Pick, Shift+drag): its world rect `[x, y, w, h]`; `keys` are the layers inside.
+    pub rect: Option<[f64; 4]>,
+    /// Name of the page an area chip is on.
+    pub page: String,
+    /// PNG crop of the layers (or of the area), sent with the message like an attached image.
+    pub image: Option<Vec<u8>>,
 }
 
 /// An image waiting in the composer.
@@ -247,6 +258,8 @@ pub struct ChatState {
     turn_chat: Option<String>,
     /// Stop was pressed; the turn stays occupied until the backend's last event.
     pub stopping: bool,
+    /// The last turn ended because the user stopped it: the list says "Stopped", not an error.
+    pub stopped: bool,
     window: Option<TurnWindow>,
     /// Runs the tracker finished while a window was open, waiting for `settle_claims`.
     unclaimed: Vec<crate::runs::Run>,
@@ -291,6 +304,8 @@ pub struct ChatState {
     /// Annotation lines of the chips' layers, refreshed from the editor just before a send.
     pub sel_notes: Vec<String>,
     pub images: Vec<Attachment>,
+    /// An Actions-menu prompt is in the composer: the column sends it once the agents are known.
+    pub send_draft: bool,
     /// Text of the title field while renaming.
     pub renaming: Option<String>,
     /// Chat waiting for the delete confirm.
@@ -312,6 +327,17 @@ pub struct ChatState {
     #[cfg(not(target_arch = "wasm32"))]
     pending_images: Vec<ImageAttachment>,
     width_dirty: bool,
+    /// The design-system summary, rebuilt when the design system changes (`refresh_ds`).
+    pub ds: crate::chat::ds_digest::Cached,
+    ds_checked: Option<web_time::Instant>,
+    /// CLI/ACP chats: the summary key their agent session last got, so a change is sent once.
+    ds_sent: HashMap<String, u64>,
+    /// Offscreen renderer for chip crops; set by the app each frame (None in tests and the web).
+    pub gpu: Option<crate::render::gpu::Headless>,
+    /// Pick mode: the next canvas click (or Shift+drag) becomes a chip.
+    pub picking: bool,
+    /// The on-canvas Ask box (⌘K on a selection).
+    pub ask: Option<chat_pick::Ask>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -542,7 +568,10 @@ impl ChatState {
             }
             Event::Error(e) => {
                 self.thought_secs = self.thinking_since.take().map(|t| t.elapsed().as_secs());
-                self.error = Some(e);
+                // A backend killed by Stop reports how it died; that is the stop, not a failure.
+                if !self.stopping {
+                    self.error = Some(e);
+                }
                 return true;
             }
         }
@@ -590,7 +619,7 @@ impl ChatState {
     fn finish_turn(&mut self) {
         self.turn = None;
         self.rx = None;
-        self.stopping = false;
+        self.stopped = std::mem::take(&mut self.stopping);
         self.approvals.clear();
         self.save();
         // The agent run does not wait for its 30 s idle timeout once the turn that made it is over.
@@ -608,6 +637,26 @@ impl ChatState {
         )
     }
 
+    /// The summary to send with turns: on in Settings and not empty.
+    fn ds_text(&self) -> &str {
+        if self.prefs.ds_summary { &self.ds.text } else { "" }
+    }
+
+    /// Rebuilds the design-system summary when the project's design system changed. `force`
+    /// skips the once-a-second throttle (a send).
+    pub fn refresh_ds(&mut self, ed: &Editor, force: bool) {
+        if !force && self.ds_checked.is_some_and(|t| t.elapsed() < DS_CHECK) {
+            return;
+        }
+        self.ds_checked = Some(web_time::Instant::now());
+        let dir = self.project.clone();
+        self.ds.refresh(ed, || {
+            dir.as_deref()
+                .and_then(|d| Some(crate::libraries::status(&crate::project::Store::open(d.parent()?).ok()?, d, ed)))
+                .unwrap_or_default()
+        });
+    }
+
     /// Adds `prompt` as a user message and starts a turn on the chat's backend. Errors (no CLI,
     /// no key) come back as text and are also kept in `error` for the error row.
     #[cfg(not(target_arch = "wasm32"))]
@@ -623,7 +672,8 @@ impl ChatState {
             return Err("A turn is already running".into());
         }
         self.ensure_chat();
-        let system = self.system_prompt();
+        let mut system = self.system_prompt();
+        let digest = self.ds_text().to_owned();
         let (Some(dir), Some(chat)) = (self.project.clone(), self.chat.as_mut()) else {
             return Err("Open a project to chat".into());
         };
@@ -634,6 +684,14 @@ impl ChatState {
         }
         let turn_chat = chat.id.clone();
         let Backend { kind, model, effort, endpoint, cli_session, agent } = chat.backend.clone();
+        // API: the summary is its own system block, current every request. CLI/ACP read the system
+        // prompt when a session starts; a resumed one hears of a change in front of the prompt.
+        let api = kind == BackendKind::Anthropic;
+        let ds_stale = !api && !digest.is_empty() && cli_session.is_some() && self.ds_sent.get(&turn_chat) != Some(&self.ds.key);
+        let sent = if ds_stale { format!("[Design system changed] {digest}\n\n{prompt}") } else { prompt.to_owned() };
+        if !api && !digest.is_empty() {
+            system = format!("{system}\n\n{digest}");
+        }
         let ep = self.prefs.endpoint(endpoint.as_deref()).clone();
         // Another host's model is whatever the endpoint says now; the Claude host keeps the chat's pick.
         let model = if ep.is_claude_host() { model.or_else(|| Some(ep.model.clone())) } else { Some(ep.model.clone()) };
@@ -642,28 +700,30 @@ impl ChatState {
             endpoint: ep.clone(),
             api_history: Some(dir.join("chats").join(format!("{}.api.json", chat.id))),
             project_dir: dir,
-            mcp_url: self.mcp_url.clone(),
+            // Calls from a CLI backend name the chat, so they land in this chat's run.
+            mcp_url: format!("{}?chat={turn_chat}", self.mcp_url),
             model,
             effort,
             session: cli_session,
-            tools: self.tools.clone(),
+            tools: self.tools.clone().map(|d| d.for_chat(&turn_chat)),
             images: std::mem::take(&mut self.pending_images),
             system,
+            ds_digest: if api { digest.clone() } else { String::new() },
             binary: cli_binary(&self.prefs, kind),
             ..Default::default()
         };
         let (tx, rx) = std::sync::mpsc::channel();
         let started = match kind {
-            BackendKind::ClaudeCode => claude_code::start(&cfg, prompt, tx).map(TurnHandle::Cli),
-            BackendKind::Codex => codex::start(&cfg, prompt, tx).map(TurnHandle::Cli),
+            BackendKind::ClaudeCode => claude_code::start(&cfg, &sent, tx).map(TurnHandle::Cli),
+            BackendKind::Codex => codex::start(&cfg, &sent, tx).map(TurnHandle::Cli),
             BackendKind::Anthropic => match ep.format {
-                ApiFormat::Anthropic => anthropic::start(&cfg, prompt, tx),
-                ApiFormat::OpenAi => openai::start(&cfg, prompt, tx),
+                ApiFormat::Anthropic => anthropic::start(&cfg, &sent, tx),
+                ApiFormat::OpenAi => openai::start(&cfg, &sent, tx),
             }
             .map(TurnHandle::Api),
-            BackendKind::Acp => start_acp(&cfg, &self.prefs, agent.as_deref(), prompt, tx),
+            BackendKind::Acp => start_acp(&cfg, &self.prefs, agent.as_deref(), &sent, tx),
         };
-        (self.error, self.start_failed, self.failed_prompt) = (None, false, None);
+        (self.error, self.start_failed, self.failed_prompt, self.stopped) = (None, false, None, false);
         match started {
             Ok(t) => {
                 self.thinking.clear();
@@ -672,6 +732,9 @@ impl ChatState {
                 self.stopping = false;
                 self.live_context = None;
                 self.window = Some(TurnWindow { chat: turn_chat.clone(), start: now_ms(), edits: None });
+                if !digest.is_empty() {
+                    self.ds_sent.insert(turn_chat.clone(), self.ds.key);
+                }
                 self.turn_chat = Some(turn_chat);
                 (self.turn, self.rx) = (Some(t), Some(rx));
                 ctx.request_repaint();
@@ -878,17 +941,45 @@ impl ChatState {
         if text.is_empty() {
             return Ok(());
         }
+        let (sels, notes, images) = (self.sels.clone(), self.sel_notes.clone(), self.images.clone());
+        let r = self.send_with(ctx, &sels, &notes, &images, &text);
+        if r.is_ok() {
+            (self.sels, self.images) = (Vec::new(), Vec::new());
+            self.draft.clear();
+        }
+        r
+    }
+
+    /// Sends `text` with the chips (context lines and crops) and the images. The composer and the
+    /// Ask box both send through here, so they give the same message.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn send_with(&mut self, ctx: &egui::Context, chips: &[SelChip], notes: &[String], images: &[Attachment], text: &str) -> Result<(), String> {
+        let prompt = self.compose(chips, notes, images, text)?;
+        let r = self.send(ctx, &prompt);
+        self.pending_images.clear();
+        r
+    }
+
+    /// The message: the chips' context lines, the images, then the text. API images (crops too)
+    /// go to `pending_images` as blocks; CLI images are saved under the project and named by path.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn compose(&mut self, chips: &[SelChip], notes: &[String], images: &[Attachment], text: &str) -> Result<String, String> {
         self.ensure_chat();
         let (Some(dir), Some(chat)) = (self.project.clone(), self.chat.as_ref()) else {
             return Err("Open a project to chat".into());
         };
         let (api, chat_id) = (chat.backend.kind == BackendKind::Anthropic, chat.id.clone());
-        let mut lines = selection_lines(&self.sels, &self.sel_notes);
+        let mut lines = selection_lines(chips, notes);
         let mut pending = Vec::new();
-        for a in &self.images {
+        let crops = chips.iter().filter_map(|c| {
+            let data = c.image.clone()?;
+            let what = if c.rect.is_some() { "area".to_owned() } else { c.keys.first().map_or_else(String::new, |k| k.replace(':', "-")) };
+            Some(Attachment { name: format!("crop-{what}.png"), img: ImageAttachment { mime: "image/png".into(), data } })
+        });
+        for a in images.iter().cloned().chain(crops) {
             if api {
                 lines.push(format!("[Attached] {}", a.name));
-                pending.push(a.img.clone());
+                pending.push(a.img);
                 continue;
             }
             let folder = store::tmp_of(&dir, &chat_id).ok_or("invalid chat id")?;
@@ -896,15 +987,13 @@ impl ChatState {
             crate::vfs::create_dir_all(&folder).and_then(|()| crate::vfs::write(&path, &a.img.data)).map_err(|e| format!("could not save the image: {e}"))?;
             lines.push(format!("[Attached] {}", path.display()));
         }
-        let prompt = if lines.is_empty() { text } else { format!("{}\n\n{text}", lines.join("\n")) };
         self.pending_images = pending;
-        let r = self.send(ctx, &prompt);
-        self.pending_images.clear();
-        if r.is_ok() {
-            (self.sels, self.images) = (Vec::new(), Vec::new());
-            self.draft.clear();
-        }
-        r
+        Ok(if lines.is_empty() { text.to_owned() } else { format!("{}\n\n{text}", lines.join("\n")) })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn send_with(&mut self, _ctx: &egui::Context, _chips: &[SelChip], _notes: &[String], _images: &[Attachment], _text: &str) -> Result<(), String> {
+        Err(WEB_NOTE.into())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -927,9 +1016,12 @@ impl ChatState {
 
     /// Context in use at the latest model call and the window it counts against (never above it).
     /// None when the backend reports no per-call usage (Codex): the meter is hidden.
+    /// Before the first turn it is the design-system summary that the first turn will carry.
     pub fn context_use(&self) -> Option<(u64, u64)> {
         let saved = self.chat.as_ref().and_then(|c| c.messages.iter().rev().find_map(|m| m.context));
-        let used = self.live_context.filter(|_| self.turn.is_some()).or(saved)?;
+        let fresh = self.chat.as_ref().is_some_and(|c| c.messages.is_empty()) && !self.ds_text().is_empty();
+        let first = fresh.then(|| self.ds.tokens());
+        let used = self.live_context.filter(|_| self.turn.is_some()).or(saved).or(first)?;
         Some((used.min(CONTEXT_WINDOW), CONTEXT_WINDOW))
     }
 }
@@ -997,9 +1089,9 @@ fn chip_label(first: &str, count: usize) -> String {
     if count > 1 { format!("{first} \u{b7} {count} layers") } else { first.to_owned() }
 }
 
-/// Adds a chip unless one with the same layers is already there.
+/// Adds a chip unless one with the same layers (and area) is already there.
 fn push_chip(chips: &mut Vec<SelChip>, chip: SelChip) {
-    if !chips.iter().any(|c| c.keys == chip.keys) {
+    if !chips.iter().any(|c| c.keys == chip.keys && c.rect == chip.rect) {
         chips.push(chip);
     }
 }
@@ -1007,7 +1099,15 @@ fn push_chip(chips: &mut Vec<SelChip>, chip: SelChip) {
 /// The `[Selection]` context lines of the chips, one each, with node ids.
 #[cfg(not(target_arch = "wasm32"))]
 fn selection_lines(chips: &[SelChip], notes: &[String]) -> Vec<String> {
-    chips.iter().map(|s| format!("[Selection] {} ({})", s.label, s.keys.join(", "))).chain(notes.iter().map(|n| format!("[Selection] {n}"))).collect()
+    chips.iter().map(chip_line).chain(notes.iter().map(|n| format!("[Selection] {n}"))).collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `[Selection] Card (a:1)`, or for an area `[Area] page P, rect x,y,w,h, contains: a:1, a:2`.
+fn chip_line(c: &SelChip) -> String {
+    let Some([x, y, w, h]) = c.rect else { return format!("[Selection] {} ({})", c.label, c.keys.join(", ")) };
+    let ids = if c.keys.is_empty() { "nothing".to_owned() } else { c.keys.join(", ") };
+    format!("[Area] page {}, rect {x:.0},{y:.0},{w:.0},{h:.0}, contains: {ids}", c.page)
 }
 
 /// One line per annotation on the chips' layers (and their children): number, type key, label,
@@ -1040,16 +1140,25 @@ pub fn selection_notes(ed: &Editor, chips: &[SelChip]) -> Vec<String> {
 }
 
 /// The current selection becomes a chip (Cmd+L or the @ button); each click adds one.
-fn add_selection(ed: &mut Editor, st: &mut ChatState) {
+pub(super) fn add_selection(ed: &mut Editor, st: &mut ChatState) {
     let ids = ed.top_selection();
-    let Some(first) = ids.first() else {
+    if ids.is_empty() {
         ed.status = "Select a layer to add it to the chat".into();
         return;
-    };
-    let page = ed.active_page;
-    let keys = ids.iter().map(|id| crate::mcp::exec::node_key(ed, page, *id)).collect();
-    let name = ed.doc.get(*first).map(|n| n.name.clone()).unwrap_or_default();
-    push_chip(&mut st.sels, SelChip { label: chip_label(&name, ids.len()), keys });
+    }
+    push_chip(&mut st.sels, layer_chip(ed, st.gpu.as_ref(), ed.active_page, &ids));
+}
+
+/// Sends the composer an Actions-menu intent filled in, once detection is done (so the chat has
+/// its backend); a failed start shows the usual error row.
+pub(super) fn send_draft(ctx: &egui::Context, ed: &Editor, c: &mut ChatState) {
+    if !c.send_draft || c.detect.is_none() || c.is_running() {
+        return;
+    }
+    c.send_draft = false;
+    c.sel_notes = selection_notes(ed, &c.sels);
+    c.refresh_ds(ed, true);
+    let _ = c.submit(ctx);
 }
 
 /// Pans the canvas to a node the agent touched, unless the user moved the camera lately.
@@ -1168,7 +1277,9 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     }
     st.chat.poll_detect(&ctx, &st.settings.chat);
     st.chat.ensure_defaults(&st.settings.chat);
+    send_draft(&ctx, ed, &mut st.chat);
     follow(ed, &mut st.chat);
+    st.chat.refresh_ds(ed, false);
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::L)) {
         add_selection(ed, &mut st.chat);
     }
@@ -1209,7 +1320,9 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             runs: &st.runs,
             approvals: &st.chat.approvals,
             error: st.chat.error.as_deref(),
+            stopped: st.chat.stopped,
             signin: signin.as_ref(),
+            live_run: st.run_open.iter().find(|r| r.client.split(" \u{b7} ").next() == Some(crate::mcp::CHAT_CLIENT)),
         };
         chat_msgs::list(ui, chat, &view, &mut acts);
     }
@@ -1262,11 +1375,13 @@ fn apply_acts(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, acts: Acts
     }
     if acts.retry_last && st.chat.start_failed {
         st.chat.sel_notes = selection_notes(ed, &st.chat.sels);
+        st.chat.refresh_ds(ed, true);
         st.chat.retry_start(ctx);
         return;
     }
     let again = acts.retry_last.then(|| st.chat.last_prompt()).flatten();
     if let Some(text) = acts.send.or(again) {
+        st.chat.refresh_ds(ed, true);
         let _ = st.chat.send(ctx, &text);
     }
 }
@@ -1308,6 +1423,7 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
         _ => String::new(),
     };
     let context = st.chat.context_use();
+    let ds_tokens = if st.chat.ds_text().is_empty() { 0 } else { st.chat.ds.tokens() };
     let mut rect = None;
     ui.horizontal(|ui| {
         let r = kit::chip_ink(ui, &label, st.chat.picker_open.then(theme::accent));
@@ -1318,7 +1434,11 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
         }
         let Some((used, window)) = context else { return };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(format!("{} / {}", fmt_tokens(used), fmt_tokens(window))).size(theme::SECONDARY).color(p.secondary));
+            let tip = format!("Includes the design-system summary, about {} tokens", fmt_tokens(ds_tokens));
+            let r = ui.label(RichText::new(format!("{} / {}", fmt_tokens(used), fmt_tokens(window))).size(theme::SECONDARY).color(p.secondary));
+            if ds_tokens > 0 {
+                r.on_hover_text(tip);
+            }
             let (bar, _) = ui.allocate_exact_size(egui::vec2(36.0, 3.0), egui::Sense::hover());
             ui.painter().rect_filled(bar, 2.0, p.separator);
             let frac = (used as f32 / window as f32).clamp(0.0, 1.0);
@@ -1494,6 +1614,11 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
             if kit::chip(ui, "@ Selection", false).on_hover_text("Add the selection (Cmd+L)").clicked() {
                 add_selection(ed, &mut st.chat);
             }
+            let tip = "Point at the canvas: click a layer or Shift+drag an area (Esc cancels). Option+click adds a layer too.";
+            if kit::chip(ui, "Pick", st.chat.picking).on_hover_text(tip).clicked() {
+                st.chat.picking = !st.chat.picking;
+            }
+            super::actions::chip(ui, ed, st);
             #[cfg(not(target_arch = "wasm32"))]
             if theme::icon_button(ui, Icon::Image, 24.0, false).on_hover_text("Attach an image (or paste, or drop one)").clicked()
                 && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"]).pick_file()
@@ -1522,6 +1647,7 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
     if (submit || enter) && !running && backend_ok && !no_project {
         let ctx = ui.ctx().clone();
         st.chat.sel_notes = selection_notes(ed, &st.chat.sels);
+        st.chat.refresh_ds(ed, true);
         let _ = st.chat.submit(&ctx);
     }
 }
@@ -1621,6 +1747,21 @@ mod tests {
         assert!(saved.messages.iter().any(|m| m.text == "partial"), "what was streamed before the end is kept");
         assert!(st.take_finish_run(), "a turn that edited closes its agent run, like a normal end");
         assert!(!st.take_finish_run());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_stopped_backend_that_dies_shows_stopped_not_an_error() {
+        use std::sync::atomic::Ordering;
+        let (mut st, tx, running, dir) = running_turn();
+        let ctx = egui::Context::default();
+        st.stop();
+        tx.send(Event::Error("Codex exited with signal: 15".into())).unwrap();
+        running.store(false, Ordering::SeqCst);
+        st.pump(&ctx);
+        assert!(!st.is_running());
+        assert_eq!(st.error, None);
+        assert!(st.stopped);
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -1806,7 +1947,7 @@ mod tests {
     }
 
     fn chip(label: &str, keys: &[&str]) -> SelChip {
-        SelChip { label: label.into(), keys: keys.iter().map(|k| (*k).into()).collect() }
+        SelChip { label: label.into(), keys: keys.iter().map(|k| (*k).into()).collect(), ..Default::default() }
     }
 
     #[test]
@@ -1836,7 +1977,7 @@ mod tests {
         a.id = 1;
         a.body = "first line\nsecond".into();
         ed.doc.annotations.push(a);
-        let chips = [SelChip { label: "x".into(), keys: vec![crate::mcp::exec::node_key(&ed, page, id)] }];
+        let chips = [SelChip { label: "x".into(), keys: vec![crate::mcp::exec::node_key(&ed, page, id)], ..Default::default() }];
         let notes = selection_notes(&ed, &chips);
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].contains("[rule]") && notes[0].contains("Use 8pt grid \u{2014} first line") && !notes[0].contains("second"), "{notes:?}");

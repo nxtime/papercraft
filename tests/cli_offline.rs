@@ -241,3 +241,56 @@ fn offline_matches_app_placement_and_saves_no_camera() {
     let _ = std::fs::remove_dir_all(dir_a.parent().unwrap());
     let _ = std::fs::remove_dir_all(dir_b.parent().unwrap());
 }
+
+#[test]
+fn offline_sessions_lock_the_project_and_never_lose_writes() {
+    use papercraft::cli::{PROJECT_LOCK_WAIT, lock_project};
+    let store = temp_store("lock");
+    let root = store.root.clone();
+    let (p, _) = store.create("Shared").unwrap();
+    let id = p.manifest.id.clone();
+    let open = || Offline::new(Store::open(&root).unwrap(), Some(&id)).unwrap();
+    let artboard = |o: &mut Offline, name: &str| {
+        o.call("create_artboard", &json!({"name": name, "styles": {"width": "100px", "height": "100px"}}))
+    };
+    // Both load the project; B writes first and finishes, then A writes: B's work survives.
+    let mut a = open();
+    let mut b = open();
+    artboard(&mut b, "From B").unwrap();
+    drop(b);
+    artboard(&mut a, "From A").unwrap();
+    // While A holds the project another writer waits, then fails with a clear message.
+    let mut c = open();
+    let t = std::time::Instant::now();
+    let e = artboard(&mut c, "From C").unwrap_err();
+    assert!(e.contains("another papercraft-cli is writing"), "{e}");
+    assert!(t.elapsed() >= PROJECT_LOCK_WAIT);
+    // Reads never wait.
+    c.call("get_basic_info", &Value::Null).unwrap();
+    drop(a);
+    artboard(&mut c, "From C").unwrap();
+    let names: Vec<String> = json_of(c.call("get_basic_info", &Value::Null).unwrap())["artboards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["From B", "From A", "From C"]);
+    drop(c);
+    let held = lock_project(&p.dir, std::time::Duration::ZERO).unwrap();
+    assert!(lock_project(&p.dir, std::time::Duration::ZERO).is_err());
+    drop(held);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn app_lock_marks_the_projects_folder_in_use() {
+    use papercraft::cli::{app_running, hold_app_lock};
+    let root = temp_store("applock").root.clone();
+    assert!(!app_running(&root));
+    let held = hold_app_lock(&root).unwrap();
+    assert!(app_running(&root));
+    drop(held);
+    assert!(!app_running(&root));
+    let _ = std::fs::remove_dir_all(&root);
+}

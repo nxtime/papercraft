@@ -23,6 +23,7 @@ Options:
 
 Environment:
   CARGO_TARGET_DIR     Build directory (default: $HOME/Library/Caches/PaperCraft/build).
+  PAPERCRAFT_SIGN_IDENTITY  Code-signing identity (default: "PaperCraft Local" when present, else ad hoc).
   PAPERCRAFT_APP_PATH  Install destination (default: /Applications/PaperCraft.app).
 
 The previous bundle is kept next to the new one as PaperCraft.app.backup-<timestamp>.
@@ -96,7 +97,7 @@ main() {
   if [ "$skip_build" -eq 0 ]; then
     echo "==> building papercraft $version ($target_triple)"
     (cd "$ROOT" && CARGO_TARGET_DIR="$target_dir" MACOSX_DEPLOYMENT_TARGET=11.0 \
-      cargo build --release --locked --bin papercraft --target "$target_triple")
+      cargo build --release --locked --bin papercraft --bin papercraft-cli --target "$target_triple")
   else
     echo "==> skipping the build (--skip-build)"
     if [ ! -f "$bin" ]; then
@@ -121,9 +122,16 @@ main() {
   printf 'APPL????' >"$staged_app/Contents/PkgInfo"
 
   plutil -lint "$staged_app/Contents/Info.plist" >/dev/null
-  codesign --force --sign - --timestamp=none --options runtime \
+  # A stable identity keeps macOS privacy grants (e.g. removable volumes) across rebuilds;
+  # ad-hoc signing ("-") makes every build a new app that asks again.
+  local sign_id="${PAPERCRAFT_SIGN_IDENTITY:-}"
+  if [ -z "$sign_id" ] && security find-identity -p codesigning 2>/dev/null | grep -q '"PaperCraft Local"'; then
+    sign_id="PaperCraft Local"
+  fi
+  sign_id="${sign_id:--}"
+  codesign --force --sign "$sign_id" --timestamp=none --options runtime \
     --entitlements "$PKG_DIR/entitlements.plist" "$staged_app/Contents/MacOS/$APP_NAME"
-  codesign --force --sign - --timestamp=none --options runtime \
+  codesign --force --sign "$sign_id" --timestamp=none --options runtime \
     --entitlements "$PKG_DIR/entitlements.plist" "$staged_app"
   codesign --verify --strict --deep --verbose=2 "$staged_app"
   echo "==> signed and verified $staged_app"
@@ -194,6 +202,14 @@ main() {
   trap - ERR INT TERM
 
   echo "==> installed $dest"
+
+  # Keep the CLI agents call in step with the app (a stale one hides newer tools).
+  local cli="${bin%/papercraft}/papercraft-cli"
+  if [ -f "$cli" ]; then
+    mkdir -p "$HOME/.local/bin"
+    cp "$cli" "$HOME/.local/bin/papercraft-cli"
+    echo "==> installed $HOME/.local/bin/papercraft-cli"
+  fi
 
   if [ "$no_launch" -eq 0 ]; then
     open "$dest"

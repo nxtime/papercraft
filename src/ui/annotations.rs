@@ -137,8 +137,7 @@ pub fn build_annotation(
 ) -> Annotation {
     let mut a = Annotation::new(Some(target), label.trim(), category);
     a.body = compose_body(fields, body);
-    a.position = annotation::auto_position(doc, target);
-    a.anchor = Anchor { side: Side::Right, t: 0.5 };
+    annotation::auto_place(doc, &mut a);
     a
 }
 
@@ -331,11 +330,16 @@ pub fn open_popover(ed: &mut Editor, ann: &mut AnnotationsUi, target: NodeId) {
 /// Screen position of the popover: right of the target, or left / below when out of room.
 fn popover_pos(ed: &Editor, canvas: egui::Rect, target: NodeId) -> egui::Pos2 {
     let Some(r) = ed.doc.world_rect(target) else { return canvas.center() };
-    let s = ed.camera.world_rect_to_screen(&r);
+    anchor_pos(ed, canvas, &r, POPOVER_W)
+}
+
+/// Screen position of a `width`-wide popover next to the world rect `r` (the chat's Ask box too).
+pub fn anchor_pos(ed: &Editor, canvas: egui::Rect, r: &crate::geom::Rect, width: f32) -> egui::Pos2 {
+    let s = ed.camera.world_rect_to_screen(r);
     let (min, max) = (s.min(), V2 { x: s.x + s.w, y: s.y + s.h });
     let pos = egui::pos2(canvas.min.x + max.x as f32 + 12.0, canvas.min.y + min.y as f32);
-    if pos.x + POPOVER_W > canvas.max.x {
-        return egui::pos2(canvas.min.x + min.x as f32 - POPOVER_W - 12.0, pos.y);
+    if pos.x + width > canvas.max.x {
+        return egui::pos2(canvas.min.x + min.x as f32 - width - 12.0, pos.y);
     }
     pos
 }
@@ -436,31 +440,34 @@ fn popover(ctx: &egui::Context, ed: &mut Editor, ann: &mut AnnotationsUi, canvas
 }
 
 /// Right-click menu on the canvas: Annotate the selection.
-fn canvas_menu(ctx: &egui::Context, ed: &mut Editor, ann: &mut AnnotationsUi, canvas: egui::Rect) {
+/// The right-click Actions menu on the selection. Annotate opens the popover here; the other
+/// actions come back for `actions::dispatch`.
+fn canvas_menu(ctx: &egui::Context, ed: &mut Editor, ann: &mut AnnotationsUi, canvas: egui::Rect) -> Option<super::actions::Act> {
     let clicked = ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
     if clicked && !ed.selection.is_empty() {
         let at = ctx.input(|i| i.pointer.interact_pos());
         ann.menu = at.filter(|p| canvas.contains(*p));
     }
-    let Some(pos) = ann.menu else { return };
-    let mut run = false;
+    let pos = ann.menu?;
+    let mut act = None;
     let area = egui::Area::new("annotation-menu".into()).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(140.0);
-            if ui.button("Annotate").clicked() {
-                run = true;
-            }
+            ui.set_min_width(180.0);
+            act = super::actions::menu(ui, ed);
         });
     });
     let away = ctx.input(|i| i.pointer.any_pressed()) && !area.response.contains_pointer();
-    if run {
+    if act == Some(super::actions::Act::Annotate) {
+        act = None;
         if let Some(t) = ed.top_selection().first().copied() {
             open_popover(ed, ann, t);
         }
-    }
-    if run || away || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         ann.menu = None;
     }
+    if act.is_some() || away || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ann.menu = None;
+    }
+    act
 }
 
 // ---------------------------------------------------------------------------- shared note editor
@@ -556,13 +563,55 @@ pub fn annotate_with_ai(ed: &mut Editor, st: &mut UiState) {
     let name = frame.and_then(|f| ed.doc.get(f)).map(|n| n.name.clone());
     let subject = name.as_ref().map_or_else(|| "this page".to_string(), |n| format!("the frame “{n}”"));
     st.chat.draft = ai_prompt(&subject, &tpl.name);
-    if let (Some(f), Some(n)) = (frame, name) {
-        let chip = super::chat::SelChip { label: n, keys: vec![crate::mcp::exec::node_key(ed, page, f)] };
-        if !st.chat.sels.contains(&chip) {
+    if let Some(f) = frame {
+        let chip = super::chat::layer_chip(ed, st.chat.gpu.as_ref(), page, &[f]);
+        if !st.chat.sels.iter().any(|c| c.keys == chip.keys) {
             st.chat.sels.push(chip);
         }
     }
     st.set_chat_mode(true);
+}
+
+/// Annotation types "Send open notes to chat" picks up, besides open feedback.
+const OPEN_NOTE_TYPES: [&str; 2] = ["todo", "question"];
+
+/// The frame's open notes as one prompt: its chip, the context lines (open feedback, then
+/// `todo`/`question` annotations from `selection_notes`) and the ask. None when nothing is open.
+pub fn open_notes_message(ed: &Editor, frame: NodeId) -> Option<(super::chat::SelChip, Vec<String>, String)> {
+    let page = ed.active_page;
+    let name = ed.doc.get(frame)?.name.clone();
+    let chip = super::chat::SelChip { label: name.clone(), keys: vec![crate::mcp::exec::node_key(ed, page, frame)], ..Default::default() };
+    let feedback = ed.doc.subtree(frame).into_iter().filter_map(|id| Some((id, ed.doc.get(id)?))).flat_map(|(id, n)| {
+        let key = crate::mcp::exec::node_key(ed, page, id);
+        n.comments.iter().filter(|c| !c.resolved).map(move |c| format!("feedback #{} on {key} ({}): {}", c.id, n.name, c.text.trim()))
+    });
+    let typed = super::chat::selection_notes(ed, std::slice::from_ref(&chip)).into_iter().filter(|l| {
+        l.split_once("] on ").is_some_and(|(head, _)| OPEN_NOTE_TYPES.iter().any(|k| head.to_lowercase().ends_with(&format!("[{k}"))))
+    });
+    let notes: Vec<String> = feedback.chain(typed).collect();
+    if notes.is_empty() {
+        return None;
+    }
+    let ask = format!(
+        "Work through the {} open notes on the frame “{name}”: make each feedback and todo change, answer each question in a reply. Resolve the feedback you handled (resolve_feedback) and keep to the design system.",
+        notes.len()
+    );
+    Some((chip, notes, ask))
+}
+
+/// "Send open notes to chat": sends the frame's open notes as one batched message with its chip
+/// (an explicit action, so it sends) and opens Chat mode. The composer's own draft and chips stay.
+pub fn send_open_notes(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, frame: NodeId) {
+    let Some((chip, notes, ask)) = open_notes_message(ed, frame) else {
+        ed.status = "No open notes on this frame".into();
+        return;
+    };
+    st.set_chat_mode(true);
+    let kept = (std::mem::replace(&mut st.chat.sels, vec![chip]), std::mem::replace(&mut st.chat.draft, ask));
+    st.chat.sel_notes = notes;
+    st.chat.refresh_ds(ed, true);
+    let _ = st.chat.submit(ctx);
+    (st.chat.sels, st.chat.draft) = kept;
 }
 
 fn template_picker(ui: &mut Ui, ed: &mut Editor, ann: &mut AnnotationsUi) {
@@ -680,6 +729,15 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         ann.customize.open = true;
         ann.customize.draft = None;
     }
+    let tidy_frame = ed.selection.first().and_then(|n| annotation::frame_of(&ed.doc, *n));
+    ui.add_enabled_ui(!ed.doc.annotations.is_empty(), |ui| {
+        if kit::button_wide(ui, kit::ButtonKind::Secondary, None, "Tidy notes")
+            .on_hover_text("Re-place the notes of the selected frame (or the page) beside their targets")
+            .clicked()
+        {
+            ed.tidy_annotations(tidy_frame);
+        }
+    });
     let can_chat = !cfg!(target_arch = "wasm32") && st.project_dir.is_some();
     ui.add_enabled_ui(can_chat, |ui| {
         if kit::button_wide(ui, kit::ButtonKind::Primary, None, "Annotate with AI")
@@ -796,6 +854,15 @@ pub fn inspector_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: Nod
         open_popover(ed, &mut ann, id);
     }
     put(st, ann);
+    let frame = annotation::frame_of(&ed.doc, id).filter(|f| *f == id);
+    let can_chat = !cfg!(target_arch = "wasm32") && st.project_dir.is_some() && !st.chat.is_running();
+    if let Some(f) = frame.filter(|f| can_chat && open_notes_message(ed, *f).is_some())
+        && kit::button_wide(ui, kit::ButtonKind::Secondary, None, "Send open notes to chat")
+            .on_hover_text("Open feedback and todo/question notes on this frame, as one chat message")
+            .clicked()
+    {
+        send_open_notes(&ui.ctx().clone(), ed, st, f);
+    }
 }
 
 // ---------------------------------------------------------------------------- customize modal
@@ -1037,7 +1104,7 @@ fn customize(ctx: &egui::Context, ed: &mut Editor, ann: &mut AnnotationsUi) {
 /// Popover, right-click menu, Customize modal and delete confirm. Called once per frame.
 pub fn overlays(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect) {
     let mut ann = take(st);
-    canvas_menu(ctx, ed, &mut ann, canvas);
+    let act = canvas_menu(ctx, ed, &mut ann, canvas);
     popover(ctx, ed, &mut ann, canvas);
     customize(ctx, ed, &mut ann);
     if let Some(id) = ann.pending_delete {
@@ -1059,6 +1126,9 @@ pub fn overlays(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: 
         }
     }
     put(st, ann);
+    if let Some(a) = act {
+        super::actions::dispatch(ed, st, a);
+    }
 }
 
 #[cfg(test)]
@@ -1145,6 +1215,31 @@ mod tests {
         assert!(st.chat.draft.starts_with("Annotate the frame “Sign in” using the Product spec template."));
         assert_eq!(st.chat.sels.len(), 1);
         assert!(st.chat.turn.is_none());
+    }
+
+    #[test]
+    fn open_notes_batch_feedback_todos_and_questions_with_a_chip() {
+        let mut e = Editor::default();
+        let f = frame(&mut e, "Sign in", Rect::new(0.0, 0.0, 300.0, 300.0));
+        let c = child(&mut e, f, Rect::new(10.0, 10.0, 20.0, 20.0));
+        assert!(open_notes_message(&e, f).is_none(), "nothing open");
+        let comment = |id, text: &str, resolved| crate::model::Comment { id, text: text.into(), author: "user".into(), resolved, reply: None };
+        e.edit("fb", |tx| {
+            let n = tx.node_mut(c).unwrap();
+            n.comments.push(comment(1, "Bigger button", false));
+            n.comments.push(comment(2, "Done already", true));
+        });
+        e.add_annotation(Annotation::new(Some(c), "Empty state", "todo"));
+        e.add_annotation(Annotation::new(Some(f), "Which locale?", "Question"));
+        e.add_annotation(Annotation::new(Some(c), "Reads users.email", "data"));
+        let (chip, notes, ask) = open_notes_message(&e, f).unwrap();
+        assert_eq!(chip.label, "Sign in");
+        assert_eq!(chip.keys, [crate::mcp::exec::node_key(&e, 0, f)]);
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(notes[0].starts_with("feedback #1 on ") && notes[0].ends_with("Bigger button"));
+        assert!(notes[1..].iter().any(|n| n.contains("[todo]") && n.contains("Empty state")));
+        assert!(notes[1..].iter().any(|n| n.contains("Which locale?")));
+        assert!(ask.contains("3 open notes") && ask.contains("“Sign in”"));
     }
 
     fn run(f: impl FnMut(&mut Ui)) {

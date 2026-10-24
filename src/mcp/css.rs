@@ -1239,6 +1239,9 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                         set_text_flag(n, |s| s.color = Some(c));
                     } else {
                         n.style.set_fill(Some(c));
+                        // A new colour replaces a `text-color` binding; left in place, the next
+                        // change of that variable would overwrite it and unlink the new one.
+                        n.bindings.remove("text-color");
                     }
                     true
                 }

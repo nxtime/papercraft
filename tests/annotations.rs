@@ -69,7 +69,8 @@ fn frame(h: &mut exec::SessionHost, name: &str) -> Value {
 
 #[test]
 fn annotation_batch_by_id_and_name_is_one_undo_step() {
-    use papercraft::model::annotation::{Author, CARD_H, card_world};
+    use papercraft::model::annotation::{Author, card_world};
+    use papercraft::model::annotation_layout::card_size;
     let mut f = Fixture::new();
     let h = &mut f.host;
     let id = frame(h, "Sign in");
@@ -83,7 +84,11 @@ fn annotation_batch_by_id_and_name_is_one_undo_step() {
     assert_eq!(notes.len(), 2);
     assert_eq!(notes[0].body, "For 15 minutes");
     assert_eq!(notes[0].author, Author::Agent);
-    assert!(card_world(&h.ed.doc, &notes[1]).y >= card_world(&h.ed.doc, &notes[0]).y + CARD_H);
+    let rect = |n: &papercraft::model::annotation::Annotation| {
+        let (at, s) = (card_world(&h.ed.doc, n), card_size(n));
+        papercraft::geom::Rect::new(at.x, at.y, s.x, s.y)
+    };
+    assert!(!rect(&notes[1]).intersects(&rect(&notes[0])), "cards overlap");
     h.ed.undo();
     assert_eq!(h.ed.doc, before);
     h.ed.redo();
@@ -186,6 +191,7 @@ fn annotation_tool_classification_and_description_budget() {
     use papercraft::mcp::tools;
     for (name, edits) in [("annotate", true), ("get_annotations", false),
         ("get_annotation_template", false), ("set_annotation_template", true),
+        ("upsert_annotation_template", true), ("delete_annotation_template", true),
         ("update_annotation", true), ("delete_annotations", true)] {
         assert_eq!(tools::edits_doc(name, &json!({})), edits);
         let def = tools::definitions().into_iter().find(|d| d["name"] == name).unwrap();
@@ -363,4 +369,85 @@ fn update_annotation_rejects_type_disabled_by_template() {
     assert_eq!(h.ed.doc, before);
     call(h, "update_annotation", json!({"ref": "Sign in #1", "type": "data"}));
     assert_eq!(h.ed.doc.annotations[0].category, "data");
+}
+
+fn err(h: &mut exec::SessionHost, name: &str, args: Value) -> String {
+    exec::call(h, name, &args).err().unwrap_or_else(|| panic!("{name} should fail"))
+}
+
+fn review() -> Value {
+    json!({"name": "Legal review", "display": "badges", "categories": [
+        {"key": "legal", "guidance": "Legal risk.", "fields": ["Owner", "Law"]},
+        {"key": "rule"},
+        {"key": "data", "enabled": false}]})
+}
+
+#[test]
+fn upsert_template_creates_category_applies_to_page_and_gates_annotate() {
+    let mut f = Fixture::new();
+    let h = &mut f.host;
+    let id = frame(h, "Sign in");
+    let undo = h.ed.history.undo_len();
+    let r = call(h, "upsert_annotation_template", json!({"template": review(), "setAs": "page",
+        "categories": [{"key": "legal", "name": "Legal", "color": "#aa3355", "icon": "scale"}]}));
+    assert_eq!(r["id"], "legal-review");
+    assert_eq!(r["types"], json!([["legal", "Legal risk.", ["Owner", "Law"]], ["rule", "", []]]));
+    assert_eq!(h.ed.design.category_by_key("legal").unwrap().color.to_hex(), "#aa3355");
+    assert_eq!(h.ed.history.undo_len(), undo + 2, "edit + page override");
+    assert_eq!(call(h, "get_annotation_template", json!({}))["template"], "Legal review");
+    call(h, "annotate", json!({"notes": [{"node": id, "type": "legal", "text": "GDPR\nOwner: me"}]}));
+    assert_eq!(h.ed.doc.annotations[0].category, "legal");
+    assert!(err(h, "annotate", json!({"notes": [{"node": id, "type": "data", "text": "x"}]})).contains("legal, rule"));
+    // update by name: same id, category restyled
+    let r = call(h, "upsert_annotation_template", json!({"template": {"name": "legal REVIEW", "categories": [{"key": "legal"}]},
+        "categories": [{"key": "legal", "color": "#112233"}]}));
+    assert_eq!(r["id"], "legal-review");
+    assert_eq!(h.ed.design.templates().iter().filter(|t| t.id == "legal-review").count(), 1);
+    assert_eq!(h.ed.design.category_by_key("legal").unwrap().name, "Legal");
+    assert_eq!(h.ed.design.category_by_key("legal").unwrap().color.to_hex(), "#112233");
+    // second template with the same slug gets a unique id; project default
+    let r = call(h, "upsert_annotation_template", json!({"setAs": "project",
+        "template": {"id": "x", "name": "Legal Review!", "categories": [{"key": "rule"}]}}));
+    assert_eq!(r["id"], "x");
+    assert_eq!(h.ed.design.annotation_template.as_deref(), Some("x"));
+}
+
+#[test]
+fn upsert_template_is_one_undo_step_and_errors_change_nothing() {
+    let mut f = Fixture::new();
+    let h = &mut f.host;
+    let base = h.ed.design.clone();
+    let undo = h.ed.history.undo_len();
+    call(h, "upsert_annotation_template", json!({"template": review(), "setAs": "project",
+        "categories": [{"key": "legal", "name": "Legal", "color": "#aa3355", "icon": "scale"}]}));
+    assert_eq!(h.ed.history.undo_len(), undo + 1);
+    h.ed.undo();
+    assert_eq!(h.ed.design, base);
+    let cat = |c: Value| json!({"template": {"name": "T", "categories": [{"key": "rule"}]}, "categories": [c]});
+    let e = err(h, "upsert_annotation_template", cat(json!({"key": "z", "name": "Z", "color": "#aa3355", "icon": "nope"})));
+    assert!(e.contains("unknown icon `nope`") && e.contains("scale") && e.contains("zap"), "{e}");
+    assert!(err(h, "upsert_annotation_template", cat(json!({"key": "z", "name": "Z", "color": "red", "icon": "zap"}))).contains("bad color"));
+    assert!(err(h, "upsert_annotation_template", cat(json!({"key": "z", "name": "Z", "icon": "zap"}))).contains("color"));
+    let e = err(h, "upsert_annotation_template", json!({"template": {"name": "T", "categories": [{"key": "ghost"}]}}));
+    assert!(e.contains("ghost") && e.contains("rule, behaviour"), "{e}");
+    assert!(err(h, "upsert_annotation_template", json!({"template": {"name": "T", "categories": [{"key": "rule"}]}, "setAs": "x"})).contains("setAs"));
+    assert_eq!(h.ed.design, base);
+    assert_eq!(h.ed.history.undo_len(), undo);
+}
+
+#[test]
+fn delete_template_rules() {
+    let mut f = Fixture::new();
+    let h = &mut f.host;
+    call(h, "set_annotation_template", json!({"template": "Minimal", "scope": "project"}));
+    assert_eq!(call(h, "delete_annotation_template", json!({"template": "minimal"}))["deleted"], "Minimal");
+    assert_eq!(h.ed.design.annotation_template, None);
+    assert!(err(h, "delete_annotation_template", json!({"template": "zzz"})).contains("Product spec"));
+    for t in ["dev-handoff", "accessibility-review", "content-review"] {
+        call(h, "delete_annotation_template", json!({"template": t}));
+    }
+    call(h, "upsert_annotation_template", json!({"template": {"name": "Mine", "categories": [{"key": "rule"}]}}));
+    call(h, "delete_annotation_template", json!({"template": "product-spec"}));
+    assert!(err(h, "delete_annotation_template", json!({"template": "Mine"})).contains("last"));
+    assert_eq!(h.ed.design.templates().len(), 1);
 }

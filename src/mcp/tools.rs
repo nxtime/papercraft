@@ -87,14 +87,28 @@ pub fn definitions() -> Vec<Value> {
     let node_id = |d: &str| json!({"type": "string", "description": d});
     let ids = |d: &str| json!({"type": "array", "items": {"type": "string"}, "description": d});
     vec![
-        tool("annotate", "Add notes to node ids or exact layer names on a page in one undo step. First text line is label; remaining lines are body. Type is an allowed category key (default rule); put fields as \"Name: value\" lines in text. Placement is automatic. Returns [number, node, type, label] rows.",
+        tool("annotate", "Add notes to node ids or exact layer names on a page in one undo step. First text line is label; remaining lines are body. Type is an allowed category key (default rule); put fields as \"Name: value\" lines in text. Placement is automatic (tidy re-lays-out). Returns [number, node, type, label] rows; tidy alone returns {tidied: moved}.",
             json!({"pageId": page_id(), "notes": {"type": "array", "items": {
                 "type": "object", "properties": {"node": {"type": "string"},
-                "text": {"type": "string"}, "type": {"type": "string"}}, "required": ["node", "text"]}}}), &["notes"], false),
+                "text": {"type": "string"}, "type": {"type": "string"}}, "required": ["node", "text"]}},
+                "tidy": {"type": "boolean", "description": "Re-layout all notes (of frame, else the page) as part of this undo step; notes may then be omitted."},
+                "frame": {"type": "string"}}), &[], false),
         tool("get_annotation_template", "Read the page's annotation template: [type key, guidance, field names] for each allowed type. Call once before annotate.",
             json!({"pageId": page_id()}), &[], true),
         tool("set_annotation_template", "Switch the annotation template by id or name, for one page or the whole project. Annotate only accepts the template's types.",
             json!({"template": {"type": "string"}, "scope": {"type": "string", "enum": ["page", "project"]}, "pageId": page_id()}), &["template"], false),
+        tool("upsert_annotation_template", "Create or replace an annotation template, optionally defining new categories (key, name, #hex color, icon name) first. Reuse existing keys freely. One undo step for the edit; setAs page adds a second. Returns {id, name, types}.",
+            json!({"template": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"},
+                "display": {"type": "string", "enum": ["full", "badges"]},
+                "categories": {"type": "array", "items": {"type": "object", "properties": {"key": {"type": "string"},
+                    "enabled": {"type": "boolean"}, "guidance": {"type": "string"},
+                    "fields": {"type": "array", "items": {"type": "string"}}}, "required": ["key"]}}},
+                "required": ["name", "categories"]},
+                "categories": {"type": "array", "items": {"type": "object", "properties": {"key": {"type": "string"},
+                    "name": {"type": "string"}, "color": {"type": "string"}, "icon": {"type": "string"}}, "required": ["key"]}},
+                "setAs": {"type": "string", "enum": ["project", "page"]}, "pageId": page_id()}), &["template"], false),
+        tool("delete_annotation_template", "Delete an annotation template by id or name. The last template cannot be deleted; a project default pointing at it reverts to Product spec.",
+            json!({"template": {"type": "string"}}), &["template"], false),
         tool("get_annotations", "Read annotations as [number, nodeName, type, text] rows. Text includes label and first body line, limited to 120 characters. Use full for complete objects, nodeId for a subtree, or pageId for another page.",
             json!({"nodeId": {"type": "string"}, "pageId": page_id(), "full": {"type": "boolean"}}), &[], true),
         tool("update_annotation", "Update annotation text or category key by id or frame reference such as Sign in #3. First text line is label; remaining lines are body. One undo step.",
@@ -167,7 +181,8 @@ pub fn definitions() -> Vec<Value> {
             "get_basic_info",
             "Essential context about the open project: project name, the page, node count, \
              artboards (top-level frames) with ids, sizes and world positions, other top-level \
-             layers, fonts, and `pages` with the active one marked isActive.\n\
+             layers, fonts, `pages` with the active one marked isActive, and `viewport` \
+             ({pageId, rect: [x, y, w, h] world, zoom}: what the user sees).\n\
              - worldX/worldY are world positions; x/y are relative to the parent.\n\
              - Pass pageId to inspect another page without switching the user's view.",
             json!({"pageId": page_id()}),
@@ -177,7 +192,8 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "get_selection",
             "The selected layers on the page the user is viewing: ids, names, types, sizes, \
-             positions and the artboard each belongs to.",
+             positions and the artboard each belongs to, plus `viewport` ({pageId, rect: \
+             [x, y, w, h] world, zoom}).",
             json!({}),
             &[],
             true,
@@ -204,7 +220,8 @@ pub fn definitions() -> Vec<Value> {
              cheaper than get_jsx for orientation. nodeId \"root\" summarizes the whole page.",
             json!({
                 "nodeId": node_id("Root of the summary, or \"root\"."),
-                "depth": {"type": "number", "description": "Maximum depth (default 3, max 10)."},
+                "depth": {"type": "number", "description": "Levels shown, counting nodeId (or each top-level layer for \"root\") as level 1 (default 3, max 10). Deeper levels collapse to \"… N children\"."},
+                "fullText": {"type": "boolean", "description": "Show each text layer's complete text instead of its first 40 characters (for copy review)."},
                 "pageId": page_id(),
             }),
             &["nodeId"],
@@ -219,6 +236,7 @@ pub fn definitions() -> Vec<Value> {
                 "nodeId": node_id("The node to capture; omit for the whole page."),
                 "scale": {"type": "number", "description": "Render scale: 1 (default) or 2."},
                 "out": {"type": "string", "description": "Optional file path to save the PNG to (also used by papercraft-cli)."},
+                "annotations": {"type": "boolean", "description": "Also draw the note cards, badges and leader lines of notes on the captured layers; the image grows to include the cards."},
                 "pageId": page_id(),
             }),
             &[],
@@ -288,8 +306,9 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "find_nodes",
             "Find nodes by text content and/or computed style. Searches the whole project by \
-             default; pass pageId for one page or nodeId for a subtree. `textValue` matches text \
-             case-insensitively with * wildcards anchored to the whole value. `filters` are \
+             default; pass pageId for one page or nodeId for a subtree. `textValue` finds text \
+             containing it, ignoring case and line breaks; with * wildcards it must match the \
+             whole value (\"Get *\"). `filters` are \
              {styleName, styleValue} pairs (AND), values may use * wildcards; colors match by value.",
             json!({
                 "pageId": page_id(),
@@ -669,11 +688,11 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "import_components",
-            "Copy the main components anywhere on `fromPageId` (including inside artboards, \
-             typically on a `Design System` page) onto this one, so you can place instances here \
-             with create_instance or <x-paper-instance component=\"Name\"/> / component-id=\"ID\". \
-             Components with the same name already here are skipped. Variables and tokens are \
-             already shared by every page; components are copies, not live links.",
+            "Copies mains onto this page (detached from the source); only for moving a design \
+             system, not for using components: create_instance and swap_instance take a main on \
+             any page or an enabled library directly, with no import. Copies the main components \
+             anywhere on `fromPageId` (including inside artboards); components with the same name \
+             already here are skipped. Variables and tokens are already shared by every page.",
             json!({"fromPageId": {"type": "string"}, "pageId": page_id(),
                    "names": {"type": "array", "items": {"type": "string"},
                        "description": "Only these components (default all)."}}),
@@ -693,9 +712,11 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "create_instance",
-            "Place an instance of a component. Edit text and styles on the instance's descendants \
-             with set_text_content / update_styles (they become overrides); edits to the main \
-             component flow to every instance. Returns the instance id and its text layers.",
+            "Place an instance of a component. componentKey may be a component on any page or an \
+             enabled library; no import needed (the instance stays linked to that main). Edit text \
+             and styles on the instance's descendants with set_text_content / update_styles (they \
+             become overrides); edits to the main component flow to every instance. Returns the \
+             instance id and its text layers.",
             json!({"componentId": {"type": "string", "description": "A main on any page (\"pageId:num\")."},
                    "componentKey": {"type": "string", "description": "Instead of componentId: the key from get_components."},
                    "parentId": {"type": "string", "description": "Parent frame; omit or \"root\" for the page."},
@@ -708,8 +729,9 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "swap_instance",
-            "Swap an instance root to point at a different main component (any page), \
-             preserving overrides on descendants matched by name and layer type.",
+            "Swap an instance root to point at a different main component, preserving overrides \
+             on descendants matched by name and layer type. componentKey may be a component on \
+             any page or an enabled library; no import needed.",
             json!({"nodeId": node_id("The instance root node to swap."),
                    "componentId": node_id("The new main component id."),
                    "componentKey": {"type": "string", "description": "Instead of componentId: a key from get_components, including a library component."},
@@ -800,9 +822,29 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "select_nodes",
             "Select nodes on the page the user is viewing so they can see what you mean; \
-             zoom: true also frames them in the viewport. An empty list clears the selection.",
+             zoom: true also frames them in the viewport (at most 100%). An empty list clears \
+             the selection. For another page or a closer zoom use set_viewport.",
             json!({"nodeIds": ids("Nodes to select."), "zoom": {"type": "boolean"}}),
             &["nodeIds"],
+            false,
+        ),
+        tool(
+            "set_viewport",
+            "Move the user's view: switch to pageId (as clicking it in the page list does) and \
+             fit nodeIds or a world rect, optionally at an explicit zoom (0.01 to 256). With only \
+             zoom it zooms about the view's centre. Refused while the user is moving the canvas \
+             (within 10 s of their last pan or zoom) unless force: true. Returns the new viewport \
+             ({pageId, rect: [x, y, w, h] in world units, zoom}); get_basic_info and \
+             get_selection report the current one.",
+            json!({
+                "pageId": {"type": "string", "description": "Page to show; defaults to the page of nodeIds, else the current one."},
+                "nodeIds": ids("Nodes to fit in the view."),
+                "rect": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "World rect [x, y, width, height] to fit, instead of nodeIds."},
+                "zoom": {"type": "number", "description": "Explicit zoom level (1 = 100%); centres the nodes or rect at this zoom instead of fitting."},
+                "padding": {"type": "number", "description": "Screen margin when fitting, in px (default 64)."},
+                "force": {"type": "boolean", "description": "Move the view even if the user is panning or zooming."},
+            }),
+            &[],
             false,
         ),
         tool(
@@ -918,12 +960,12 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "get_computed_styles" | "get_fill_image" | "find_nodes" | "get_font_family_info"
         | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
         | "diff_frames" | "publish_library" | "list_libraries" => false,
-        "select_nodes" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"
+        "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"
         | "create_file" | "finish_working_on_nodes" => false,
         "lint_design" => args["fix"] == true,
         "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html"
         | "create_shape" | "update_styles" | "set_text_content" | "rename_nodes"
-        | "annotate" | "set_annotation_template" | "update_annotation" | "delete_annotations" | "add_feedback" | "resolve_feedback" | "set_variables" | "set_tokens"
+        | "annotate" | "set_annotation_template" | "upsert_annotation_template" | "delete_annotation_template" | "update_annotation" | "delete_annotations" | "add_feedback" | "resolve_feedback" | "set_variables" | "set_tokens"
         | "create_collection" | "delete_variables" | "bind_variable"
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"

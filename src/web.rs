@@ -422,10 +422,15 @@ impl Web {
             let mut runs = std::mem::take(&mut self.runs);
             let result = runs.call(
                 self,
+                &crate::mcp::Client::default(),
                 &call.name,
                 &call.args,
                 crate::project::format::now_ms(),
             );
+            let touched = runs.take_touched();
+            if result.is_ok() {
+                self.st.mark_agent(&self.ed, String::new(), &call.name, &call.args, &touched);
+            }
             self.runs = runs;
             self.st.project_name = self.session.project_name();
             self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
@@ -449,9 +454,10 @@ impl Web {
     /// Render a screenshot offscreen and answer call `id` when the readback lands.
     fn start_screenshot(&mut self, id: u64, req: ShotRequest) {
         let doc = self.ed.page_doc(req.page).clone();
+        let cats = self.ed.design.categories();
         let gpu = self.gpu_handle();
         self.finish(
-            async move { exec::screenshot_async(&gpu, &doc, &req).await },
+            async move { exec::screenshot_async(&gpu, &doc, &cats, &req).await },
             move |w, r: ToolResult| {
                 let reply = match r {
                     Ok(out) => Reply::ok(id, out),
@@ -706,6 +712,12 @@ impl Web {
     fn frame(&mut self) {
         let now = now_ms();
         self.pump_calls();
+        if let Some((act, keys)) = self.st.pending_action.take() {
+            let mut runs = std::mem::take(&mut self.runs);
+            crate::ui::actions::run(self, &mut runs, act, &keys, crate::project::format::now_ms());
+            self.runs = runs;
+            self.dirty = true;
+        }
         let dir = self
             .session
             .project
@@ -716,7 +728,7 @@ impl Web {
             dir.map(|p| p.dir.as_path()),
             &self.ed,
         );
-        self.dirty |= self.st.sync_runs(&mut self.runs);
+        self.dirty |= self.st.sync_runs(&mut self.runs, &self.ed);
         if self.relay.tick(now) {
             self.dirty = true;
         }

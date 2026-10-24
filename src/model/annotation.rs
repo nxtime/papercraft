@@ -109,28 +109,17 @@ pub fn category_by_key<'a>(cats: &'a [AnnotationCategory], key: &str) -> Option<
     cats.iter().find(|c| c.key().eq_ignore_ascii_case(key))
 }
 
-/// Size the canvas gives a note card, used to stack automatically placed notes.
-pub const CARD_W: f64 = 220.0;
-pub const CARD_H: f64 = 72.0;
-const CARD_GAP: f64 = 24.0;
+/// Card width and minimum height in world units; the real height grows with the text (see
+/// [`super::annotation_layout::card_size`]).
+pub const CARD_W: f64 = 280.0;
+pub const CARD_H: f64 = 44.0;
 
-/// Where a new note on `target` goes, as a `position` (relative to the target's top-left):
-/// right of the target's top-level frame, level with the target, pushed down past any
-/// existing note card so none overlap.
-pub fn auto_position(doc: &Document, target: NodeId) -> V2 {
-    let Some(t) = doc.world_rect(target) else { return V2::ZERO };
-    let frame = frame_of(doc, target)
-        .and_then(|f| doc.world_rect(f))
-        .unwrap_or(t);
-    let x = frame.right() + CARD_GAP;
-    let mut y = t.y;
-    let cards: Vec<V2> = doc.annotations.iter().map(|a| card_world(doc, a)).collect();
-    while cards.iter().any(|c| {
-        x < c.x + CARD_W && c.x < x + CARD_W && y < c.y + CARD_H && c.y < y + CARD_H
-    }) {
-        y += CARD_H + CARD_GAP / 2.0;
+/// Set `a`'s card position and anchor next to its target, clear of every node and note.
+pub fn auto_place(doc: &Document, a: &mut Annotation) {
+    if let Some(p) = super::annotation_layout::place(doc, a) {
+        a.position = p.position;
+        a.anchor = p.anchor;
     }
-    V2 { x: x, y: y } - t.min()
 }
 
 /// The six built-in categories, with stable ids.

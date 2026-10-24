@@ -4,8 +4,8 @@
 use crate::editor::Editor;
 use crate::mcp::exec::{Host, find_page};
 use crate::mcp::{
-    ToolResult,
-    diff::{NodeDiff, diff_pages},
+    CHAT_CLIENT, Client, ToolResult,
+    diff::{NodeDiff, PageDiff, diff_pages},
     tools::edits_doc,
 };
 use crate::model::{Document, NodeId};
@@ -36,6 +36,20 @@ pub struct RunPage {
     /// Auto-version taken before the run touched the page; None when the run created the page.
     #[serde(default)]
     pub version: Option<String>,
+    /// Nodes the run changed on the page, sorted. Empty for older runs and for runs that only
+    /// changed variables, notes or the page itself.
+    #[serde(default)]
+    pub nodes: Vec<NodeId>,
+}
+
+impl RunPage {
+    /// The diff row is about a node this run changed.
+    fn touches(&self, n: &NodeDiff) -> bool {
+        [n.id_a, n.id_b]
+            .into_iter()
+            .flatten()
+            .any(|id| self.nodes.binary_search(&id).is_ok())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -62,6 +76,93 @@ pub struct Run {
     pub changed: usize,
     #[serde(default)]
     pub removed: usize,
+    /// The agent client that made it ("Claude Code", "Claude Code · 2" for its second session,
+    /// "Chat"); empty for older runs and unnamed clients.
+    #[serde(default)]
+    pub client: String,
+}
+
+impl Run {
+    /// Layers the run changed so far, without a diff: the live count while it is open.
+    pub fn touched(&self) -> usize {
+        self.pages.iter().map(|p| p.nodes.len()).sum()
+    }
+}
+
+/// Added, changed and removed, and whether the run changed nothing at all.
+pub type Counts = (usize, usize, usize, bool);
+
+/// What `run` changed, against its snapshots. On a page where the run recorded its nodes, rows of
+/// nodes it did not change (another agent's, the user's) do not count.
+pub fn count(project: &Path, ed: &Editor, run: &Run) -> Counts {
+    let (mut added, mut changed, mut removed, mut empty) = (0, 0, 0, true);
+    for p in &run.pages {
+        let page = ed.pages.iter().position(|s| s.id == p.page_id);
+        let after = page.map(|i| ed.page_doc(i)).cloned().unwrap_or_default();
+        let Some(v) = &p.version else {
+            if page.is_some() {
+                added += after.root.len().max(1);
+                empty = false;
+            }
+            continue;
+        };
+        let Some(before) = crate::versions::load(project, v) else {
+            empty = false;
+            continue;
+        };
+        let mut d = diff_pages(&before, &after);
+        keep_own(&mut d, p);
+        let (a, m, r) = (d.added, d.modified, d.removed);
+        let renamed = page.is_some_and(|i| ed.pages[i].name != before.name);
+        let deleted = page.is_none();
+        added += a;
+        changed += m + usize::from(renamed);
+        removed += r + usize::from(deleted);
+        empty &= a + m + r == 0 && !renamed && !deleted;
+    }
+    (added, changed, removed, empty)
+}
+
+/// Leaves out of `d` the rows of nodes the run did not change on page `p` (another agent's, the
+/// user's). A page without recorded nodes keeps every row.
+pub fn keep_own(d: &mut PageDiff, p: &RunPage) {
+    if p.nodes.is_empty() {
+        return;
+    }
+    for g in &mut d.groups {
+        g.nodes.retain(|n| {
+            let own = p.touches(n);
+            if !own {
+                match n.status {
+                    "added" => d.added -= 1,
+                    "removed" => d.removed -= 1,
+                    _ => d.modified -= 1,
+                }
+            }
+            own
+        });
+    }
+    d.groups.retain(|g| !g.nodes.is_empty());
+}
+
+/// `r` was still going when `run` started, or came after it: its edits sit on top of `run`'s.
+fn not_before(r: &Run, run: &Run) -> bool {
+    r.id != run.id && r.state != RunState::Reverted && r.ended.is_none_or(|e| e > run.started)
+}
+
+/// A later (or overlapping) run that changed some of the nodes `run` changed: reverting `run`
+/// alone would undo part of that one too, so only "Restore to here" may. Returns its number.
+pub fn blocker(runs: &[Run], run: &Run) -> Option<u32> {
+    runs.iter()
+        .filter(|r| not_before(r, run))
+        .find(|r| {
+            r.pages.iter().any(|p| {
+                run.pages.iter().any(|q| {
+                    q.page_id == p.page_id && p.nodes.iter().any(|n| q.nodes.binary_search(n).is_ok())
+                })
+            })
+        })
+        .map(|r| r.number)
 }
 
 fn dir(project: &Path) -> PathBuf {
@@ -78,15 +179,29 @@ pub fn save(project: &Path, run: &Run) -> std::io::Result<()> {
     crate::vfs::write(file_of(project, &run.id), bytes)
 }
 
-/// Restore every page touched by a run, loading all versions before changing the editor.
+/// Restore every page touched by a run, loading all versions before changing the editor. A page
+/// another run (later or overlapping) also edited only gets this run's nodes back, so that run's
+/// nodes stay. Refused when a later run changed the same nodes (see [`blocker`]).
 pub fn revert(project: &Path, ed: &mut Editor, run: &mut Run) -> Result<(), String> {
+    let others = list(project);
+    if let Some(n) = blocker(&others, run) {
+        return Err(format!(
+            "run {n} changed the same layers afterwards; use Restore to here to revert both"
+        ));
+    }
+    let shared = |p: &RunPage| {
+        !p.nodes.is_empty()
+            && others
+                .iter()
+                .any(|r| not_before(r, run) && r.pages.iter().any(|q| q.page_id == p.page_id))
+    };
     let snapshots: Vec<_> = run
         .pages
         .iter()
         .filter_map(|p| {
             p.version.as_deref().map(|version| {
                 crate::versions::load(project, version)
-                    .map(|doc| (p.page_id.clone(), doc))
+                    .map(|doc| (p, doc))
                     .ok_or_else(|| {
                         let name = ed
                             .pages
@@ -99,20 +214,42 @@ pub fn revert(project: &Path, ed: &mut Editor, run: &mut Run) -> Result<(), Stri
         })
         .collect::<Result<_, _>>()?;
     let active = ed.active_page_id().to_string();
-    for (id, snap) in snapshots {
+    for (page, snap) in snapshots {
+        let id = &page.page_id;
         let i = ed
             .pages
             .iter()
-            .position(|p| p.id == id)
-            .unwrap_or_else(|| ed.add_page_with_id(&id, &snap));
+            .position(|p| &p.id == id)
+            .unwrap_or_else(|| ed.add_page_with_id(id, &snap));
         ed.switch_page(i);
+        if shared(page) {
+            let mut d = diff_pages(&snap, &ed.doc);
+            keep_own(&mut d, page);
+            for row in d.groups.into_iter().flat_map(|g| g.nodes) {
+                // ponytail: a row whose node went with an earlier row's subtree is skipped.
+                let _ = revert_node(ed, &snap, &row);
+            }
+            continue;
+        }
         ed.restore_snapshot(&snap);
         ed.rename_page(i, &snap.name);
     }
     for page in run.pages.iter().filter(|p| p.version.is_none()) {
-        if let Some(i) = ed.pages.iter().position(|p| p.id == page.page_id) {
+        let Some(i) = ed.pages.iter().position(|p| p.id == page.page_id) else {
+            continue;
+        };
+        if !shared(page) {
             ed.delete_page(i);
+            continue;
         }
+        ed.switch_page(i);
+        ed.edit("Revert agent run", |tx| {
+            for id in &page.nodes {
+                if tx.doc().get(*id).is_some() {
+                    tx.remove(*id);
+                }
+            }
+        });
     }
     if let Some(i) = ed.pages.iter().position(|p| p.id == active) {
         ed.switch_page(i);
@@ -307,56 +444,99 @@ fn recover(project: &Path) {
     }
 }
 
-/// The run being recorded, with what the tracker needs between calls.
+/// A run being recorded, with what the tracker needs between calls.
 struct Open {
     run: Run,
+    /// The client whose calls go into this run.
+    key: Client,
     /// Clock of the last successful editing call.
     last: u64,
     /// Activity verb of the first editing call, the title unless `finish_working_on_nodes` names one.
     verb: &'static str,
 }
 
-/// Groups the agent's editing tool calls into runs. Hosts route every call through [`Tracker::call`]
-/// and call [`Tracker::tick`] once per frame. `now` is Unix milliseconds, injected so tests can fake it.
+/// Groups each agent client's editing tool calls into runs: one open run per client (MCP client
+/// and session, or chat), so parallel agents get runs of their own. Hosts route every call through
+/// [`Tracker::call`] and call [`Tracker::tick`] once per frame. `now` is Unix milliseconds,
+/// injected so tests can fake it.
 #[derive(Default)]
 pub struct Tracker {
     dir: Option<PathBuf>,
-    open: Option<Open>,
-    finished: Option<Run>,
+    open: Vec<Open>,
+    finished: Vec<Run>,
+    /// Clients in first-call order, to number the sessions of one client.
+    // ponytail: never pruned; a few entries per app session.
+    clients: Vec<Client>,
+    /// Nodes the last call changed, as (page id, node), for the canvas's live outlines.
+    touched: Vec<(String, NodeId)>,
 }
 
 impl Tracker {
-    /// The run being recorded, if any.
-    pub fn open_run(&self) -> Option<&Run> {
-        self.open.as_ref().map(|o| &o.run)
+    /// The runs being recorded, oldest first.
+    pub fn open_runs(&self) -> impl Iterator<Item = &Run> {
+        self.open.iter().map(|o| &o.run)
     }
 
-    /// The run that ended last, once (for the finish banner).
+    /// The runs that ended, one per call (for the finish banner).
     pub fn take_finished(&mut self) -> Option<Run> {
-        self.finished.take()
+        (!self.finished.is_empty()).then(|| self.finished.remove(0))
     }
 
-    /// Runs `exec::call`, recording it in the open run when it edits the document.
-    pub fn call(&mut self, host: &mut dyn Host, name: &str, args: &Value, now: u64) -> ToolResult {
+    fn open_of(&self, client: &Client) -> Option<usize> {
+        self.open.iter().position(|o| &o.key == client)
+    }
+
+    /// Takes the nodes the last call changed (empty for reads and failed calls).
+    pub fn take_touched(&mut self) -> Vec<(String, NodeId)> {
+        std::mem::take(&mut self.touched)
+    }
+
+    /// The client's name for the run, numbered from its second session on.
+    pub fn label(&mut self, client: &Client) -> String {
+        if !self.clients.contains(client) {
+            self.clients.push(client.clone());
+        }
+        let n = self
+            .clients
+            .iter()
+            .filter(|c| c.name == client.name)
+            .position(|c| c == client)
+            .map_or(1, |i| i + 1);
+        match n {
+            1 => client.name.clone(),
+            n => format!("{} \u{b7} {n}", client.name),
+        }
+    }
+
+    /// Runs `exec::call`, recording it in `client`'s open run when it edits the document.
+    pub fn call(
+        &mut self,
+        host: &mut dyn Host,
+        client: &Client,
+        name: &str,
+        args: &Value,
+        now: u64,
+    ) -> ToolResult {
         let dir = host.project().map(|p| p.dir.clone());
         self.sync_project(now, dir.as_deref());
         let Some(dir) = dir else {
             return crate::mcp::exec::call(host, name, args);
         };
-        let outgoing = (name == "open_file")
-            .then(|| self.counts(host.editor()))
-            .flatten();
+        // Snapshots and diffs below look at every page the call may touch.
+        host.editor().finish_loading();
+        let outgoing = (name == "open_file").then(|| self.counts(host.editor()));
         let edits = edits_doc(name, args);
         let mut before = None;
         if edits {
-            if self.open.as_ref().is_some_and(|o| idle(o.last, now)) {
-                self.end(now, Some(host.editor()), None);
+            if self.open_of(client).is_some_and(|i| idle(self.open[i].last, now)) {
+                self.end(now, Some(host.editor()), None, |o| &o.key == client);
             }
-            let opened = self.open.is_none();
-            match self.before(&dir, host.editor(), name, args, now) {
+            let opened = self.open_of(client).is_none();
+            match self.before(&dir, host.editor(), client, name, args, now) {
                 Ok(saved) => before = Some(saved),
                 Err(err) => {
-                    if opened && let Some(open) = self.open.take() {
+                    if opened && let Some(i) = self.open_of(client) {
+                        let open = self.open.remove(i);
                         for version in open.run.pages.iter().filter_map(|p| p.version.as_deref()) {
                             crate::versions::delete(&dir, version);
                         }
@@ -364,75 +544,85 @@ impl Tracker {
                     return Err(err);
                 }
             }
+            host.editor().touch_log = Some(Vec::new());
         }
         let r = crate::mcp::exec::call(host, name, args);
+        let touched = host.editor().touch_log.take().unwrap_or_default();
         let current = host.project().map(|p| p.dir.clone());
         if current.as_deref() != Some(dir.as_path()) {
-            self.end_counted(now, outgoing, None);
+            self.end_counted(now, outgoing.unwrap_or_default(), None);
             self.sync_project(now, current.as_deref());
         }
+        self.touched = if before.is_some() && r.is_ok() { touched.clone() } else { Vec::new() };
         if let Some((opened, ids)) = before {
-            self.after(&dir, host.editor(), r.is_ok(), opened, &ids, now);
-        } else if name == "finish_working_on_nodes" && self.open.is_some() {
+            self.after(&dir, host.editor(), client, r.is_ok(), opened, &ids, touched, now);
+        } else if name == "finish_working_on_nodes" && self.open_of(client).is_some() {
             let ed = host.editor();
             let title = finish_title(ed, args);
-            self.end(now, Some(ed), title);
+            self.end(now, Some(ed), title, |o| &o.key == client);
         }
         r
     }
 
-    /// Closes the open run now (a chat turn is over), the way `finish_working_on_nodes` does,
-    /// instead of waiting `RUN_IDLE_SECS`.
+    /// Closes the chat's open run now (its turn is over), the way `finish_working_on_nodes` does,
+    /// instead of waiting `RUN_IDLE_SECS`. Other agents' runs stay open.
     pub fn finish(&mut self, now: u64, ed: &Editor) {
-        self.end(now, Some(ed), None);
+        self.end(now, Some(ed), None, |o| o.key.name == CHAT_CLIENT);
     }
 
-    /// Per frame: closes the run after `RUN_IDLE_SECS` idle or when the user switched project.
+    /// Closes `client`'s open run now under `title` (an action that made several calls).
+    pub fn finish_client(&mut self, now: u64, ed: &Editor, client: &Client, title: String) {
+        self.end(now, Some(ed), Some(title), |o| &o.key == client);
+    }
+
+    /// Per frame: closes runs idle for `RUN_IDLE_SECS`, and all of them when the user switched project.
     pub fn tick(&mut self, now: u64, dir: Option<&Path>, ed: &Editor) {
         self.sync_project(now, dir);
-        if self.open.as_ref().is_some_and(|o| idle(o.last, now)) {
-            self.end(now, Some(ed), None);
-        }
+        self.end(now, Some(ed), None, |o| idle(o.last, now));
     }
 
-    /// Notices a project change: the old run ends (its pages are gone, so no diff), the new project's
-    /// stale `Running` records are recovered.
+    /// Notices a project change: the old runs end (their pages are gone, so no diff), the new
+    /// project's stale `Running` records are recovered.
     fn sync_project(&mut self, now: u64, dir: Option<&Path>) {
         if self.dir.as_deref() == dir {
             return;
         }
-        self.end(now, None, None);
+        self.end(now, None, None, |_| true);
         self.dir = dir.map(Path::to_path_buf);
         if let Some(d) = dir {
             recover(d);
         }
     }
 
-    /// Opens the run if needed and snapshots the pages the call targets. Returns whether this call
-    /// opened the run, and the page ids before the call.
+    /// Opens the client's run if needed and snapshots the pages the call targets. Returns whether
+    /// this call opened the run, and the page ids before the call.
     fn before(
         &mut self,
         dir: &Path,
         ed: &Editor,
+        client: &Client,
         name: &str,
         args: &Value,
         now: u64,
     ) -> Result<(bool, Vec<String>), String> {
-        let opened = self.open.is_none();
-        let open = self.open.get_or_insert_with(|| {
+        let opened = self.open_of(client).is_none();
+        if opened {
             let number = next_number(dir);
             let run = Run {
                 id: format!("r{number}-{now}"),
                 number,
                 started: now,
+                client: self.label(client),
                 ..Run::default()
             };
-            Open {
+            self.open.push(Open {
                 run,
+                key: client.clone(),
                 last: now,
                 verb: crate::ui::agent_verb(name),
-            }
-        });
+            });
+        }
+        let open = self.open.iter_mut().find(|o| &o.key == client).expect("opened above");
         for i in target_pages(ed, name, args) {
             let page_id = &ed.pages[i].id;
             if open.run.pages.iter().any(|p| &p.page_id == page_id) {
@@ -445,76 +635,89 @@ impl Tracker {
             open.run.pages.push(RunPage {
                 page_id: page_id.clone(),
                 version: Some(v.id),
+                nodes: Vec::new(),
             });
         }
         let _ = save(dir, &open.run);
         Ok((opened, ed.pages.iter().map(|p| p.id.clone()).collect()))
     }
 
-    fn after(&mut self, dir: &Path, ed: &Editor, ok: bool, opened: bool, ids: &[String], now: u64) {
-        let Some(open) = self.open.as_mut() else {
+    #[allow(clippy::too_many_arguments)]
+    fn after(
+        &mut self,
+        dir: &Path,
+        ed: &Editor,
+        client: &Client,
+        ok: bool,
+        opened: bool,
+        ids: &[String],
+        touched: Vec<(String, NodeId)>,
+        now: u64,
+    ) {
+        let Some(i) = self.open_of(client) else {
             return;
         };
         if !ok {
             if opened {
-                delete(dir, &open.run.id);
-                self.open = None;
+                delete(dir, &self.open[i].run.id);
+                self.open.remove(i);
             }
             return;
         }
+        let open = &mut self.open[i];
         open.run.calls += 1;
         open.last = now;
         for p in ed.pages.iter().filter(|p| !ids.contains(&p.id)) {
             open.run.pages.push(RunPage {
                 page_id: p.id.clone(),
                 version: None,
+                nodes: Vec::new(),
             });
+        }
+        for (page, id) in touched {
+            if let Some(p) = open.run.pages.iter_mut().find(|p| p.page_id == page)
+                && let Err(k) = p.nodes.binary_search(&id)
+            {
+                p.nodes.insert(k, id);
+            }
         }
         let _ = save(dir, &open.run);
     }
 
-    /// Closes the open run: no changes drops it with its versions, otherwise it waits for review.
-    /// Without `ed` (the project is gone) the changes cannot be counted and the run is kept.
-    fn end(&mut self, now: u64, ed: Option<&Editor>, title: Option<String>) {
-        let counts = ed.and_then(|ed| self.counts(ed));
-        self.end_counted(now, counts, title);
-    }
-
-    pub(crate) fn counts(&self, ed: &Editor) -> Option<(usize, usize, usize, bool)> {
-        let (open, dir) = (self.open.as_ref()?, self.dir.as_ref()?);
-        let (mut added, mut changed, mut removed, mut empty) = (0, 0, 0, true);
-        for p in &open.run.pages {
-            let page = ed.pages.iter().position(|s| s.id == p.page_id);
-            let after = page.map(|i| ed.page_doc(i)).cloned().unwrap_or_default();
-            let Some(v) = &p.version else {
-                if page.is_some() {
-                    added += after.root.len().max(1);
-                    empty = false;
-                }
+    /// Closes the open runs `pick` selects: no changes drops one with its versions, otherwise it
+    /// waits for review. Without `ed` (the project is gone) the changes cannot be counted and the
+    /// run is kept.
+    fn end(&mut self, now: u64, ed: Option<&Editor>, title: Option<String>, pick: impl Fn(&Open) -> bool) {
+        let mut i = 0;
+        while i < self.open.len() {
+            if !pick(&self.open[i]) {
+                i += 1;
                 continue;
-            };
-            let Some(before) = crate::versions::load(dir, v) else {
-                empty = false;
-                continue;
-            };
-            let d = diff_pages(&before, &after);
-            let renamed = page.is_some_and(|i| ed.pages[i].name != before.name);
-            let deleted = page.is_none();
-            added += d.added;
-            changed += d.modified + usize::from(renamed);
-            removed += d.removed + usize::from(deleted);
-            empty &= d.is_empty() && !renamed && !deleted;
+            }
+            let counts = ed
+                .zip(self.dir.as_deref())
+                .map(|(ed, dir)| count(dir, ed, &self.open[i].run));
+            let open = self.open.remove(i);
+            self.close(open, now, counts, title.clone());
         }
-        Some((added, changed, removed, empty))
     }
 
-    pub(crate) fn end_counted(
-        &mut self,
-        now: u64,
-        counts: Option<(usize, usize, usize, bool)>,
-        title: Option<String>,
-    ) {
-        let (Some(open), Some(dir)) = (self.open.take(), self.dir.clone()) else {
+    /// Counts of every open run, in order, for [`Tracker::end_counted`] after the editor moved on.
+    pub(crate) fn counts(&self, ed: &Editor) -> Vec<Counts> {
+        let Some(dir) = &self.dir else { return Vec::new() };
+        self.open.iter().map(|o| count(dir, ed, &o.run)).collect()
+    }
+
+    /// Closes every open run with counts taken earlier ([`Tracker::counts`]); a run without
+    /// counts is kept.
+    pub(crate) fn end_counted(&mut self, now: u64, counts: Vec<Counts>, title: Option<String>) {
+        for (k, open) in std::mem::take(&mut self.open).into_iter().enumerate() {
+            self.close(open, now, counts.get(k).copied(), title.clone());
+        }
+    }
+
+    fn close(&mut self, open: Open, now: u64, counts: Option<Counts>, title: Option<String>) {
+        let Some(dir) = self.dir.clone() else {
             return;
         };
         let mut run = open.run;
@@ -530,7 +733,7 @@ impl Tracker {
         run.ended = Some(now);
         let _ = save(&dir, &run);
         prune(&dir);
-        self.finished = Some(run);
+        self.finished.push(run);
     }
 }
 
@@ -655,6 +858,7 @@ mod tests {
         RunPage {
             page_id: page.id,
             version: Some(version.id),
+            nodes: Vec::new(),
         }
     }
 
@@ -847,6 +1051,7 @@ mod tests {
             RunPage {
                 page_id: created_id.clone(),
                 version: None,
+                nodes: Vec::new(),
             },
             saved,
         ];
@@ -870,12 +1075,14 @@ mod tests {
         r.pages.push(RunPage {
             page_id: ed.pages[created].id.clone(),
             version: None,
+            nodes: Vec::new(),
         });
         let missing = ed.add_page();
         ed.rename_page(missing, "Missing page");
         r.pages.push(RunPage {
             page_id: ed.pages[missing].id.clone(),
             version: Some("missing".into()),
+            nodes: Vec::new(),
         });
         save(&dir, &r).unwrap();
         let original = r.clone();
@@ -1010,10 +1217,12 @@ mod tests {
                 RunPage {
                     page_id: "p1".into(),
                     version: Some("p1__1".into()),
+                    nodes: Vec::new(),
                 },
                 RunPage {
                     page_id: "p2".into(),
                     version: None,
+                    nodes: Vec::new(),
                 },
             ],
             state: RunState::Review,
@@ -1046,6 +1255,7 @@ mod tests {
         r.pages = vec![RunPage {
             page_id: "p1".into(),
             version: Some(auto.id.clone()),
+            nodes: Vec::new(),
         }];
         save(&dir, &r).unwrap();
         delete(&dir, &r.id);
@@ -1089,7 +1299,7 @@ mod tests {
 
     fn write(t: &mut Tracker, h: &mut SessionHost, now: u64) {
         let args = json!({"targetNodeId": "root", "html": "<div style=\"width: 50px; height: 50px\"></div>"});
-        t.call(h, "write_html", &args, now).unwrap();
+        t.call(h, &Client::default(), "write_html", &args, now).unwrap();
     }
 
     #[test]
@@ -1100,9 +1310,9 @@ mod tests {
         t.take_finished().unwrap();
         let node = h.ed.doc.root[0].0.to_string();
         let notes = json!({"notes": [{"node": node, "text": "Rule one"}, {"node": node, "text": "Rule two"}]});
-        t.call(&mut h, "annotate", &notes, T0 + GAP + 2).unwrap();
+        t.call(&mut h, &Client::default(), "annotate", &notes, T0 + GAP + 2).unwrap();
         assert_eq!(h.ed.doc.annotations.len(), 2);
-        assert_eq!(t.counts(&h.ed), Some((2, 0, 0, false)));
+        assert_eq!(t.counts(&h.ed), vec![(2, 0, 0, false)]);
         t.tick(T0 + 2 * GAP + 3, Some(&dir_of(&h)), &h.ed);
         let mut run = t.take_finished().expect("annotation-only run kept");
         assert_eq!((run.added, run.changed, run.removed), (2, 0, 0));
@@ -1185,6 +1395,7 @@ mod tests {
         let err = t
             .call(
                 &mut h,
+                &Client::default(),
                 "write_html",
                 &json!({"targetNodeId": "root", "html": "<div>Hi</div>"}),
                 T0,
@@ -1192,11 +1403,11 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("snapshot"), "{err}");
         assert_content(&h.ed.doc, &before);
-        assert_eq!(t.open_run().map_or(0, |r| r.calls), 0);
+        assert_eq!(t.open_runs().next().map_or(0, |r| r.calls), 0);
         std::fs::remove_file(dir.join("versions")).unwrap();
         write(&mut t, &mut h, T0 + 1);
-        assert_eq!(t.open_run().unwrap().calls, 1);
-        assert_eq!(t.open_run().unwrap().pages.len(), 1);
+        assert_eq!(t.open_runs().next().unwrap().calls, 1);
+        assert_eq!(t.open_runs().next().unwrap().pages.len(), 1);
     }
 
     #[test]
@@ -1206,18 +1417,17 @@ mod tests {
             write(&mut t, &mut h, T0);
             h.ed.undo();
             let dir = dir_of(&h);
-            let missing = t.open_run().unwrap().pages[0].version.clone().unwrap();
+            let missing = t.open_runs().next().unwrap().pages[0].version.clone().unwrap();
             h.ed.add_page_in_background(Some("Other"));
             let other = h.ed.pages[1].id.clone();
-            t.call(
-                &mut h,
+            t.call(&mut h, &Client::default(),
                 "rename_pages",
                 &json!({"updates": [{"pageId": other, "name": "Changed"}]}),
                 T0 + 1,
             )
             .unwrap();
             h.ed.rename_page(1, "Other");
-            let remaining = t.open_run().unwrap().pages[1].version.clone().unwrap();
+            let remaining = t.open_runs().next().unwrap().pages[1].version.clone().unwrap();
             if corrupt {
                 std::fs::write(
                     dir.join("versions").join(format!("{missing}.json")),
@@ -1241,11 +1451,10 @@ mod tests {
             let page = h.ed.pages[0].id.clone();
             if deleted {
                 h.ed.add_page_in_background(Some("Other"));
-                t.call(&mut h, "delete_pages", &json!({"pageIds": [page]}), T0)
+                t.call(&mut h, &Client::default(), "delete_pages", &json!({"pageIds": [page]}), T0)
                     .unwrap();
             } else {
-                t.call(
-                    &mut h,
+                t.call(&mut h, &Client::default(),
                     "rename_pages",
                     &json!({"updates": [{"pageId": page, "name": "Renamed"}]}),
                     T0,
@@ -1267,7 +1476,7 @@ mod tests {
         for i in 0..6 {
             write(&mut t, &mut h, T0 + i * 1000);
         }
-        assert_eq!(t.open_run().unwrap().calls, 6);
+        assert_eq!(t.open_runs().next().unwrap().calls, 6);
         t.tick(T0 + GAP + 5000, Some(&dir_of(&h)), &h.ed);
         let run = t.take_finished().unwrap();
         let dir = dir_of(&h);
@@ -1279,13 +1488,27 @@ mod tests {
     }
 
     #[test]
+    fn each_edit_hands_over_its_touched_layers_and_the_run_counts_them_live() {
+        let (mut h, mut t) = (host(), Tracker::default());
+        write(&mut t, &mut h, T0);
+        let first = t.take_touched();
+        assert!(!first.is_empty());
+        assert!(t.take_touched().is_empty(), "taken once");
+        write(&mut t, &mut h, T0 + 1000);
+        let both = t.open_runs().next().unwrap().touched();
+        assert!(both > first.len(), "{both}");
+        let _ = t.call(&mut h, &Client::default(), "get_basic_info", &json!({}), T0 + 2000);
+        assert!(t.take_touched().is_empty(), "reads touch nothing");
+    }
+
+    #[test]
     fn gap_starts_next_run() {
         let (mut h, mut t) = (host(), Tracker::default());
         write(&mut t, &mut h, T0);
         std::thread::sleep(std::time::Duration::from_millis(3));
         write(&mut t, &mut h, T0 + GAP);
         assert_eq!(t.take_finished().unwrap().number, 1);
-        assert_eq!(t.open_run().unwrap().number, 2);
+        assert_eq!(t.open_runs().next().unwrap().number, 2);
     }
 
     #[test]
@@ -1296,24 +1519,24 @@ mod tests {
             ("lint_design", json!({})),
             ("select_nodes", json!({"nodeIds": []})),
         ] {
-            let _ = t.call(&mut h, n, &a, T0);
+            let _ = t.call(&mut h, &Client::default(), n, &a, T0);
         }
-        assert!(t.open_run().is_none());
+        assert!(t.open_runs().next().is_none());
         assert!(list(&dir_of(&h)).is_empty());
     }
 
     #[test]
     fn lint_fix_opens_a_run() {
         let (mut h, mut t) = (host(), Tracker::default());
-        let _ = t.call(&mut h, "lint_design", &json!({"fix": true}), T0);
-        assert_eq!(t.open_run().map(|r| r.calls), Some(1));
+        let _ = t.call(&mut h, &Client::default(), "lint_design", &json!({"fix": true}), T0);
+        assert_eq!(t.open_runs().next().map(|r| r.calls), Some(1));
     }
 
     #[test]
     fn create_page_is_recorded_without_version() {
         let (mut h, mut t) = (host(), Tracker::default());
-        t.call(&mut h, "create_page", &json!({}), T0).unwrap();
-        let run = t.open_run().unwrap();
+        t.call(&mut h, &Client::default(), "create_page", &json!({}), T0).unwrap();
+        let run = t.open_runs().next().unwrap();
         assert_eq!(run.pages.len(), 1);
         assert_eq!(run.pages[0].page_id, h.ed.pages[1].id);
         assert_eq!(run.pages[0].version, None);
@@ -1325,14 +1548,13 @@ mod tests {
         write(&mut t, &mut h, T0);
         let old_dir = dir_of(&h);
         let (other, _) = h.session.store.create("Other").unwrap();
-        t.call(
-            &mut h,
+        t.call(&mut h, &Client::default(),
             "open_file",
             &json!({"fileId": other.manifest.id}),
             T0 + 1,
         )
         .unwrap();
-        assert!(t.open_run().is_none());
+        assert!(t.open_runs().next().is_none());
         let finished = t.take_finished().unwrap();
         assert_eq!((finished.number, finished.added), (1, 1));
         assert_eq!(list(&old_dir), vec![finished]);
@@ -1371,17 +1593,17 @@ mod tests {
         let (mut h, mut t) = (host(), Tracker::default());
         write(&mut t, &mut h, T0);
         let dir = dir_of(&h);
-        t.call(&mut h, "create_file", &json!({"name": "Other"}), T0 + 1)
+        t.call(&mut h, &Client::default(), "create_file", &json!({"name": "Other"}), T0 + 1)
             .unwrap();
-        assert!(t.open_run().is_some());
+        assert!(t.open_runs().next().is_some());
         assert!(
-            t.call(&mut h, "open_file", &json!({"fileId": "missing"}), T0 + 2)
+            t.call(&mut h, &Client::default(), "open_file", &json!({"fileId": "missing"}), T0 + 2)
                 .is_err()
         );
-        assert!(t.open_run().is_some());
-        t.call(&mut h, "open_file", &json!({"fileId": dir}), T0 + 3)
+        assert!(t.open_runs().next().is_some());
+        t.call(&mut h, &Client::default(), "open_file", &json!({"fileId": dir}), T0 + 3)
             .unwrap();
-        assert!(t.open_run().is_some());
+        assert!(t.open_runs().next().is_some());
         assert!(t.take_finished().is_none());
     }
 
@@ -1389,7 +1611,7 @@ mod tests {
     fn write_then_undo_drops_the_run_and_its_version() {
         let (mut h, mut t) = (host(), Tracker::default());
         write(&mut t, &mut h, T0);
-        t.call(&mut h, "undo", &json!({}), T0 + 1).unwrap();
+        t.call(&mut h, &Client::default(), "undo", &json!({}), T0 + 1).unwrap();
         t.tick(T0 + GAP, Some(&dir_of(&h)), &h.ed);
         assert!(t.take_finished().is_none());
         let dir = dir_of(&h);
@@ -1397,12 +1619,70 @@ mod tests {
         assert!(crate::versions::list(&dir, &h.ed.pages[0].id).is_empty());
     }
 
+    fn who(name: &str, session: &str) -> Client {
+        Client { name: name.into(), session: session.into() }
+    }
+
+    fn frame_as(t: &mut Tracker, h: &mut SessionHost, c: &Client, now: u64) -> NodeId {
+        let args = json!({"targetNodeId": "root", "html": "<div style=\"width: 50px; height: 50px\"></div>"});
+        t.call(h, c, "write_html", &args, now).unwrap();
+        *h.ed.doc.root.last().unwrap()
+    }
+
+    #[test]
+    fn each_client_session_gets_its_own_numbered_run() {
+        let (mut h, mut t) = (host(), Tracker::default());
+        let (a, b) = (who("Claude Code", "s1"), who("Claude Code", "s2"));
+        frame_as(&mut t, &mut h, &a, T0);
+        frame_as(&mut t, &mut h, &b, T0 + 1);
+        frame_as(&mut t, &mut h, &a, T0 + 2);
+        let open: Vec<_> = t.open_runs().map(|r| (r.client.clone(), r.calls)).collect();
+        assert_eq!(open, [("Claude Code".to_string(), 2), ("Claude Code \u{b7} 2".to_string(), 1)]);
+        t.tick(T0 + GAP + 2, Some(&dir_of(&h)), &h.ed);
+        let (ra, rb) = (t.take_finished().unwrap(), t.take_finished().unwrap());
+        assert_eq!((ra.added, rb.added), (2, 1), "each run counts only its own frames");
+    }
+
+    #[test]
+    fn chat_turn_end_closes_only_the_chat_run() {
+        let (mut h, mut t) = (host(), Tracker::default());
+        frame_as(&mut t, &mut h, &who("Codex", "x"), T0);
+        frame_as(&mut t, &mut h, &Client::chat("c1"), T0 + 1);
+        t.finish(T0 + 2, &h.ed);
+        assert_eq!(t.take_finished().unwrap().client, CHAT_CLIENT);
+        assert_eq!(t.open_runs().map(|r| r.client.as_str()).collect::<Vec<_>>(), ["Codex"]);
+    }
+
+    #[test]
+    fn revert_is_refused_when_a_later_run_changed_the_same_nodes() {
+        let (mut h, mut t) = (host(), Tracker::default());
+        let dir = dir_of(&h);
+        let (a, b) = (who("A", "1"), who("B", "1"));
+        let node = frame_as(&mut t, &mut h, &a, T0);
+        t.tick(T0 + GAP, Some(&dir), &h.ed);
+        let mut first = t.take_finished().unwrap();
+        let styles = json!({"updates": [{"nodeIds": [node.0.to_string()], "styles": {"opacity": 0.5}}]});
+        t.call(&mut h, &b, "update_styles", &styles, T0 + GAP + 1).unwrap();
+        frame_as(&mut t, &mut h, &a, T0 + GAP + 2);
+        t.tick(T0 + 2 * GAP + 2, Some(&dir), &h.ed);
+        assert_eq!(blocker(&list(&dir), &first), Some(2));
+        let err = revert(&dir, &mut h.ed, &mut first).unwrap_err();
+        assert!(err.contains("run 2"), "{err}");
+        assert_eq!(h.ed.doc.root.len(), 2, "nothing reverted");
+        // The third run (A again, a new frame) does not touch B's node: it reverts alone.
+        let mut third = list(&dir).into_iter().find(|r| r.number == 3).unwrap();
+        revert(&dir, &mut h.ed, &mut third).unwrap();
+        assert_eq!(h.ed.doc.root, [node], "B's edit and the first frame stay");
+        assert_eq!(revert_all(&dir, &mut h.ed, runs_from(&list(&dir), &first.id)).unwrap(), 2);
+        assert!(h.ed.doc.root.is_empty());
+    }
+
     #[test]
     fn running_record_on_disk_becomes_review() {
         let (mut h, mut t) = (host(), Tracker::default());
         let dir = dir_of(&h);
         save(&dir, &run(1)).unwrap();
-        let _ = t.call(&mut h, "get_basic_info", &json!({}), T0);
+        let _ = t.call(&mut h, &Client::default(), "get_basic_info", &json!({}), T0);
         assert_eq!(list(&dir)[0].state, RunState::Review);
     }
 }

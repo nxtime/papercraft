@@ -97,7 +97,10 @@ fn copy_props(main: &Node, inst: &mut Node, overrides: &[String], is_root: bool)
     }
     if !ov("layout") {
         inst.layout = main.layout;
-        inst.layout_child = main.layout_child;
+        // How a root sits in its own parent (absolute, fill/hug) is the instance's, not the main's.
+        if !is_root {
+            inst.layout_child = main.layout_child;
+        }
     }
     if !is_root && !ov("position") {
         inst.rect.x = main.rect.x;
@@ -556,6 +559,7 @@ impl Editor {
 
     /// Clear overrides on the selected instance nodes and resync from the main component.
     pub fn reset_overrides(&mut self) {
+        self.finish_loading();
         let ids = self.top_selection();
         let roots: Vec<NodeId> = ids
             .iter()
@@ -601,6 +605,11 @@ impl Editor {
         doc.get(l.main).map(|n| (page, n))
     }
 
+    /// The main of `l` is on a page that is still being read, so it cannot be looked at yet.
+    fn link_pending(&self, l: &InstanceLink) -> bool {
+        matches!(&l.source, Some(Source::Page(p)) if self.pages.iter().any(|s| s.id == *p && s.pending))
+    }
+
     /// A clone of the document holding the main of instance node `id`, when it is another page.
     pub(super) fn source_doc(&self, id: NodeId) -> Option<Document> {
         let l = self.doc.get(id)?.instance.as_ref()?;
@@ -623,7 +632,7 @@ impl Editor {
             n.instance.as_ref().is_some_and(|l| match &l.source {
                 // A library instance whose library or component is gone still counts (detach, warning).
                 Some(Source::Library(lib)) => self.library_main_ok(lib, l.main) || self.is_main_missing(id),
-                _ => self.link_main(l).is_some_and(|(_, m)| m.component),
+                _ => self.link_pending(l) || self.link_main(l).is_some_and(|(_, m)| m.component),
             })
         })
     }
@@ -638,7 +647,7 @@ impl Editor {
                 .is_none_or(|p| p.instance.is_none());
             root && match &l.source {
                 Some(Source::Library(lib)) => !self.library_main_ok(lib, l.main),
-                _ => self.link_main(l).is_none_or(|(_, m)| !m.component),
+                _ => !self.link_pending(l) && self.link_main(l).is_none_or(|(_, m)| !m.component),
             }
         })
     }
@@ -658,11 +667,14 @@ impl Editor {
                     .is_none_or(|p| p.instance.is_none());
                 let found = match &l.source {
                     None => doc.get(l.main),
-                    Some(Source::Page(p)) => self
-                        .pages
-                        .iter()
-                        .position(|s| s.id == *p)
-                        .and_then(|i| self.page_doc(i).get(l.main)),
+                    Some(Source::Page(p)) => {
+                        let src = self.pages.iter().position(|s| s.id == *p);
+                        // Still being read: its mains cannot be told apart from missing ones.
+                        if src.is_some_and(|i| self.pages[i].pending) {
+                            return false;
+                        }
+                        src.and_then(|i| self.page_doc(i).get(l.main))
+                    }
                     Some(Source::Library(lib)) => return root && !self.library_main_ok(lib, l.main),
                 };
                 root && found.is_none_or(|m| !m.component)
@@ -1042,6 +1054,33 @@ mod tests {
         assert!(red(&e, 1, inst), "B untouched by undo on A");
         e.with_page(1, |e| e.undo());
         assert!(!red(&e, 1, inst), "undo on B restores B");
+    }
+
+    #[test]
+    fn swap_and_main_edit_keep_how_the_root_sits_in_its_parent() {
+        let (mut e, comp, inst) = setup();
+        e.edit("absolute main", |tx| tx.node_mut(comp).unwrap().layout_child.absolute = true);
+        let src = e.doc.clone();
+        let source = Some(Source::Page(e.pages[0].id.clone()));
+        let other = e.add_node(
+            Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0., 0., 40., 40.)),
+            None,
+        );
+        e.selection = vec![other];
+        e.create_component();
+        let src2 = e.doc.clone();
+        e.with_page(1, |e| {
+            e.edit("in flow", |tx| {
+                let n = tx.node_mut(inst).unwrap();
+                n.layout_child.absolute = false;
+                n.layout_child.sizing = [Sizing::Fill, Sizing::Hug];
+            });
+            e.edit("sync", |tx| sync_node(tx, inst, true, Some(&src)));
+            e.edit("swap", |tx| swap_instance_tx(tx, Some(&src2), source, inst, other));
+            let lc = e.doc.get(inst).unwrap().layout_child;
+            assert!(!lc.absolute, "root stays in auto layout");
+            assert_eq!(lc.sizing, [Sizing::Fill, Sizing::Hug]);
+        });
     }
 
     #[test]

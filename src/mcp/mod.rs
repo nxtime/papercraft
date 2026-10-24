@@ -53,10 +53,31 @@ pub enum Out {
 
 pub type ToolResult = Result<Vec<Out>, String>;
 
+/// Name of the client for calls made by an in-app chat turn; its session is the chat id.
+pub const CHAT_CLIENT: &str = "Chat";
+/// Client of the Actions menu's in-process actions (Bind to tokens, Use components, ...).
+pub const ACTIONS_CLIENT: &str = "Actions";
+
+/// Who made a tool call: each (name, session) pair gets its own agent run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Client {
+    /// The MCP `clientInfo` title or name ("Claude Code"), or [`CHAT_CLIENT`].
+    pub name: String,
+    /// The MCP session id, or the chat id.
+    pub session: String,
+}
+
+impl Client {
+    pub fn chat(id: &str) -> Client {
+        Client { name: CHAT_CLIENT.into(), session: id.into() }
+    }
+}
+
 /// A tool call travelling from the HTTP thread to the editor thread.
 pub struct Call {
     pub name: String,
     pub args: serde_json::Value,
+    pub client: Client,
     pub reply: tokio::sync::oneshot::Sender<ToolResult>,
 }
 

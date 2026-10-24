@@ -7,7 +7,56 @@ use crate::mcp::{Out, ToolResult, tools};
 use crate::project::Store;
 use base64::Engine;
 use serde_json::{Value, json};
-use std::path::Path;
+use std::fs::{File, TryLockError};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// Held (exclusive advisory lock) by a running app in its projects folder, from start-up on.
+pub const APP_LOCK: &str = ".papercraft-app.lock";
+/// Held by an offline CLI session in the project folder while it may write the project.
+pub const PROJECT_LOCK: &str = ".papercraft-cli.lock";
+/// How long an offline session waits for another one to release the project.
+pub const PROJECT_LOCK_WAIT: Duration = Duration::from_secs(5);
+const LOCK_POLL: Duration = Duration::from_millis(100);
+
+fn lock_file(path: &Path) -> std::io::Result<File> {
+    File::options().create(true).truncate(false).write(true).open(path)
+}
+
+/// Mark the app as running for `papercraft-cli` (see [`app_running`]); keep the file alive.
+pub fn hold_app_lock(root: &Path) -> Option<File> {
+    let f = lock_file(&root.join(APP_LOCK)).ok()?;
+    f.try_lock().ok()?;
+    Some(f)
+}
+
+/// An app holds the projects folder at `root` (it may still be starting its server).
+pub fn app_running(root: &Path) -> bool {
+    lock_file(&root.join(APP_LOCK))
+        .is_ok_and(|f| matches!(f.try_lock(), Err(TryLockError::WouldBlock)))
+}
+
+/// Take the offline write lock of project `dir`, waiting up to `wait` for another holder.
+pub fn lock_project(dir: &Path, wait: Duration) -> Result<File, String> {
+    let path = dir.join(PROJECT_LOCK);
+    let f = lock_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let start = Instant::now();
+    loop {
+        match f.try_lock() {
+            Ok(()) => return Ok(f),
+            Err(TryLockError::WouldBlock) if start.elapsed() < wait => std::thread::sleep(LOCK_POLL),
+            Err(TryLockError::WouldBlock) => {
+                return Err(format!(
+                    "another papercraft-cli is writing {} (waited {} s); retry when it is done, or \
+                     open the project in the app so calls go through it",
+                    dir.display(),
+                    wait.as_secs()
+                ));
+            }
+            Err(TryLockError::Error(e)) => return Err(format!("{}: {e}", path.display())),
+        }
+    }
+}
 
 /// Tools that work with no project open, so they never trigger the default-project open.
 const NO_PROJECT_TOOLS: [&str; 6] = [
@@ -28,6 +77,8 @@ pub struct Offline {
     /// Checked with `open_file`'s `fileId` before it runs (the binary refuses projects the app has open).
     pub open_guard: Option<Box<dyn Fn(&str) -> Result<(), String>>>,
     default_tried: bool,
+    /// The project this session may write, and its lock ([`PROJECT_LOCK`]).
+    lock: Option<(PathBuf, File)>,
 }
 
 impl Offline {
@@ -39,6 +90,7 @@ impl Offline {
             last_touched: None,
             open_guard: None,
             default_tried: project.is_some(),
+            lock: None,
         };
         if let Some(p) = project {
             exec::call(&mut o.host, "open_file", &json!({"fileId": p}))?;
@@ -58,12 +110,37 @@ impl Offline {
         if edits && self.host.project().is_none() {
             return Err("no project is open; run create_file, then open_file".into());
         }
+        if edits {
+            self.lock_for_write()?;
+        }
         let r = exec::call(&mut self.host, name, args)?;
         if edits {
             self.host.save()?;
             self.last_touched = touched_key(args, &r).and_then(|k| self.artboard_of(&k));
         }
         Ok(r)
+    }
+
+    /// Before the first write to a project: take its lock, then reload it, so writes another
+    /// session saved before the lock was ours are not overwritten.
+    fn lock_for_write(&mut self) -> Result<(), String> {
+        let Some(dir) = self.host.project().map(|p| p.dir.clone()) else {
+            return Ok(());
+        };
+        if self.lock.as_ref().is_some_and(|(d, _)| *d == dir) {
+            return Ok(());
+        }
+        let f = lock_project(&dir, PROJECT_LOCK_WAIT)?;
+        self.lock = Some((dir.clone(), f));
+        let page = self.host.ed.active_page_id().to_string();
+        self.host
+            .session
+            .open(&mut self.host.ed, &dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        if let Ok(i) = exec::find_page(&self.host.ed, &page) {
+            self.host.ed.switch_page(i);
+        }
+        Ok(())
     }
 
     fn open_default(&mut self) {

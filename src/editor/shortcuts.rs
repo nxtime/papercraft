@@ -55,6 +55,8 @@ pub enum Action {
     PlaceImage,
     ToggleSketch,
     CommandPalette,
+    /// ⌘K: the Ask box on the selection, the command palette when nothing is selected.
+    Ask,
     Rename,
     ToggleUi,
     ToggleChat,
@@ -158,7 +160,7 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
             A::ToggleSketch,
             "Hand-drawn style on/off",
         ),
-        (Char('k'), CMD, A::CommandPalette, "Command palette"),
+        (Char('k'), CMD, A::Ask, "Ask about the selection (palette when none)"),
         (Char('p'), CMD_ALT, A::ExportPdf, "Export PDF"),
         (Char('c'), CMD_SHIFT, A::CopyAsPng, "Copy as PNG"),
         (Char('j'), CMD, A::ToggleChat, "Design / Chat mode"),
@@ -416,6 +418,7 @@ pub fn category(a: Action) -> &'static str {
         | A::PasteProps
         | A::Rename
         | A::CommandPalette
+        | A::Ask
         | A::Escape
         | A::EditText
         | A::SelectNext

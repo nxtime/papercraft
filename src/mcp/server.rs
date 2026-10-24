@@ -5,7 +5,7 @@
 //! `Accept` header (some clients omit it and then misread the 406 as an auth failure) and
 //! answers unknown routes with a plain JSON hint rather than an OAuth-looking error.
 
-use super::{Call, ENDPOINT, Out, ToolResult, tools};
+use super::{Call, Client, ENDPOINT, Out, ToolResult, tools};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -85,12 +85,13 @@ impl ServerHandler for PaperServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let (reply, rx) = tokio::sync::oneshot::channel();
         let call = Call {
             name: request.name.to_string(),
             args: serde_json::Value::Object(request.arguments.unwrap_or_default()),
+            client: client_of(&context),
             reply,
         };
         let r = if !(self.dispatch)(call) {
@@ -104,6 +105,29 @@ impl ServerHandler for PaperServer {
         };
         Ok(to_result(r).into())
     }
+}
+
+/// Who is calling: an in-app chat turn when the URL carries `?chat=<id>` (the chat's CLI
+/// backends connect that way), else the MCP client's title or name and its session id.
+fn client_of(context: &RequestContext<RoleServer>) -> Client {
+    let parts = context.extensions.get::<axum::http::request::Parts>();
+    if let Some(id) = parts.and_then(|p| p.uri.query()).and_then(chat_of) {
+        return Client::chat(id);
+    }
+    let name = context
+        .client_info()
+        .map(|i| i.title.filter(|t| !t.is_empty()).unwrap_or(i.name))
+        .unwrap_or_default();
+    let session = parts
+        .and_then(|p| p.headers.get("mcp-session-id"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    Client { name, session: session.into() }
+}
+
+/// The chat id in an MCP URL query (`chat=<id>`).
+pub fn chat_of(query: &str) -> Option<&str> {
+    query.split('&').find_map(|kv| kv.strip_prefix("chat="))
 }
 
 /// Add the `Accept` header the streamable HTTP transport requires when a client omits it.

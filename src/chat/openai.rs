@@ -197,7 +197,8 @@ mod api {
         let model = cfg.model.as_deref().unwrap_or(&cfg.endpoint.model);
         let mut all = vec![];
         if !cfg.system.is_empty() {
-            all.push(json!({"role": "system", "content": cfg.system}));
+            let text = if cfg.ds_digest.is_empty() { cfg.system.clone() } else { format!("{}\n\n{}", cfg.system, cfg.ds_digest) };
+            all.push(json!({"role": "system", "content": text}));
         }
         all.extend(messages.iter().cloned());
         json!({

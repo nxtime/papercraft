@@ -58,6 +58,7 @@ impl Editor {
         pre: Option<&dyn Fn(&mut crate::history::Tx)>,
     ) -> Result<(R, Fills), Error> {
         self.commit();
+        self.finish_loading();
         // A project that never went through the session (no design.json yet) starts from what
         // its first page already holds.
         if self.design.collections.is_empty() {
@@ -124,6 +125,7 @@ impl Editor {
     /// Rebuild every page's cache, bound fills and bindings from `Editor::design` after an undo
     /// or redo, with no history of their own. The pages are marked unsaved so the files follow.
     fn rebuild_all_silently(&mut self, renames: &BTreeMap<String, String>) {
+        self.finish_loading();
         for i in 0..self.pages.len() {
             let cache = self.design.cache_for(&self.pages[i].modes);
             self.with_page(i, |ed| ed.rebuild_cache("", &cache, renames, None, None, |_| {}, false));
@@ -166,7 +168,7 @@ impl Editor {
         }
         match self.rec.take() {
             Some((rec, key)) if keep => {
-                if self.history.commit(&self.doc, rec, key) {
+                if self.log_touched(&rec) && self.history.commit(&self.doc, rec, key) {
                     self.revision += 1;
                 }
             }
@@ -196,6 +198,7 @@ impl Editor {
         if !c.modes.iter().any(|m| m.id == mode_id) {
             return Err(Error::NotFound(mode_id.into()));
         }
+        self.ensure_loaded(page);
         let old = self.pages[page].modes.clone();
         let mut modes = old.clone();
         modes.insert(collection_id.into(), mode_id.into());
@@ -214,6 +217,7 @@ impl Editor {
 
     /// Set (or clear, with `None`) page `page`'s annotation template override. One undo step.
     pub fn set_page_template_on(&mut self, page: usize, template: Option<&str>) {
+        self.ensure_loaded(page);
         let old = self.pages[page].modes.clone();
         let mut modes = old.clone();
         match template {

@@ -279,6 +279,8 @@ pub struct Editor {
     pub(crate) touched_mains: Vec<NodeId>,
     pub(crate) cross_pending: Vec<(usize, Vec<NodeId>)>,
     pub(crate) cross_busy: bool,
+    /// Reads the pages the project was opened without (see [`PageSlot::pending`]).
+    pub(crate) loader: Option<crate::project::loader::PageLoader>,
     /// Pen tool in progress.
     pub pen: Option<vector_ops::PenState>,
     /// Path point editing in progress.
@@ -303,6 +305,11 @@ pub struct Editor {
     /// Text we last put on the system clipboard (to recognize our own copy).
     clipboard_written: Option<String>,
     clipboard_style: Option<(crate::model::Style, crate::model::TextStyle)>,
+    /// When user input last moved the camera (agents leave the view alone for a while after).
+    pub cam_moved: Option<web_time::Instant>,
+    /// While set, every committed change appends the (page id, node) pairs it changed: the agent
+    /// run tracker attributes nodes to the run that made the call.
+    pub touch_log: Option<Vec<(String, NodeId)>>,
 }
 
 impl Default for Editor {
@@ -363,6 +370,7 @@ impl Editor {
             touched_mains: Vec::new(),
             cross_pending: Vec::new(),
             cross_busy: false,
+            loader: None,
             pen: None,
             path_edit: None,
             measures: Vec::new(),
@@ -374,6 +382,8 @@ impl Editor {
             sticky_color: Color::rgb(0xff, 0xdf, 0x6b),
             ui_events: Vec::new(),
             clipboard_style: None,
+            cam_moved: None,
+            touch_log: None,
             clipboard_io: None,
             clipboard_written: None,
         }
@@ -406,6 +416,7 @@ impl Editor {
         self.fixup();
         let mains = std::mem::take(&mut self.touched_mains);
         if let Some((rec, key)) = self.rec.take()
+            && self.log_touched(&rec)
             && self.history.commit(&self.doc, rec, key)
         {
             self.revision += 1;
@@ -414,6 +425,24 @@ impl Editor {
             }
         }
         self.flush_cross_pages();
+    }
+
+    /// Appends the nodes `rec` changed to `touch_log`. Always true, so it chains before a commit.
+    pub(crate) fn log_touched(&mut self, rec: &Recording) -> bool {
+        let Some(page) = self.touch_log.as_ref().and_then(|_| self.pages.get(self.edit_page_index())) else {
+            return true;
+        };
+        let page = page.id.clone();
+        let changed: Vec<_> = rec
+            .touched()
+            .iter()
+            .filter(|id| rec.before(**id).map(Option::as_ref) != Some(self.doc.nodes.get(id)))
+            .map(|id| (page.clone(), *id))
+            .collect();
+        if let Some(log) = &mut self.touch_log {
+            log.extend(changed);
+        }
+        true
     }
 
     /// Run one edit as a complete transaction.
@@ -429,6 +458,7 @@ impl Editor {
         self.begin(label);
         let result = f(&mut self.tx());
         if let Some((rec, key)) = self.rec.take()
+            && self.log_touched(&rec)
             && self.history.commit(&self.doc, rec, key)
         {
             self.revision += 1;
@@ -659,6 +689,14 @@ impl Editor {
     // ------------------------------------------------------------------ input
 
     pub fn handle(&mut self, ev: InputEvent) {
+        let cam = self.camera;
+        self.handle_event(ev);
+        if self.camera != cam {
+            self.cam_moved = Some(web_time::Instant::now());
+        }
+    }
+
+    fn handle_event(&mut self, ev: InputEvent) {
         match ev {
             InputEvent::Modifiers(m) => {
                 self.mods = m;
@@ -1057,7 +1095,7 @@ impl Editor {
     }
 
     /// The layer a click on `hit` selects: the outermost group or instance not yet entered.
-    fn click_target(&self, hit: NodeId, double: bool) -> NodeId {
+    pub fn click_target(&self, hit: NodeId, double: bool) -> NodeId {
         let mut chain = self.doc.ancestors(hit);
         chain.reverse();
         chain.push(hit);
@@ -2031,6 +2069,8 @@ impl Editor {
             A::PlaceImage => self.requests.push(AppRequest::PlaceImage),
             A::ToggleSketch => self.toggle_sketch(),
             A::CommandPalette => self.ui_events.push(commands::UiEvent::TogglePalette),
+            A::Ask if self.selection.is_empty() => self.ui_events.push(commands::UiEvent::TogglePalette),
+            A::Ask => self.ui_events.push(commands::UiEvent::Ask),
             A::Rename => {
                 if let Some(id) = self.selection.first() {
                     self.ui_events.push(commands::UiEvent::Rename(*id));

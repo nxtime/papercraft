@@ -423,6 +423,7 @@ impl App {
     /// Export through a save (or folder) dialog.
     fn export(&mut self, spec: crate::io::export::Spec) {
         use crate::io::export;
+        self.ed.finish_loading();
         let names: Vec<String> = self.ed.pages.iter().map(|p| p.name.clone()).collect();
         let pages: Vec<(&str, &crate::model::Document)> = names
             .iter()
@@ -706,6 +707,11 @@ impl App {
     fn redraw(&mut self) {
         let now = self.now();
         self.ed.tick(now);
+        if let Some((act, keys)) = self.st.pending_action.take() {
+            let mut runs = std::mem::take(&mut self.runs);
+            crate::ui::actions::run(self, &mut runs, act, &keys, crate::project::format::now_ms());
+            self.runs = runs;
+        }
         let dir = self
             .session
             .project
@@ -720,8 +726,11 @@ impl App {
             // A chat turn that edited is over: close its run now, not after the 30 s idle timeout.
             self.runs.finish(crate::project::format::now_ms(), &self.ed);
         }
-        self.st.sync_runs(&mut self.runs);
+        self.st.sync_runs(&mut self.runs, &self.ed);
         self.st.chat.tools = self.tool_dispatch().map(crate::chat::events::ToolDispatch);
+        if self.st.chat.gpu.is_none() {
+            self.st.chat.gpu = self.offscreen();
+        }
         let Some(g) = self.gfx.as_mut() else { return };
         let input = g.egui.take_egui_input(&g.window);
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
@@ -819,6 +828,12 @@ impl App {
         }
         // The laser trail fades out frame by frame, then the loop goes idle again.
         let animating = self.ed.animating(now);
+        // Pages are still being read in the background: look again soon to show them.
+        let repaint_delay = if self.ed.loading() {
+            repaint_delay.min(Duration::from_millis(30))
+        } else {
+            repaint_delay
+        };
         if repaint_delay.is_zero() || pending || animating || !self.ed.requests.is_empty() {
             g.window.request_redraw();
             self.next_repaint = None;
@@ -1459,7 +1474,12 @@ impl App {
         }
         for c in calls {
             let mut runs = std::mem::take(&mut self.runs);
-            let r = runs.call(self, &c.name, &c.args, crate::project::format::now_ms());
+            let r = runs.call(self, &c.client, &c.name, &c.args, crate::project::format::now_ms());
+            let touched = runs.take_touched();
+            if r.is_ok() {
+                let who = runs.label(&c.client);
+                self.st.mark_agent(&self.ed, who, &c.name, &c.args, &touched);
+            }
             self.runs = runs;
             self.st.log_agent(&c.name, r.as_ref().err().cloned());
             if let Err(e) = &r {
@@ -1562,6 +1582,9 @@ pub fn run(start: Start) -> Result<(), String> {
     crate::chat::path::init();
     let store = Store::open(Store::default_root())
         .map_err(|e| format!("cannot create the projects folder: {e}"))?;
+    // Tells papercraft-cli the app is up (or starting), so it waits for the server instead of
+    // writing the projects offline. Released by the OS when the process ends.
+    let _running = crate::cli::hold_app_lock(&store.root);
     let mut builder = EventLoop::<UserEvent>::with_user_event();
     #[cfg(target_os = "linux")]
     {

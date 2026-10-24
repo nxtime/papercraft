@@ -57,7 +57,7 @@ impl Session {
     pub fn open(&mut self, ed: &mut Editor, dir: &Path) -> Result<(), FormatError> {
         let p = Project::open(dir)?;
         crate::assets::load_dir(&dir.join(crate::project::ASSETS_DIR));
-        let loaded = p.load_all()?;
+        let loaded = p.load_first(p.manifest.active_page.as_deref())?;
         ed.open_pages(loaded.pages, p.manifest.active_page.as_deref());
         ed.design = loaded.design;
         crate::libraries::sweep_orphans(dir, &ed.design.libraries);
@@ -77,6 +77,8 @@ impl Session {
         for &i in &loaded.changed {
             ed.pages[i].saved_gen = u64::MAX;
         }
+        // The other pages are read in the background; the editor installs them as they arrive.
+        ed.load_pages_in_background(dir, &loaded.pending);
         self.design_disk = (!loaded.design_new).then(|| ed.design.clone());
         ed.meta_dirty = loaded.design_new && !ed.design.collections.is_empty();
         self.project = Some(p);
@@ -287,6 +289,10 @@ impl Session {
         let Some(p) = &self.project else {
             return Ok(());
         };
+        // The thumbnail shows the first page: wait until it is read, or it would come out empty.
+        if ed.pages[0].pending {
+            return Ok(());
+        }
         self.thumb_stale = false;
         self.last_thumb = Some(Instant::now());
         let doc = ed.page_doc(0);
@@ -304,6 +310,9 @@ impl Session {
     /// asynchronously and then calls [`finish_thumbnail`]).
     pub fn start_thumbnail(&mut self, ed: &Editor) -> Option<ThumbJob> {
         let p = self.project.as_ref()?;
+        if ed.pages[0].pending {
+            return None;
+        }
         self.thumb_stale = false;
         self.last_thumb = Some(Instant::now());
         Some(ThumbJob {

@@ -15,6 +15,7 @@
 //! All writes go through [`crate::io::atomic`], so a crash never leaves a torn file.
 
 pub mod format;
+pub mod loader;
 
 use crate::io::atomic;
 pub use format::{FormatError, Manifest, PageData, PageRef, new_id, now_ms};
@@ -92,6 +93,9 @@ pub struct Loaded {
     pub changed: Vec<usize>,
     /// `design.json` did not exist: it was built from the first page.
     pub design_new: bool,
+    /// Pages not read yet (see [`Project::load_first`]): their entry in `pages` is an empty
+    /// placeholder, read later by a [`loader::PageLoader`].
+    pub pending: Vec<usize>,
 }
 
 /// File-system safe folder name for a project name.
@@ -353,6 +357,65 @@ impl Store {
     }
 }
 
+/// An empty stand-in for a page that is read later.
+fn placeholder_page(r: &PageRef) -> PageData {
+    PageData {
+        id: r.id.clone(),
+        name: r.name.clone(),
+        doc: crate::model::Document { name: r.name.clone(), ..Default::default() },
+        camera: None,
+    }
+}
+
+/// Read the page file `path` of manifest entry `r`; the manifest owns the name, and a missing
+/// file is an empty page.
+pub fn read_page_file(path: &Path, r: &PageRef) -> Result<(PageData, PageModes), FormatError> {
+    let (mut p, m) = match crate::vfs::read_to_string(path)
+        .map_err(FormatError::from)
+        .and_then(|s| format::page_from_json_modes(&s))
+    {
+        Ok(x) => x,
+        Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            (placeholder_page(r), PageModes::new())
+        }
+        Err(e) => return Err(e),
+    };
+    // The manifest owns page names (renames touch only the manifest).
+    p.name = r.name.clone();
+    p.doc.name = r.name.clone();
+    Ok((p, m))
+}
+
+/// Give a freshly read page the variable cache `design` derives for its modes and every main
+/// component a key. True when that changed the page, so the next save must write it.
+pub fn finalize_page(design: &DesignSystem, p: &mut PageData, m: &mut PageModes) -> bool {
+    // A page without per-collection modes keeps the mode its old `mode` field names.
+    if m.is_empty()
+        && let Some(name) = &p.doc.mode
+        && let Some(c) = design.collections.iter().find(|c| c.name == COLORS_COLLECTION)
+        && let Some(mode) = c.modes.iter().find(|x| &x.name == name)
+    {
+        m.insert(c.id.clone(), mode.id.clone());
+    }
+    let cache = design.cache_for(m);
+    let mut dirty = p.doc.variables != cache.variables
+        || p.doc.modes != cache.modes
+        || p.doc.mode != cache.mode
+        || p.doc.tokens != cache.tokens;
+    p.doc.variables = cache.variables;
+    p.doc.modes = cache.modes;
+    p.doc.mode = cache.mode;
+    p.doc.tokens = cache.tokens;
+    for n in p.doc.nodes.values_mut() {
+        if n.component && n.component_key.is_none() {
+            // From the page and node ids, so every device agrees on the key.
+            n.component_key = Some(format!("{}:{}", p.id, n.id.0));
+            dirty = true;
+        }
+    }
+    dirty
+}
+
 fn read_manifest(dir: &Path) -> Result<Manifest, FormatError> {
     Manifest::from_json(&crate::vfs::read_to_string(dir.join(MANIFEST))?)
 }
@@ -420,80 +483,77 @@ impl Project {
         Ok(())
     }
 
+    /// `design.json`, or `None` when it is missing. A damaged one must not lock the project:
+    /// the bad file is kept for recovery and the design is rebuilt from the page caches (which
+    /// hold every value). The next save rewrites it.
+    fn read_design(&self) -> Result<Option<DesignSystem>, FormatError> {
+        match self.load_design() {
+            Ok(d) => Ok(d),
+            Err(FormatError::Json(e)) => {
+                let backup = self.dir.join(format!("{DESIGN}.broken-{}", now_ms()));
+                log::warn!("{DESIGN} is malformed ({e}); saved as {backup:?}, rebuilding");
+                crate::vfs::rename(self.design_path(), backup)?;
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// One page of the manifest read from disk: a missing file comes back empty (e.g. after a
+    /// crash between creating the page and its first save). Nothing is derived from the design
+    /// yet, see [`finalize_page`].
+    pub fn read_page(&self, r: &PageRef) -> Result<(PageData, PageModes), FormatError> {
+        read_page_file(&self.page_path(&r.id), r)
+    }
+
     /// Load the design system and every page listed in the manifest. A page whose file is
     /// missing comes back empty (e.g. after a crash between creating it and its first save).
     /// A project without `design.json` gets one built from the first page; pages get the
     /// derived variable cache and every main component a key. Nothing is written here:
     /// `Loaded::changed` and `Loaded::design_new` say what the next save must write.
     pub fn load_all(&self) -> Result<Loaded, FormatError> {
+        self.load_pages_with(self.read_design()?, None)
+    }
+
+    /// Like [`Self::load_all`], but reads only the design system and the page named `active`
+    /// (the first when it is unknown); the other pages come back as empty placeholders listed in
+    /// `Loaded::pending`, for a [`loader::PageLoader`] to read in the background. A project
+    /// without `design.json` needs every page to build it, and the browser has no threads, so
+    /// both load everything here.
+    pub fn load_first(&self, active: Option<&str>) -> Result<Loaded, FormatError> {
+        let first = active
+            .and_then(|a| self.manifest.pages.iter().position(|r| r.id == a))
+            .unwrap_or(0);
+        self.load_pages_with(self.read_design()?, Some(first))
+    }
+
+    fn load_pages_with(
+        &self,
+        stored: Option<DesignSystem>,
+        first: Option<usize>,
+    ) -> Result<Loaded, FormatError> {
+        let lazy = first.filter(|_| stored.is_some() && !cfg!(target_arch = "wasm32"));
         let mut pages = Vec::new();
         let mut modes = Vec::new();
-        for r in &self.manifest.pages {
-            let (mut p, m) = match crate::vfs::read_to_string(self.page_path(&r.id))
-                .map_err(FormatError::from)
-                .and_then(|s| format::page_from_json_modes(&s))
-            {
-                Ok(x) => x,
-                Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => (
-                    PageData {
-                        id: r.id.clone(),
-                        name: r.name.clone(),
-                        doc: crate::model::Document::default(),
-                        camera: None,
-                    },
-                    PageModes::new(),
-                ),
-                Err(e) => return Err(e),
-            };
-            // The manifest owns page names (renames touch only the manifest).
-            p.name = r.name.clone();
-            p.doc.name = r.name.clone();
+        let mut pending = Vec::new();
+        for (i, r) in self.manifest.pages.iter().enumerate() {
+            if lazy.is_some_and(|f| f != i) {
+                pages.push(placeholder_page(r));
+                modes.push(PageModes::new());
+                pending.push(i);
+                continue;
+            }
+            let (p, m) = self.read_page(r)?;
             pages.push(p);
             modes.push(m);
         }
-        let stored = match self.load_design() {
-            Ok(d) => d,
-            // A damaged design.json must not lock the project: keep the bad file for recovery
-            // and rebuild from the page caches (which hold every value). Next save rewrites it.
-            Err(FormatError::Json(e)) => {
-                let backup = self.dir.join(format!("{DESIGN}.broken-{}", now_ms()));
-                log::warn!("{DESIGN} is malformed ({e}); saved as {backup:?}, rebuilding");
-                crate::vfs::rename(self.design_path(), backup)?;
-                None
-            }
-            Err(e) => return Err(e),
-        };
         let design_new = stored.is_none();
         let design = stored.unwrap_or_else(|| {
             crate::variables::migrate_from_document(&union_doc(&pages))
         });
         let mut changed = Vec::new();
         for (i, (p, m)) in pages.iter_mut().zip(&mut modes).enumerate() {
-            // A page without per-collection modes keeps the mode its old `mode` field names.
-            if m.is_empty()
-                && let Some(name) = &p.doc.mode
-                && let Some(c) = design.collections.iter().find(|c| c.name == COLORS_COLLECTION)
-                && let Some(mode) = c.modes.iter().find(|x| &x.name == name)
-            {
-                m.insert(c.id.clone(), mode.id.clone());
-            }
-            let cache = design.cache_for(m);
-            let mut dirty = p.doc.variables != cache.variables
-                || p.doc.modes != cache.modes
-                || p.doc.mode != cache.mode
-                || p.doc.tokens != cache.tokens;
-            p.doc.variables = cache.variables;
-            p.doc.modes = cache.modes;
-            p.doc.mode = cache.mode;
-            p.doc.tokens = cache.tokens;
-            for n in p.doc.nodes.values_mut() {
-                if n.component && n.component_key.is_none() {
-                    // From the page and node ids, so every device agrees on the key.
-                    n.component_key = Some(format!("{}:{}", p.id, n.id.0));
-                    dirty = true;
-                }
-            }
-            if dirty {
+            if !pending.contains(&i) && finalize_page(&design, p, m) {
                 changed.push(i);
             }
         }
@@ -503,6 +563,7 @@ impl Project {
             modes,
             changed,
             design_new,
+            pending,
         })
     }
 

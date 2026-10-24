@@ -931,3 +931,105 @@ fn export_design_system_writes_groups_and_round_trips() {
     assert_eq!(doc.tokens["space-md"], "16px");
     assert_eq!(doc.tokens["font"], "Inter");
 }
+
+/// A text colour bound by `update_styles {color: var(--x)}` or `bind_variable text-color` keeps
+/// following the variable through `set_variables`, on every page, in both entry shapes.
+#[test]
+fn text_colour_bindings_survive_set_variables() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_variables",
+        json!({"mode": "Light", "variables": {"color/tag/gold/text": "#8a6d00"}}),
+    );
+    call(
+        &mut h,
+        "set_variables",
+        json!({"mode": "Dark", "variables": {"color/tag/gold/text": "#e0c060"}}),
+    );
+    let p2 = call(&mut h, "create_page", json!({"name": "Second"}));
+    let mut texts: Vec<(Value, usize)> = Vec::new(); // (node id, page index)
+    for (pi, page) in [Value::Null, p2["pageId"].clone()].into_iter().enumerate() {
+        let mut args = json!({"name": "Screen", "styles": {"width": "200px", "height": "100px"}});
+        if !page.is_null() {
+            args["pageId"] = page.clone();
+        }
+        let ab = call(&mut h, "create_artboard", args);
+        let r = call(
+            &mut h,
+            "write_html",
+            json!({"targetNodeId": ab["id"], "mode": "insert-children",
+                   "html": "<div layer-name=\"A\" style=\"font-size:14px\">A</div><div layer-name=\"B\" style=\"font-size:14px\">B</div>"}),
+        );
+        let ids = r["createdNodeIds"].as_array().unwrap().clone();
+        call(
+            &mut h,
+            "update_styles",
+            json!({"updates": [{"nodeIds": [ids[0]], "styles": {"color": "var(--color-tag-gold-text)"}}]}),
+        );
+        call(
+            &mut h,
+            "bind_variable",
+            json!({"nodeIds": [ids[1]], "field": "text-color", "variable": "color-tag-gold-text"}),
+        );
+        texts.push((ids[0].clone(), pi));
+        texts.push((ids[1].clone(), pi));
+    }
+    let check = |h: &exec::SessionHost, want: Color| {
+        for (i, (id, pi)) in texts.iter().enumerate() {
+            let n = h.ed.page_doc(*pi).get(node(id)).unwrap();
+            let (c, var) = match n.style.fills.last() {
+                Some(Paint::Solid { color, var }) => (*color, var.clone()),
+                o => panic!("not solid: {o:?}"),
+            };
+            let bound = var.as_deref() == Some("color-tag-gold-text")
+                || n.bindings.get("text-color").map(String::as_str) == Some("color-tag-gold-text");
+            assert!(bound, "text {i} lost its binding (var {var:?}, bindings {:?})", n.bindings);
+            assert_eq!(c, want, "text {i}");
+        }
+    };
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"color/tag/gold/text": "#4a3a00"}}),
+    );
+    check(&h, Color::rgb(0x4a, 0x3a, 0));
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"color/tag/gold/text": {"value": "#2a2000"}}}),
+    );
+    check(&h, Color::rgb(0x2a, 0x20, 0));
+}
+
+/// Re-colouring a text layer that was bound with `bind_variable text-color` replaces that
+/// binding, so a later change of the old variable cannot overwrite the new colour or unlink it.
+#[test]
+fn update_styles_colour_replaces_a_text_colour_binding() {
+    let mut h = host();
+    call(
+        &mut h,
+        "set_variables",
+        json!({"variables": {"old": "#111111", "new": "#222222"}}),
+    );
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Screen", "styles": {"width": "200px", "height": "100px"}}),
+    );
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children",
+               "html": "<div layer-name=\"A\" style=\"font-size:14px\">A</div>"}),
+    );
+    let t = r["createdNodeIds"][0].clone();
+    call(&mut h, "bind_variable", json!({"nodeIds": [t], "field": "text-color", "variable": "old"}));
+    call(
+        &mut h,
+        "update_styles",
+        json!({"updates": [{"nodeIds": [t], "styles": {"color": "var(--new)"}}]}),
+    );
+    call(&mut h, "set_variables", json!({"variables": {"old": "#333333"}}));
+    assert_eq!(fill(&h, &t), (Color::rgb(0x22, 0x22, 0x22), Some("new".into())));
+}

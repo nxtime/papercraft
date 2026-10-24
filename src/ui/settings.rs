@@ -88,6 +88,8 @@ pub struct ChatPrefs {
     /// Old settings files: read once into the default endpoint's model, never written.
     #[serde(skip_serializing)]
     pub api_model: Option<String>,
+    /// Send the design-system summary (`chat::ds_digest`) with chat turns. It costs tokens.
+    pub ds_summary: bool,
 }
 
 impl Default for ChatPrefs {
@@ -102,6 +104,7 @@ impl Default for ChatPrefs {
             default_endpoint: endpoint::DEFAULT_ENDPOINT_ID.into(),
             api_effort: DEFAULT_EFFORT.into(),
             api_model: None,
+            ds_summary: true,
         }
     }
 }
@@ -1042,6 +1045,12 @@ mod native {
             }
             note(ui, "Sent to api.anthropic.com only.");
         });
+        field_row(ui, "Design system", |ui| {
+            if kit::checkbox(ui, &mut prefs.ds_summary, "Send design-system summary").changed() {
+                ed.save = true;
+            }
+            note(ui, "Variables, components and libraries with each turn, about 1,500 tokens.");
+        });
     }
 }
 
@@ -1078,6 +1087,7 @@ mod tests {
             default_endpoint: "ep-1".into(),
             api_effort: "high".into(),
             api_model: None,
+            ds_summary: false,
         };
         assert_eq!(ChatPrefs::from_json(&prefs.to_json()), prefs);
         assert_eq!(ChatPrefs::from_json(&ChatPrefs::default().to_json()), ChatPrefs::default());

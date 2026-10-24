@@ -474,6 +474,7 @@ impl Editor {
     /// Drop faded laser points (call with the current time before drawing).
     pub fn tick(&mut self, now: f64) {
         self.now_ms = now;
+        self.poll_loading();
         self.laser.retain(|(_, t)| now - t < LASER_DECAY_MS);
     }
 

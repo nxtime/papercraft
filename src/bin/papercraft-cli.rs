@@ -13,17 +13,21 @@ use rmcp::transport::StreamableHttpClientTransport;
 use serde_json::{Value, json};
 use std::io::{BufRead, IsTerminal, Read, Write};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const USAGE: &str = "\
 papercraft-cli: call the running papercraft app's tools from a shell
 
 USAGE:
-  papercraft-cli list                       tool names and one-line descriptions (works offline)
+  papercraft-cli list                       tool names and one-line descriptions (the running app's,
+                                            else the built-in list offline)
   papercraft-cli schema <tool>              a tool's full description and JSON input schema
   papercraft-cli call <tool> [JSON|-]       run a tool; JSON arguments inline, or `-` for stdin
         [-o|--out FILE]                   where to save an image result (default: <tool>.png, or {\"out\": \"FILE\"})
         [--offline] [--project NAME|ID|PATH]   work without the app, see below
+        [--online]                        fail instead of working offline when the app is down
+                                            (also PAPERCRAFT_CLI_NO_OFFLINE=1)
   papercraft-cli shell                      interactive session; reads lines from a pipe too (see below)
   papercraft-cli icons list                 installed and installable open icon sets
   papercraft-cli icons add <set>...         download sets (lucide tabler phosphor heroicons material)
@@ -41,7 +45,9 @@ With the app running and a project open, calls go to the app. Otherwise (app not
 --offline) the tools run in this process on the project store ($PAPERCRAFT_HOME, else the
 default folder) and every editing call is saved. --project opens that project first; without it
 the most recently modified one is used (create_file and open_file work as usual). --offline is
-refused while the app has the same project open.
+refused while the app has the same project open. While PaperCraft is starting, calls wait up to
+15 s for its server. An offline session locks the project it writes (.papercraft-cli.lock); a
+second one waits 5 s, then fails.
 
 shell [--project X] [--offline]: one session, many calls. A line is `<tool> <json>` (JSON may
 span lines until its braces close) or a command:
@@ -59,8 +65,30 @@ fn fail(msg: impl std::fmt::Display) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// The running app's tools, so tools newer than this CLI show too; the built-in list offline.
+fn tool_list() -> Vec<rmcp::model::Tool> {
+    if app_reachable()
+        && let Ok(rt) = runtime()
+        && let Ok(client) = connect(&rt)
+        && let Ok(tools) = rt.block_on(client.list_all_tools())
+    {
+        return tools;
+    }
+    server::tool_list()
+}
+
+/// Warn once when the app is another version than this CLI (its tool list may differ).
+fn check_version(client: &Client) {
+    let ours = env!("CARGO_PKG_VERSION");
+    if let Some(app) = client.peer_info().and_then(|i| i.server_info.as_ref().map(|s| s.version.clone()))
+        && app != ours
+    {
+        eprintln!("papercraft-cli {ours} \u{2260} app {app}; reinstall the CLI");
+    }
+}
+
 fn list() {
-    for t in server::tool_list() {
+    for t in tool_list() {
         let d = t.description.as_deref().unwrap_or("");
         let first = d.split(['.', '\n']).next().unwrap_or("");
         println!("{}\t{first}", t.name);
@@ -205,7 +233,7 @@ fn icons_cmd(args: &[String]) -> ExitCode {
 }
 
 fn schema(name: &str) -> bool {
-    let Some(t) = server::tool_list().into_iter().find(|t| t.name == name) else {
+    let Some(t) = tool_list().into_iter().find(|t| t.name == name) else {
         eprintln!("papercraft-cli: no tool named {name} (see `papercraft-cli list`)");
         return false;
     };
@@ -284,6 +312,35 @@ fn connect(rt: &tokio::runtime::Runtime) -> Result<Client, String> {
         .map_err(|e| format!("cannot reach papercraft at {url}: {e}. Is the app running?"))
 }
 
+/// `call`/`shell` fail instead of working offline when the app is down (`--online`).
+static ONLINE_ONLY: AtomicBool = AtomicBool::new(false);
+const NO_OFFLINE_ENV: &str = "PAPERCRAFT_CLI_NO_OFFLINE";
+/// How long to wait for the server of an app that is still starting.
+const APP_START_WAIT: Duration = Duration::from_secs(15);
+const APP_START_POLL: Duration = Duration::from_millis(250);
+
+/// The app holds the projects folder but its server is not up yet: wait for it. Ok(true) once
+/// it answers, Ok(false) when no app runs, Err when one runs but never answers (writing its
+/// projects offline then would race it).
+fn app_starting() -> Result<bool, String> {
+    if !cli::app_running(&Store::default_root()) {
+        return Ok(false);
+    }
+    eprintln!("papercraft-cli: PaperCraft is starting; waiting for its server");
+    let start = std::time::Instant::now();
+    while start.elapsed() < APP_START_WAIT {
+        if app_reachable() {
+            return Ok(true);
+        }
+        std::thread::sleep(APP_START_POLL);
+    }
+    Err(format!(
+        "PaperCraft is running but its server at {} does not answer (PAPERCRAFT_MCP=0, or \
+         another PAPERCRAFT_MCP_PORT?)",
+        mcp::url(mcp::port())
+    ))
+}
+
 fn app_reachable() -> bool {
     use std::net::{Ipv4Addr, SocketAddr, TcpStream};
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, mcp::port()));
@@ -340,13 +397,20 @@ fn open_backend(
         }
         return open_offline(project);
     }
-    if app_reachable() {
+    if app_reachable() || app_starting()? {
         let rt = runtime()?;
         let client = connect(&rt)?;
+        check_version(&client);
         if let Some(p) = project {
             rt.block_on(online_call(&client, "open_file", &json!({"fileId": p})))?;
         }
         return Ok(Backend::Online(rt, client));
+    }
+    if ONLINE_ONLY.load(Ordering::Relaxed) || std::env::var_os(NO_OFFLINE_ENV).is_some_and(|v| v == "1") {
+        return Err(format!(
+            "cannot reach papercraft at {} and offline work is off (--online / {NO_OFFLINE_ENV}=1); start the app",
+            mcp::url(mcp::port())
+        ));
     }
     eprintln!("papercraft-cli: app not running; working offline");
     open_offline(project)
@@ -398,6 +462,14 @@ fn call_once(
     project: Option<String>,
 ) -> Result<bool, String> {
     let out = out_arg(&args, out);
+    // The CLI saves image results itself; passing `out` on would make the app write the file
+    // too, on its UI thread, where a macOS privacy prompt for that folder freezes it.
+    let mut args = args;
+    if name == "get_screenshot"
+        && let Some(m) = args.as_object_mut()
+    {
+        m.remove("out");
+    }
     let mut be = open_backend(
         offline,
         project.as_deref(),
@@ -671,7 +743,8 @@ fn main() -> ExitCode {
     let out = take_flag(&mut args, "--out", Some("-o"));
     let project = take_flag(&mut args, "--project", None);
     let offline = args.iter().any(|a| a == "--offline");
-    args.retain(|a| a != "--offline");
+    ONLINE_ONLY.store(args.iter().any(|a| a == "--online"), Ordering::Relaxed);
+    args.retain(|a| a != "--offline" && a != "--online");
     match args.first().map(String::as_str) {
         Some("list") => list(),
         Some("schema") => match args.get(1) {

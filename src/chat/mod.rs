@@ -7,6 +7,7 @@ pub mod acp;
 pub mod anthropic;
 pub mod claude_code;
 pub mod codex;
+pub mod ds_digest;
 pub mod endpoint;
 pub mod events;
 #[cfg(not(target_arch = "wasm32"))]

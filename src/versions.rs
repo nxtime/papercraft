@@ -49,7 +49,11 @@ pub fn save(
     doc: &Document,
 ) -> std::io::Result<Version> {
     crate::vfs::create_dir_all(dir(project))?;
-    let saved = now_ms();
+    let mut saved = now_ms();
+    // Two runs (parallel agents) may snapshot a page in the same millisecond: never share a file.
+    while crate::vfs::exists(&file_of(project, &format!("{page_id}__{saved}"))) {
+        saved += 1;
+    }
     let id = format!("{page_id}__{saved}");
     let name = name.trim();
     let name = if name.is_empty() {
