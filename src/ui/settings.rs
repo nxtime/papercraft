@@ -15,6 +15,7 @@ pub enum Page {
     Appearance,
     Canvas,
     Chat,
+    Plugins,
     Updates,
 }
 
@@ -23,7 +24,7 @@ pub const API_MODELS: [(&str, &str); 3] = [
     ("claude-sonnet-5-5", "Sonnet 5.5"),
     ("claude-haiku-5-5", "Haiku 5.5"),
 ];
-pub const API_EFFORTS: [(&str, &str); 3] = [("low", "Low"), ("medium", "Medium"), ("high", "High")];
+pub const API_EFFORTS: [(&str, &str); 5] = [("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "X-High"), ("max", "Max")];
 /// Fixed size of the dialog, the same on every page; long pages scroll inside it.
 const MODAL_W: f32 = 880.0;
 const MODAL_H: f32 = 640.0;
@@ -34,6 +35,9 @@ fn modal_height(ctx: &egui::Context) -> f32 {
 }
 const DEFAULT_MODEL: &str = "claude-opus-5-5";
 const DEFAULT_EFFORT: &str = "medium";
+/// Generous: a long build (eight screens) read about 5M tokens.
+const DEFAULT_TURN_BUDGET: u64 = 10_000_000;
+pub const TURN_BUDGETS: [(u64, &str); 5] = [(0, "No limit"), (2_000_000, "2M tokens"), (5_000_000, "5M tokens"), (10_000_000, "10M tokens"), (20_000_000, "20M tokens")];
 #[cfg(not(target_arch = "wasm32"))]
 const BACKENDS: [(BackendKind, &str); 3] = [
     (BackendKind::ClaudeCode, "Claude Code"),
@@ -90,6 +94,22 @@ pub struct ChatPrefs {
     pub api_model: Option<String>,
     /// Send the design-system summary (`chat::ds_digest`) with chat turns. It costs tokens.
     pub ds_summary: bool,
+    /// Claude Code runs without the user's CLAUDE.md, hooks, plugins and skills, with only the
+    /// tools a design chat can use: about half the prompt (specs/chat-tokens).
+    pub cli_lean: bool,
+    /// The agent may search the web and bring back reference images (the composer's Web chip).
+    pub research: bool,
+    /// Stop a turn once its model calls have read this many tokens in all (0: no limit). A guard
+    /// against a runaway loop; one of [`TURN_BUDGETS`].
+    pub turn_budget: u64,
+    /// Where `generate_image` gets images: "" (off), "codex" or "command".
+    pub image_gen: String,
+    /// The "command" provider's shell template (`{prompt}`, `{aspect}`, `{out}`).
+    pub image_command: String,
+    /// The user answered the chat's offer to use Codex for images.
+    pub image_offer_seen: bool,
+    /// Plugins turned on (`plugins::PLUGINS` ids); all off by default.
+    pub plugins: Vec<String>,
 }
 
 impl Default for ChatPrefs {
@@ -105,6 +125,13 @@ impl Default for ChatPrefs {
             api_effort: DEFAULT_EFFORT.into(),
             api_model: None,
             ds_summary: true,
+            cli_lean: true,
+            research: false,
+            turn_budget: DEFAULT_TURN_BUDGET,
+            image_gen: String::new(),
+            image_command: String::new(),
+            image_offer_seen: false,
+            plugins: Vec::new(),
         }
     }
 }
@@ -155,6 +182,18 @@ impl ChatPrefs {
     /// The endpoint with this id; None or an unknown id means the default one.
     pub fn endpoint(&self, id: Option<&str>) -> &Endpoint {
         id.and_then(|id| self.endpoints.iter().find(|e| e.id == id)).unwrap_or_else(|| self.default_endpoint())
+    }
+
+    /// The image provider the user turned on (off by default).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn image_provider(&self) -> crate::mcp::imagegen::Provider {
+        use crate::mcp::imagegen::Provider;
+        match self.image_gen.as_str() {
+            "codex" => Provider::Codex,
+            "gf" => Provider::Command(crate::mcp::imagegen::GF_COMMAND.into()),
+            "command" if !self.image_command.trim().is_empty() => Provider::Command(self.image_command.clone()),
+            _ => Provider::Off,
+        }
     }
 
     pub fn default_endpoint(&self) -> &Endpoint {
@@ -260,6 +299,7 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
                                 (Page::Appearance, Icon::Sketch, "Appearance"),
                                 (Page::Canvas, Icon::Grid, "Canvas"),
                                 (Page::Chat, Icon::Component, "Chat"),
+                                (Page::Plugins, Icon::Library, "Plugins"),
                                 (Page::Updates, Icon::Restore, "Updates"),
                             ] {
                                 if kit::nav_item(ui, icon, label, st.settings.page == page) {
@@ -286,6 +326,65 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
     }
 }
 
+/// The plugin catalogue: a card per plugin, two to a row and of one size, each with its switch.
+#[cfg(not(target_arch = "wasm32"))]
+fn plugins_page(ui: &mut Ui, prefs: &mut ChatPrefs) {
+    let p = theme::pal(ui);
+    let mut changed = false;
+    let w = (ui.available_width() - PLUGIN_GAP) / 2.0;
+    ui.spacing_mut().item_spacing = egui::vec2(PLUGIN_GAP, PLUGIN_GAP);
+    for row in crate::plugins::PLUGINS.chunks(2) {
+        ui.horizontal(|ui| {
+            for plugin in row {
+                let mut on = prefs.plugins.iter().any(|id| id == plugin.id);
+                ui.allocate_ui_with_layout(egui::vec2(w, PLUGIN_CARD_H), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    egui::Frame::new().fill(p.backdrop).corner_radius(theme::RADIUS_PANEL).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+                        ui.set_width(w - 28.0);
+                        ui.set_height(PLUGIN_CARD_H - 28.0);
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        ui.horizontal(|ui| {
+                            kit::badge(ui, plugin_icon(plugin.id), if on { theme::accent() } else { p.secondary }, 32.0);
+                            ui.label(RichText::new(plugin.name).font(theme::semibold(theme::BODY + 1.0)));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if kit::toggle(ui, &mut on).changed() {
+                                    prefs.plugins.retain(|id| id != plugin.id);
+                                    if on {
+                                        prefs.plugins.push(plugin.id.into());
+                                    }
+                                    changed = true;
+                                }
+                            });
+                        });
+                        ui.add(egui::Label::new(RichText::new(plugin.about).color(p.text)).wrap());
+                        ui.add(egui::Label::new(RichText::new(plugin.license).size(theme::SECONDARY).color(p.tertiary)).wrap());
+                    });
+                });
+            }
+        });
+    }
+    if changed {
+        prefs.save();
+    }
+}
+
+/// Plugin cards: one height for all (three lines of text under the title) and the gap between.
+#[cfg(not(target_arch = "wasm32"))]
+const PLUGIN_CARD_H: f32 = 132.0;
+#[cfg(not(target_arch = "wasm32"))]
+const PLUGIN_GAP: f32 = 12.0;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn plugin_icon(id: &str) -> Icon {
+    match id {
+        "avataaars" => Icon::Sketch,
+        "dicebear" => Icon::Component,
+        "iconify" => Icon::Star,
+        "picsum" => Icon::Image,
+        "flags" => Icon::Note,
+        _ => Icon::Grid,
+    }
+}
+
 fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
@@ -293,6 +392,7 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
             Page::Appearance => ("Appearance", "Theme, scale and motion."),
             Page::Canvas => ("Canvas", "How the canvas looks."),
             Page::Chat => ("Chat", "Agents, API endpoints and defaults for design by conversation."),
+            Page::Plugins => ("Plugins", "Assets the agent can place in a design. Fetched from each service once, then cached."),
             Page::Updates => ("Updates", "Keep PaperCraft current."),
         };
         ui.vertical(|ui| {
@@ -374,6 +474,10 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
             // The columns have no fixed height of their own, so the page gets the dialog's.
             let height = modal_height(ctx) - PAGE_CHROME;
             egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(height).min_scrolled_height(height).show(ui, |ui| chat_page(ui, ctx, &mut st.settings));
+        }
+        Page::Plugins => {
+            #[cfg(not(target_arch = "wasm32"))]
+            plugins_page(ui, &mut st.settings.chat);
         }
         Page::Updates => {
             kit::setting_row(
@@ -1051,6 +1155,44 @@ mod native {
             }
             note(ui, "Variables, components and libraries with each turn, about 1,500 tokens.");
         });
+        field_row(ui, "Images", |ui| {
+            let width = ui.available_width();
+            // Google Flow shows when the user's `gf` CLI is installed (or already chosen).
+            let gf = prefs.image_gen == "gf" || crate::chat::path::which("gf").is_some();
+            let mut options = vec![("", "Off"), ("codex", "Codex (your ChatGPT plan)")];
+            if gf {
+                options.push(("gf", "Google Flow (gf)"));
+            }
+            options.push(("command", "Custom command"));
+            let current = options.iter().map(|(id, _)| *id).find(|id| *id == prefs.image_gen).unwrap_or("");
+            if let Some(v) = kit::select(ui, current, &options, width) {
+                prefs.image_gen = v.to_owned();
+                prefs.image_offer_seen = true;
+                ed.save = true;
+            }
+            if prefs.image_gen == "command" {
+                text_edit(ui, &mut prefs.image_command, "my-image-cli {prompt} --aspect {aspect} --out {out}", ed);
+                note(ui, "Runs once per image. {prompt}, {aspect} (square, portrait, landscape) and {ratio} (1:1, 3:4, 16:9) are passed as text; write the images into the {out} folder.");
+            } else if prefs.image_gen == "gf" {
+                note(ui, "Uses Google Flow in your signed-in Chrome. Sign in once with `gf auth login`.");
+            } else {
+                note(ui, "Lets the agent make card art, heroes and reference images. Off by default.");
+            }
+        });
+        field_row(ui, "Turn budget", |ui| {
+            let width = ui.available_width();
+            if let Some(b) = kit::select(ui, prefs.turn_budget, &TURN_BUDGETS, width) {
+                prefs.turn_budget = b;
+                ed.save = true;
+            }
+            note(ui, "Stops a turn once its steps have read this much in all (each step re-reads the chat). 10M is about $2 on Opus with caching.");
+        });
+        field_row(ui, "Claude Code", |ui| {
+            if kit::checkbox(ui, &mut prefs.cli_lean, "Lean sessions").changed() {
+                ed.save = true;
+            }
+            note(ui, "Leaves out your CLAUDE.md, hooks, plugins and skills: about half the tokens per turn.");
+        });
     }
 }
 
@@ -1088,6 +1230,13 @@ mod tests {
             api_effort: "high".into(),
             api_model: None,
             ds_summary: false,
+            cli_lean: false,
+            research: true,
+            turn_budget: 0,
+            image_gen: "command".into(),
+            image_command: "my-tool {prompt} {out}".into(),
+            image_offer_seen: true,
+            plugins: vec!["avataaars".into()],
         };
         assert_eq!(ChatPrefs::from_json(&prefs.to_json()), prefs);
         assert_eq!(ChatPrefs::from_json(&ChatPrefs::default().to_json()), ChatPrefs::default());
@@ -1125,7 +1274,7 @@ mod tests {
 
     #[test]
     fn chat_prefs_fall_back_to_defaults() {
-        let prefs = ChatPrefs::from_json(r#"{"api_model":"gpt-x","api_effort":"max"}"#);
+        let prefs = ChatPrefs::from_json(r#"{"api_model":"gpt-x","api_effort":"turbo"}"#);
         assert_eq!(prefs.endpoints[0].model, DEFAULT_MODEL);
         assert_eq!(prefs.api_effort, DEFAULT_EFFORT);
         assert_eq!(ChatPrefs::from_json(r#"{"endpoints":[]}"#).endpoints, vec![Endpoint::default()]);

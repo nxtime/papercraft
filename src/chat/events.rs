@@ -72,6 +72,10 @@ pub struct TurnConfig {
     pub effort: Option<String>,
     /// Resume this backend session.
     pub session: Option<String>,
+    /// Claude Code: leave out the user's CLAUDE.md, hooks, plugins, skills and unusable tools.
+    pub lean: bool,
+    /// Web research is on: web search and fetch tools for the agent.
+    pub research: bool,
     /// Override for the CLI binary path.
     pub binary: Option<std::path::PathBuf>,
     /// API backend: where tool calls run (see [`ToolDispatch`]).

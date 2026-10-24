@@ -23,7 +23,10 @@ pub fn parse_line_partial(line: &str) -> Vec<Event> {
 
 fn parse(line: &str, partial: bool) -> Vec<Event> {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return vec![] };
+    // A sub-agent's own words stay in its card: only its tool calls and results reach the chat.
+    let sub = !v["parent_tool_use_id"].is_null();
     match v["type"].as_str() {
+        Some("assistant" | "stream_event") if sub => tool_uses(&v),
         Some("system") if v["subtype"] == "init" => v["session_id"].as_str().map(|s| Event::Session(s.into())).into_iter().collect(),
         Some("assistant") => assistant(&v, partial),
         Some("user") => tool_results(&v),
@@ -65,6 +68,12 @@ fn assistant(v: &Value, partial: bool) -> Vec<Event> {
             _ => {}
         }
     }
+    out
+}
+
+fn tool_uses(v: &Value) -> Vec<Event> {
+    let mut out = assistant(v, true);
+    out.retain(|e| matches!(e, Event::ToolStart { .. }));
     out
 }
 
@@ -125,7 +134,7 @@ fn result(v: &Value) -> Vec<Event> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use process::{args, detect, start};
+pub use process::{args, detect, start, user_model};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod process {
@@ -155,6 +164,27 @@ mod process {
         Some((path, version))
     }
 
+    /// The model picked in the user's own Claude Code settings. A lean session skips that file
+    /// (`--setting-sources project,local`), so without this it silently runs the CLI's default.
+    pub fn user_model() -> Option<String> {
+        let dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".claude")))?;
+        model_in(&dir.join("settings.json"))
+    }
+
+    fn model_in(settings: &Path) -> Option<String> {
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(settings).ok()?).ok()?;
+        v["model"].as_str().filter(|m| !m.is_empty()).map(str::to_owned)
+    }
+
+    /// Research runs in a Haiku sub-agent: its searches and fetches stay out of the main
+    /// context, which gets only the kept references (a research step cost $0.03 instead of the
+    /// $1.71 it cost in a long main session).
+    const RESEARCHER: &str = r#"{"researcher": {"description": "Finds interface references on the web and brings the useful ones in. Use it for all reference research.", "prompt": "You research UI references for a designer. Search the web, then call mcp__papercraft__fetch_reference_images once with the best image or page URLs (nicelydone.club/apps/<app> for SaaS web apps, banani.co/references/apps and screenlane.com for mobile, App Store and Google Play listings; Dribbble, Behance and Figma Community block fetching). Look at what came back and keep only images that show an interface like the one asked for: no logos, icons, social cards or illustrations. If fewer than two qualify, search once more. Reply with only the kept images, one line each: the path, then what to take from it (layout, density, color, type).", "tools": ["WebSearch", "WebFetch", "mcp__papercraft__fetch_reference_images"], "model": "haiku"}}"#;
+
+    /// Measured in specs/chat-tokens: 42.7k prompt tokens down to 20.6k. Bash, Edit, Write and
+    /// the web tools need a permission `-p` never grants, so they only cost tokens.
+    const LEAN_ARGS: [&str; 5] = ["--disable-slash-commands", "--setting-sources", "project,local", "--tools", "Read,TodoWrite,ToolSearch"];
+
     /// `system_file` holds the system prompt (read by the CLI, so it is not in `ps` output).
     pub fn args(cfg: &TurnConfig, system_file: Option<&Path>) -> Vec<String> {
         let mcp = serde_json::json!({"mcpServers": {"papercraft": {"type": "http", "url": cfg.mcp_url}}});
@@ -165,6 +195,18 @@ mod process {
         ]
         .map(String::from)
         .into();
+        if cfg.research {
+            let i = a.iter().position(|x| x == "--allowedTools").unwrap() + 1;
+            a[i].push_str(",WebSearch,WebFetch,Agent");
+            a.extend(["--agents".into(), RESEARCHER.to_string()]);
+        }
+        if cfg.lean {
+            // Without ToolSearch the CLI loads every PaperCraft tool schema up front.
+            a.extend(LEAN_ARGS.map(String::from));
+            if cfg.research {
+                a.last_mut().unwrap().push_str(",WebSearch,WebFetch,Agent");
+            }
+        }
         if let Some(f) = system_file {
             a.extend(["--append-system-prompt-file".into(), f.display().to_string()]);
         }
@@ -352,6 +394,15 @@ mod process {
         use std::sync::mpsc::channel;
 
         #[test]
+    fn a_sub_agent_shows_its_tool_calls_not_its_words() {
+        let text = r#"{"type":"stream_event","parent_tool_use_id":"t1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"thinking aloud"}}}"#;
+        assert!(parse_line_partial(text).is_empty());
+        let call = r#"{"type":"assistant","parent_tool_use_id":"t1","message":{"content":[{"type":"text","text":"x"},{"type":"tool_use","id":"u1","name":"mcp__papercraft__fetch_reference_images","input":{"urls":["https://a.com"]}}]}}"#;
+        let ev = parse_line_partial(call);
+        assert!(matches!(ev.as_slice(), [Event::ToolStart { name, .. }] if name == "fetch_reference_images"), "{ev:?}");
+    }
+
+    #[test]
         fn args_shape() {
             let cfg = TurnConfig {
                 mcp_url: "http://127.0.0.1:1/mcp".into(),
@@ -372,6 +423,30 @@ mod process {
             let mcp: Value = serde_json::from_str(at("--mcp-config")).unwrap();
             assert_eq!(mcp["mcpServers"]["papercraft"]["url"], "http://127.0.0.1:1/mcp");
             assert!(a.contains(&"--strict-mcp-config".to_string()));
+            assert!(!a.contains(&"--tools".to_string()), "not lean: the user's own setup");
+            let lean = args(&TurnConfig { lean: true, effort: Some("high".into()), ..cfg }, None);
+            let at = |f: &str| lean[lean.iter().position(|x| x == f).unwrap() + 1].as_str();
+            assert_eq!(at("--tools"), "Read,TodoWrite,ToolSearch", "ToolSearch keeps the PaperCraft schemas deferred");
+            assert_eq!(at("--setting-sources"), "project,local");
+            assert_eq!(at("--effort"), "high");
+            assert!(lean.contains(&"--disable-slash-commands".to_string()));
+            let web = args(&TurnConfig { lean: true, research: true, ..Default::default() }, None);
+            let at = |f: &str| web[web.iter().position(|x| x == f).unwrap() + 1].as_str();
+            assert_eq!(at("--tools"), "Read,TodoWrite,ToolSearch,WebSearch,WebFetch,Agent");
+            assert_eq!(at("--allowedTools"), "mcp__papercraft__*,WebSearch,WebFetch,Agent", "allowed, so -p does not deny them");
+            let agents: Value = serde_json::from_str(at("--agents")).unwrap();
+            assert_eq!(agents["researcher"]["model"], "haiku");
+        }
+
+        #[test]
+        fn the_users_own_model_is_read_from_their_settings() {
+            let p = std::env::temp_dir().join(format!("papercraft-cc-settings-{}.json", std::process::id()));
+            std::fs::write(&p, r#"{"model":"opus","hooks":{}}"#).unwrap();
+            assert_eq!(model_in(&p).as_deref(), Some("opus"));
+            std::fs::write(&p, "{}").unwrap();
+            assert_eq!(model_in(&p), None);
+            std::fs::remove_file(&p).ok();
+            assert_eq!(model_in(&p), None, "no settings file");
         }
 
         #[test]

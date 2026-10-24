@@ -133,6 +133,13 @@ impl SseParser {
 
     fn stop(&mut self, idx: usize, out: &mut Vec<Event>) {
         let Some(b) = self.blocks.get_mut(&idx) else { return };
+        // A server tool (tool search) runs on the API; its input is kept for the history.
+        if b.raw["type"] == "server_tool_use" {
+            if let Ok(input) = serde_json::from_str::<Value>(&b.json) {
+                b.raw["input"] = input;
+            }
+            return;
+        }
         if b.raw["type"] != "tool_use" {
             return;
         }
@@ -199,6 +206,33 @@ mod api {
         model.contains("opus") || model.contains("sonnet")
     }
 
+    /// Tools a design turn uses most, always loaded; the rest are found through tool search.
+    const CORE_TOOLS: [&str; 25] = [
+        "get_basic_info", "get_selection", "get_node_info", "get_children", "get_tree_summary", "get_screenshot",
+        "find_nodes", "get_guide", "get_variables", "get_components", "search_icons", "zoom_image", "ask_user", "get_feedback",
+        "create_artboard", "write_html", "update_styles", "set_text_content", "create_instance", "delete_nodes",
+        "duplicate_nodes", "move_nodes", "rename_nodes", "lint_design", "finish_working_on_nodes",
+    ];
+    const TOOL_SEARCH: &str = "tool_search_tool_bm25_20251119";
+    const BETA_CONTEXT_EDIT: &str = "context-management-2025-06-27";
+    /// Context editing: clear old tool uses past this many input tokens, keep the latest few, and
+    /// clear enough each time to be worth the cache write it costs.
+    const CLEAR_TOOLS_AT: u64 = 60_000;
+    const CLEAR_KEEP: u64 = 4;
+    const CLEAR_AT_LEAST: u64 = 15_000;
+    /// Searches and fetches a research turn may make.
+    const WEB_MAX_USES: u32 = 5;
+
+    /// Web search and fetch (server tools) for a research turn. Haiku takes the basic versions;
+    /// the others the ones with dynamic filtering.
+    pub fn web_tools(model: &str) -> [Value; 2] {
+        let (search, fetch) = if model.contains("haiku") { ("web_search_20250305", "web_fetch_20250910") } else { ("web_search_20260209", "web_fetch_20260209") };
+        [
+            json!({"type": search, "name": "web_search", "max_uses": WEB_MAX_USES}),
+            json!({"type": fetch, "name": "web_fetch", "max_uses": WEB_MAX_USES}),
+        ]
+    }
+
     /// `claude_only`: the host is `api.anthropic.com`, so the beta header may be sent. An empty key
     /// sends no key header (local servers).
     pub fn build_headers(model: &str, key: &str, claude_only: bool) -> Vec<(&'static str, String)> {
@@ -206,14 +240,17 @@ mod api {
         if !key.is_empty() {
             h.insert(0, ("x-api-key", key.to_string()));
         }
-        if claude_only && has_fallbacks(model) {
-            h.push(("anthropic-beta", BETA_FALLBACK.to_string()));
+        if claude_only {
+            let betas: Vec<&str> = [Some(BETA_CONTEXT_EDIT), has_fallbacks(model).then_some(BETA_FALLBACK)].into_iter().flatten().collect();
+            h.push(("anthropic-beta", betas.join(",")));
         }
         h
     }
 
     /// The app's tools as Messages API tools, in `tool_list()` order. `claude_only` adds
-    /// `eager_input_streaming` and a cache breakpoint on the last tool.
+    /// `eager_input_streaming`, defers the tools outside [`CORE_TOOLS`] behind the tool-search
+    /// tool (about 19k tokens of schemas down to a third, specs/chat-tokens) and puts a cache
+    /// breakpoint on the last loaded tool.
     pub fn tools_json(claude_only: bool) -> Vec<Value> {
         let mut out: Vec<Value> = tools::tool_specs()
             .into_iter()
@@ -221,13 +258,20 @@ mod api {
                 let mut tool = json!({"name": t["name"], "description": t["description"], "input_schema": t["inputSchema"]});
                 if claude_only {
                     tool["eager_input_streaming"] = json!(true);
+                    if !CORE_TOOLS.contains(&t["name"].as_str().unwrap_or_default()) {
+                        tool["defer_loading"] = json!(true);
+                    }
                 }
                 tool
             })
             .collect();
-        if let Some(last) = out.last_mut().filter(|_| claude_only) {
+        if !claude_only {
+            return out;
+        }
+        if let Some(last) = out.iter_mut().rfind(|t| t.get("defer_loading").is_none()) {
             last["cache_control"] = json!({"type": "ephemeral"});
         }
+        out.push(json!({"type": TOOL_SEARCH, "name": "tool_search_tool_bm25"}));
         out
     }
 
@@ -261,6 +305,15 @@ mod api {
             if has_fallbacks(model) {
                 body["fallbacks"] = json!("default");
             }
+            // Old tool results and inputs (screenshots, whole HTML blocks) are cleared on the server
+            // once the chat is long; the last few stay, the canvas holds the rest.
+            body["context_management"] = json!({"edits": [{
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": CLEAR_TOOLS_AT},
+                "keep": {"type": "tool_uses", "value": CLEAR_KEEP},
+                "clear_at_least": {"type": "input_tokens", "value": CLEAR_AT_LEAST},
+                "clear_tool_inputs": true,
+            }]});
         }
         body
     }
@@ -374,7 +427,10 @@ mod api {
                 Some(base) => format!("{}/v1/messages", base.trim_end_matches('/')),
                 None => self.cfg.endpoint.url(),
             };
-            let tools = tools_json(self.cfg.endpoint.is_claude_host());
+            let mut tools = tools_json(self.cfg.endpoint.is_claude_host());
+            if self.cfg.research && self.cfg.endpoint.is_claude_host() {
+                tools.extend(web_tools(self.model()));
+            }
             let specs = crate::chat::tools::tool_specs();
             let mut total = Usage::default();
             let (mut rounds, mut continued) = (0, false);
@@ -581,13 +637,19 @@ mod api {
             assert!(b.get("tool_choice").is_none());
             assert_eq!(b["system"], json!([{"type": "text", "text": "SYS", "cache_control": {"type": "ephemeral"}}]));
             assert_eq!(b["messages"], json!([{"role": "user", "content": "hi"}]));
-            let ts = b["tools"].as_array().unwrap();
+            let (search, ts) = b["tools"].as_array().unwrap().split_last().unwrap();
+            assert_eq!(search["type"], TOOL_SEARCH, "the search tool comes last");
             let names: Vec<String> = crate::mcp::server::tool_list().iter().map(|t| t.name.to_string()).collect();
             assert_eq!(ts.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>(), names);
             assert!(ts.iter().all(|t| t["eager_input_streaming"] == true && t["input_schema"]["type"] == "object" && t["description"].is_string()));
+            for t in ts {
+                let core = CORE_TOOLS.contains(&t["name"].as_str().unwrap());
+                assert_eq!(t.get("defer_loading").is_none(), core, "{}", t["name"]);
+            }
+            assert!(CORE_TOOLS.iter().all(|c| names.iter().any(|n| n == c)), "every core tool exists");
             let with_cc: Vec<_> = ts.iter().filter(|t| t.get("cache_control").is_some()).collect();
             assert_eq!(with_cc.len(), 1);
-            assert_eq!(ts.last().unwrap()["cache_control"], json!({"type": "ephemeral"}));
+            assert!(with_cc[0].get("defer_loading").is_none(), "the breakpoint is on a loaded tool");
             assert_eq!(tools_json(true), tools, "stable across calls");
         }
 
@@ -604,7 +666,7 @@ mod api {
             assert_eq!((b["model"].as_str(), b["system"].as_str()), (Some("other-model"), Some("SYS")));
             assert_eq!(b["max_tokens"], 16_384);
             let text = b.to_string();
-            for claude_only in ["effort", "thinking", "fallbacks", "cache_control", "eager_input_streaming"] {
+            for claude_only in ["effort", "thinking", "fallbacks", "cache_control", "eager_input_streaming", "defer_loading", "tool_search"] {
                 assert!(!text.contains(claude_only), "{claude_only} sent to another host");
             }
             let names: Vec<String> = crate::mcp::server::tool_list().iter().map(|t| t.name.to_string()).collect();
@@ -639,7 +701,10 @@ mod api {
                 assert_eq!(b.get("fallbacks").is_some(), fb, "{model}");
                 assert_eq!(b["output_config"]["effort"], "high");
                 let h = build_headers(model, "K", true);
-                assert_eq!(h.iter().any(|(k, v)| *k == "anthropic-beta" && v == "server-side-fallback-2026-07-01"), fb, "{model}");
+                let beta = h.iter().find(|(k, _)| *k == "anthropic-beta").map(|(_, v)| v.as_str()).unwrap_or_default();
+                assert_eq!(beta.split(',').any(|b| b == "server-side-fallback-2026-07-01"), fb, "{model}");
+                assert!(beta.split(',').any(|b| b == "context-management-2025-06-27"), "{model}: context editing on every Claude model");
+                assert_eq!(b["context_management"]["edits"][0]["type"], "clear_tool_uses_20250919");
                 assert!(h.contains(&("x-api-key", "K".into())) && h.contains(&("anthropic-version", "2023-06-01".into())));
             }
         }
@@ -801,7 +866,7 @@ mod api {
             let seen = seen.lock().unwrap();
             let (h1, b1) = &seen[0];
             assert!(h1.contains(&format!("x-api-key: {}", TEST_KEY.to_lowercase())));
-            assert!(h1.iter().any(|h| h.starts_with("anthropic-beta: server-side-fallback")));
+            assert!(h1.iter().any(|h| h.starts_with("anthropic-beta: ") && h.contains("server-side-fallback")));
             assert_eq!(b1["messages"].as_array().unwrap().len(), 1);
             let m = seen[1].1["messages"].as_array().unwrap();
             assert_eq!(m.len(), 3);

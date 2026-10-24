@@ -20,6 +20,10 @@ pub mod exec;
 pub mod html;
 pub mod lint;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod imagegen;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod refs;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod relay;
 pub mod relay_proto;
 #[cfg(not(target_arch = "wasm32"))]

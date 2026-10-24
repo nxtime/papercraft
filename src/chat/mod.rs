@@ -23,6 +23,49 @@ use serde_json::Value;
 
 /// Where images for CLI backends and the system prompt file are saved, under the project folder.
 pub const TMP_DIR: &str = ".papercraft-chat-tmp";
+/// Long edge of a `zoom_image` crop, the same cap as a sent attachment.
+pub const ZOOM_MAX_EDGE: u32 = 1568;
+
+/// Attachments are sent at most this big (about 1.6k image tokens; full size costs up to ~4.8k).
+/// The original is kept for `zoom_image` when it was bigger.
+const IMAGE_MAX_EDGE: f64 = ZOOM_MAX_EDGE as f64;
+const IMAGE_MAX_PIXELS: f64 = 1_150_000.0;
+/// Only used when a JPEG had to be scaled down: high enough that re-encoding is invisible.
+const IMAGE_JPEG_QUALITY: u8 = 95;
+
+/// Scales an image down to the send cap, then re-encodes it: PNG at the best lossless
+/// compression, JPEG stays JPEG (a PNG of a photo is often bigger than the original). Keeps the
+/// original bytes when they are already smaller. The third value is the original when scaled.
+pub fn shrink_image(name: String, img: events::ImageAttachment) -> (String, events::ImageAttachment, Option<Vec<u8>>) {
+    use image::codecs::{jpeg::JpegEncoder, png};
+    let Ok(decoded) = image::load_from_memory(&img.data) else { return (name, img, None) };
+    let (w, h) = (f64::from(decoded.width()), f64::from(decoded.height()));
+    let k = (IMAGE_MAX_EDGE / w.max(h)).min((IMAGE_MAX_PIXELS / (w * h)).sqrt());
+    if k >= 1.0 && img.mime == "image/jpeg" {
+        return (name, img, None); // re-encoding a JPEG loses detail for little gain
+    }
+    let decoded = if k < 1.0 { decoded.resize((w * k) as u32, (h * k) as u32, image::imageops::FilterType::Lanczos3) } else { decoded };
+    let jpeg = img.mime == "image/jpeg";
+    let mut out = Vec::new();
+    let encoded = if jpeg {
+        decoded.to_rgb8().write_with_encoder(JpegEncoder::new_with_quality(&mut out, IMAGE_JPEG_QUALITY))
+    } else {
+        decoded.write_with_encoder(png::PngEncoder::new_with_quality(&mut out, png::CompressionType::Best, png::FilterType::Adaptive))
+    };
+    if encoded.is_err() || (k >= 1.0 && out.len() >= img.data.len()) {
+        return (name, img, None);
+    }
+    let ext = if jpeg { "jpg" } else { "png" };
+    let name = std::path::Path::new(&name).with_extension(ext).to_string_lossy().into_owned();
+    let full = (k < 1.0).then_some(img.data);
+    (name, events::ImageAttachment { mime: if jpeg { "image/jpeg" } else { "image/png" }.into(), data: out }, full)
+}
+
+/// Where the original of a scaled-down attachment is kept: `shot.png` -> `shot.full.png`.
+pub fn full_image_path(sent: &std::path::Path) -> std::path::PathBuf {
+    let ext = sent.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    sent.with_extension(format!("full.{ext}"))
+}
 /// Each agent's own setup page, linked from a missing agent's row.
 pub const CLAUDE_DOCS: &str = "https://docs.anthropic.com/en/docs/claude-code/setup";
 pub const CODEX_DOCS: &str = "https://github.com/openai/codex";
@@ -118,6 +161,10 @@ pub struct Message {
     /// Tokens in the context at the turn's last model call (input and cache), for the header meter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<u64>,
+    /// Claude Code: the session's running cost as the CLI reported it (`total_cost_usd` adds up
+    /// over a resumed session); `usage.cost_usd` holds this turn's share.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_cost: Option<f64>,
     /// Unix milliseconds.
     #[serde(default)]
     pub at: u64,

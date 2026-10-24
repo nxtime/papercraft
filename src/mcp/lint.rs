@@ -1,7 +1,7 @@
 //! `lint_design`: checks a design for the mistakes agents make most, with a concrete fix for each.
 //!
-//! The rules are conventions, not law: WCAG 2.x contrast, a 4px spacing grid, a type scale, 44px
-//! hit areas for buttons and tabs, real layer names, and colors that should be variables. Each
+//! The rules are conventions, not law: WCAG 2.x contrast, a 4px spacing grid, a type scale, hit
+//! areas for buttons and tabs (44px on touch screens, 24px on desktop screens), real layer names, and colors that should be variables. Each
 //! issue says which node, what is wrong, and what to change.
 
 use crate::model::{Color, Document, Node, NodeId, Paint};
@@ -14,6 +14,21 @@ pub struct Issue {
     pub node: NodeId,
     pub message: String,
     pub fix: String,
+}
+
+/// Screens at least this wide are desktop (pointer) UIs.
+const DESKTOP_MIN_W: f64 = 1024.0;
+/// Touch targets: Apple HIG 44pt, WCAG 2.5.5 (AAA).
+const TOUCH_TARGET: f64 = 44.0;
+/// Pointer targets: WCAG 2.2 2.5.8 (AA). Compact 32px desktop controls pass.
+const POINTER_TARGET: f64 = 24.0;
+
+/// Smallest height for a button or tab: 24 inside a desktop-wide screen, else 44 (a screen
+/// narrower than a desktop, or a component on its own, whose screen is unknown).
+fn min_target(doc: &Document, id: NodeId) -> f64 {
+    let top = doc.ancestors(id).last().copied();
+    let desktop = top.and_then(|t| doc.get(t)).is_some_and(|t| t.rect.w >= DESKTOP_MIN_W);
+    if desktop { POINTER_TARGET } else { TOUCH_TARGET }
 }
 
 /// Sizes the type-scale rule accepts by default.
@@ -196,12 +211,13 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
         let tap = lower.starts_with("button")
             || lower.starts_with("tab /")
             || lower.starts_with("tab bar /");
-        if tap && n.is_frame() && n.rect.h < 44.0 && n.rect.h > 0.0 && !lower.contains("icon") {
+        let min = min_target(doc, id);
+        if tap && n.is_frame() && n.rect.h < min && n.rect.h > 0.0 && !lower.contains("icon") {
             add(
                 "touch-target",
                 "warning",
                 format!("`{}` is {:.0}px tall", n.name, n.rect.h),
-                "make interactive targets at least 44px tall (padding, not just text size)".into(),
+                format!("make interactive targets at least {min:.0}px tall (padding, not just text size)"),
             );
         }
         // ---- names
@@ -401,20 +417,21 @@ pub fn autofix_node(tx: &mut crate::history::Tx, id: NodeId, scale: &[f64]) -> b
         }
     }
 
-    // 4. Touch target height >= 44px for buttons/tabs.
+    // 4. Touch target height for buttons/tabs (see `min_target`).
     let lower = n.name.to_lowercase();
     let tap =
         lower.starts_with("button") || lower.starts_with("tab /") || lower.starts_with("tab bar /");
     let mut new_h = n.rect.h;
-    if tap && n.is_frame() && n.rect.h < 44.0 && n.rect.h > 0.0 && !lower.contains("icon") {
-        let extra = ((44.0 - n.rect.h) / 2.0).ceil();
+    let min = min_target(tx.doc(), id);
+    if tap && n.is_frame() && n.rect.h < min && n.rect.h > 0.0 && !lower.contains("icon") {
+        let extra = ((min - n.rect.h) / 2.0).ceil();
         if let Some(l) = &mut new_layout
             && n.layout_child.sizing[1] == crate::model::Sizing::Hug
         {
             l.padding[0] = snap4(l.padding[0] + extra);
             l.padding[2] = snap4(l.padding[2] + extra);
         }
-        new_h = 44.0;
+        new_h = min;
         changed = true;
     }
 
@@ -530,5 +547,26 @@ mod tests {
         assert_eq!(l.gap, 12.0);
         assert_eq!(l.padding, [8.0, 16.0, 8.0, 16.0]);
         assert_eq!(fixed.rect.h, 44.0);
+    }
+
+    #[test]
+    fn compact_buttons_pass_on_a_desktop_screen_not_on_a_phone() {
+        let mut doc = Document::default();
+        let mut screen = |w: f64| {
+            let s = doc.alloc_id();
+            doc.nodes.insert(s, Node::new(s, crate::model::NodeKind::Frame { clip: false }, crate::geom::Rect::new(0.0, 0.0, w, 800.0)));
+            doc.root.push(s);
+            let b = doc.alloc_id();
+            let mut n = Node::new(b, crate::model::NodeKind::Frame { clip: false }, crate::geom::Rect::new(0.0, 0.0, 96.0, 32.0));
+            n.name = "Button / Primary".into();
+            n.parent = Some(s);
+            doc.nodes.insert(b, n);
+            doc.nodes.get_mut(&s).unwrap().children.push(b);
+            s
+        };
+        let (desktop, phone) = (screen(1440.0), screen(390.0));
+        let targets = |root| lint(&doc, &[root], &DEFAULT_SCALE).into_iter().filter(|i| i.rule == "touch-target").count();
+        assert_eq!(targets(desktop), 0, "32px clears WCAG 2.2 AA on a pointer UI");
+        assert_eq!(targets(phone), 1, "a phone still needs 44px");
     }
 }

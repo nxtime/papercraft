@@ -97,7 +97,7 @@ main() {
   if [ "$skip_build" -eq 0 ]; then
     echo "==> building papercraft $version ($target_triple)"
     (cd "$ROOT" && CARGO_TARGET_DIR="$target_dir" MACOSX_DEPLOYMENT_TARGET=11.0 \
-      cargo build --release --locked --bin papercraft --bin papercraft-cli --target "$target_triple")
+      cargo build --release --locked --bin papercraft --bin papercraft-cli --bin papercraft-mcp --target "$target_triple")
   else
     echo "==> skipping the build (--skip-build)"
     if [ ! -f "$bin" ]; then
@@ -203,13 +203,16 @@ main() {
 
   echo "==> installed $dest"
 
-  # Keep the CLI agents call in step with the app (a stale one hides newer tools).
-  local cli="${bin%/papercraft}/papercraft-cli"
-  if [ -f "$cli" ]; then
-    mkdir -p "$HOME/.local/bin"
-    cp "$cli" "$HOME/.local/bin/papercraft-cli"
-    echo "==> installed $HOME/.local/bin/papercraft-cli"
-  fi
+  # Keep the CLI and the stdio MCP bridge agents call in step with the app: both answer the
+  # tool list from their own copy, so a stale one hides newer tools.
+  local tool
+  for tool in papercraft-cli papercraft-mcp; do
+    if [ -f "${bin%/papercraft}/$tool" ]; then
+      mkdir -p "$HOME/.local/bin"
+      cp "${bin%/papercraft}/$tool" "$HOME/.local/bin/$tool"
+      echo "==> installed $HOME/.local/bin/$tool"
+    fi
+  done
 
   if [ "$no_launch" -eq 0 ]; then
     open "$dest"

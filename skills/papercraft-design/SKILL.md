@@ -78,7 +78,7 @@ Sizes: **12, 14, 16, 20, 24, 32, 40, 48, 64.** `lint_design` flags anything else
 ## 6. Touch targets and density
 
 * Interactive targets are **at least 44px** tall and wide on touch (mobile, tablet). Make them 44 with padding (12 + 20 + 12), not just a bigger font. On dense desktop UIs 32 to 40 is acceptable; say so, and keep spacing between targets at 8 or more.
-* `lint_design` checks frames named `Button…`, `Tab /…` and `Tab Bar /…` for height under 44, so **name interactive layers that way**.
+* `lint_design` checks frames named `Button…`, `Tab /…` and `Tab Bar /…`: under 44px tall on a touch screen (or a component on its own), under 24px on a screen 1024px or wider (WCAG 2.2 AA for pointers). **Name interactive layers that way.**
 * Mobile: body 16px or larger, side padding 16 to 24, bottom navigation within thumb reach, safe areas (status bar 44, home indicator 34 at the bottom).
 
 ## 7. Components and states

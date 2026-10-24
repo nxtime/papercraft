@@ -15,12 +15,23 @@ const ARGS_LIMIT: usize = 600;
 const TARGET_CHARS: usize = 40;
 const THUMB_MAX: u32 = 320;
 const THUMB_H: f32 = 52.0;
+const LIGHTBOX_MAX: u32 = 2048;
+/// The tool whose calls are drawn as a question card instead of a tool card.
+const ASK_TOOL: &str = "ask_user";
+const REFS_TOOL: &str = "fetch_reference_images";
+const GEN_TOOL: &str = "generate_image";
+const REF_THUMB_H: f32 = 96.0;
+/// Opacity of a fetched image the agent did not keep.
+const DIMMED: f32 = 0.35;
+const CHIP_TALL: f32 = 28.0;
+const OPTION_IMAGE_H: f32 = 72.0;
+pub const ATTACHED_THUMB_H: f32 = 64.0;
 const TODO_TOOL: &str = "TodoWrite";
 const ROW_H: f32 = 22.0;
 const BASE64_MIN: usize = 1000;
 const KB: usize = 1024;
 /// Prefixes of the context lines the composer puts in front of a prompt.
-pub const CONTEXT_TAGS: [&str; 2] = ["[Selection] ", "[Attached] "];
+pub const CONTEXT_TAGS: [&str; 3] = ["[Selection] ", "[Attached] ", "[Research] "];
 pub const SUGGESTIONS: [(Icon, &str); 3] = [
     (Icon::Frame, "Design a sign-in screen using this project's variables"),
     (Icon::Text, "Lint this page and fix warnings"),
@@ -62,6 +73,8 @@ pub struct View<'a> {
     pub error: Option<&'a str>,
     /// The last turn was stopped by the user.
     pub stopped: bool,
+    /// The last turn was stopped by the turn budget: the budget, in tokens read.
+    pub budget: Option<u64>,
     pub signin: Option<&'a super::chat::chat_agents::SignIn>,
     /// The chat's run while it is being recorded, for the live count on the step group.
     pub live_run: Option<&'a Run>,
@@ -112,11 +125,37 @@ pub fn latest_plan(chat: &Chat) -> Vec<Todo> {
 
 /// `12400` -> "12.4k", `12000` -> "12k", `900` -> "900".
 pub fn fmt_k(n: u64) -> String {
-    if n < 1000 {
-        return n.to_string();
-    }
-    let s = format!("{:.1}", n as f64 / 1000.0);
-    format!("{}k", s.strip_suffix(".0").unwrap_or(&s))
+    let (v, unit) = match n {
+        0..1000 => return n.to_string(),
+        1000..1_000_000 => (n as f64 / 1e3, "k"),
+        _ => (n as f64 / 1e6, "M"),
+    };
+    let s = format!("{v:.1}");
+    format!("{}{unit}", s.strip_suffix(".0").unwrap_or(&s))
+}
+
+/// What one turn cost. Claude Code turns saved before `session_cost` hold the session's
+/// running cost: the turn is the difference from the previous total (`session_total`).
+fn turn_cost(m: &Message, claude_code: bool, session_total: &mut Option<f64>) -> Option<f64> {
+    let cost = m.usage.as_ref().and_then(|u| u.cost_usd)?;
+    let shown = match (claude_code && m.session_cost.is_none(), *session_total) {
+        (true, Some(prev)) if cost >= prev => cost - prev,
+        _ => cost,
+    };
+    *session_total = m.session_cost.or(Some(cost));
+    Some(shown)
+}
+
+/// What the whole chat has cost so far (None when no turn reported a cost).
+pub fn chat_cost(chat: &Chat) -> Option<f64> {
+    let claude_code = chat.backend.kind == crate::chat::BackendKind::ClaudeCode;
+    let mut session_total = None;
+    let costs: Vec<f64> = turns(&chat.messages)
+        .into_iter()
+        .filter_map(|(start, end)| chat.messages[start + 1..end].iter().rev().find(|m| m.usage.is_some()))
+        .filter_map(|m| turn_cost(m, claude_code, &mut session_total))
+        .collect();
+    (!costs.is_empty()).then(|| costs.iter().sum())
 }
 
 /// "12.4k in · 1.1k out · 9.8k cached · $0.06"
@@ -124,6 +163,10 @@ pub fn usage_line(u: &Usage) -> String {
     let mut parts = vec![format!("{} in", fmt_k(u.input)), format!("{} out", fmt_k(u.output))];
     if u.cache_read > 0 {
         parts.push(format!("{} cached", fmt_k(u.cache_read)));
+    }
+    // Cache writes cost more than plain input, often most of the bill: never hide them.
+    if u.cache_write > 0 {
+        parts.push(format!("{} cache write", fmt_k(u.cache_write)));
     }
     if let Some(c) = u.cost_usd {
         parts.push(format!("${c:.2}"));
@@ -455,6 +498,55 @@ fn thumb(ui: &Ui, tool_id: &str, result: &Value) -> Option<Thumb> {
     made
 }
 
+// ---------------------------------------------------------------------------------- attached images
+
+/// An attached image as a texture (at most `LIGHTBOX_MAX` px a side), decoded once per `key`.
+fn image_tex(ui: &Ui, key: &str, bytes: impl FnOnce() -> Option<Vec<u8>>) -> Option<egui::TextureHandle> {
+    let id = Id::new(("chat-image", key));
+    if let Some(t) = ui.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
+        return t;
+    }
+    let made = (|| {
+        let img = image::load_from_memory(&bytes()?).ok()?;
+        let img = if img.width().max(img.height()) > LIGHTBOX_MAX { img.thumbnail(LIGHTBOX_MAX, LIGHTBOX_MAX) } else { img };
+        let rgba = img.to_rgba8();
+        let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+        Some(ui.ctx().load_texture(format!("chat-image-{key}"), ci, egui::TextureOptions::LINEAR))
+    })();
+    ui.data_mut(|d| d.insert_temp(id, made.clone()));
+    made
+}
+
+/// A thumbnail of an attached image, `h` tall; a click opens it in the lightbox. None when the
+/// image cannot be read.
+pub fn image_thumb(ui: &mut Ui, key: &str, h: f32, bytes: impl FnOnce() -> Option<Vec<u8>>) -> Option<egui::Response> {
+    let tex = image_tex(ui, key, bytes)?;
+    let [w, th] = tex.size();
+    let w = (h * w as f32 / th.max(1) as f32).clamp(h * 0.5, h * 3.0);
+    let resp = ui
+        .add(egui::Image::new(&tex).fit_to_exact_size(vec2(w, h)).corner_radius(theme::RADIUS_MD).sense(Sense::click()))
+        .on_hover_cursor(egui::CursorIcon::ZoomIn);
+    if resp.clicked() {
+        ui.data_mut(|d| d.insert_temp(Id::new("chat-lightbox"), Some(tex)));
+    }
+    Some(resp)
+}
+
+/// The image the user clicked, full size over the window. Esc or a click closes it.
+pub fn lightbox(ctx: &egui::Context) {
+    let id = Id::new("chat-lightbox");
+    let Some(tex) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)).flatten() else { return };
+    let max = ctx.content_rect().size() * 0.9;
+    let size = tex.size_vec2();
+    let size = size * (max.x / size.x).min(max.y / size.y).min(1.0);
+    let modal = egui::Modal::new(id.with("modal")).frame(egui::Frame::NONE).show(ctx, |ui| {
+        ui.add(egui::Image::new(&tex).fit_to_exact_size(size).corner_radius(theme::RADIUS_MD).sense(Sense::click())).clicked()
+    });
+    if modal.inner || modal.should_close() {
+        ctx.data_mut(|d| d.remove::<Option<egui::TextureHandle>>(id));
+    }
+}
+
 // ---------------------------------------------------------------------------------- tool cards
 
 fn tool_card(ui: &mut Ui, t: &ToolCall, state: ToolState, acts: &mut Acts) {
@@ -614,9 +706,24 @@ fn user_bubble(ui: &mut Ui, text: &str) {
     let p = theme::pal(ui);
     let (ctx, prompt) = split_context(text);
     ui.with_layout(Layout::top_down(Align::Max), |ui| {
+        let mut images = Vec::new();
         for line in ctx {
             let (tag, rest) = CONTEXT_TAGS.iter().find_map(|t| line.strip_prefix(t).map(|r| (t.trim(), r))).unwrap_or(("", line));
-            muted(ui, format!("{} {rest}", tag.trim_matches(['[', ']'])));
+            match tag {
+                "[Attached]" => images.push(rest),
+                "[Research]" => muted(ui, rest),
+                _ => muted(ui, format!("{} {rest}", tag.trim_matches(['[', ']']))),
+            }
+        }
+        if !images.is_empty() {
+            ui.with_layout(Layout::right_to_left(Align::Min).with_main_wrap(true), |ui| {
+                for path in images {
+                    // Older API chats name the image without saving it: keep the name.
+                    if image_thumb(ui, path, ATTACHED_THUMB_H, || crate::vfs::read(path).ok()).is_none() {
+                        muted(ui, format!("Attached {path}"));
+                    }
+                }
+            });
         }
         if prompt.is_empty() {
             return;
@@ -777,24 +884,233 @@ fn actions_row(ui: &mut Ui, id: Id, text: &str, can_retry: bool, acts: &mut Acts
 
 // ---------------------------------------------------------------------------------- list
 
-fn assistant_segment(ui: &mut Ui, md_id: Id, m: &Message, v: &View, acts: &mut Acts) {
+/// One assistant message: its text, tool cards and reference galleries. Its questions are drawn
+/// by [`list`] at the end of the turn. `offered`: the images the turn's questions offer.
+fn assistant_segment(ui: &mut Ui, md_id: Id, m: &Message, v: &View, offered: &[String], acts: &mut Acts) {
     if !m.text.trim().is_empty() {
         chat_md::render(ui, md_id, &m.text, theme::BODY);
     }
-    // While a call is live every call shows as a card; a settled turn folds into one group.
-    let live = m.tools.iter().any(|t| matches!(tool_state(t, v.running, v.approvals), ToolState::Running | ToolState::Pending));
     // A call waiting for approval is shown by its approval card instead.
     let waiting = |t: &ToolCall| v.approvals.iter().any(|a| a.id == t.id);
-    for run in group_tools(&m.tools, &waiting) {
-        match run.as_slice() {
-            calls if live || calls.len() == 1 => {
-                for t in calls {
-                    tool_card(ui, t, tool_state(t, v.running, v.approvals), acts);
-                }
-            }
+    let tools: Vec<ToolCall> = m.tools.iter().filter(|t| !is_question(t)).cloned().collect();
+    let (refs, tools): (Vec<ToolCall>, Vec<ToolCall>) = tools.into_iter().partition(|t| [REFS_TOOL, GEN_TOOL].contains(&t.name.as_str()) && t.result.is_some());
+    // Finished calls stay folded in their group while the turn runs and only the live ones show
+    // as cards, so the list does not grow and shrink (and the scroll jump) on every call.
+    for run in group_tools(&tools, &waiting) {
+        let live = |t: &&ToolCall| matches!(tool_state(t, v.running, v.approvals), ToolState::Running | ToolState::Pending);
+        let (active, done): (Vec<&ToolCall>, Vec<&ToolCall>) = run.into_iter().partition(live);
+        match done.as_slice() {
+            [] => {}
+            [t] => tool_card(ui, t, tool_state(t, v.running, v.approvals), acts),
             calls => tool_group(ui, calls, v, acts),
         }
+        for t in active {
+            tool_card(ui, t, tool_state(t, v.running, v.approvals), acts);
+        }
     }
+    for t in &refs {
+        reference_gallery(ui, t, offered, acts);
+    }
+}
+
+/// An `ask_user` call that went through: drawn as a question card, not a tool card.
+fn is_question(t: &ToolCall) -> bool {
+    t.name == ASK_TOOL && t.error.is_none()
+}
+
+/// `{path, source}` of each image a `fetch_reference_images` call saved.
+fn reference_images(result: &Value) -> Vec<(String, String)> {
+    let texts: Vec<&str> = match result {
+        Value::Array(blocks) => blocks.iter().filter_map(|b| b["text"].as_str()).collect(),
+        Value::String(s) => vec![s.as_str()],
+        _ => vec![],
+    };
+    texts
+        .iter()
+        .filter_map(|t| serde_json::from_str::<Value>(t).ok())
+        .flat_map(|v| v["images"].as_array().cloned().unwrap_or_default())
+        .filter_map(|i| Some((i["path"].as_str()?.to_owned(), i["source"].as_str().unwrap_or_default().to_owned())))
+        .collect()
+}
+
+/// Image paths an `ask_user` call offers as options.
+fn offered_images(args: &Value) -> Vec<String> {
+    let options = args["questions"].as_array().into_iter().flatten().flat_map(|q| q["options"].as_array().cloned().unwrap_or_default());
+    options.filter_map(|o| o["image"].as_str().map(str::to_owned)).collect()
+}
+
+/// The images the agent fetched from the web, as thumbnails (click: lightbox), with a way to
+/// put them on the canvas. When the agent offered some as options, the others are dimmed.
+fn reference_gallery(ui: &mut Ui, t: &ToolCall, offered: &[String], acts: &mut Acts) {
+    let images = reference_images(t.result.as_ref().unwrap_or(&Value::Null));
+    if images.is_empty() {
+        return;
+    }
+    card(ui).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            theme::paint_icon(ui.painter(), r, Icon::Image, theme::accent());
+            ui.label(RichText::new(if t.name == GEN_TOOL { "Generated" } else { "References" }).font(theme::semibold(theme::BODY)));
+            let kept = images.iter().filter(|(p, _)| offered.contains(p)).count();
+            if kept > 0 {
+                muted(ui, format!("{kept} of {} kept", images.len()));
+            } else {
+                muted(ui, super::panels::count(images.len(), "image"));
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            for (path, source) in &images {
+                let dim = !offered.is_empty() && !offered.contains(path);
+                // Opacity on the row itself: a child scope would break the wrapping.
+                let opacity = ui.opacity();
+                if dim {
+                    ui.set_opacity(opacity * DIMMED);
+                }
+                let r = image_thumb(ui, path, REF_THUMB_H, || crate::vfs::read(path).ok());
+                ui.set_opacity(opacity);
+                if let Some(r) = r {
+                    r.on_hover_text(if dim { format!("Not used: {source}") } else { source.clone() });
+                }
+            }
+        });
+        if kit::chip(ui, "Put on canvas", false).on_hover_text("Place these images on a References page").clicked() {
+            let paths: Vec<&str> = images.iter().map(|(p, _)| p.as_str()).collect();
+            acts.send = Some(format!(
+                "Put these reference images on a page named References, side by side at their own sizes with their source under each (write_html, <img src> with the path): {}",
+                paths.join(", ")
+            ));
+        }
+    });
+}
+
+/// The agent's `ask_user` questions as a card: a row of answer chips per question (a palette
+/// option shows its swatches), then Send. Picks live in egui memory until sent.
+fn question_card(ui: &mut Ui, t: &ToolCall, open: bool, acts: &mut Acts) {
+    let Some(qs) = t.args["questions"].as_array() else { return };
+    let id = Id::new(("chat-ask", &t.id));
+    let mut picks: Vec<Vec<usize>> = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| vec![Vec::new(); qs.len()]);
+    card(ui).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 6.0;
+        for (qi, q) in qs.iter().enumerate() {
+            ui.label(RichText::new(q["question"].as_str().unwrap_or_default()).font(theme::semibold(theme::BODY)));
+            let multiple = q["multiple"].as_bool().unwrap_or(false);
+            ui.horizontal_wrapped(|ui| {
+                for (oi, o) in q["options"].as_array().into_iter().flatten().enumerate() {
+                    let colors: Vec<Color32> = o["colors"].as_array().into_iter().flatten().filter_map(|c| crate::model::Color::from_hex(c.as_str()?)).map(super::c32).collect();
+                    let on = picks[qi].contains(&oi);
+                    let label = o["label"].as_str().unwrap_or_default();
+                    // A reference option shows its image; a double click opens it in the lightbox.
+                    let tex = o["image"].as_str().and_then(|path| image_tex(ui, path, || crate::vfs::read(path).ok()));
+                    let mut r = match &tex {
+                        Some(tex) => option_tile(ui, label, tex, on, oi == 0),
+                        None => option_chip(ui, label, &colors, on, oi == 0),
+                    };
+                    if let Some(tex) = tex.filter(|_| r.double_clicked()) {
+                        ui.data_mut(|d| d.insert_temp(Id::new("chat-lightbox"), Some(tex)));
+                    }
+                    if let Some(d) = o["detail"].as_str() {
+                        r = r.on_hover_text(d);
+                    }
+                    if r.clicked() && open {
+                        match (multiple, on) {
+                            (true, true) => picks[qi].retain(|&x| x != oi),
+                            (true, false) => picks[qi].push(oi),
+                            (false, _) => picks[qi] = vec![oi],
+                        }
+                    }
+                }
+            });
+        }
+        if !open {
+            return;
+        }
+        ui.horizontal(|ui| {
+            if kit::button(ui, kit::ButtonKind::Primary, Some(Icon::ArrowRight), "Send answers").clicked() {
+                acts.send = Some(answers_text(qs, &picks));
+            }
+            if kit::chip(ui, "Use your defaults", false).on_hover_text("The option the agent recommends for each question").clicked() {
+                acts.send = Some("Go with the option you recommended for each question.".into());
+            }
+            muted(ui, "or type your own answer below");
+        });
+    });
+    ui.data_mut(|d| d.insert_temp(id, picks));
+}
+
+/// "Answers:" then one line per question; one left unpicked is the agent's call.
+fn answers_text(qs: &[Value], picks: &[Vec<usize>]) -> String {
+    let lines = qs.iter().zip(picks).map(|(q, pick)| {
+        let labels: Vec<&str> = pick.iter().filter_map(|&i| q["options"][i]["label"].as_str()).collect();
+        let answer = if labels.is_empty() { "your call".to_owned() } else { labels.join(", ") };
+        format!("- {} {answer}", q["question"].as_str().unwrap_or_default())
+    });
+    std::iter::once("Answers:".to_owned()).chain(lines).collect::<Vec<_>>().join("\n")
+}
+
+/// Fill and outline of an answer: picked in the accent, else an outlined field (so it reads as
+/// a button on the card).
+fn option_frame(ui: &Ui, rect: egui::Rect, radius: u8, on: bool, hovered: bool) {
+    let p = theme::pal(ui);
+    let fill = if on { theme::accent().gamma_multiply(0.18) } else { theme::blend(p.field, p.hover.gamma_multiply(f32::from(u8::from(hovered)))) };
+    let stroke = if on { egui::Stroke::new(1.0, theme::accent()) } else { egui::Stroke::new(1.0, p.secondary.gamma_multiply(OUTLINE_ALPHA)) };
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(radius), fill);
+    ui.painter().rect_stroke(rect, egui::CornerRadius::same(radius), stroke, egui::StrokeKind::Inside);
+}
+
+/// Strength of an idle answer's outline: enough to read as a button on the card.
+const OUTLINE_ALPHA: f32 = 0.45;
+
+/// A dot before the recommended answer (the agent lists it first).
+const RECOMMENDED_DOT: f32 = 6.0;
+
+/// An answer chip: the recommended dot, swatches, then the label; the picked one in the accent.
+fn option_chip(ui: &mut Ui, label: &str, colors: &[Color32], on: bool, recommended: bool) -> egui::Response {
+    const SWATCH: f32 = 12.0;
+    const PAD: f32 = 10.0;
+    let p = theme::pal(ui);
+    let ink = if on { theme::accent() } else { p.text };
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::semibold(theme::SECONDARY + 1.0), ink);
+    let dot = if recommended { RECOMMENDED_DOT + 6.0 } else { 0.0 };
+    let sw = if colors.is_empty() { 0.0 } else { colors.len() as f32 * (SWATCH - 3.0) + 3.0 + 6.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(2.0 * PAD + dot + sw + galley.size().x, CHIP_TALL), Sense::click());
+    option_frame(ui, rect, 255, on, resp.hovered());
+    if recommended {
+        ui.painter().circle_filled(egui::pos2(rect.left() + PAD + RECOMMENDED_DOT / 2.0, rect.center().y), RECOMMENDED_DOT / 2.0, theme::accent());
+    }
+    let mut x = rect.left() + PAD + dot + SWATCH / 2.0;
+    for c in colors {
+        ui.painter().circle(egui::pos2(x, rect.center().y), SWATCH / 2.0, *c, egui::Stroke::new(1.0, p.separator));
+        x += SWATCH - 3.0;
+    }
+    let tx = rect.left() + PAD + dot + sw;
+    ui.painter().galley(egui::pos2(tx, rect.center().y - galley.size().y / 2.0), galley, ink);
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if recommended { resp.on_hover_text("Recommended") } else { resp }
+}
+
+/// An answer that is a picture (a reference): the image, its label under it in up to two lines.
+fn option_tile(ui: &mut Ui, label: &str, tex: &egui::TextureHandle, on: bool, recommended: bool) -> egui::Response {
+    const PAD: f32 = 6.0;
+    let p = theme::pal(ui);
+    let [w, h] = tex.size();
+    let img_w = (OPTION_IMAGE_H * w as f32 / h.max(1) as f32).clamp(OPTION_IMAGE_H * 1.2, OPTION_IMAGE_H * 2.0);
+    let ink = if on { theme::accent() } else { p.text };
+    let text = if recommended { format!("\u{2022} {label}") } else { label.to_owned() };
+    let mut job = egui::text::LayoutJob::simple(text, theme::semibold(theme::SECONDARY), ink, img_w);
+    job.wrap.max_rows = 2;
+    job.wrap.break_anywhere = false;
+    job.halign = Align::Center;
+    let galley = ui.painter().layout_job(job);
+    let (rect, resp) = ui.allocate_exact_size(vec2(img_w + 2.0 * PAD, OPTION_IMAGE_H + 3.0 * PAD + galley.size().y), Sense::click());
+    option_frame(ui, rect, theme::RADIUS_MD, on, resp.hovered());
+    let img = egui::Rect::from_min_size(rect.min + vec2(PAD, PAD), vec2(img_w, OPTION_IMAGE_H));
+    egui::Image::new(tex).corner_radius(theme::RADIUS_MD - 2).paint_at(ui, img);
+    ui.painter().galley(egui::pos2(rect.center().x, img.bottom() + PAD), galley, ink);
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("{label}\nDouble-click to view it larger"));
+    if recommended { resp.on_hover_text("Recommended") } else { resp }
 }
 
 /// The scrolling message list of `chat`.
@@ -805,6 +1121,8 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
         ui.spacing_mut().item_spacing.y = 8.0;
         let msgs = &chat.messages;
         let all = turns(msgs);
+        let claude_code = chat.backend.kind == crate::chat::BackendKind::ClaudeCode;
+        let mut session_total: Option<f64> = None;
         let last_turn = all.len().saturating_sub(1);
         for (n, &(start, end)) in all.iter().enumerate() {
             let runs = runs_of(&msgs[start + 1..end], v.runs);
@@ -817,15 +1135,24 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
                 reasoning_row(ui, v.thinking, v.running, v.thought_secs);
             }
             let reply = &msgs[start + 1..end];
+            let questions: Vec<&ToolCall> = reply.iter().flat_map(|m| &m.tools).filter(|t| is_question(t)).collect();
+            // Images the agent offered as options are the ones it kept; the rest are dimmed.
+            let offered: Vec<String> = questions.iter().flat_map(|t| offered_images(&t.args)).collect();
             for (k, m) in reply.iter().enumerate() {
-                assistant_segment(ui, Id::new(("chat-md", &chat.id, start + 1 + k)), m, v, acts);
+                assistant_segment(ui, Id::new(("chat-md", &chat.id, start + 1 + k)), m, v, &offered, acts);
+            }
+            // Questions close the turn, after the summary the agent writes once the call returns.
+            for t in questions {
+                question_card(ui, t, is_last && !v.running, acts);
             }
             let text = reply.iter().map(|m| m.text.as_str()).collect::<Vec<_>>().join("\n\n");
             if !text.is_empty() && !(is_last && v.running) {
                 actions_row(ui, Id::new(("chat-actions", &chat.id, start)), &text, is_last, acts);
             }
-            if let Some(u) = reply.iter().rev().find_map(|m| m.usage.as_ref()) {
-                ui.label(RichText::new(usage_line(u)).size(theme::SECONDARY).color(theme::pal(ui).tertiary));
+            if let Some(m) = reply.iter().rev().find(|m| m.usage.is_some()) {
+                let mut u = m.usage.clone().unwrap_or_default();
+                u.cost_usd = turn_cost(m, claude_code, &mut session_total);
+                ui.label(RichText::new(usage_line(&u)).size(theme::SECONDARY).color(theme::pal(ui).tertiary));
             }
             for r in runs.iter().filter(|r| r.state != RunState::Running) {
                 run_card(ui, r, acts);
@@ -851,6 +1178,8 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
         }
         if let Some(e) = v.error {
             error_row(ui, e, v.signin, acts);
+        } else if let Some(b) = v.budget.filter(|_| v.stopped && !v.running) {
+            muted(ui, format!("Stopped at the turn budget ({} tokens read). Send a message to continue, or change the budget in Settings \u{2192} Chat.", fmt_k(b)));
         } else if v.stopped && !v.running {
             muted(ui, "Stopped");
         }
@@ -1086,5 +1415,34 @@ mod tests {
         t.error = None;
         t.result = Some(json!([]));
         assert_eq!(tool_state(&t, true, &[]), ToolState::Done);
+    }
+
+    #[test]
+    fn answers_name_each_pick_and_leave_the_rest_to_the_agent() {
+        let qs = [
+            json!({"question": "Frame size?", "options": [{"label": "Desktop 1440x900"}, {"label": "Phone 390x844"}]}),
+            json!({"question": "Palette?", "options": [{"label": "Ember", "colors": ["#ff5a1f"]}, {"label": "Tide"}], "multiple": true}),
+            json!({"question": "Density?", "options": [{"label": "Compact"}, {"label": "Comfortable"}]}),
+        ];
+        let text = answers_text(&qs, &[vec![1], vec![0, 1], vec![]]);
+        assert_eq!(text, "Answers:\n- Frame size? Phone 390x844\n- Palette? Ember, Tide\n- Density? your call");
+    }
+
+    #[test]
+    fn fetched_references_list_their_saved_paths() {
+        let mcp = json!([{"type": "image", "data": "x"}, {"type": "text", "text": "{\"images\":[{\"path\":\"/p/a.png\",\"source\":\"https://x/a\"}],\"skipped\":[]}"}]);
+        assert_eq!(reference_images(&mcp), [("/p/a.png".to_owned(), "https://x/a".to_owned())]);
+        assert!(reference_images(&json!("not json")).is_empty());
+    }
+
+    #[test]
+    fn a_chat_total_adds_each_turns_share() {
+        use crate::chat::{Backend, BackendKind, Usage};
+        let turn = |cost: f64, session: Option<f64>| Message { role: Role::Assistant, usage: Some(Usage { cost_usd: Some(cost), ..Default::default() }), session_cost: session, ..Default::default() };
+        let user = || Message { role: Role::User, text: "go".into(), ..Default::default() };
+        // Two legacy turns holding the running total (1.00, then 1.50), then one with its share.
+        let chat = Chat { backend: Backend { kind: BackendKind::ClaudeCode, ..Default::default() }, messages: vec![user(), turn(1.0, None), user(), turn(1.5, None), user(), turn(0.25, Some(1.75))], ..Default::default() };
+        assert!((chat_cost(&chat).unwrap() - 1.75).abs() < 1e-9);
+        assert_eq!(chat_cost(&Chat::default()), None);
     }
 }

@@ -304,6 +304,15 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "verify_code" => verify_code(ed, &a),
                 "get_computed_styles" => computed_styles(ed, &a),
                 "get_fill_image" => fill_image(ed, &a),
+                "zoom_image" => zoom_image(host, &a),
+                "ask_user" => ask_user(&a),
+                #[cfg(not(target_arch = "wasm32"))]
+                "fetch_reference_images" => super::refs::fetch(host.project().map(|p| p.dir.clone()).as_deref(), None, &Value::Object(a.0.clone())),
+                #[cfg(not(target_arch = "wasm32"))]
+                "generate_image" => {
+                    let provider = crate::ui::settings::ChatPrefs::load().image_provider();
+                    super::imagegen::generate(host.project().map(|p| p.dir.clone()).as_deref(), None, &provider, &Value::Object(a.0.clone()))
+                }
                 "find_nodes" => find_nodes(ed, &a),
                 "export" => export(host, &a),
                 "export_combined_pdf" => export_pdf(host, &a),
@@ -1217,6 +1226,53 @@ fn fill_image(ed: &mut Editor, a: &Args) -> ToolResult {
             mime: img.mime().into(),
         },
         Out::Text(json!({"asset": asset, "width": img.width, "height": img.height}).to_string()),
+    ])
+}
+
+/// Questions for the user; the chat draws them as a card from the call's arguments, so this only
+/// checks the shape and tells the agent to wait.
+fn ask_user(a: &Args) -> ToolResult {
+    let qs = a.arr("questions")?;
+    if !(1..=ASK_MAX_QUESTIONS).contains(&qs.len()) {
+        return Err(format!("ask 1 to {ASK_MAX_QUESTIONS} questions"));
+    }
+    for (i, q) in qs.iter().enumerate() {
+        let n = q["options"].as_array().map_or(0, Vec::len);
+        if q["question"].as_str().is_none_or(str::is_empty) || !(2..=ASK_MAX_OPTIONS).contains(&n) {
+            return Err(format!("question {} has {n} options: give each question text and 2 to {ASK_MAX_OPTIONS} options", i + 1));
+        }
+    }
+    text(json!({"shown": true, "next": "End your turn now. The answers arrive as the user's next message."}))
+}
+
+const ASK_MAX_QUESTIONS: usize = 5;
+const ASK_MAX_OPTIONS: usize = 6;
+
+/// A region of a chat attachment at full resolution: the `.full` original kept next to the sent
+/// image when it was scaled down, else the image itself. Only files in the project's chat folder.
+fn zoom_image(host: &mut dyn Host, a: &Args) -> ToolResult {
+    let dir = host.project().map(|p| p.dir.join(crate::chat::TMP_DIR)).ok_or("open a project first")?;
+    let sent = std::path::Path::new(a.req_str("path")?);
+    let (Ok(root), Ok(sent)) = (std::fs::canonicalize(&dir), std::fs::canonicalize(sent)) else {
+        return Err("no such attached image".into());
+    };
+    if !sent.starts_with(&root) {
+        return Err("zoom_image reads only images attached in this project's chat".into());
+    }
+    let full = crate::chat::full_image_path(&sent);
+    let bytes = std::fs::read(if full.is_file() { &full } else { &sent }).map_err(|e| e.to_string())?;
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("not an image: {e}"))?;
+    let (w, h) = (f64::from(img.width()), f64::from(img.height()));
+    let frac = |k: &str, default: f64| a.num(k).unwrap_or(default).clamp(0.0, 1.0);
+    let (x, y) = (frac("x", 0.0), frac("y", 0.0));
+    let (cw, ch) = (frac("width", 1.0).min(1.0 - x), frac("height", 1.0).min(1.0 - y));
+    let (px, py, pw, ph) = ((x * w) as u32, (y * h) as u32, ((cw * w) as u32).max(1), ((ch * h) as u32).max(1));
+    let crop = img.crop_imm(px, py, pw, ph);
+    let max = crate::chat::ZOOM_MAX_EDGE;
+    let crop = if pw.max(ph) > max { crop.resize(max, max, image::imageops::FilterType::Lanczos3) } else { crop };
+    Ok(vec![
+        Out::Image { data: crate::io::export::encode_png(&crop.to_rgba8())?, mime: "image/png".into() },
+        Out::Text(json!({"imageWidth": img.width(), "imageHeight": img.height(), "region": [px, py, pw, ph]}).to_string()),
     ])
 }
 
@@ -2686,6 +2742,8 @@ impl Builder<'_, '_> {
             "x-paper-clone" | "paper-clone" => self.clone_el(el, &own, parent, index),
             "x-paper-instance" => self.instance_el(el, &own, parent, index),
             "x-paper-icon" => self.icon_el(el, &own, inherited, parent, index),
+            #[cfg(not(target_arch = "wasm32"))]
+            "x-plugin" => self.plugin_el(el, &own, inherited, parent, index),
             "hr" => {
                 let mut st: Styles = vec![
                     ("height".into(), "1px".into()),
@@ -3173,6 +3231,83 @@ impl Builder<'_, '_> {
         }
     }
 
+    /// `<x-plugin use="avataaars" size="64" …/>`: an asset from a plugin the user turned on
+    /// (`crate::plugins`), as vector layers (SVG) or an image.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn plugin_el(
+        &mut self,
+        el: &Element,
+        own: &Styles,
+        inherited: &Styles,
+        parent: &Parent,
+        index: &mut Option<usize>,
+    ) -> Option<NodeId> {
+        use crate::plugins::{self, Kind};
+        let id = el.attr("use").unwrap_or("");
+        let mut fail = |e: String| {
+            self.warnings.push(format!("x-plugin: {e}"));
+            None
+        };
+        let Some(p) = plugins::plugin(id) else {
+            let known: Vec<&str> = plugins::PLUGINS.iter().map(|p| p.id).collect();
+            return fail(format!("no plugin `{id}` (plugins: {})", known.join(", ")));
+        };
+        if !crate::ui::settings::ChatPrefs::load().plugins.iter().any(|x| x == p.id) {
+            return fail(format!("the {} plugin is off; the user can turn it on in Settings, Chat, Plugins", p.name));
+        }
+        let (w, h) = plugins::layer_size(p, &el.attrs, 1.0);
+        let url = match plugins::url(p, &el.attrs, w, h) {
+            Ok(u) => u,
+            Err(e) => return fail(e),
+        };
+        let file = match plugins::fetch(&url, p.kind) {
+            Ok(f) => f,
+            Err(e) => return fail(format!("{}: {e}", p.name)),
+        };
+        let label = Self::layer_name(el).unwrap_or_else(|| format!("{} / {}", p.name, el.attr("seed").or(el.attr("icon")).or(el.attr("code")).unwrap_or("asset")));
+        let placed = match p.kind {
+            Kind::Raster => {
+                let img = Element { tag: "img".into(), attrs: vec![("src".into(), file.display().to_string()), ("width".into(), w.to_string()), ("height".into(), h.to_string())], children: vec![], raw: None };
+                self.image(&img, own, parent, index)
+            }
+            Kind::Svg => {
+                let svg = crate::vfs::read_to_string(&file).unwrap_or_default();
+                let Some(mut svg_el) = html::parse(&svg).into_iter().find_map(|h| match h {
+                    Html::Element(e) if e.tag == "svg" => Some(e),
+                    _ => None,
+                }) else {
+                    return fail(format!("{} did not return an SVG", p.name));
+                };
+                // No viewBox (flagcdn's jp.svg has only width and height): the size is the box.
+                let px = |k: &str| svg_el.attr(k).and_then(|v| v.trim_end_matches("px").parse::<f64>().ok());
+                let vb: Vec<f64> = match svg_el.attr("viewBox") {
+                    Some(v) => v.split([' ', ',']).filter_map(|n| n.parse().ok()).collect(),
+                    None => px("width").zip(px("height")).map(|(w, h)| vec![0.0, 0.0, w, h]).unwrap_or_default(),
+                };
+                // The importer keeps viewBox units: scale the artwork to the layer size.
+                if let [vx, vy, vw, vh] = vb[..]
+                    && vw > 0.0
+                    && vh > 0.0
+                    && let Some(raw) = svg_el.raw.take()
+                {
+                    let (lw, lh) = plugins::layer_size(p, &el.attrs, vh / vw);
+                    let body = raw.find('>').map_or("", |i| &raw[i + 1..]);
+                    let inner = body.trim_end().strip_suffix("</svg>").unwrap_or(body);
+                    let k = lw / vw;
+                    let defs_ns = "xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
+                    svg_el.raw = Some(format!("<svg {defs_ns}><g transform=\"scale({k}) translate({} {})\">{inner}</g></svg>", -vx, -vy));
+                    svg_el.attrs.retain(|(k, _)| !matches!(k.as_str(), "viewBox" | "width" | "height"));
+                    svg_el.attrs.push(("viewBox".into(), format!("0 0 {lw} {lh}")));
+                    svg_el.attrs.push(("width".into(), lw.to_string()));
+                    svg_el.attrs.push(("height".into(), lh.to_string()));
+                }
+                self.svg(&svg_el, own, inherited, parent, index)
+            }
+        }?;
+        self.tx.node_mut(placed).unwrap().name = label;
+        Some(placed)
+    }
+
     /// `<x-paper-icon name="lucide:check" size="20" color="var(--text)" stroke-width="2"/>`.
     fn icon_el(
         &mut self,
@@ -3571,6 +3706,8 @@ fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
         return Err("insert-children needs a frame or group target; use mode \"replace\" or target its parent".into());
     }
     let tree = html::parse(src);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::plugins::prefetch(&tree, &crate::ui::settings::ChatPrefs::load().plugins);
     let page_id = ed.pages[page].id.clone();
     let all_pages: Vec<(String, String, Document)> = ed
         .pages

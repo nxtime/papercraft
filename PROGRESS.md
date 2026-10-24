@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-10-22.
+Last updated: 2026-10-24.
 
 ## Phase 3: local-first design and whiteboard tool
 
@@ -75,6 +75,17 @@ are credited in `THIRD_PARTY.md`.
   heading (and the sticky note) visible, and ⌘Z removes each agent edit in one step.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
+
+### 2026-10-24: 0.7.0 (images, research, plugins, fewer tokens)
+
+* Images in chat: paste from the clipboard (Cmd/Ctrl+V with an image-only clipboard now reaches the composer), thumbnails in the composer and in sent messages, a lightbox, image-only messages. Attachments are sent at most 1568 px (originals kept); `zoom_image` reads a region of the original.
+* Brief and finish: `ask_user` draws questions as a card of clickable answers (palette swatches, reference image tiles, the recommended answer marked). The chat rules ask for a brief before the first design, variables and components first, sizes from the agreed density, a short report and next steps as a card.
+* Web research (the composer's Web chip): `fetch_reference_images` (public addresses only, icons, logos and backdrops dropped, social cards last), a References gallery that dims what the agent did not keep; on Claude Code a Haiku `researcher` sub-agent does the searching.
+* Image generation, opt-in (Settings, Chat, Images): Codex (offered once when signed in with a ChatGPT plan), Google Flow through `gf`, or any command (`{prompt}`, `{aspect}`, `{ratio}`, `{out}`, passed as data).
+* Plugins (Settings, Plugins): Avataaars, DiceBear, Iconify, Lorem Picsum, Flags, QR codes, placed with `<x-plugin use="…">`, cached on disk. SVG import draws masked groups as images (Avataaars).
+* Tokens: lean Claude Code sessions (42.7k to 20.6k prompt tokens), deferred tool schemas and context editing on the API, a fresh session with a recap past 120k (or on demand from the meter), per-turn cost for resumed Claude Code sessions, a 1M context meter, a turn budget. Model and effort pickers for Claude Code.
+* Also: page switcher in the Chat top bar, steps stay folded while a turn runs (no flicker), `lint_design` asks 24 px targets on desktop screens, the installer keeps `papercraft-mcp` current.
+* Evidence: `src/mcp/{refs,imagegen}.rs`, `src/plugins.rs`, `src/io/svg_import.rs`, `src/ui/{chat,chat_msgs,chat_agents,settings}.rs`, `src/chat/{anthropic,claude_code}.rs`, `tests/chat_tools.rs`, `specs/chat-tokens/spec.md`.
 
 ### 2026-10-22: 0.6.1 (agents via ACP, annotations)
 

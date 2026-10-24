@@ -104,6 +104,10 @@ fn walk(g: &usvg::Group, opacity: f32, out: &mut Vec<Node>) {
     let opacity = opacity * g.opacity().get();
     for child in g.children() {
         match child {
+            // Layers cannot carry an SVG mask: a masked group would spill out as its raw shapes
+            // (Avataaars hair and clothes as plain rectangles). It is drawn as an image instead.
+            // Clip paths stay vector: whole Figma exports sit in one.
+            usvg::Node::Group(sub) if sub.mask().is_some() => out.extend(raster(child, sub, opacity)),
             usvg::Node::Group(sub) => walk(sub, opacity, out),
             usvg::Node::Path(p) => {
                 if !p.is_visible() {
@@ -208,6 +212,28 @@ fn walk(g: &usvg::Group, opacity: f32, out: &mut Vec<Node>) {
         }
     }
 }
+
+/// A group drawn by resvg at `RASTER_SCALE`, as an image layer over its bounds.
+fn raster(node: &usvg::Node, g: &usvg::Group, opacity: f32) -> Option<Node> {
+    use resvg::tiny_skia::{Pixmap, Transform};
+    let b = node.abs_layer_bounding_box()?;
+    let (w, h) = ((b.width() * RASTER_SCALE).ceil() as u32, (b.height() * RASTER_SCALE).ceil() as u32);
+    let mut pixmap = Pixmap::new(w.max(1), h.max(1))?;
+    // render_node applies the group's own transform after the root one and shifts by the bounds,
+    // so the root carries the parent's absolute transform, between that shift and its undo.
+    let parent = g.abs_transform().pre_concat(g.transform().invert()?);
+    let root = Transform::from_scale(RASTER_SCALE, RASTER_SCALE).pre_translate(-b.x(), -b.y()).pre_concat(parent).pre_translate(b.x(), b.y());
+    resvg::render_node(node, root, &mut pixmap.as_mut())?;
+    let asset = crate::assets::register(&pixmap.encode_png().ok()?).ok()?;
+    let mut n = Node::new(NodeId(0), NodeKind::Rect, Rect::new(b.x() as f64, b.y() as f64, b.width() as f64, b.height() as f64));
+    n.name = if g.id().is_empty() { "Masked group".into() } else { g.id().into() };
+    n.style.fills = vec![Paint::Image { asset, mode: ImageMode::Stretch, opacity: 1.0 }];
+    n.style.opacity = opacity as f64;
+    Some(n)
+}
+
+/// Pixels per SVG unit for a masked group drawn as an image: sharp at 3x zoom.
+const RASTER_SCALE: f32 = 3.0;
 
 fn options() -> usvg::Options<'static> {
     let mut o = usvg::Options::default();

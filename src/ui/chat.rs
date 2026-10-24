@@ -32,10 +32,44 @@ pub const COLUMN_MAX: f32 = 640.0;
 /// Width of the inspector overlay.
 const INSPECTOR_W: f32 = 272.0;
 /// Context window of the CLIs and of the API models (all three list 200k).
-const CONTEXT_WINDOW: u64 = 200_000;
+const CONTEXT_WINDOW: u64 = 1_000_000;
+/// Past this a CLI chat's next message starts a fresh agent session with a recap: every step
+/// re-reads the whole context, and answers get worse well before the window is full.
+const FRESH_SESSION_AT: u64 = 120_000;
+/// The recap a fresh session starts with: this many recent requests, each and the last report cut.
+const RECAP_ASKS: usize = 8;
+const RECAP_ASK_CHARS: usize = 300;
+const RECAP_REPORT_CHARS: usize = 1500;
 /// The meter turns yellow above this share of the window.
 const CONTEXT_WARN: f32 = 0.75;
 const COMPOSER_MAX_H: f32 = 120.0;
+/// Added to the chat rules when an image provider is on (Settings, Chat, Images).
+#[cfg(not(target_arch = "wasm32"))]
+const ART_RULE: &str = "\n\nArt: image generation is on. Never leave an icon on a glow where art belongs (card art, a hero, thumbnails, backgrounds): call generate_image once with up to four prompts written as art direction in the agreed palette, then place each with <img src=\"path\">. It takes a minute or more, so batch what a screen needs.";
+/// First line of a message sent with web research on (a `chat_msgs::CONTEXT_TAGS` line).
+#[cfg(not(target_arch = "wasm32"))]
+const RESEARCH_LINE: &str = "[Research] Web research is on";
+/// How the in-app chat differs from an agent in a terminal: the user is right here, and every
+/// token is theirs (specs/chat-tokens).
+#[cfg(not(target_arch = "wasm32"))]
+const CHAT_RULES: &str = "In-app chat: the user is watching and can answer at once.
+
+Brief. Before the first design in a project or on an empty page, ask first, even when the request looks specific, unless the user said to go ahead:
+* Call ask_user once, up to five questions, your recommended option first: platform and frame size (desktop 1440x900, laptop 1280x800, 1440p 2560x1440, tablet 768x1024, phone 390x844); density (compact, 32px controls for a desktop pointer UI; comfortable, 40px; touch, 44px and up); palette (two or three palettes that suit the request, with their hex colors, plus \"my brand colors\"); type (a pairing that suits it, or Inter only); scope (one screen to judge the look, or a flow).
+* In the same message invite references: they can paste or drop screenshots and images in the chat. Then end your turn. Never restate a card in text: one short sentence at most next to it.
+
+Build.
+* Variables first: colors (light and dark modes) with set_variables, spacing, radius and type sizes with set_tokens, then write every style with var(--name), no literal colors or off-scale sizes. For more than one screen put them and the components on a Design System page first.
+* Anything that repeats (a card, a row, a button, a slot) is a component, built once and placed as instances, with variants for its states. Once a component exists, place it inside write_html with <x-paper-instance component=\"Name\" overrides='{\"Label\":\"Text\"}'/> instead of writing its markup again: rewritten markup is most of what a turn costs.
+* Sizes follow the agreed density. WCAG 2.2 AA asks 24px targets for a pointer, so compact desktop controls are fine; touch screens need 44px.
+* Few, large steps: one write_html per region or per set of components, not one per element. Read narrowly: get_tree_summary or find_nodes on the frame you change, not the page; get_jsx only for what you will copy. One screenshot per screen you changed, at the end, after one lint: every image stays in the context and is re-read on each later step.
+
+Finish. Report in at most 80 words, flat bullets: what you built, what is a component, what the user should confirm. Then call ask_user with two to four next steps (for example: turn the repeats into components, add the light mode, a mobile layout, the next screen).
+
+Research. When a message carries the [Research] line, web search is on. If a researcher agent is available, hand all reference research to it (one Agent call with what the design is and the brief): it searches and fetches on a cheaper model and returns only the kept images; then skip to asking which to follow. Otherwise, after the brief is answered (or when asked), find three to six references that show an interface, not marketing. Sources that work: nicelydone.club/apps/<app> (real screenshots of 500+ SaaS web apps: linear, notion, slack, jira...), banani.co/references/apps and screenlane.com (mobile screens), App Store and Google Play listings (app screenshots), godly.website and awwwards.com/websites (marketing sites). Dribbble, Behance, Figma Community, Mobbin, Land-book and Lapa block automated fetching; a homepage's image is marketing art. Bring them in with one fetch_reference_images call, then look at what came back: keep only images that show an interface like the one you are designing (a screen, its layout or its components). A social card, a logo, an app icon or an illustration is not a reference. If fewer than two qualify, search again once with better sources (the product name plus \"screenshot\", its App Store listing, a help-center article) before building. Say in one line each what you take from a kept one (layout, density, color, type), then ask_user which to follow with only the kept ones as options, each with its `image` path, even when the user took your defaults. Take ideas, never a brand's logo or artwork.
+
+* Less common tools (annotations, pages, files, export, libraries, design-system and component edits) may not be loaded yet: find them with tool search.
+* Attached images are scaled down to send. To read small text or detail in one, call zoom_image with its attached path and a region instead of guessing.";
 const SELF_FOLLOW_QUIET: Duration = Duration::from_secs(10);
 pub use crate::chat::TMP_DIR;
 /// A run that started this long before the turn's first edit call or after its last still counts as its own
@@ -110,6 +144,8 @@ pub struct EndpointState {
 pub struct Detect {
     pub claude: Option<Found>,
     pub codex: Option<Found>,
+    /// Codex is signed in with a ChatGPT plan (`codex login status`), so it can make images.
+    pub codex_plan: bool,
     pub endpoints: Vec<EndpointState>,
     pub default_endpoint: String,
     /// Every registry and custom agent (`agents::detect_all`).
@@ -192,9 +228,15 @@ fn scan(prefs: &super::settings::ChatPrefs) -> Detect {
             EndpointState { id: e.id.clone(), key, ready: e.is_complete() && (key || !e.needs_key()) }
         })
         .collect();
+    let codex = codex::detect(cli_path(prefs, "codex").map(Path::new));
+    // `codex login status` prints "Logged in using ChatGPT" (to stderr in 0.162).
+    let codex_plan = codex.as_ref().is_some_and(|(bin, _)| {
+        std::process::Command::new(bin).args(["login", "status"]).env_remove("OPENAI_API_KEY").env_remove("CODEX_API_KEY").output().is_ok_and(|o| [&o.stdout, &o.stderr].iter().any(|b| String::from_utf8_lossy(b).contains("ChatGPT")))
+    });
     Detect {
         claude: claude_code::detect(cli_path(prefs, "claude-code").map(Path::new)),
-        codex: codex::detect(cli_path(prefs, "codex").map(Path::new)),
+        codex,
+        codex_plan,
         endpoints,
         default_endpoint: prefs.default_endpoint.clone(),
         agents: agents::detect_all(prefs),
@@ -219,6 +261,8 @@ pub struct SelChip {
 pub struct Attachment {
     pub name: String,
     pub img: ImageAttachment,
+    /// The original when `img` was scaled down, saved next to it for `zoom_image`.
+    pub full: Option<Vec<u8>>,
 }
 
 /// A destructive tool call waiting for the user (API backend).
@@ -267,6 +311,12 @@ pub struct ChatState {
     finish_run: bool,
     /// Tokens in the context at the latest model call of the running turn.
     live_context: Option<u64>,
+    /// The user asked to compact (the meter): the next message starts a fresh CLI session.
+    pub fresh_next: bool,
+    /// Tokens the running turn has read so far (every model call's context), for the budget.
+    turn_read: u64,
+    /// The last turn was stopped by the turn budget (`ChatPrefs::turn_budget`).
+    pub budget_hit: bool,
     pub approvals: Vec<Approval>,
     /// Streamed thinking of the last turn (the "Thinking" row; not saved).
     pub thinking: String,
@@ -554,11 +604,26 @@ impl ChatState {
                 }
             }
             Event::NeedsApproval { id, name, args } => self.approvals.push(Approval { id, name, args }),
-            Event::Context(n) => self.live_context = Some(n),
+            Event::Context(n) => {
+                self.live_context = Some(n);
+                self.turn_read += n;
+            }
             Event::TurnEnd { usage, session, .. } => {
                 self.thought_secs = self.thinking_since.take().map(|t| t.elapsed().as_secs());
+                // Claude Code reports the session's running cost; a resumed session's turn costs
+                // the difference from the last total.
+                let cli = chat.backend.kind == BackendKind::ClaudeCode;
+                let resumed = cli && session.is_some() && session == chat.backend.cli_session;
+                let before = chat.messages.iter().rev().find_map(|m| m.session_cost).filter(|_| resumed);
                 if let Some(m) = chat.messages.last_mut().filter(|m| m.role == Role::Assistant) {
-                    m.usage = usage;
+                    let total = usage.as_ref().and_then(|u| u.cost_usd).filter(|_| cli);
+                    m.usage = usage.map(|mut u| {
+                        if let (Some(t), Some(b)) = (total, before) {
+                            u.cost_usd = Some((t - b).max(0.0));
+                        }
+                        u
+                    });
+                    m.session_cost = total;
                     m.context = self.live_context;
                 }
                 if let Some(s) = session.filter(|_| chat.backend.kind != BackendKind::Anthropic) {
@@ -601,6 +666,13 @@ impl ChatState {
         for ev in events {
             done |= self.apply(ev);
         }
+        // A turn that keeps going past the budget is stopped, like the Stop button; what it made
+        // so far stays.
+        let budget = self.prefs.turn_budget;
+        if !done && budget > 0 && self.turn_read > budget && !self.stopping {
+            self.budget_hit = true;
+            self.stop();
+        }
         if done {
             self.finish_turn();
         } else if busy && parked.is_some() {
@@ -631,8 +703,12 @@ impl ChatState {
     fn system_prompt(&self) -> String {
         let skill = include_str!("../../skills/papercraft/SKILL.md");
         let dir = self.project.as_deref().map(|d| d.display().to_string()).unwrap_or_default();
+        let art = if self.prefs.image_provider() == crate::mcp::imagegen::Provider::Off { "" } else { ART_RULE };
+        // Plugins the user turned on, one usage line each.
+        let on: Vec<&str> = crate::plugins::PLUGINS.iter().filter(|p| self.prefs.plugins.iter().any(|id| id == p.id)).map(|p| p.hint).collect();
+        let plugins = if on.is_empty() { String::new() } else { format!("\n\nPlugins on, placed inside write_html (prefer them to drawn placeholders: avatars for people, real icons):\n- {}", on.join("\n- ")) };
         format!(
-            "{skill}\n\nProject context: the open project is \"{}\" (folder {dir}). Read and edit it only through the papercraft tools.",
+            "{skill}\n\n{CHAT_RULES}{art}{plugins}\n\nProject context: the open project is \"{}\" (folder {dir}). Read and edit it only through the papercraft tools.",
             self.project_name
         )
     }
@@ -674,9 +750,17 @@ impl ChatState {
         self.ensure_chat();
         let mut system = self.system_prompt();
         let digest = self.ds_text().to_owned();
+        let compact = std::mem::take(&mut self.fresh_next);
         let (Some(dir), Some(chat)) = (self.project.clone(), self.chat.as_mut()) else {
             return Err("Open a project to chat".into());
         };
+        // A CLI session that grew long is not resumed: a fresh one with a recap re-reads far less on
+        // every step, and the canvas holds the work.
+        let long = chat.messages.iter().rev().find_map(|m| m.context).is_some_and(|c| c > FRESH_SESSION_AT);
+        let recap = (chat.backend.kind != BackendKind::Anthropic && chat.backend.cli_session.is_some() && (long || compact)).then(|| recap(&chat.messages));
+        if recap.is_some() {
+            chat.backend.cli_session = None;
+        }
         chat.messages.push(Message { role: Role::User, text: prompt.into(), at: now_ms(), ..Default::default() });
         if chat.title == NEW_CHAT {
             let text = chat_msgs::split_context(prompt).1;
@@ -689,13 +773,23 @@ impl ChatState {
         let api = kind == BackendKind::Anthropic;
         let ds_stale = !api && !digest.is_empty() && cli_session.is_some() && self.ds_sent.get(&turn_chat) != Some(&self.ds.key);
         let sent = if ds_stale { format!("[Design system changed] {digest}\n\n{prompt}") } else { prompt.to_owned() };
+        let sent = match &recap {
+            Some(r) => format!("{r}\n\n{sent}"),
+            None => sent,
+        };
         if !api && !digest.is_empty() {
             system = format!("{system}\n\n{digest}");
         }
         let ep = self.prefs.endpoint(endpoint.as_deref()).clone();
         // Another host's model is whatever the endpoint says now; the Claude host keeps the chat's pick.
-        let model = if ep.is_claude_host() { model.or_else(|| Some(ep.model.clone())) } else { Some(ep.model.clone()) };
-        let effort = effort.filter(|_| ep.is_claude_host());
+        // CLI agents get only their own pick, never an API endpoint's model.
+        let (model, effort) = match kind {
+            BackendKind::Anthropic if ep.is_claude_host() => (model.or_else(|| Some(ep.model.clone())), effort),
+            BackendKind::Anthropic => (Some(ep.model.clone()), None),
+            // Lean sessions skip the user's Claude Code settings: keep the model they picked there.
+            BackendKind::ClaudeCode if self.prefs.cli_lean => (model.or_else(claude_code::user_model), effort),
+            _ => (model, effort),
+        };
         let cfg = TurnConfig {
             endpoint: ep.clone(),
             api_history: Some(dir.join("chats").join(format!("{}.api.json", chat.id))),
@@ -710,6 +804,8 @@ impl ChatState {
             system,
             ds_digest: if api { digest.clone() } else { String::new() },
             binary: cli_binary(&self.prefs, kind),
+            lean: self.prefs.cli_lean,
+            research: self.prefs.research,
             ..Default::default()
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -731,6 +827,7 @@ impl ChatState {
                 self.save();
                 self.stopping = false;
                 self.live_context = None;
+                (self.turn_read, self.budget_hit) = (0, false);
                 self.window = Some(TurnWindow { chat: turn_chat.clone(), start: now_ms(), edits: None });
                 if !digest.is_empty() {
                     self.ds_sent.insert(turn_chat.clone(), self.ds.key);
@@ -876,6 +973,7 @@ impl ChatState {
         if self.turn.is_some() {
             return;
         }
+        self.fresh_next = false;
         self.chat = Some(new_chat());
         self.reset_view();
     }
@@ -884,6 +982,7 @@ impl ChatState {
         if self.turn.is_some() {
             return;
         }
+        self.fresh_next = false;
         if let Some(c) = self.chats.iter().find(|c| c.id == id) {
             self.chat = Some(c.clone());
             self.reset_view();
@@ -909,7 +1008,8 @@ impl ChatState {
 
     pub fn add_image(&mut self, name: String, mime: &str, data: Vec<u8>) {
         if self.images.len() < MAX_IMAGES {
-            self.images.push(Attachment { name, img: ImageAttachment { mime: mime.into(), data } });
+            let (name, img, full) = crate::chat::shrink_image(name, ImageAttachment { mime: mime.into(), data });
+            self.images.push(Attachment { name, img, full });
         }
     }
 
@@ -938,7 +1038,7 @@ impl ChatState {
     #[cfg(not(target_arch = "wasm32"))]
     fn submit_inner(&mut self, ctx: &egui::Context) -> Result<(), String> {
         let text = self.draft.trim().to_owned();
-        if text.is_empty() {
+        if text.is_empty() && self.images.is_empty() {
             return Ok(());
         }
         let (sels, notes, images) = (self.sels.clone(), self.sel_notes.clone(), self.images.clone());
@@ -970,22 +1070,27 @@ impl ChatState {
         };
         let (api, chat_id) = (chat.backend.kind == BackendKind::Anthropic, chat.id.clone());
         let mut lines = selection_lines(chips, notes);
+        if self.prefs.research {
+            lines.insert(0, RESEARCH_LINE.to_owned());
+        }
         let mut pending = Vec::new();
         let crops = chips.iter().filter_map(|c| {
             let data = c.image.clone()?;
             let what = if c.rect.is_some() { "area".to_owned() } else { c.keys.first().map_or_else(String::new, |k| k.replace(':', "-")) };
-            Some(Attachment { name: format!("crop-{what}.png"), img: ImageAttachment { mime: "image/png".into(), data } })
+            Some(Attachment { name: format!("crop-{what}.png"), img: ImageAttachment { mime: "image/png".into(), data }, full: None })
         });
+        // Every image is saved, so the sent message can show it; API images also go as blocks.
         for a in images.iter().cloned().chain(crops) {
-            if api {
-                lines.push(format!("[Attached] {}", a.name));
-                pending.push(a.img);
-                continue;
-            }
             let folder = store::tmp_of(&dir, &chat_id).ok_or("invalid chat id")?;
             let path = folder.join(format!("{}-{}", now_ms(), a.name));
-            crate::vfs::create_dir_all(&folder).and_then(|()| crate::vfs::write(&path, &a.img.data)).map_err(|e| format!("could not save the image: {e}"))?;
+            crate::vfs::create_dir_all(&folder)
+                .and_then(|()| crate::vfs::write(&path, &a.img.data))
+                .and_then(|()| a.full.as_ref().map_or(Ok(()), |full| crate::vfs::write(crate::chat::full_image_path(&path), full)))
+                .map_err(|e| format!("could not save the image: {e}"))?;
             lines.push(format!("[Attached] {}", path.display()));
+            if api {
+                pending.push(a.img);
+            }
         }
         self.pending_images = pending;
         Ok(if lines.is_empty() { text.to_owned() } else { format!("{}\n\n{text}", lines.join("\n")) })
@@ -1063,9 +1168,62 @@ fn model_name(id: &str) -> &str {
     super::settings::API_MODELS.iter().find(|m| m.0 == id).map_or(id, |m| m.1)
 }
 
+/// Once, when Codex is signed in with a ChatGPT plan and no image provider is set: offer to use
+/// it for images. Either answer is kept; Settings, Chat, Images changes it later.
+fn image_offer(ui: &mut Ui, st: &mut UiState) {
+    let prefs = &st.settings.chat;
+    let codex_plan = st.chat.detect.as_ref().is_some_and(|d| d.codex_plan);
+    if !codex_plan || !prefs.image_gen.is_empty() || prefs.image_offer_seen {
+        return;
+    }
+    let p = theme::pal(ui);
+    let mut answer = None;
+    egui::Frame::new().fill(p.popover).corner_radius(theme::RADIUS_PANEL).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.label(RichText::new("Generate images with Codex?").font(theme::semibold(theme::BODY)));
+        ui.add(egui::Label::new(RichText::new("Codex is signed in with your ChatGPT plan. The agent could use it to make card art, heroes and reference images instead of placeholders. Each batch takes a minute or two of your Codex usage.").size(theme::SECONDARY).color(p.secondary)).wrap());
+        ui.horizontal(|ui| {
+            if kit::button(ui, kit::ButtonKind::Primary, None, "Turn on").clicked() {
+                answer = Some(true);
+            }
+            if kit::chip(ui, "Not now", false).clicked() {
+                answer = Some(false);
+            }
+        });
+    });
+    if let Some(on) = answer {
+        let prefs = &mut st.settings.chat;
+        prefs.image_offer_seen = true;
+        if on {
+            prefs.image_gen = "codex".into();
+        }
+        prefs.save();
+    }
+}
+
+/// What a fresh session needs from a chat that grew long: the user's recent requests and the
+/// agent's last report. The canvas itself is read with the tools.
+fn recap(messages: &[Message]) -> String {
+    let asks: Vec<String> = messages
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .rev()
+        .take(RECAP_ASKS)
+        .map(|m| chat_msgs::split_context(&m.text).1.chars().take(RECAP_ASK_CHARS).collect::<String>())
+        .collect();
+    let last = messages.iter().rev().find(|m| m.role == Role::Assistant && !m.text.trim().is_empty()).map(|m| m.text.chars().take(RECAP_REPORT_CHARS).collect::<String>()).unwrap_or_default();
+    let asks = asks.iter().rev().map(|a| format!("- {}", a.replace('\n', " "))).collect::<Vec<_>>().join("\n");
+    format!(
+        "[Fresh session] This chat continues from an earlier session that grew long. The design is on the canvas: read what you need with the tools (get_basic_info, get_tree_summary) instead of assuming.\nRecent requests:\n{asks}\nYour last report:\n{last}"
+    )
+}
+
 fn backend_label(b: &Backend, prefs: &super::settings::ChatPrefs) -> String {
     match b.kind {
-        BackendKind::ClaudeCode => "Claude Code".into(),
+        BackendKind::ClaudeCode => {
+            ["Claude Code", b.model.as_deref().map_or("", model_name), b.effort.as_deref().unwrap_or_default()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" \u{b7} ")
+        }
         BackendKind::Codex => "Codex".into(),
         BackendKind::Acp => b.agent.as_deref().map_or("Agent".into(), |id| agent_name(id, prefs)),
         BackendKind::Anthropic => {
@@ -1078,10 +1236,6 @@ fn backend_label(b: &Backend, prefs: &super::settings::ChatPrefs) -> String {
             }
         }
     }
-}
-
-fn fmt_tokens(n: u64) -> String {
-    if n >= 1000 { format!("{}k", n / 1000) } else { n.to_string() }
 }
 
 /// "Card" for one layer, "Card \u{b7} 3 layers" for several.
@@ -1270,6 +1424,7 @@ pub fn canvas_pill(ctx: &egui::Context, st: &UiState, canvas: egui::Rect) {
 fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let ctx = ui.ctx().clone();
     let column_rect = ui.max_rect();
+    chat_msgs::lightbox(&ctx);
     st.chat.ensure_chat();
     if std::mem::take(&mut st.settings.chat_changed) {
         // Paths, key or Re-scan changed in Settings: what was detected is stale.
@@ -1294,6 +1449,7 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         if let Some(todos) = st.chat.chat.as_ref().map(chat_msgs::latest_plan).filter(|t| !t.is_empty()) {
             chat_msgs::plan_card(ui, &todos);
         }
+        image_offer(ui, st);
         composer(ui, ed, st, column_rect, setup);
     })
     .response
@@ -1321,6 +1477,7 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             approvals: &st.chat.approvals,
             error: st.chat.error.as_deref(),
             stopped: st.chat.stopped,
+            budget: st.chat.budget_hit.then_some(st.settings.chat.turn_budget),
             signin: signin.as_ref(),
             live_run: st.run_open.iter().find(|r| r.client.split(" \u{b7} ").next() == Some(crate::mcp::CHAT_CLIENT)),
         };
@@ -1434,16 +1591,34 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
         }
         let Some((used, window)) = context else { return };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let tip = format!("Includes the design-system summary, about {} tokens", fmt_tokens(ds_tokens));
-            let r = ui.label(RichText::new(format!("{} / {}", fmt_tokens(used), fmt_tokens(window))).size(theme::SECONDARY).color(p.secondary));
+            let long = used > FRESH_SESSION_AT;
+            let mut tip = String::new();
             if ds_tokens > 0 {
-                r.on_hover_text(tip);
+                tip = format!("Includes the design-system summary, about {} tokens.", chat_msgs::fmt_k(ds_tokens));
+            }
+            // A CLI session can be compacted: the next message starts fresh with a recap.
+            let can_compact = st.chat.chat.as_ref().is_some_and(|c| c.backend.kind != BackendKind::Anthropic && c.backend.cli_session.is_some());
+            let queued = can_compact && (long || st.chat.fresh_next);
+            if queued {
+                tip.push_str("\nYour next message starts a fresh agent session with a recap of this chat: each step re-reads far less. The canvas keeps the work.");
+            } else if can_compact {
+                tip.push_str("\nClick to compact: your next message starts a fresh agent session with a recap.");
+            }
+            let text = format!("{} / {}{}", chat_msgs::fmt_k(used), chat_msgs::fmt_k(window), if queued { " \u{b7} fresh next" } else { "" });
+            let r = ui.add(egui::Label::new(RichText::new(text).size(theme::SECONDARY).color(if long || queued { p.warning } else { p.secondary })).sense(egui::Sense::click()));
+            if let Some(total) = st.chat.chat.as_ref().and_then(chat_msgs::chat_cost) {
+                ui.label(RichText::new(format!("${total:.2} \u{b7}")).size(theme::SECONDARY).color(p.secondary))
+                    .on_hover_text("What this chat has cost so far, at API prices. A Claude or ChatGPT plan is not billed per token.");
+            }
+            let r = if tip.is_empty() { r } else { r.on_hover_text(tip.trim()) };
+            if can_compact && !long && r.clicked() {
+                st.chat.fresh_next = !st.chat.fresh_next;
             }
             let (bar, _) = ui.allocate_exact_size(egui::vec2(36.0, 3.0), egui::Sense::hover());
             ui.painter().rect_filled(bar, 2.0, p.separator);
             let frac = (used as f32 / window as f32).clamp(0.0, 1.0);
             let fill = egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * frac, bar.height()));
-            ui.painter().rect_filled(fill, 2.0, if frac > CONTEXT_WARN { p.warning } else { theme::accent() });
+            ui.painter().rect_filled(fill, 2.0, if frac > CONTEXT_WARN || long { p.warning } else { theme::accent() });
         });
     });
     rect
@@ -1580,7 +1755,22 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
                 }
                 let mut drop = None;
                 for (i, a) in st.chat.images.iter().enumerate() {
-                    if kit::chip(ui, &format!("{} \u{d7}", a.name), false).clicked() {
+                    let key = format!("draft-{}-{}", a.name, a.img.data.len());
+                    let Some(thumb) = chat_msgs::image_thumb(ui, &key, chat_msgs::ATTACHED_THUMB_H, || Some(a.img.data.clone())) else {
+                        if kit::chip(ui, &format!("{} \u{d7}", a.name), false).clicked() {
+                            drop = Some(i);
+                        }
+                        continue;
+                    };
+                    let corner = thumb.rect.right_top();
+                    thumb.on_hover_text(format!("{} \u{b7} {} KB", a.name, (a.img.data.len() / 1024).max(1)));
+                    // The remove button sits on the thumbnail's top-right corner.
+                    let x = egui::Rect::from_center_size(corner + egui::vec2(-11.0, 11.0), egui::vec2(18.0, 18.0));
+                    let resp = ui.interact(x, egui::Id::new(("chat-image-remove", &key)), egui::Sense::click());
+                    let p = theme::pal(ui);
+                    ui.painter().circle_filled(x.center(), 9.0, if resp.hovered() { p.danger } else { p.popover });
+                    ui.painter().text(x.center(), egui::Align2::CENTER_CENTER, "\u{d7}", egui::FontId::proportional(theme::BODY), p.text);
+                    if resp.on_hover_text("Remove the image").clicked() {
                         drop = Some(i);
                     }
                 }
@@ -1619,6 +1809,11 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
                 st.chat.picking = !st.chat.picking;
             }
             super::actions::chip(ui, ed, st);
+            let tip = "Let the agent search the web and bring back reference images";
+            if kit::chip(ui, "Web", st.settings.chat.research).on_hover_text(tip).clicked() {
+                st.settings.chat.research = !st.settings.chat.research;
+                st.settings.chat.save();
+            }
             #[cfg(not(target_arch = "wasm32"))]
             if theme::icon_button(ui, Icon::Image, 24.0, false).on_hover_text("Attach an image (or paste, or drop one)").clicked()
                 && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"]).pick_file()
@@ -1635,7 +1830,7 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
                         st.chat.stop();
                     }
                 } else {
-                    let can = backend_ok && !no_project && !st.chat.draft.trim().is_empty();
+                    let can = backend_ok && !no_project && (!st.chat.draft.trim().is_empty() || !st.chat.images.is_empty());
                     ui.add_enabled_ui(can, |ui| {
                         submit = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::ArrowRight), "Send").clicked();
                     });
@@ -1721,6 +1916,21 @@ mod tests {
         st.turn_chat = Some(id.clone());
         st.window = Some(TurnWindow { chat: id, start: now_ms(), edits: None });
         (st, tx, running, dir)
+    }
+
+    #[test]
+    fn a_turn_past_its_budget_is_stopped() {
+        let (mut st, tx, _running, dir) = running_turn();
+        st.prefs.turn_budget = 250_000;
+        let ctx = egui::Context::default();
+        tx.send(Event::Context(120_000)).unwrap();
+        tx.send(Event::Context(125_000)).unwrap();
+        st.pump(&ctx);
+        assert!(!st.stopping && !st.budget_hit, "245k read: under the budget");
+        tx.send(Event::Context(130_000)).unwrap();
+        st.pump(&ctx);
+        assert!(st.stopping && st.budget_hit, "375k read: stopped like the Stop button");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     fn write_html() -> Event {
@@ -1839,8 +2049,34 @@ mod tests {
         let c = st.chat.as_mut().unwrap();
         c.messages.push(Message { role: Role::Assistant, context: Some(150_000), ..Default::default() });
         assert_eq!(st.context_use(), Some((150_000, CONTEXT_WINDOW)));
-        st.chat.as_mut().unwrap().messages.last_mut().unwrap().context = Some(999_999);
+        st.chat.as_mut().unwrap().messages.last_mut().unwrap().context = Some(CONTEXT_WINDOW + 1);
         assert_eq!(st.context_use(), Some((CONTEXT_WINDOW, CONTEXT_WINDOW)));
+    }
+
+    #[test]
+    fn a_long_cli_session_is_not_resumed_and_the_new_one_gets_a_recap() {
+        let msgs = vec![
+            Message { role: Role::User, text: "[Selection] Card (a:1)\n\nDesign a sprint board".into(), ..Default::default() },
+            Message { role: Role::Assistant, text: "Built the board with 4 columns.".into(), context: Some(FRESH_SESSION_AT + 1), ..Default::default() },
+        ];
+        let r = recap(&msgs);
+        assert!(r.starts_with("[Fresh session]") && r.contains("- Design a sprint board") && r.contains("Built the board with 4 columns."), "{r}");
+        assert!(!r.contains("[Selection]"), "context lines are not repeated");
+    }
+
+    #[test]
+    fn a_resumed_claude_code_turn_costs_its_share_of_the_session_total() {
+        let mut chat = new_chat();
+        chat.backend = Backend { kind: BackendKind::ClaudeCode, cli_session: Some("s".into()), ..Default::default() };
+        chat.messages.push(Message { role: Role::Assistant, session_cost: Some(6.25), ..Default::default() });
+        chat.messages.push(Message { role: Role::User, text: "annotate".into(), ..Default::default() });
+        chat.messages.push(Message { role: Role::Assistant, text: "done".into(), ..Default::default() });
+        let mut st = ChatState { chat: Some(chat), ..Default::default() };
+        let usage = crate::chat::Usage { cost_usd: Some(6.72), ..Default::default() };
+        st.apply(Event::TurnEnd { usage: Some(usage), session: Some("s".into()), stop_reason: None });
+        let m = st.chat.as_ref().unwrap().messages.last().unwrap();
+        assert!((m.usage.as_ref().unwrap().cost_usd.unwrap() - 0.47).abs() < 1e-9, "{:?}", m.usage);
+        assert_eq!(m.session_cost, Some(6.72), "the running total is kept for the next turn");
     }
 
     #[test]
@@ -2054,5 +2290,19 @@ mod tests {
         assert!(st.chat.as_ref().unwrap().messages.is_empty(), "no message that never went anywhere");
         assert!(!st.is_running());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn attached_images_are_capped_to_what_the_model_sees() {
+        let png = |w, h| crate::io::export::encode_png(&image::RgbaImage::from_pixel(w, h, image::Rgba([40, 90, 200, 255]))).unwrap();
+        let (name, big, full) = crate::chat::shrink_image("shot.png".into(), ImageAttachment { mime: "image/png".into(), data: png(4000, 1000) });
+        let size = image::load_from_memory(&big.data).map(|i| (i.width(), i.height())).unwrap();
+        assert_eq!((name.as_str(), size), ("shot.png", (1568, 392)), "long edge capped, aspect kept");
+        assert_eq!(image::load_from_memory(&full.expect("the original is kept")).unwrap().width(), 4000);
+        let small = png(300, 200);
+        let (_, kept, full) = crate::chat::shrink_image("a.png".into(), ImageAttachment { mime: "image/png".into(), data: small.clone() });
+        assert!(kept.data.len() <= small.len() && full.is_none(), "never bigger than the original, nothing to zoom");
+        let jpeg = ImageAttachment { mime: "image/jpeg".into(), data: vec![0xff, 0xd8] };
+        assert_eq!(crate::chat::shrink_image("p.jpg".into(), jpeg.clone()).1, jpeg, "unreadable or small JPEGs pass through");
     }
 }

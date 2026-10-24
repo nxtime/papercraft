@@ -902,10 +902,9 @@ impl App {
                 let ev = match a {
                     A::Cut => egui::Event::Cut,
                     A::Copy => egui::Event::Copy,
-                    A::Paste => match g.egui.clipboard_text() {
-                        Some(t) => egui::Event::Paste(t),
-                        None => return,
-                    },
+                    // An image-only clipboard has no text: an empty paste still tells the chat
+                    // composer to look for an image.
+                    A::Paste => egui::Event::Paste(g.egui.clipboard_text().unwrap_or_default()),
                     A::Undo => key(egui::Key::Z, false),
                     A::Redo => key(egui::Key::Z, true),
                     _ => key(egui::Key::A, false),
@@ -1252,7 +1251,19 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if self.ctx.egui_wants_keyboard_input() {
-                    self.gfx.as_ref().unwrap().window.request_redraw();
+                    let command = self.ed.mods.command();
+                    let g = self.gfx.as_mut().unwrap();
+                    // egui-winit drops Cmd/Ctrl+V when the clipboard holds no text (an image):
+                    // send an empty paste so the chat composer can pick the image up.
+                    let input = g.egui.egui_input_mut();
+                    if event.state == ElementState::Pressed
+                        && command
+                        && event.physical_key == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyV)
+                        && !input.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+                    {
+                        input.events.push(egui::Event::Paste(String::new()));
+                    }
+                    g.window.request_redraw();
                     return;
                 }
                 let physical = match &event.physical_key {
@@ -1473,6 +1484,21 @@ impl App {
             return;
         }
         for c in calls {
+            // Network and Codex work runs off the editor thread; it only reads the project folder.
+            if [crate::mcp::refs::TOOL, crate::mcp::imagegen::TOOL].contains(&c.name.as_str()) {
+                let dir = self.session.project.as_ref().map(|p| p.dir.clone());
+                let chat = (c.client.name == crate::mcp::CHAT_CLIENT).then(|| c.client.session.clone());
+                let provider = self.st.settings.chat.image_provider();
+                std::thread::spawn(move || {
+                    let r = if c.name == crate::mcp::refs::TOOL {
+                        crate::mcp::refs::fetch(dir.as_deref(), chat.as_deref(), &c.args)
+                    } else {
+                        crate::mcp::imagegen::generate(dir.as_deref(), chat.as_deref(), &provider, &c.args)
+                    };
+                    let _ = c.reply.send(r);
+                });
+                continue;
+            }
             let mut runs = std::mem::take(&mut self.runs);
             let r = runs.call(self, &c.client, &c.name, &c.args, crate::project::format::now_ms());
             let touched = runs.take_touched();

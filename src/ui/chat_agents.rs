@@ -570,30 +570,36 @@ fn draw_rows(ui: &mut Ui, rows: &[Row], selected: &Pick, sel: usize, n: &mut usi
     }
 }
 
-/// Model and effort of the selected endpoint when it is a Claude host (the old picker's blocks).
+/// Model and effort of a Claude API endpoint, or of Claude Code (where no pick, "Default", leaves
+/// the CLI's own choice).
 fn model_block(ui: &mut Ui, i: &PanelIn) -> Option<Act> {
+    use crate::ui::settings::{API_EFFORTS, API_MODELS};
     let b = i.backend;
     let ep = i.prefs.endpoint(b.endpoint.as_deref());
-    if b.kind != BackendKind::Anthropic || !ep.is_claude_host() {
+    let api = b.kind == BackendKind::Anthropic && ep.is_claude_host();
+    if !api && b.kind != BackendKind::ClaudeCode {
         return None;
     }
     let mut out = None;
-    let model = b.model.clone().unwrap_or_else(|| ep.model.clone());
+    let model = if api { Some(b.model.clone().unwrap_or_else(|| ep.model.clone())) } else { b.model.clone() };
     section(ui, "Model", None, Fold::None);
-    for (id, label) in crate::ui::settings::API_MODELS {
-        let r = ui.add(egui::Button::selectable(model == id, RichText::new(format!("{label}   {id}")).size(theme::SECONDARY + 1.0)).frame(false));
+    let default = (!api).then_some((None, "Default", "Claude Code's own choice"));
+    for (id, label, detail) in default.into_iter().chain(API_MODELS.iter().map(|(id, l)| (Some(*id), *l, *id))) {
+        let r = ui.add(egui::Button::selectable(model.as_deref() == id, RichText::new(format!("{label}   {detail}")).size(theme::SECONDARY + 1.0)).frame(false));
         if r.clicked() && !i.running {
-            out = Some(Act::SetBackend(Backend { model: Some(id.into()), ..b.clone() }));
+            out = Some(Act::SetBackend(Backend { model: id.map(Into::into), ..b.clone() }));
         }
     }
     section(ui, "Effort", None, Fold::None);
-    let effort = b.effort.clone().unwrap_or_else(|| i.prefs.api_effort.clone());
-    let items: Vec<(&str, Option<&str>)> = crate::ui::settings::API_EFFORTS.iter().map(|(_, l)| (*l, None)).collect();
-    let cur = crate::ui::settings::API_EFFORTS.iter().position(|(id, _)| *id == effort).unwrap_or(1);
+    let effort = if api { Some(b.effort.clone().unwrap_or_else(|| i.prefs.api_effort.clone())) } else { b.effort.clone() };
+    let offset = usize::from(!api);
+    let items: Vec<(&str, Option<&str>)> = (!api).then_some(("Default", None)).into_iter().chain(API_EFFORTS.iter().map(|(_, l)| (*l, None))).collect();
+    let cur = effort.and_then(|e| API_EFFORTS.iter().position(|(id, _)| *id == e)).map_or(if api { 1 } else { 0 }, |n| n + offset);
     if let Some(n) = kit::segmented(ui, &items, cur)
         && !i.running
     {
-        out = Some(Act::SetBackend(Backend { effort: Some(crate::ui::settings::API_EFFORTS[n].0.into()), ..b.clone() }));
+        let effort = n.checked_sub(offset).map(|n| API_EFFORTS[n].0.to_owned());
+        out = Some(Act::SetBackend(Backend { effort, ..b.clone() }));
     }
     out
 }

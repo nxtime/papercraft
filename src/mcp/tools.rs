@@ -58,7 +58,7 @@ fn tool(name: &str, desc: &str, props: Value, required: &[&str], read_only: bool
         && !m.contains_key("fileId")
         && !matches!(
             name,
-            "list_resources" | "create_file" | "get_font_family_info" | "get_guide" | "open_file"
+            "list_resources" | "create_file" | "get_font_family_info" | "get_guide" | "open_file" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image"
         )
     {
         m.insert("fileId".into(), file_id());
@@ -304,6 +304,65 @@ pub fn definitions() -> Vec<Value> {
             true,
         ),
         tool(
+            "ask_user",
+            "Ask the user a few questions as a card with clickable answers (in-app chat). Use it \
+             for the brief before a new design (platform and frame size, density, palette, type, \
+             references, scope) and for next steps after one. One to five questions, two to six \
+             options each, the option you recommend first. A palette option lists its hex colors \
+             in `colors` (shown as swatches); a reference option gives its saved `image` path. The user can also type their own answer. After \
+             calling it, end your turn: the answers come as the user's next message.",
+            json!({"questions": {"type": "array", "items": {"type": "object", "properties": {
+                "question": {"type": "string"},
+                "options": {"type": "array", "items": {"type": "object", "properties": {
+                    "label": {"type": "string"},
+                    "detail": {"type": "string", "description": "One short line under the label."},
+                    "colors": {"type": "array", "items": {"type": "string"}, "description": "Hex colors to show as swatches."},
+                    "image": {"type": "string", "description": "A saved image path (a fetched reference) shown on the option."},
+                }, "required": ["label"]}},
+                "multiple": {"type": "boolean", "description": "More than one option may be picked."},
+            }, "required": ["question", "options"]}}}),
+            &["questions"],
+            true,
+        ),
+        tool(
+            "generate_image",
+            "Make images with the Codex CLI's image generation (the user's Codex login): art the \
+             design needs (card art, a hero, thumbnails, backgrounds) or reference images. One \
+             call makes up to 4, one per prompt; write each prompt as art direction (subject, \
+             style, palette, lighting, composition). The images show in the chat and come back \
+             with saved `path`s: place one with <img src> in write_html. Takes a minute or more.",
+            json!({
+                "prompts": {"type": "array", "items": {"type": "string"}, "description": "1 to 4 image descriptions."},
+                "aspect": {"type": "string", "enum": ["square", "portrait", "landscape"], "description": "Default square; card art is portrait."},
+            }),
+            &["prompts"],
+            true,
+        ),
+        tool(
+            "fetch_reference_images",
+            "Bring images from the web into the chat as design references (the user sees them \
+             as a gallery). `urls`: image URLs or page URLs; a page gives its largest images. \
+             Public http(s) only. Good sources: nicelydone.club/apps/<app> (SaaS web apps), \
+             banani.co/references/apps, screenlane.com, App Store / Google Play listings. Returns the images and their saved `path`s \
+             (usable with zoom_image, or as <img src> in write_html for a References page).",
+            json!({"urls": {"type": "array", "items": {"type": "string"}, "description": "1 to 6 image or page URLs."}}),
+            &["urls"],
+            true,
+        ),
+        tool(
+            "zoom_image",
+            "A region of an image the user attached in the chat, at full resolution (attachments \
+             are sent scaled down). `path` is the attached path; x, y, width, height are fractions \
+             of the image (0 to 1), the whole image when left out.",
+            json!({
+                "path": {"type": "string", "description": "The [Attached] path from the message."},
+                "x": {"type": "number"}, "y": {"type": "number"},
+                "width": {"type": "number"}, "height": {"type": "number"},
+            }),
+            &["path"],
+            true,
+        ),
+        tool(
             "find_nodes",
             "Find nodes by text content and/or computed style. Searches the whole project by \
              default; pass pageId for one page or nodeId for a subtree. `textValue` finds text \
@@ -393,6 +452,8 @@ pub fn definitions() -> Vec<Value> {
             "write_html",
             "Parse HTML with inline styles into layers. Write incrementally: each call should add \
              one visual group (a header, one list row, a card) so the user sees progress.\n\
+             - <x-plugin use=\"avataaars|dicebear|iconify|picsum|flags|qr\" .../> places an \
+             avatar, icon, photo, flag or QR code from a plugin the user turned on in Settings.\n\
              - mode \"insert-children\" appends the HTML inside targetNodeId (\"root\" = the page); \
              \"replace\" replaces targetNodeId with it.\n\
              - Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, \
@@ -957,7 +1018,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
     Some(match name {
         "list_resources" | "get_basic_info" | "get_selection" | "get_node_info" | "get_children"
         | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
-        | "get_computed_styles" | "get_fill_image" | "find_nodes" | "get_font_family_info"
+        | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "find_nodes" | "get_font_family_info"
         | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
         | "diff_frames" | "publish_library" | "list_libraries" => false,
         "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"

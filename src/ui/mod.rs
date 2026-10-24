@@ -526,6 +526,8 @@ pub(crate) const PANEL_GAP: f32 = 12.0;
 const TIGHT_BAR_W: f32 = 520.0;
 /// Room the Design | Chat switch takes in the top bar.
 const CHAT_SWITCH_W: f32 = 140.0;
+/// Tallest the top bar's page menu grows before it scrolls.
+const PAGE_MENU_MAX_H: f32 = 360.0;
 
 /// Canvas width under which the egui menu bar folds into a single "Menu" button.
 const MENU_BAR_W: f32 = 1100.0;
@@ -1105,14 +1107,38 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     t.rect.top()
                 })
                 .inner;
-            let sub = ed.page_name().to_string();
-            let bottom = ui
-                .add(
-                    egui::Label::new(RichText::new(sub).size(theme::SECONDARY).color(p.secondary))
-                        .truncate(),
-                )
-                .rect
-                .bottom();
+            // The page name opens a page menu: Chat mode has no Pages panel to switch with.
+            let many = ed.pages.len() > 1;
+            let row = ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let label = ui.add(
+                    egui::Label::new(RichText::new(ed.page_name()).size(theme::SECONDARY).color(p.secondary))
+                        .truncate()
+                        .sense(egui::Sense::click()),
+                );
+                if many {
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                    theme::paint_icon(ui.painter(), r, Icon::ChevronDown, p.secondary);
+                }
+                label
+            });
+            let page = row.inner;
+            let bottom = page.rect.bottom();
+            if many {
+                let page = page.on_hover_text("Switch page").on_hover_cursor(egui::CursorIcon::PointingHand);
+                egui::Popup::menu(&page).show(|ui| {
+                    ui.set_min_width(180.0);
+                    egui::ScrollArea::vertical().max_height(PAGE_MENU_MAX_H).show(ui, |ui| {
+                        for i in 0..ed.pages.len() {
+                            let name = ed.pages[i].name.clone();
+                            if ui.selectable_label(i == ed.active_page, name).clicked() {
+                                ed.switch_page(i);
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+            }
             (top + bottom) / 2.0
         });
         let centre = column.inner;

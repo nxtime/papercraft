@@ -110,6 +110,7 @@ mod tests {
                 }],
                 run_id: Some("r1".into()),
                 context: Some(7),
+                session_cost: Some(0.5),
                 usage: Some(Usage {
                     input: 10,
                     output: 4,

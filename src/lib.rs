@@ -24,6 +24,8 @@ pub mod macos;
 pub mod mcp;
 pub mod merge;
 pub mod model;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugins;
 pub mod project;
 pub mod render;
 pub mod session;
