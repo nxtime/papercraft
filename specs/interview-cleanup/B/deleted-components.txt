@@ -1,0 +1,212 @@
+Admin Shell Header
+Admin Sidebar
+Admin Sidebar / Challenges Active
+Admin Sidebar / Configuration Active
+Admin Sidebar / Dashboard Active
+Admin Sidebar / Question bank Active
+Admin Sidebar / Rubric Active
+Admin Sidebar / Schedule Active
+Admin Sidebar / Sessions Active
+Alert / Error
+Alert / Error With Icon
+Alert / Info
+Alert / Info With Icon
+Alert / Success
+Alert / Success With Icon
+Alert / Warning
+Alert / Warning With Icon
+Ant Button / Danger
+Ant Button / Danger Large
+Ant Button / Danger Small
+Ant Button / Default
+Ant Button / Default Large
+Ant Button / Default Small
+Ant Button / Primary
+Ant Button / Primary Large
+Ant Button / Primary Small
+Ant Button / Text
+Ant Button / Text Danger
+Ant Button / Text Danger Large
+Ant Button / Text Danger Small
+Ant Button / Text Large
+Ant Button / Text Small
+Ant Segmented / 3 Options Active 1
+Ant Segmented / 3 Options Active 2
+Ant Segmented / 3 Options Active 3
+Ant Table / Header Row
+Ant Table / Row
+Ant Tag / Default
+Ant Tag / Error
+Ant Tag / Processing
+Ant Tag / Success
+Ant Tag / Warning
+Avatar
+Avatar / 30
+Avatar / 34
+Avatar / 36
+Avatar / 40
+Button / Danger
+Button / Danger Large
+Button / Danger Small
+Button / Dark
+Button / Dark Large
+Button / Dark Small
+Button / Default Large
+Button / Default Small
+Button / Ghost
+Button / Ghost Large
+Button / Ghost Small
+Button / Notification Bell
+Button / Primary
+Candidate Shell Header
+Candidate Sidebar
+Candidate Sidebar / Home Active
+Candidate Sidebar / My interview Active
+Card
+Card / Compact
+Card / Hover
+Challenge Option / JavaScript closures Off
+Challenge Option / JavaScript closures On
+Challenge Option / Two Sum Off
+Challenge Option / Two Sum On
+Challenge Option / URL shortener Off
+Challenge Option / URL shortener On
+Checkbox / Checked
+Checkbox / Unchecked
+Data Table / Empty
+Data Table / Footer
+Data Table / Header Row
+Data Table / Row
+Data Table / Row Hover
+Date Picker
+Device Preview / Blocked
+Device Preview / Ready
+Donut
+Drawer
+Empty / Simple
+Empty State
+Entry Request / Admitted
+Entry Request / Waiting
+Form Field
+Form Field / Error
+Form Field / Required
+Form Field / With Help
+Input
+Input / Disabled
+Input / Error
+Input / Filled
+Input / Focus
+Input / Large
+Input / Large Error
+Input / Large Filled
+Input / Large Focus
+Input / Password
+Input / Search
+Input / With Prefix
+Input Number
+Link Field
+Link Field / Copied
+Loading Block
+Modal
+Page Header
+Pagination
+Pill / Active
+Pill / Active With Count
+Pill / Inactive
+Pill / Inactive With Count
+Progress / Circle
+Radio / Selected
+Radio / Unselected
+Score Bar / High
+Score Bar / Low
+Score Bar / Mid
+Score Dots / 0
+Score Dots / 1
+Score Dots / 2
+Score Dots / 3
+Score Dots / 4
+Score Dots / 5
+Search Input
+Search Input / Filled
+Search Input / Focused
+Section Title
+Section Title / With Action
+Segmented / 2 Options Active 1
+Segmented / 2 Options Active 2
+Segmented / 3 Options Active 1
+Segmented / 3 Options Active 2
+Segmented / 3 Options Active 3
+Segmented / 4 Options Active 1
+Segmented / 4 Options Active 2
+Segmented / 4 Options Active 3
+Segmented / 4 Options Active 4
+Select
+Select / Dropdown
+Select / Filled
+Select / Large
+Select / Large Filled
+Skeleton
+Sparkline / Blue
+Sparkline / Green
+Sparkline / Orange
+Sparkline / Orange Down
+Sparkline / Purple
+Sparkline / Teal
+Spin
+Spin / Large
+Spin / Small
+Stars / 0
+Stars / 1
+Stars / 2
+Stars / 3
+Stars / 4
+Stars / 5
+Stat / Blue
+Stat / Green
+Stat / Orange
+Stat / Orange Down
+Stat / Purple
+Stat / Teal
+Submission Status Badge / Errored
+Submission Status Badge / Graded
+Submission Status Badge / Queued
+Submission Status Badge / Running
+Submission Status Badge / Unknown
+Switch / Off
+Switch / On
+T Donut
+T Hdr
+T Spark
+T Stat
+Tabs / Bar 3 Active 1
+Tabs / Bar 3 Active 2
+Tabs / Bar 3 Active 3
+Tabs / Bar 5 Large Active 1
+Tabs / Bar 5 Large Active 2
+Tabs / Bar 5 Large Active 3
+Tabs / Bar 5 Large Active 4
+Tabs / Bar 5 Large Active 5
+Tabs / Tab Active
+Tabs / Tab Active Large
+Tabs / Tab Inactive
+Tabs / Tab Inactive Large
+Tag / Blue
+Tag / Cyan
+Tag / Gold
+Tag / Gray
+Tag / Green
+Tag / Purple
+Tag / Red
+Tag Dot / Blue
+Tag Dot / Cyan
+Tag Dot / Gold
+Tag Dot / Gray
+Tag Dot / Green
+Tag Dot / Purple
+Tag Dot / Red
+Textarea
+Textarea / Filled
+Timeline / Step 1
+Timeline / Step 2
+Timeline / Step 3
+Tooltip

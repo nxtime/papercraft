@@ -1,0 +1,280 @@
+old,new,componentKey,action
+Button / Primary,Button / Primary,64e1d4aaf56fe6a4:5980,kept
+Button / Primary Small,Button / Primary / SM,64e1d4aaf56fe6a4:5982,renamed
+Button / Primary Large,Button / Primary / LG,64e1d4aaf56fe6a4:5984,renamed
+Button / Default,Button / Secondary,64e1d4aaf56fe6a4:5986,renamed
+Button / Default Small,Button / Secondary / SM,64e1d4aaf56fe6a4:5988,renamed
+Button / Default Large,Button / Secondary / LG,64e1d4aaf56fe6a4:5990,renamed
+Button / Ghost,Button / Ghost,64e1d4aaf56fe6a4:5992,kept
+Button / Ghost Small,Button / Ghost / SM,64e1d4aaf56fe6a4:5994,renamed
+Button / Ghost Large,Button / Ghost / LG,64e1d4aaf56fe6a4:5996,renamed
+Button / Danger,Button / Danger,64e1d4aaf56fe6a4:5998,kept
+Button / Danger Small,Button / Danger / SM,64e1d4aaf56fe6a4:6000,renamed
+Button / Danger Large,Button / Danger / LG,64e1d4aaf56fe6a4:6002,renamed
+Button / Dark,Button / Dark,64e1d4aaf56fe6a4:6004,kept
+Button / Dark Small,Button / Dark / SM,64e1d4aaf56fe6a4:6006,renamed
+Button / Dark Large,Button / Dark / LG,64e1d4aaf56fe6a4:6008,renamed
+Button / Notification Bell,Button / Icon / Bell,64e1d4aaf56fe6a4:6010,renamed
+Ant Button / Primary,Button / Primary,64e1d4aaf56fe6a4:5980,merged-dropped
+Ant Button / Primary Small,Button / Primary / SM,64e1d4aaf56fe6a4:5982,merged-dropped
+Ant Button / Primary Large,Button / Primary / LG,64e1d4aaf56fe6a4:5984,merged-dropped
+Ant Button / Default,Button / Secondary,64e1d4aaf56fe6a4:5986,merged-dropped
+Ant Button / Default Small,Button / Secondary / SM,64e1d4aaf56fe6a4:5988,merged-dropped
+Ant Button / Default Large,Button / Secondary / LG,64e1d4aaf56fe6a4:5990,merged-dropped
+Ant Button / Danger,Button / Danger,64e1d4aaf56fe6a4:5998,merged-dropped
+Ant Button / Danger Small,Button / Danger / SM,64e1d4aaf56fe6a4:6000,merged-dropped
+Ant Button / Danger Large,Button / Danger / LG,64e1d4aaf56fe6a4:6002,merged-dropped
+Ant Button / Text,Button / Text,64e1d4aaf56fe6a4:6032,renamed
+Ant Button / Text Small,Button / Text / SM,64e1d4aaf56fe6a4:6034,renamed
+Ant Button / Text Large,Button / Text / LG,64e1d4aaf56fe6a4:6036,renamed
+Ant Button / Text Danger,Button / Danger Text,64e1d4aaf56fe6a4:6038,renamed
+Ant Button / Text Danger Small,Button / Danger Text / SM,64e1d4aaf56fe6a4:6040,renamed
+Ant Button / Text Danger Large,Button / Danger Text / LG,64e1d4aaf56fe6a4:6042,renamed
+Avatar,Avatar / 32,64e1d4aaf56fe6a4:6044,renamed
+Avatar / 30,Avatar / 30,64e1d4aaf56fe6a4:6046,kept
+Avatar / 34,Avatar / 34,64e1d4aaf56fe6a4:6048,kept
+Avatar / 36,Avatar / 36,64e1d4aaf56fe6a4:6050,kept
+Avatar / 40,Avatar / 40,64e1d4aaf56fe6a4:6052,kept
+Card,Card / Default,64e1d4aaf56fe6a4:6054,renamed
+Card / Hover,Card / Hover,64e1d4aaf56fe6a4:6057,kept
+Card / Compact,Card / Compact,64e1d4aaf56fe6a4:6060,kept
+Sparkline / Blue,Sparkline / Blue,64e1d4aaf56fe6a4:6063,kept
+Sparkline / Purple,Sparkline / Purple,64e1d4aaf56fe6a4:6067,kept
+Sparkline / Orange,Sparkline / Orange,64e1d4aaf56fe6a4:6071,kept
+Sparkline / Green,Sparkline / Green,64e1d4aaf56fe6a4:6075,kept
+Sparkline / Teal,Sparkline / Teal,64e1d4aaf56fe6a4:6079,kept
+Sparkline / Orange Down,Sparkline / Orange Down,64e1d4aaf56fe6a4:6083,kept
+Stat / Blue,Stat / Blue,64e1d4aaf56fe6a4:6087,kept
+Stat / Purple,Stat / Purple,64e1d4aaf56fe6a4:6100,kept
+Stat / Orange,Stat / Orange,64e1d4aaf56fe6a4:6113,kept
+Stat / Green,Stat / Green,64e1d4aaf56fe6a4:6126,kept
+Stat / Teal,Stat / Teal,64e1d4aaf56fe6a4:6139,kept
+Stat / Orange Down,Stat / Orange Down,64e1d4aaf56fe6a4:6152,kept
+Tag / Blue,Tag / Blue,64e1d4aaf56fe6a4:6165,kept
+Tag Dot / Blue,Tag / Blue / Dot,64e1d4aaf56fe6a4:6167,renamed
+Tag / Green,Tag / Green,64e1d4aaf56fe6a4:6170,kept
+Tag Dot / Green,Tag / Green / Dot,64e1d4aaf56fe6a4:6172,renamed
+Tag / Gold,Tag / Gold,64e1d4aaf56fe6a4:6175,kept
+Tag Dot / Gold,Tag / Gold / Dot,64e1d4aaf56fe6a4:6177,renamed
+Tag / Red,Tag / Red,64e1d4aaf56fe6a4:6180,kept
+Tag Dot / Red,Tag / Red / Dot,64e1d4aaf56fe6a4:6182,renamed
+Tag / Purple,Tag / Purple,64e1d4aaf56fe6a4:6185,kept
+Tag Dot / Purple,Tag / Purple / Dot,64e1d4aaf56fe6a4:6187,renamed
+Tag / Cyan,Tag / Cyan,64e1d4aaf56fe6a4:6190,kept
+Tag Dot / Cyan,Tag / Cyan / Dot,64e1d4aaf56fe6a4:6192,renamed
+Tag / Gray,Tag / Gray,64e1d4aaf56fe6a4:6195,kept
+Tag Dot / Gray,Tag / Gray / Dot,64e1d4aaf56fe6a4:6197,renamed
+Ant Tag / Default,Tag / Gray,64e1d4aaf56fe6a4:6195,merged-dropped
+Ant Tag / Success,Tag / Green,64e1d4aaf56fe6a4:6170,merged-dropped
+Ant Tag / Warning,Tag / Gold,64e1d4aaf56fe6a4:6175,merged-dropped
+Ant Tag / Error,Tag / Red,64e1d4aaf56fe6a4:6180,merged-dropped
+Ant Tag / Processing,Tag / Blue,64e1d4aaf56fe6a4:6165,merged-dropped
+Submission Status Badge / Queued,Submission Status Badge / Queued,64e1d4aaf56fe6a4:6210,kept
+Submission Status Badge / Running,Submission Status Badge / Running,64e1d4aaf56fe6a4:6212,kept
+Submission Status Badge / Graded,Submission Status Badge / Graded,64e1d4aaf56fe6a4:6214,kept
+Submission Status Badge / Errored,Submission Status Badge / Errored,64e1d4aaf56fe6a4:6216,kept
+Submission Status Badge / Unknown,Submission Status Badge / Unknown,64e1d4aaf56fe6a4:6218,kept
+Pill / Active,Pill / Active,64e1d4aaf56fe6a4:6220,kept
+Pill / Active With Count,Pill / Active With Count,64e1d4aaf56fe6a4:6222,kept
+Pill / Inactive,Pill / Inactive,64e1d4aaf56fe6a4:6225,kept
+Pill / Inactive With Count,Pill / Inactive With Count,64e1d4aaf56fe6a4:6227,kept
+Search Input,Input / Search / Default,64e1d4aaf56fe6a4:6230,renamed
+Search Input / Focused,Input / Search / Focus,64e1d4aaf56fe6a4:6234,renamed
+Search Input / Filled,Input / Search / Filled,64e1d4aaf56fe6a4:6238,renamed
+Segmented / 2 Options Active 1,Segmented / 2 Options Active 1,64e1d4aaf56fe6a4:6242,kept
+Segmented / 2 Options Active 2,Segmented / 2 Options Active 2,64e1d4aaf56fe6a4:6247,kept
+Segmented / 3 Options Active 1,Segmented / 3 Options Active 1,64e1d4aaf56fe6a4:6252,kept
+Segmented / 3 Options Active 2,Segmented / 3 Options Active 2,64e1d4aaf56fe6a4:6259,kept
+Segmented / 3 Options Active 3,Segmented / 3 Options Active 3,64e1d4aaf56fe6a4:6266,kept
+Segmented / 4 Options Active 1,Segmented / 4 Options Active 1,64e1d4aaf56fe6a4:6273,kept
+Segmented / 4 Options Active 2,Segmented / 4 Options Active 2,64e1d4aaf56fe6a4:6282,kept
+Segmented / 4 Options Active 3,Segmented / 4 Options Active 3,64e1d4aaf56fe6a4:6291,kept
+Segmented / 4 Options Active 4,Segmented / 4 Options Active 4,64e1d4aaf56fe6a4:6300,kept
+Ant Segmented / 3 Options Active 1,Segmented / 3 Options Active 1,64e1d4aaf56fe6a4:6252,merged-dropped
+Ant Segmented / 3 Options Active 2,Segmented / 3 Options Active 2,64e1d4aaf56fe6a4:6259,merged-dropped
+Ant Segmented / 3 Options Active 3,Segmented / 3 Options Active 3,64e1d4aaf56fe6a4:6266,merged-dropped
+Score Bar / High,Score Bar / High,64e1d4aaf56fe6a4:6330,kept
+Score Bar / Mid,Score Bar / Mid,64e1d4aaf56fe6a4:6332,kept
+Score Bar / Low,Score Bar / Low,64e1d4aaf56fe6a4:6334,kept
+Score Dots / 0,Score Dots / 0,64e1d4aaf56fe6a4:6336,kept
+Score Dots / 1,Score Dots / 1,64e1d4aaf56fe6a4:6349,kept
+Score Dots / 2,Score Dots / 2,64e1d4aaf56fe6a4:6362,kept
+Score Dots / 3,Score Dots / 3,64e1d4aaf56fe6a4:6375,kept
+Score Dots / 4,Score Dots / 4,64e1d4aaf56fe6a4:6388,kept
+Score Dots / 5,Score Dots / 5,64e1d4aaf56fe6a4:6401,kept
+Stars / 0,Stars / 0,64e1d4aaf56fe6a4:6414,kept
+Stars / 1,Stars / 1,64e1d4aaf56fe6a4:6416,kept
+Stars / 2,Stars / 2,64e1d4aaf56fe6a4:6418,kept
+Stars / 3,Stars / 3,64e1d4aaf56fe6a4:6420,kept
+Stars / 4,Stars / 4,64e1d4aaf56fe6a4:6422,kept
+Stars / 5,Stars / 5,64e1d4aaf56fe6a4:6424,kept
+Donut,Donut / Default,64e1d4aaf56fe6a4:6426,renamed
+Spin / Small,Spin / SM,64e1d4aaf56fe6a4:6436,renamed
+Spin,Spin / MD,64e1d4aaf56fe6a4:6442,renamed
+Spin / Large,Spin / LG,64e1d4aaf56fe6a4:6448,renamed
+Loading Block,Loading / Block,64e1d4aaf56fe6a4:6454,renamed
+Empty / Simple,Empty / Simple,64e1d4aaf56fe6a4:6462,kept
+Empty State,Empty / Illustrated,64e1d4aaf56fe6a4:6468,renamed
+Page Header,Header / Page,64e1d4aaf56fe6a4:6476,renamed
+Admin Shell Header,Header / Admin,64e1d4aaf56fe6a4:6480,renamed
+Candidate Shell Header,Header / Candidate,64e1d4aaf56fe6a4:6489,renamed
+Section Title,Section Title / Default,64e1d4aaf56fe6a4:6498,renamed
+Section Title / With Action,Section Title / With Action,64e1d4aaf56fe6a4:6502,kept
+Data Table / Header Row,Data Table / Header Row,64e1d4aaf56fe6a4:6507,kept
+Data Table / Row,Data Table / Row,64e1d4aaf56fe6a4:6513,kept
+Data Table / Row Hover,Data Table / Row Hover,64e1d4aaf56fe6a4:6519,kept
+Pagination,Pagination / Default,64e1d4aaf56fe6a4:6525,renamed
+Data Table / Footer,Data Table / Footer,64e1d4aaf56fe6a4:6542,kept
+Data Table / Empty,Data Table / Empty,64e1d4aaf56fe6a4:6561,kept
+Ant Table / Header Row,Data Table / Header Row,64e1d4aaf56fe6a4:6507,merged-dropped
+Ant Table / Row,Data Table / Row,64e1d4aaf56fe6a4:6513,merged-dropped
+Input,Input / Default,64e1d4aaf56fe6a4:6575,renamed
+Input / Filled,Input / Filled,64e1d4aaf56fe6a4:6577,kept
+Input / Focus,Input / Focus,64e1d4aaf56fe6a4:6579,kept
+Input / Error,Input / Error,64e1d4aaf56fe6a4:6581,kept
+Input / Disabled,Input / Disabled,64e1d4aaf56fe6a4:6583,kept
+Input / Large,Input / Default / LG,64e1d4aaf56fe6a4:6585,renamed
+Input / Large Filled,Input / Filled / LG,64e1d4aaf56fe6a4:6587,renamed
+Input / Large Focus,Input / Focus / LG,64e1d4aaf56fe6a4:6589,renamed
+Input / Large Error,Input / Error / LG,64e1d4aaf56fe6a4:6591,renamed
+Input / With Prefix,Input / With Prefix,64e1d4aaf56fe6a4:6593,kept
+Input / Password,Input / Password,64e1d4aaf56fe6a4:6596,kept
+Input / Search,Input / Search / Icon,64e1d4aaf56fe6a4:6600,renamed
+Input Number,Input / Number,64e1d4aaf56fe6a4:6604,renamed
+Date Picker,Input / Date,64e1d4aaf56fe6a4:6613,renamed
+Textarea,Textarea / Default,64e1d4aaf56fe6a4:6617,renamed
+Textarea / Filled,Textarea / Filled,64e1d4aaf56fe6a4:6619,kept
+Select,Select / Default,64e1d4aaf56fe6a4:6621,renamed
+Select / Filled,Select / Filled,64e1d4aaf56fe6a4:6625,kept
+Select / Large,Select / Default / LG,64e1d4aaf56fe6a4:6629,renamed
+Select / Large Filled,Select / Filled / LG,64e1d4aaf56fe6a4:6633,renamed
+Select / Dropdown,Select / Dropdown,64e1d4aaf56fe6a4:6637,kept
+Checkbox / Unchecked,Checkbox / Unchecked,64e1d4aaf56fe6a4:6644,kept
+Checkbox / Checked,Checkbox / Checked,64e1d4aaf56fe6a4:6647,kept
+Radio / Unselected,Radio / Unselected,64e1d4aaf56fe6a4:6652,kept
+Radio / Selected,Radio / Selected,64e1d4aaf56fe6a4:6655,kept
+Switch / Off,Switch / Off,64e1d4aaf56fe6a4:6659,kept
+Switch / On,Switch / On,64e1d4aaf56fe6a4:6661,kept
+Form Field,Form Field / Default,64e1d4aaf56fe6a4:6663,renamed
+Form Field / Required,Form Field / Required,64e1d4aaf56fe6a4:6668,kept
+Form Field / Error,Form Field / Error,64e1d4aaf56fe6a4:6674,kept
+Form Field / With Help,Form Field / With Help,64e1d4aaf56fe6a4:6681,kept
+Modal,Modal / Default,64e1d4aaf56fe6a4:6687,renamed
+Drawer,Drawer / Default,64e1d4aaf56fe6a4:6698,renamed
+Tooltip,Tooltip / Default,64e1d4aaf56fe6a4:6705,renamed
+Alert / Info,Alert / Info,64e1d4aaf56fe6a4:6710,kept
+Alert / Info With Icon,Alert / Info / With Icon,64e1d4aaf56fe6a4:6712,renamed
+Alert / Success,Alert / Success,64e1d4aaf56fe6a4:6716,kept
+Alert / Success With Icon,Alert / Success / With Icon,64e1d4aaf56fe6a4:6718,renamed
+Alert / Warning,Alert / Warning,64e1d4aaf56fe6a4:6722,kept
+Alert / Warning With Icon,Alert / Warning / With Icon,64e1d4aaf56fe6a4:6724,renamed
+Alert / Error,Alert / Error,64e1d4aaf56fe6a4:6728,kept
+Alert / Error With Icon,Alert / Error / With Icon,64e1d4aaf56fe6a4:6730,renamed
+Tabs / Tab Active,Tab / Active,64e1d4aaf56fe6a4:6734,renamed
+Tabs / Tab Active Large,Tab / Active / LG,64e1d4aaf56fe6a4:6738,renamed
+Tabs / Tab Inactive,Tab / Default,64e1d4aaf56fe6a4:6742,renamed
+Tabs / Tab Inactive Large,Tab / Default / LG,64e1d4aaf56fe6a4:6746,renamed
+Tabs / Bar 3 Active 1,Tabs / Bar 3 Active 1,64e1d4aaf56fe6a4:6750,kept
+Tabs / Bar 3 Active 2,Tabs / Bar 3 Active 2,64e1d4aaf56fe6a4:6763,kept
+Tabs / Bar 3 Active 3,Tabs / Bar 3 Active 3,64e1d4aaf56fe6a4:6776,kept
+Tabs / Bar 5 Large Active 1,Tabs / Bar 5 Large Active 1,64e1d4aaf56fe6a4:6789,kept
+Tabs / Bar 5 Large Active 2,Tabs / Bar 5 Large Active 2,64e1d4aaf56fe6a4:6810,kept
+Tabs / Bar 5 Large Active 3,Tabs / Bar 5 Large Active 3,64e1d4aaf56fe6a4:6831,kept
+Tabs / Bar 5 Large Active 4,Tabs / Bar 5 Large Active 4,64e1d4aaf56fe6a4:6852,kept
+Tabs / Bar 5 Large Active 5,Tabs / Bar 5 Large Active 5,64e1d4aaf56fe6a4:6873,kept
+Progress / Circle,Progress / Circle,64e1d4aaf56fe6a4:6894,kept
+Skeleton,Skeleton / Default,64e1d4aaf56fe6a4:6900,renamed
+Admin Sidebar,Sidebar / Admin,64e1d4aaf56fe6a4:6906,renamed
+Admin Sidebar / Dashboard Active,Sidebar / Admin / Dashboard Active,64e1d4aaf56fe6a4:6964,renamed
+Admin Sidebar / Challenges Active,Sidebar / Admin / Challenges Active,64e1d4aaf56fe6a4:7022,renamed
+Admin Sidebar / Question bank Active,Sidebar / Admin / Question bank Active,64e1d4aaf56fe6a4:7080,renamed
+Admin Sidebar / Sessions Active,Sidebar / Admin / Sessions Active,64e1d4aaf56fe6a4:7138,renamed
+Admin Sidebar / Schedule Active,Sidebar / Admin / Schedule Active,64e1d4aaf56fe6a4:7196,renamed
+Admin Sidebar / Configuration Active,Sidebar / Admin / Configuration Active,64e1d4aaf56fe6a4:7254,renamed
+Admin Sidebar / Rubric Active,Sidebar / Admin / Rubric Active,64e1d4aaf56fe6a4:7312,renamed
+Candidate Sidebar,Sidebar / Candidate,64e1d4aaf56fe6a4:7370,renamed
+Candidate Sidebar / Home Active,Sidebar / Candidate / Home Active,64e1d4aaf56fe6a4:7396,renamed
+Candidate Sidebar / My interview Active,Sidebar / Candidate / My interview Active,64e1d4aaf56fe6a4:7422,renamed
+Link Field,Link Field / Default,64e1d4aaf56fe6a4:9635,renamed
+Link Field / Copied,Link Field / Copied,64e1d4aaf56fe6a4:9647,kept
+Entry Request / Waiting,Entry Request / Waiting,64e1d4aaf56fe6a4:9659,kept
+Entry Request / Admitted,Entry Request / Admitted,64e1d4aaf56fe6a4:9675,kept
+Device Preview / Ready,Device Preview / Ready,64e1d4aaf56fe6a4:9687,kept
+Device Preview / Blocked,Device Preview / Blocked,64e1d4aaf56fe6a4:9705,kept
+Challenge Option / Two Sum On,Challenge Option / Two Sum On,64e1d4aaf56fe6a4:9726,kept
+Challenge Option / Two Sum Off,Challenge Option / Two Sum Off,64e1d4aaf56fe6a4:9740,kept
+Challenge Option / URL shortener On,Challenge Option / URL shortener On,64e1d4aaf56fe6a4:9752,kept
+Challenge Option / URL shortener Off,Challenge Option / URL shortener Off,64e1d4aaf56fe6a4:9766,kept
+Challenge Option / JavaScript closures On,Challenge Option / JavaScript closures On,64e1d4aaf56fe6a4:9778,kept
+Challenge Option / JavaScript closures Off,Challenge Option / JavaScript closures Off,64e1d4aaf56fe6a4:9792,kept
+Timeline / Step 1,Timeline / Step 1,64e1d4aaf56fe6a4:9804,kept
+Timeline / Step 2,Timeline / Step 2,64e1d4aaf56fe6a4:9830,kept
+Timeline / Step 3,Timeline / Step 3,64e1d4aaf56fe6a4:9858,kept
+Message / Success,Message / Success,11437ea5,moved-from-admin
+Message / Error,Message / Error,66611e77,moved-from-admin
+Funnel Row,Funnel Row,de5afb19,moved-from-admin
+Funnel Row / Inverse,Funnel Row / Inverse,f1933941,moved-from-admin
+Challenge Usage Row,Challenge Usage Row,027557f2,moved-from-admin
+Review Item,Review Item,3dac03db,moved-from-admin
+Upcoming Row / Scheduled,Upcoming Row / Scheduled,ae6ca95c,moved-from-admin
+Upcoming Row / In Progress,Upcoming Row / In Progress,2f9790c6,moved-from-admin
+Donut / Score Distribution,Donut / Score Distribution,91f0e7ec,moved-from-admin
+Criterion Row / Weight,Criterion Row / Weight,3b291801,moved-from-admin
+Setting Row / On,Setting Row / On,0689a941,moved-from-admin
+Setting Row / Off,Setting Row / Off,8d865bb3,moved-from-admin
+ATS Tile / Available,ATS Tile / Available,4c191120,moved-from-admin
+ATS Tile / Soon,ATS Tile / Soon,dd80f090,moved-from-admin
+Pipeline Row / Dark,Pipeline Row / Dark,01773a7a,moved-from-admin
+IDE Toolbar / Code,IDE Toolbar / Code,27206a8f,moved-from-candidate
+IDE Toolbar / Code Low Time,IDE Toolbar / Code Low Time,afa013af,moved-from-candidate
+IDE Toolbar / Diagrams,IDE Toolbar / Diagrams,69a04099,moved-from-candidate
+IDE Toolbar / Whiteboard,IDE Toolbar / Whiteboard,5b3ac5d0,moved-from-candidate
+File Tree / SearchBox Active,File Tree / SearchBox Active,e28ab172,moved-from-candidate
+File Tree / Test Active,File Tree / Test Active,e8371af2,moved-from-candidate
+Editor Tabs / SearchBox Active,Editor Tabs / SearchBox Active,a4ba5feb,moved-from-candidate
+Editor Tabs / Debounce Active,Editor Tabs / Debounce Active,eb062132,moved-from-candidate
+Code Editor / SearchBox,Code Editor / SearchBox,2fc9c830,moved-from-candidate
+Code Editor / useDebounce,Code Editor / useDebounce,5760bb9e,moved-from-candidate
+Code Editor / Empty,Code Editor / Empty,750768e2,moved-from-candidate
+Console / Empty,Console / Empty,048a5429,moved-from-candidate
+Console / Running,Console / Running,27e3729d,moved-from-candidate
+Console / Passed,Console / Passed,1d86e919,moved-from-candidate
+Console / Failed,Console / Failed,3a0fa4a3,moved-from-candidate
+Problem Rail / Brief,Problem Rail / Brief,11431412,moved-from-candidate
+Problem Rail / Collapsed,Problem Rail / Collapsed,2ba4841f,moved-from-candidate
+Diagram Toolbar / System design,Diagram Toolbar / System design,5bbbe761,moved-from-candidate
+Diagram Toolbar / Sequence,Diagram Toolbar / Sequence,d10ceb95,moved-from-candidate
+Diagram Toolbar / Class diagram,Diagram Toolbar / Class diagram,24c7b116,moved-from-candidate
+Diagram Toolbar / State machine,Diagram Toolbar / State machine,a93f22e4,moved-from-candidate
+Whiteboard Toolbar / Rectangle,Whiteboard Toolbar / Rectangle,9e6ead47,moved-from-candidate
+Whiteboard Toolbar / Select,Whiteboard Toolbar / Select,5901a628,moved-from-candidate
+Whiteboard Toolbar / Arrow,Whiteboard Toolbar / Arrow,e6f00476,moved-from-candidate
+Theory Toolbar / Q2 of 5,Theory Toolbar / Q2 of 5,cb28f65f,moved-from-candidate
+Theory Toolbar / Q5 of 5,Theory Toolbar / Q5 of 5,bb248270,moved-from-candidate
+Theory Chip / Category,Theory Chip / Category,3d205e1f,moved-from-candidate
+Theory Chip / Easy,Theory Chip / Easy,594ed5e8,moved-from-candidate
+Theory Chip / Medium,Theory Chip / Medium,f519dada,moved-from-candidate
+Theory Chip / Hard,Theory Chip / Hard,f68f3cae,moved-from-candidate
+Theory Button / Prev,Theory Button / Prev,5530be80,moved-from-candidate
+Theory Button / Prev Disabled,Theory Button / Prev Disabled,c0f3a540,moved-from-candidate
+Theory Button / Next,Theory Button / Next,11267cc5,moved-from-candidate
+Theory Button / Submit Partial,Theory Button / Submit Partial,31ebcbad,moved-from-candidate
+Theory Button / Submit All,Theory Button / Submit All,6eaedb7a,moved-from-candidate
+Theory Answer / Empty,Theory Answer / Empty,87e5ef44,moved-from-candidate
+Theory Answer / Filled,Theory Answer / Filled,c8b94369,moved-from-candidate
+Progress Tracker / System check,Progress Tracker / System check,763366d3,moved-from-candidate
+Progress Tracker / Coding,Progress Tracker / Coding,1d309ea4,moved-from-candidate
+Check Item / Ready,Check Item / Ready,d891e5a0,moved-from-candidate
+Check Item / Stub,Check Item / Stub,cdca6ed8,moved-from-candidate
+Tip Card / Read carefully,Tip Card / Read carefully,c2730a78,moved-from-candidate
+Tip Card / Think aloud,Tip Card / Think aloud,49c13855,moved-from-candidate
+Tip Card / Manage time,Tip Card / Manage time,9ebcdf25,moved-from-candidate
+Syscheck Row / Ready,Syscheck Row / Ready,69cc38dd,moved-from-candidate
+Syscheck Row / Checking,Syscheck Row / Checking,6077230d,moved-from-candidate
+Syscheck Row / Failed,Syscheck Row / Failed,de87ba8a,moved-from-candidate
+Syscheck Row / Pending,Syscheck Row / Pending,2abab68a,moved-from-candidate
+Syscheck Step / Done,Syscheck Step / Done,28adefb9,moved-from-candidate
+Syscheck Step / Active,Syscheck Step / Active,2bf7b529,moved-from-candidate
+Message / Success,Banner / Success,9efeb1c8,moved-from-candidate
+Admin Shell Header / With Action,Header / Admin / With Action,1c5e5918,moved-from-admin
+Legend Row,Legend Row,bd7f34e5,moved-from-admin

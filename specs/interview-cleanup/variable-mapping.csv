@@ -1,0 +1,162 @@
+old,new,value,action
+color-avatar-indigo,avatar/indigo,#2f54eb,rename
+color-avatar-orange,avatar/orange,#fa541c,rename
+color-avatar-pink,avatar/pink,#eb2f96,rename
+color-avatar-purple,avatar/purple,#722ed1,rename
+color-avatar-teal,avatar/teal,#13a8a8,rename
+color-bg-elevated,bg/surface,#ffffff,rename
+color-bg-layout,bg/layout,#f5f5f5,rename
+color-bg-overlay,bg/overlay,#00000073,rename
+color-bg-selected,bg/selected,#e6f4ff,rename
+color-bg-sider,bg/subtle,#fafafa,rename
+color-border,border/default,#d9d9d9,rename
+color-border-light,border/subtle,#f0f0f0,rename
+color-border-strong,border/strong,#8c8c8c,rename
+color-brand-action,brand/pressed,#0958d9,rename
+color-brand-primary,brand/primary,#1677ff,rename
+color-brand-secondary,brand/secondary,#69b1ff,rename
+color-button-dark,button/dark,#1f1f1f,rename
+color-button-primary-hover,brand/hover,#4096ff,rename
+color-cam-hint,camera/label,#ffffff99,"rename (canonical, absorbs 1)"
+color-cam-label,camera/label,#ffffff99,"merge into camera/label (repoint uses, delete)"
+color-cam-ring,camera/ring,#ffffff40,rename
+color-card-hover-border,border/hover,#bfdbff,rename
+color-code-bg,code/bg,#1e1e1e,rename
+color-code-fg,code/fg,#d4d4d4,"rename (canonical, absorbs 1)"
+color-diagram-bg,ide/preview,#0d1117,"rename (canonical, absorbs 1)"
+color-diff-added,diff/added,#3fb950,"rename (canonical, absorbs 1)"
+color-diff-neutral,code/fg,#d4d4d4,"merge into code/fg (repoint uses, delete)"
+color-diff-removed,diff/removed,#f85149,"rename (canonical, absorbs 1)"
+color-error,status/error,#cf1322,rename
+color-focus-ring,brand/focus-ring,#1677ff1a,rename
+color-hero-chip,hero/chip,#ffffff33,rename
+color-hero-text,hero/text,#ffffffeb,rename
+color-ide-active,ide/selected,#2a2d2e,"rename (canonical, absorbs 1)"
+color-ide-blue-bg,ide/blue-bg,#1a2a3a,rename
+color-ide-border,ide/deep,#1a1a1a,"rename (canonical, absorbs 1)"
+color-ide-card,ide/card,#161616,"rename (canonical, absorbs 2)"
+color-ide-card-border,ide/card-border,#252525,"rename (canonical, absorbs 1)"
+color-ide-card-label,ide/card-label,#484848,rename
+color-ide-card-text,ide/card-text,#dddddd,rename
+color-ide-chip,ide/card-border,#252525,"merge into ide/card-border (repoint uses, delete)"
+color-ide-code-pane,ide/card,#161616,"merge into ide/card (repoint uses, delete)"
+color-ide-console,ide/console,#181818,rename
+color-ide-css,ide/css,#c586c0,rename
+color-ide-deep,ide/deep,#1a1a1a,"merge into ide/deep (repoint uses, delete)"
+color-ide-del-bg,ide/fail-bg,#3a1a1a,"rename (canonical, absorbs 1)"
+color-ide-err-bg,ide/err-bg,#1a0808,rename
+color-ide-err-border,ide/err-border,#3a1010,rename
+color-ide-fail,diff/removed,#f85149,"merge into diff/removed (repoint uses, delete)"
+color-ide-fail-bg,ide/fail-bg,#3a1a1a,"merge into ide/fail-bg (repoint uses, delete)"
+color-ide-fail-border,ide/fail-border,#5a2020,rename
+color-ide-faint,ide/faint,#555555,rename
+color-ide-gutter,ide/gutter,#5a5a5a,rename
+color-ide-input,ide/card,#161616,"merge into ide/card (repoint uses, delete)"
+color-ide-line,ide/line,#2a2a2a,rename
+color-ide-muted,ide/text-muted,#888888,"rename (canonical, absorbs 1)"
+color-ide-panel,ide/panel,#252526,"rename (canonical, absorbs 1)"
+color-ide-pass,diff/added,#3fb950,"merge into diff/added (repoint uses, delete)"
+color-ide-pass-bg,ide/pass-bg,#1a3a1a,rename
+color-ide-pass-border,ide/pass-border,#3fb95035,rename
+color-ide-preview,ide/preview,#0d1117,"merge into ide/preview (repoint uses, delete)"
+color-ide-rail,ide/rail,#1f1f1f,rename
+color-ide-sel,ide/selected,#2a2d2e,"merge into ide/selected (repoint uses, delete)"
+color-ide-sep,ide/sep,#333333,rename
+color-ide-submit-bg,ide/submit-bg,#1c2a40,rename
+color-ide-submit-fg,ide/submit-fg,#5a80a8,rename
+color-ide-teal-bg,ide/teal-bg,#1a3540,rename
+color-ide-text,ide/text,#cccccc,rename
+color-ide-text-dim,ide/text-dim,#bbbbbb,rename
+color-ide-text-faint,ide/text-faint,#666666,rename
+color-ide-text-muted,ide/text-muted,#888888,"merge into ide/text-muted (repoint uses, delete)"
+color-ide-toolbar,ide/panel,#252526,"merge into ide/panel (repoint uses, delete)"
+color-ide-warn,ide/warn,#d29922,rename
+color-ide-warn-bg,ide/warn-bg,#2a2a14,rename
+color-ide-wb,whiteboard/bg,#13131f,"rename (canonical, absorbs 1)"
+color-ide-wb-bar,whiteboard/bar,#1c1c2e,"rename (canonical, absorbs 1)"
+color-ide-wb-border,whiteboard/border,#252540,"rename (canonical, absorbs 3)"
+color-ide-wb-btn,whiteboard/border,#252540,"merge into whiteboard/border (repoint uses, delete)"
+color-ide-wb-tool,whiteboard/text,#9999bb,"rename (canonical, absorbs 1)"
+color-info,status/info,#1677ff,rename
+color-login-bg,auth/bg,#0f1117,rename
+color-login-card,auth/card,#ffffff0d,rename
+color-login-card-head,auth/card-head,#ffffff99,rename
+color-login-card-line,auth/card-line,#ffffff14,rename
+color-login-desc,auth/desc,#ffffff99,rename
+color-login-footer,auth/footer,#ffffff8c,rename
+color-login-icon-bg,auth/icon-bg,#ffffff12,rename
+color-login-icon-fg,auth/icon-fg,#ffffff8c,rename
+color-login-live-bg,auth/live-bg,#16a34a2e,rename
+color-login-live-fg,auth/live-fg,#4ade80,rename
+color-login-row,auth/row,#ffffffc7,rename
+color-login-sub,auth/sub,#ffffffa6,rename
+color-score-poor,status/score-poor,#ff4d4f,rename
+color-score-warn,status/score-warn,#faad14,rename
+color-sidebar-badge,sidebar/badge,#ffffff40,rename
+color-sidebar-bg,sidebar/bg,#11161d,rename
+color-sidebar-border,sidebar/border,#ffffff12,rename
+color-sidebar-hover,sidebar/hover,#ffffff0f,rename
+color-sidebar-tag-bg,sidebar/tag-bg,#1677ff40,rename
+color-sidebar-text,sidebar/text,#ffffffa6,rename
+color-sidebar-text-faint,sidebar/text-faint,#ffffff59,rename
+color-sidebar-text-muted,sidebar/text-muted,#ffffff73,rename
+color-star,status/star,#faad14,rename
+color-success,status/success,#52c41a,rename
+color-success-text,status/success-text,#237804,rename
+color-switch-off,control/switch-off,#00000040,rename
+color-syntax-comment,syntax/comment,#6a9955,"rename (canonical, absorbs 1)"
+color-syntax-fn,syntax/fn,#dcdcaa,"rename (canonical, absorbs 1)"
+color-syntax-gutter,syntax/gutter,#5a5a5a,rename
+color-syntax-keyword,syntax/keyword,#569cd6,"rename (canonical, absorbs 1)"
+color-syntax-number,syntax/number,#b5cea8,"rename (canonical, absorbs 1)"
+color-syntax-string,syntax/string,#ce9178,"rename (canonical, absorbs 1)"
+color-syntax-type,syntax/type,#4ec9b0,"rename (canonical, absorbs 1)"
+color-syscheck-bg,syscheck/bg,#f0f0f0,rename
+color-syscheck-camera,syscheck/camera,#111111,rename
+color-syscheck-fail,syscheck/fail,#dc2626,rename
+color-syscheck-mic,syscheck/mic,#22c55e,rename
+color-syscheck-ready,syscheck/ready,#16a34a,rename
+color-syscheck-ready-bg,syscheck/ready-bg,#16a34a1a,rename
+color-tag-blue-bd,tag/blue/border,#91caff,rename
+color-tag-blue-bg,tag/blue/bg,#e6f4ff,rename
+color-tag-blue-fg,tag/blue/text,#0958d9,rename
+color-tag-cyan-bd,tag/cyan/border,#87e8de,rename
+color-tag-cyan-bg,tag/cyan/bg,#e6fffb,rename
+color-tag-cyan-fg,tag/cyan/text,#08979c,rename
+color-tag-gold-bd,tag/gold/border,#ffe58f,rename
+color-tag-gold-bg,tag/gold/bg,#fffbe6,rename
+color-tag-gold-fg,tag/gold/text,#ad6800,rename
+color-tag-green-bd,tag/green/border,#b7eb8f,rename
+color-tag-green-bg,tag/green/bg,#f6ffed,rename
+color-tag-green-fg,tag/green/text,#389e0d,rename
+color-tag-purple-bd,tag/purple/border,#d3adf7,rename
+color-tag-purple-bg,tag/purple/bg,#f9f0ff,rename
+color-tag-purple-fg,tag/purple/text,#531dab,rename
+color-tag-red-bd,tag/red/border,#ffccc7,rename
+color-tag-red-bg,tag/red/bg,#fff1f0,rename
+color-tag-red-fg,tag/red/text,#cf1322,rename
+color-text-disabled,text/disabled,#00000073,rename
+color-text-inverse,text/inverse,#ffffff,rename
+color-text-link,text/link,#1677ff,rename
+color-text-placeholder,text/placeholder,#00000040,rename
+color-text-primary,text/primary,#000000e0,rename
+color-text-secondary,text/secondary,#000000a6,rename
+color-tok-comment,syntax/comment,#6a9955,"merge into syntax/comment (repoint uses, delete)"
+color-tok-fn,syntax/fn,#dcdcaa,"merge into syntax/fn (repoint uses, delete)"
+color-tok-keyword,syntax/keyword,#569cd6,"merge into syntax/keyword (repoint uses, delete)"
+color-tok-number,syntax/number,#b5cea8,"merge into syntax/number (repoint uses, delete)"
+color-tok-string,syntax/string,#ce9178,"merge into syntax/string (repoint uses, delete)"
+color-tok-type,syntax/type,#4ec9b0,"merge into syntax/type (repoint uses, delete)"
+color-tooltip-bg,bg/tooltip,#000000d9,rename
+color-warning,status/warning,#d48806,rename
+color-warning-text,status/warning-text,#874d00,rename
+color-wb-amber,whiteboard/amber,#d29922,rename
+color-wb-bg,whiteboard/bg,#13131f,"merge into whiteboard/bg (repoint uses, delete)"
+color-wb-blue,whiteboard/blue,#6ab0ff,rename
+color-wb-border,whiteboard/border,#252540,"merge into whiteboard/border (repoint uses, delete)"
+color-wb-button,whiteboard/border,#252540,"merge into whiteboard/border (repoint uses, delete)"
+color-wb-orange,whiteboard/orange,#ff9f43,rename
+color-wb-purple,whiteboard/purple,#c792ea,rename
+color-wb-text,whiteboard/text,#9999bb,"merge into whiteboard/text (repoint uses, delete)"
+color-wb-toolbar,whiteboard/bar,#1c1c2e,"merge into whiteboard/bar (repoint uses, delete)"
+color-wb-white,whiteboard/white,#e0e0e0,rename
