@@ -191,3 +191,17 @@ fn prototype_links_connect_a_button_to_a_screen() {
     call(&mut h, "set_prototype_links", json!({"links": [{"nodeId": btn, "to": null}]}));
     assert_eq!(h.ed.doc.get(num(&btn)).unwrap().link, None);
 }
+
+#[test]
+fn text_layers_make_only_the_state_text_part_of_the_options() {
+    let mut h = host();
+    let mut mains = Vec::new();
+    for (name, label, note, bg) in [("Linha / Ok", "Autorizada", "XML enviado", "#dcfce7"), ("Linha / Erro", "Rejeitada", "Não enviada", "#fee2e2")] {
+        let m = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": "300px", "height": "40px", "display": "flex"}}));
+        call(&mut h, "write_html", json!({"targetNodeId": m["id"], "html": format!("<span layer-name=\"Nota\">{note}</span><div layer-name=\"Badge\" style=\"display:flex;background:{bg}\"><span layer-name=\"Label\">{label}</span></div>")}));
+        mains.push(call(&mut h, "create_component", json!({"nodeId": m["id"]}))["id"].clone());
+    }
+    let r = call(&mut h, "merge_variants", json!({"componentIds": mains, "name": "Status", "textLayers": ["Badge > Label"]}));
+    let changes = r["changes"].to_string();
+    assert!(changes.contains("Badge > Label: text") && !changes.contains("Nota: text"), "{r}");
+}

@@ -926,6 +926,7 @@ pub fn definitions() -> Vec<Value> {
                 "baseId": {"type": "string", "description": "The variant kept (default: the first)."},
                 "values": {"type": "array", "items": {"type": "string"}, "description": "Option names, in componentIds order (default: each name after its last ' / ')."},
                 "includeText": {"type": "boolean", "description": "Texts that differ are part of the options (default false: instances keep their own texts)."},
+                "textLayers": {"type": "array", "items": {"type": "string"}, "description": "Only these layers' texts are part of the options (a path or its end, e.g. \"Status > Label\"); the other texts stay each instance's."},
                 "deleteMerged": {"type": "boolean", "description": "Delete the emptied variants (default true)."},
                 "pageId": page_id(),
             }),

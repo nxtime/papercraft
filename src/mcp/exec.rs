@@ -5615,6 +5615,9 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
     };
     let prop = a.str("name").unwrap_or("Variant").to_owned();
     let include_text = a.get("includeText").and_then(Value::as_bool).unwrap_or(false);
+    // Only these layers' texts are part of the state (a badge's label), the rest stay the row's.
+    let text_layers = a.strs("textLayers").unwrap_or_default();
+    let text_of_state = |real: &str| include_text || text_layers.iter().any(|t| real == t || real.ends_with(&format!(" > {t}")));
     let given = a.strs("values").unwrap_or_default();
     let names: Vec<String> = ids.iter().enumerate().map(|(i, id)| given.get(i).cloned().unwrap_or_else(|| doc.get(*id).unwrap().name.rsplit(" / ").next().unwrap_or_default().trim().to_owned())).collect();
     let value_of = |i: usize, _: NodeId| names[i].clone();
@@ -5733,7 +5736,7 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
                     record(real.clone(), "color", at, json!(c));
                 }
             }
-            if include_text && bn.kind.text().is_some() && let Some(vt) = vn.kind.text() {
+            if text_of_state(&real) && bn.kind.text().is_some() && let Some(vt) = vn.kind.text() {
                 record(real.clone(), "text", at, json!(vt));
             }
         }
