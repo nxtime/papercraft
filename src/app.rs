@@ -1499,7 +1499,7 @@ impl App {
                     } else {
                         crate::mcp::imagegen::generate(dir.as_deref(), chat.as_deref(), &provider, &c.args)
                     };
-                    let _ = c.reply.send(r);
+                    let _ = c.reply.send(crate::mcp::steer::attach(&c.client, r));
                 });
                 continue;
             }
@@ -1515,7 +1515,7 @@ impl App {
             if let Err(e) = &r {
                 log::info!("mcp {}: {e}", c.name);
             }
-            let _ = c.reply.send(r);
+            let _ = c.reply.send(crate::mcp::steer::attach(&c.client, r));
         }
         self.st.project_name = self.session.project_name();
         self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());

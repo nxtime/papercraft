@@ -30,6 +30,7 @@ pub mod relay;
 pub mod relay_proto;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;
+pub mod steer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 pub mod tools;

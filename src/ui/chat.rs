@@ -58,6 +58,9 @@ const PLAYBOOK_RULE: &str = "\n\nDesign playbook: the design-playbook rules are 
 /// Added when the user set up a helper agent (Settings, Chat, Helper): the chat agent orchestrates.
 const HELPER_RULE: &str = "\n\nHelper. A helper agent on a cheaper model is available through delegate; you orchestrate. Keep the brief, design decisions and anything that needs taste. Hand it: qa after each built screen; read when the work needs many pages, frames, specs or references read (it returns key points; do not reread what it read); build for repetitive or fully specified edits (the same row in ten places, filling a table, applying given markup), with the variables, components and exact structure written into the task. It does not see this chat, so each task is self-contained. Check a build with one narrow read or a qa pass, not by redoing it.";
 
+/// Characters of an added message shown in the composer's queue.
+const ADDED_PREVIEW: usize = 80;
+
 const CHAT_RULES: &str = "In-app chat: the user is watching and can answer at once.
 
 Brief. Before the first design in a project or on an empty page, ask first, even when the request looks specific, unless the user said to go ahead:
@@ -331,6 +334,10 @@ pub struct ChatState {
     pub rx: Option<Receiver<Event>>,
     /// Chat the running turn belongs to: its events go there, whichever chat is open.
     turn_chat: Option<String>,
+    /// Messages added during the running turn (`mcp::steer`), shown until it ends.
+    pub added: Vec<String>,
+    /// Added messages no tool call picked up: sent as the next message once the turn ends.
+    followup: Option<String>,
     /// Stop was pressed; the turn stays occupied until the backend's last event.
     pub stopping: bool,
     /// The last turn ended because the user stopped it: the list says "Stopped", not an error.
@@ -716,6 +723,9 @@ impl ChatState {
         }
         if done {
             self.finish_turn();
+            if let Some(f) = self.followup.take() {
+                let _ = self.send(ctx, &f);
+            }
         } else if busy && parked.is_some() {
             self.save();
         }
@@ -729,7 +739,26 @@ impl ChatState {
         }
     }
 
+    /// Add the draft to the running turn: the agent reads it with its next PaperCraft tool result.
+    pub fn add_to_turn(&mut self) {
+        let text = self.draft.trim().to_owned();
+        let Some(chat) = self.turn_chat.as_deref().filter(|_| !text.is_empty()) else { return };
+        crate::mcp::steer::add(chat, &text);
+        self.added.push(text);
+        self.draft.clear();
+    }
+
     fn finish_turn(&mut self) {
+        // What the agent never picked up: sent next, or back in the box after a Stop.
+        let left = self.turn_chat.as_deref().map(crate::mcp::steer::take).unwrap_or_default().join("\n\n");
+        if !left.is_empty() {
+            if self.stopping {
+                self.draft = if self.draft.is_empty() { left } else { format!("{left}\n\n{}", self.draft) };
+            } else {
+                self.followup = Some(left);
+            }
+        }
+        self.added.clear();
         self.turn = None;
         self.rx = None;
         self.stopped = std::mem::take(&mut self.stopping);
@@ -1899,6 +1928,15 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
     egui::Frame::new().fill(p.popover).corner_radius(theme::RADIUS_PANEL).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 6.0;
+        // Messages added to the running turn: waiting for the agent's next step, or seen.
+        if !st.chat.added.is_empty() {
+            let waiting = st.chat.turn_chat.as_deref().map(crate::mcp::steer::pending).unwrap_or_default();
+            for a in &st.chat.added {
+                let (tag, color) = if waiting.contains(a) { ("Waiting", p.tertiary) } else { ("Seen", p.secondary) };
+                let line: String = a.lines().next().unwrap_or_default().chars().take(ADDED_PREVIEW).collect();
+                ui.label(RichText::new(format!("{tag} \u{b7} {line}")).size(theme::SECONDARY).color(color));
+            }
+        }
         if !st.chat.sels.is_empty() || !st.chat.images.is_empty() {
             ui.horizontal_wrapped(|ui| {
                 let clicked = st.chat.sels.iter().position(|s| sel_chip(ui, &s.label));
@@ -1936,7 +1974,7 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
         } else if !backend_ok {
             "Connect an agent to start chatting"
         } else if running {
-            "Reply, or press Stop to interrupt"
+            "Add to what it is doing (Enter), or press Stop to interrupt"
         } else {
             "Ask for a design, a fix or a review"
         };
@@ -1981,6 +2019,11 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
                     if ui.add_enabled_ui(!stopping, |ui| kit::button(ui, kit::ButtonKind::Danger, None, label).clicked()).inner {
                         st.chat.stop();
                     }
+                    let can = !stopping && !st.chat.draft.trim().is_empty();
+                    let add = ui.add_enabled_ui(can, |ui| kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::ArrowRight), "Add").clicked()).inner;
+                    if add {
+                        st.chat.add_to_turn();
+                    }
                 } else {
                     let can = backend_ok && !no_project && (!st.chat.draft.trim().is_empty() || !st.chat.images.is_empty());
                     ui.add_enabled_ui(can, |ui| {
@@ -1991,6 +2034,9 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
             });
         });
     });
+    if enter && running && !st.chat.stopping {
+        st.chat.add_to_turn();
+    }
     if (submit || enter) && !running && backend_ok && !no_project {
         let ctx = ui.ctx().clone();
         st.chat.sel_notes = selection_notes(ed, &st.chat.sels);
@@ -2008,6 +2054,25 @@ pub fn mode_switch(ui: &mut Ui, chat_mode: bool) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messages_added_during_a_turn_wait_for_the_agent_then_follow_up() {
+        let mut st = ChatState { turn_chat: Some("added-test".into()), ..Default::default() };
+        st.draft = "use the amber badge".into();
+        st.add_to_turn();
+        assert!(st.draft.is_empty());
+        assert_eq!(crate::mcp::steer::pending("added-test"), vec!["use the amber badge".to_string()]);
+        st.finish_turn();
+        assert_eq!(st.followup.take().as_deref(), Some("use the amber badge"), "not picked up: sent next");
+        assert!(st.added.is_empty());
+        // After Stop it goes back into the box instead.
+        st.turn_chat = Some("added-test".into());
+        st.draft = "and a dark mode".into();
+        st.add_to_turn();
+        st.stopping = true;
+        st.finish_turn();
+        assert_eq!((st.draft.as_str(), st.followup.is_none()), ("and a dark mode", true));
+    }
     use crate::chat::claude_code::parse_line_partial;
 
     const TOOL: &str = include_str!("../../tests/fixtures/chat/claude_code_tool.jsonl");
