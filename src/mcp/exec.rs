@@ -3330,6 +3330,12 @@ impl Builder<'_, '_> {
                 }
                 Value::Object(o) => {
                     let mut o = o.clone();
+                    // A nested instance's own properties (a badge's Tone inside a row).
+                    if let Some(Value::Object(props)) = o.remove("props") {
+                        let values: BTreeMap<String, String> = props.iter().map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect();
+                        let defs = self.main_props(target);
+                        self.apply_props(target, &defs, &values);
+                    }
                     if let Some(icon) = o.remove("icon").and_then(|i| i.as_str().map(str::to_owned)) {
                         self.swap_icon(target, &icon);
                     }
@@ -5736,6 +5742,10 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
                     record(real.clone(), "color", at, json!(c));
                 }
             }
+            // A nested instance's property values are part of the state (the badge's Tone).
+            if bn.instance.is_some() && (!bn.prop_values.is_empty() || !vn.prop_values.is_empty()) {
+                record(real.clone(), "props", at, json!(vn.prop_values));
+            }
             if text_of_state(&real) && bn.kind.text().is_some() && let Some(vt) = vn.kind.text() {
                 record(real.clone(), "text", at, json!(vt));
             }
@@ -5799,6 +5809,8 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
         let want = if p == page { None } else { Some(Source::Page(base_page_id.clone())) };
         let mut by_value: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut swaps = Vec::new();
+        // What each moving instance shows now, so its own texts survive the move.
+        let mut shown: Vec<(NodeId, Vec<(String, String)>)> = Vec::new();
         for n in ed.page_doc(p).nodes.values() {
             let Some(l) = &n.instance else { continue };
             let (main, source) = l.target();
@@ -5809,6 +5821,9 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
             let key = node_key(ed, p, n.id);
             if *id != base {
                 swaps.push(key.clone());
+                let pd = ed.page_doc(p);
+                let texts = variant_paths(pd, n.id).into_iter().filter(|(_, real, _)| !text_of_state(real)).filter_map(|(_, real, t)| pd.get(t).and_then(|t| t.kind.text()).map(|s| (real, s.to_string()))).collect();
+                shown.push((n.id, texts));
             }
             // Instances of a base that already had the enum keep their own value.
             let value = match (&existing, *id == base) {
@@ -5830,6 +5845,24 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
             if let Err(e) = set_instance_props(ed, &Args(args.as_object().unwrap())) {
                 warnings.push(e);
             }
+        }
+        if !shown.is_empty() {
+            let pages = all_pages(ed);
+            ed.with_page(p, |ed| {
+                ed.edit("Merge variants", |tx| {
+                    let mut b = Builder { tx, page_id: pid.clone(), all_pages: &pages, ignored: BTreeSet::new(), warnings: Vec::new() };
+                    for (root, texts) in &shown {
+                        let changed: Map<String, Value> = texts
+                            .iter()
+                            .filter(|(path, text)| b.override_target(*root, path).and_then(|t| b.tx.doc().get(t)).and_then(|t| t.kind.text()).is_some_and(|now| now != text))
+                            .map(|(path, text)| (path.clone(), json!(text)))
+                            .collect();
+                        if !changed.is_empty() {
+                            b.apply_override_map(*root, &changed);
+                        }
+                    }
+                })
+            });
         }
     }
     let gone: Vec<String> = kept.iter().filter(|(_, id)| *id != base).map(|(_, id)| node_key(ed, page, *id)).collect();

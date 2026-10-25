@@ -205,3 +205,28 @@ fn text_layers_make_only_the_state_text_part_of_the_options() {
     let changes = r["changes"].to_string();
     assert!(changes.contains("Badge > Label: text") && !changes.contains("Nota: text"), "{r}");
 }
+
+#[test]
+fn merging_rows_keeps_what_each_row_shows_and_sets_the_nested_badge_state() {
+    let mut h = host();
+    let badge = call(&mut h, "create_artboard", json!({"name": "Badge", "styles": {"width": "fit-content", "height": "fit-content", "display": "flex"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": badge["id"], "html": "<span layer-name=\"Label\">Ok</span>"}));
+    let bmain = call(&mut h, "create_component", json!({"nodeId": badge["id"]}))["id"].clone();
+    call(&mut h, "set_component_props", json!({"componentId": bmain, "template": "status", "options": [{"value": "Ok", "color": "#16a34a"}, {"value": "Erro", "color": "#dc2626"}]}));
+    let mut mains = Vec::new();
+    for (name, note, tone) in [("Linha / Ok", "XML enviado", "Ok"), ("Linha / Erro", "Não enviada", "Erro")] {
+        let m = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": "300px", "height": "40px", "display": "flex"}}));
+        call(&mut h, "write_html", json!({"targetNodeId": m["id"], "html": format!("<span layer-name=\"Nota\">{note}</span><x-paper-instance component=\"Badge\" props='{{\"Status\":\"{tone}\"}}'/>")}));
+        mains.push(call(&mut h, "create_component", json!({"nodeId": m["id"]}))["id"].clone());
+    }
+    let screen = call(&mut h, "create_artboard", json!({"name": "S", "styles": {"width": "400px", "height": "100px", "display": "flex"}}));
+    let row = call(&mut h, "create_instance", json!({"componentId": mains[1], "parentId": screen["id"]}));
+    let r = call(&mut h, "merge_variants", json!({"componentIds": mains, "name": "State"}));
+    assert!(r["changes"].to_string().contains("Badge: props"), "{r}");
+    let i = num(&row["id"]);
+    let doc = &h.ed.doc;
+    let text_of = |name: &str| doc.get(named(&h, i, name)).unwrap().kind.text().unwrap().to_string();
+    assert_eq!(text_of("Nota"), "Não enviada", "the row keeps the text it showed");
+    assert_eq!(text_of("Label"), "Erro", "the nested badge takes its state");
+    assert_eq!(fill_hex(&h, named(&h, i, "Label")), "#dc2626");
+}
