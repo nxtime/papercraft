@@ -140,7 +140,42 @@ fn a_variant_with_another_layout_is_left_out_of_a_merge() {
         call(&mut h, "write_html", json!({"targetNodeId": m["id"], "html": "<span layer-name=\"Text\">Oi</span>"}));
         mains.push(call(&mut h, "create_component", json!({"nodeId": m["id"]}))["id"].clone());
     }
-    let r = call(&mut h, "merge_variants", json!({"componentIds": mains, "name": "Side"}));
-    assert!(r["warnings"][0].as_str().unwrap().contains("justifyContent"), "{r}");
+    let e = exec::call(&mut h, "merge_variants", &json!({"componentIds": mains, "name": "Side"})).unwrap_err();
+    assert!(e.contains("justifyContent"), "{e}");
     assert_eq!(call(&mut h, "get_components", json!({}))["components"].as_array().unwrap().len(), 2, "nothing deleted");
+}
+
+#[test]
+fn a_merge_grows_the_base_with_hidden_layers_and_extends_an_existing_enum() {
+    let mut h = host();
+    let make = |h: &mut exec::SessionHost, name: &str, inner: &str, bg: &str| {
+        let m = call(h, "create_artboard", json!({"name": name, "styles": {"width": "16px", "height": "16px", "display": "flex", "background": bg}}));
+        if !inner.is_empty() {
+            call(h, "write_html", json!({"targetNodeId": m["id"], "html": inner}));
+        }
+        call(h, "create_component", json!({"nodeId": m["id"]}))["id"].clone()
+    };
+    let empty = make(&mut h, "Checkbox / Vazio", "", "#ffffff");
+    let half = make(&mut h, "Checkbox / Parcial", "", "#dddddd");
+    let checked = make(&mut h, "Checkbox / Marcado", "<div layer-name=\"Check\" style=\"width:8px;height:8px;background:#000\"></div>", "#0f5132");
+    // Nothing merges when fewer than two can: nothing changes either.
+    assert!(exec::call(&mut h, "merge_variants", &json!({"componentIds": [empty, empty]})).is_err());
+    assert_eq!(call(&mut h, "get_components", json!({}))["components"].as_array().unwrap().len(), 3, "nothing changed");
+    let r = call(&mut h, "merge_variants", json!({"componentIds": [empty, half], "name": "State"}));
+    assert_eq!(r["options"], json!(["Vazio", "Parcial"]), "{r}");
+    // The merged base already has State: Marcado extends it, and its check joins the base hidden.
+    let base = r["component"].clone();
+    let screen = call(&mut h, "create_artboard", json!({"name": "S", "styles": {"width": "100px", "height": "40px", "display": "flex"}}));
+    let inst = call(&mut h, "create_instance", json!({"componentId": checked, "parentId": screen["id"]}));
+    let r = call(&mut h, "merge_variants", json!({"componentIds": [base, checked], "name": "State"}));
+    assert_eq!(r["layersAdded"], 1, "{r}");
+    let comps = call(&mut h, "get_components", json!({}));
+    assert_eq!(comps["components"].as_array().unwrap().len(), 1, "{comps}");
+    assert_eq!(comps["components"][0]["props"][0]["options"], json!(["Vazio", "Parcial", "Marcado"]), "{comps}");
+    let i = num(&inst["id"]);
+    let check = named(&h, i, "Check");
+    assert!(h.ed.doc.get(check).unwrap().visible, "Marcado shows its check");
+    assert_eq!(fill_hex(&h, i), "#0f5132");
+    let main_check = named(&h, num(&base), "Check");
+    assert!(!h.ed.doc.get(main_check).unwrap().visible, "the base keeps it hidden");
 }

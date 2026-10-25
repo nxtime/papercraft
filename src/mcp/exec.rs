@@ -5307,8 +5307,9 @@ fn set_component_props(ed: &mut Editor, a: &Args) -> ToolResult {
             None => defs.push(d),
         }
     }
-    for r in a.strs("remove").unwrap_or_default() {
-        defs.retain(|d| d.name != r);
+    let removed = a.strs("remove").unwrap_or_default();
+    for r in &removed {
+        defs.retain(|d| d.name != *r);
     }
     let stored = defs.clone();
     ed.with_page(page, |ed| {
@@ -5321,7 +5322,7 @@ fn set_component_props(ed: &mut Editor, a: &Args) -> ToolResult {
             tx.node_mut(id).unwrap().props = stored;
         })
     });
-    let instances = reapply_props(ed, page, id, &mut warnings);
+    let instances = reapply_props(ed, page, id, &removed, &mut warnings);
     let summary: Vec<Value> = defs.iter().map(|d| json!({"name": d.name, "kind": d.kind, "layer": d.layer, "options": d.options.iter().map(|o| o.value.clone()).collect::<Vec<_>>()})).collect();
     let mut v = json!({"props": summary, "instancesUpdated": instances, "next": "Set values with set_instance_props, or place with <x-paper-instance component=\"Name\" props='{\"Prop\":\"Value\"}'/>."});
     if !warnings.is_empty() {
@@ -5332,7 +5333,7 @@ fn set_component_props(ed: &mut Editor, a: &Args) -> ToolResult {
 
 /// Re-apply every instance's property values after main `main` (on `main_page`) changed its
 /// definitions, on every page. Returns how many instances were updated.
-fn reapply_props(ed: &mut Editor, main_page: usize, main: NodeId, warnings: &mut Vec<String>) -> usize {
+fn reapply_props(ed: &mut Editor, main_page: usize, main: NodeId, removed: &[String], warnings: &mut Vec<String>) -> usize {
     ed.finish_loading();
     let main_id = ed.pages[main_page].id.clone();
     let defs = ed.page_doc(main_page).get(main).map(|n| n.props.clone()).unwrap_or_default();
@@ -5355,7 +5356,13 @@ fn reapply_props(ed: &mut Editor, main_page: usize, main: NodeId, warnings: &mut
             ed.edit("Component properties", |tx| {
                 let mut b = Builder { tx, page_id, all_pages: &pages, ignored: BTreeSet::new(), warnings: Vec::new() };
                 for (r, values) in &roots {
-                    b.apply_props(*r, &defs, values);
+                    // Values of removed properties go with them.
+                    let mut values = values.clone();
+                    values.retain(|k, _| !removed.contains(k));
+                    if let Some(n) = b.tx.node_mut(*r) {
+                        n.prop_values.retain(|k, _| !removed.contains(k));
+                    }
+                    b.apply_props(*r, &defs, &values);
                 }
                 b.warnings
             })
@@ -5536,7 +5543,10 @@ fn variant_paths(doc: &Document, root: NodeId) -> Vec<(String, String, NodeId)> 
             let k = if key.is_empty() { norm } else { format!("{key} > {norm}") };
             let r = if real.is_empty() { name.clone() } else { format!("{real} > {name}") };
             out.push((k.clone(), r.clone(), *c));
-            stack.push((*c, k, r));
+            // An icon is one unit: a swap replaces its artwork, so its shapes are not compared.
+            if !name.starts_with("Icon / ") {
+                stack.push((*c, k, r));
+            }
         }
     }
     out
@@ -5548,11 +5558,13 @@ fn variant_paths(doc: &Document, root: NodeId) -> Vec<(String, String, NodeId)> 
 /// with its value, and the emptied variants are deleted.
 fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
     let def = page_arg(ed, a)?;
-    let (page, ids) = resolve_all(ed, &a.strs("componentIds")?, def)?;
+    let (page, mut ids) = resolve_all(ed, &a.strs("componentIds")?, def)?;
+    let mut seen = HashSet::new();
+    ids.retain(|i| seen.insert(*i));
     if ids.len() < 2 {
-        return Err("give two or more componentIds".into());
+        return Err("give two or more different componentIds".into());
     }
-    let doc = ed.page_doc(page).clone();
+    let mut doc = ed.page_doc(page).clone();
     for id in &ids {
         if !doc.get(*id).is_some_and(|n| n.component) {
             return Err(format!("{} is not a main component", node_key(ed, page, *id)));
@@ -5565,7 +5577,8 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
     let prop = a.str("name").unwrap_or("Variant").to_owned();
     let include_text = a.get("includeText").and_then(Value::as_bool).unwrap_or(false);
     let given = a.strs("values").unwrap_or_default();
-    let value_of = |i: usize, id: NodeId| given.get(i).cloned().unwrap_or_else(|| doc.get(id).unwrap().name.rsplit(" / ").next().unwrap_or_default().trim().to_owned());
+    let names: Vec<String> = ids.iter().enumerate().map(|(i, id)| given.get(i).cloned().unwrap_or_else(|| doc.get(*id).unwrap().name.rsplit(" / ").next().unwrap_or_default().trim().to_owned())).collect();
+    let value_of = |i: usize, _: NodeId| names[i].clone();
     let base_paths = variant_paths(&doc, base);
     let parent_layout = |id: NodeId| doc.get(id).and_then(|n| n.parent).and_then(|p| doc.get(p)).and_then(|p| p.layout);
     let style_of = |id: NodeId| css::computed(doc.get(id).unwrap(), parent_layout(id).as_ref(), false);
@@ -5575,11 +5588,6 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
     let mut table: BTreeMap<(String, String), Vec<Value>> = BTreeMap::new();
     for (i, id) in ids.iter().enumerate() {
         let paths = variant_paths(&doc, *id);
-        let extra: Vec<&str> = paths.iter().filter(|(k, _, _)| !base_paths.iter().any(|(bk, _, _)| bk == k)).map(|(_, r, _)| r.as_str()).collect();
-        if !extra.is_empty() {
-            warnings.push(format!("left `{}` out: it has layers the base lacks ({})", doc.get(*id).unwrap().name, extra.join(", ")));
-            continue;
-        }
         // Differences an option cannot carry (layout, size, spacing) would be lost: leave it out.
         let mut pairs = vec![(String::from("$root"), base, *id)];
         pairs.extend(base_paths.iter().filter_map(|(bk, real, b)| paths.iter().find(|(k, _, _)| k == bk).map(|(_, _, v)| (real.clone(), *b, *v))));
@@ -5602,6 +5610,49 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
         }
         kept.push((i, *id));
     }
+    if kept.len() < 2 || !kept.iter().any(|(_, id)| *id == base) {
+        return Err(format!("nothing merged: fewer than two variants can share one component. {}", warnings.join("; ")));
+    }
+    // Layers a variant has and the base lacks join the base, hidden; that variant's option shows them.
+    let mut grown = 0;
+    for (_, id) in kept.clone() {
+        if id == base {
+            continue;
+        }
+        let base_now = variant_paths(&doc, base);
+        let paths = variant_paths(&doc, id);
+        let extras: Vec<(String, NodeId)> = paths
+            .iter()
+            .filter(|(k, _, _)| !base_now.iter().any(|(bk, _, _)| bk == k))
+            .filter(|(k, _, _)| k.rsplit_once(" > ").is_none_or(|(parent, _)| base_now.iter().any(|(bk, _, _)| bk == parent)))
+            .map(|(k, _, v)| (k.clone(), *v))
+            .collect();
+        if extras.is_empty() {
+            continue;
+        }
+        ed.with_page(page, |ed| {
+            ed.edit("Merge variants", |tx| {
+                for (k, v) in &extras {
+                    let parent = match k.rsplit_once(" > ") {
+                        Some((pk, _)) => base_now.iter().find(|(bk, _, _)| bk == pk).map(|(_, _, b)| *b),
+                        None => Some(base),
+                    };
+                    let Some(parent) = parent else { continue };
+                    let vn = tx.doc().get(*v).unwrap().clone();
+                    let index = vn.parent.and_then(|vp| tx.doc().children(Some(vp)).iter().position(|c| c == v));
+                    let offset = tx.doc().parent_origin(Some(parent)) - tx.doc().parent_origin(vn.parent);
+                    let (made, _) = clone_subtree(tx, *v, Some(parent), index, offset);
+                    tx.node_mut(made).unwrap().visible = false;
+                    relayout(tx, Some(parent));
+                }
+            })
+        });
+        grown += extras.len();
+        doc = ed.page_doc(page).clone();
+    }
+    let base_paths = variant_paths(&doc, base);
+    let parent_layout = |id: NodeId| doc.get(id).and_then(|n| n.parent).and_then(|p| doc.get(p)).and_then(|p| p.layout);
+    let style_of = |id: NodeId| css::computed(doc.get(id).unwrap(), parent_layout(id).as_ref(), false);
     let n = kept.len();
     let mut record = |key: String, prop: &str, at: usize, v: Value| {
         table.entry((key, prop.to_owned())).or_insert_with(|| vec![Value::Null; n])[at] = v;
@@ -5650,6 +5701,29 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
         })
         .collect();
     let base_value = kept.iter().find(|(_, id)| *id == base).map(|(i, id)| value_of(*i, *id)).ok_or("the base was left out")?;
+    // The base already has this enum (merged before): its options stay, taking the base's look
+    // for what the new variants change, and the new variants are added to them.
+    let existing = doc.get(base).unwrap().props.iter().find(|d| d.name == prop && d.kind == "enum").cloned();
+    let base_at = kept.iter().position(|(_, id)| *id == base).unwrap();
+    let (options, default) = match &existing {
+        Some(d) => {
+            let mut opts = d.options.clone();
+            for o in &mut opts {
+                let set = o.set.as_object_mut().map(std::mem::take).unwrap_or_default();
+                let mut set = set;
+                for ((layer, key), vals) in &table {
+                    let e = set.entry(layer.clone()).or_insert_with(|| json!({}));
+                    if e.get(key.as_str()).is_none() {
+                        e[key.as_str()] = vals[base_at].clone();
+                    }
+                }
+                o.set = Value::Object(set);
+            }
+            opts.extend(options.into_iter().enumerate().filter(|(at, _)| *at != base_at).map(|(_, o)| o));
+            (opts, d.default.clone())
+        }
+        None => (options, Some(base_value.clone())),
+    };
     let family = doc.get(base).unwrap().name.rsplit_once(" / ").map(|(f, _)| f.to_owned());
     let base_key = node_key(ed, page, base);
     // The base becomes the family: its name, and the property.
@@ -5660,7 +5734,7 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
                 m.name = f.clone();
             }
             m.props.retain(|d| d.name != prop);
-            m.props.push(crate::model::PropDef { name: prop.clone(), kind: "enum".into(), options, default: Some(base_value.clone()), ..Default::default() });
+            m.props.push(crate::model::PropDef { name: prop.clone(), kind: "enum".into(), options, default, ..Default::default() });
         })
     });
     // Every instance of a merged variant moves to the base, then takes its value.
@@ -5681,7 +5755,12 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
             if *id != base {
                 swaps.push(key.clone());
             }
-            by_value.entry(value_of(*i, *id)).or_default().push(key);
+            // Instances of a base that already had the enum keep their own value.
+            let value = match (&existing, *id == base) {
+                (Some(_), true) => n.prop_values.get(&prop).cloned().unwrap_or_else(|| base_value.clone()),
+                _ => value_of(*i, *id),
+            };
+            by_value.entry(value).or_default().push(key);
         }
         let pid = ed.pages[p].id.clone();
         for key in &swaps {
@@ -5703,7 +5782,7 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
         let args = json!({"nodeIds": gone, "pageId": ed.pages[page].id});
         delete_nodes(ed, &Args(args.as_object().unwrap()))?;
     }
-    let mut v = json!({"component": base_key, "name": family, "property": prop, "options": kept.iter().map(|(i, id)| value_of(*i, *id)).collect::<Vec<_>>(), "changes": table.keys().map(|(l, k)| format!("{l}: {k}")).collect::<Vec<_>>(), "instancesMoved": moved});
+    let mut v = json!({"component": base_key, "name": family, "property": prop, "options": kept.iter().map(|(i, id)| value_of(*i, *id)).collect::<Vec<_>>(), "changes": table.keys().map(|(l, k)| format!("{l}: {k}")).collect::<Vec<_>>(), "instancesMoved": moved, "layersAdded": grown});
     if !warnings.is_empty() {
         v["warnings"] = json!(warnings);
     }
