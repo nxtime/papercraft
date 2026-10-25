@@ -265,6 +265,17 @@ pub fn definitions() -> Vec<Value> {
             true,
         ),
         tool(
+            "get_inventory",
+            "The whole project for planning in one call: each page's screens (top-level frames \
+             with id, size and a size class: mobile, tablet, desktop, email, pdf-a4), its \
+             component, instance and annotation counts and the notes still marked `? (team)`, \
+             plus every component and the token group sizes. Use it before planning an \
+             implementation instead of one get_tree_summary and get_annotations per page.",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
             "get_design_spec",
             "Export a deterministic AI Design-to-Code specification for a frame or subtree. \
              Includes all design tokens/variables, component instances, exact auto-layout tree \
@@ -275,7 +286,7 @@ pub fn definitions() -> Vec<Value> {
             json!({
                 "nodeId": node_id("Root frame or node id to export."),
                 "target": {"type": "string", "enum": ["react", "tailwind", "angular", "html", "egui"], "description": "Target UI framework (default \"react\")."},
-                "format": {"type": "string", "enum": ["markdown", "json"], "description": "Output format: \"markdown\" (default) or \"json\"."},
+                "format": {"type": "string", "enum": ["markdown", "json", "compact"], "description": "Output format: \"markdown\" (default), \"json\", or \"compact\" (terse text for an implementer: notes, tokens used, kit components, one line per node; no reference code; about 12x fewer tokens than json)."},
                 "pageId": page_id(),
             }),
             &["nodeId"],
@@ -1176,7 +1187,7 @@ pub fn edits_doc(name: &str, args: &Value) -> bool {
 /// `None` for a tool with no class, so a tool added without one fails the test below.
 fn classify(name: &str, args: &Value) -> Option<bool> {
     Some(match name {
-        "list_resources" | "get_basic_info" | "get_selection" | "get_node_info" | "get_children"
+        "list_resources" | "get_basic_info" | "get_inventory" | "get_selection" | "get_node_info" | "get_children"
         | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
         | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "delegate" | "find_nodes" | "get_font_family_info"
         | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"

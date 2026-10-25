@@ -1980,6 +1980,222 @@ pub(crate) fn to_ai_spec_markdown_with_categories(
     Ok(md)
 }
 
+/// Format the AI spec as compact text for an implementer: notes, the tokens the subtree uses,
+/// kit components, component definitions and one line per node. No reference code, no
+/// per-node enforcement prose (`verify_code` checks those). About 12x fewer tokens than JSON.
+pub fn to_ai_spec_compact(doc: &Document, root: NodeId, target: &str) -> Result<String, String> {
+    to_ai_spec_compact_with_categories(doc, root, target, &crate::model::annotation::default_categories())
+}
+
+pub(crate) fn to_ai_spec_compact_with_categories(
+    doc: &Document, root: NodeId, target: &str,
+    categories: &[crate::model::annotation::AnnotationCategory],
+) -> Result<String, String> {
+    let spec = to_ai_spec_with_categories(doc, root, target, categories)?;
+    Ok(format_compact(&spec))
+}
+
+fn format_compact(spec: &Value) -> String {
+    let mut out = format!("# {}\n\n", spec["name"].as_str().unwrap_or("Frame"));
+    if let Some(notes) = spec["annotations"].as_array().filter(|a| !a.is_empty()) {
+        out.push_str("## Notes\n");
+        for n in notes {
+            out.push_str(n.as_str().unwrap_or("").trim_start_matches('/').trim());
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    let mut used = std::collections::BTreeSet::new();
+    collect_tokens(&spec["layoutTree"], &mut used);
+    for d in spec["componentDefinitions"].as_array().into_iter().flatten() {
+        collect_tokens(&d["layoutTree"], &mut used);
+    }
+    if !used.is_empty() {
+        out.push_str("## Tokens used\n");
+        for u in &used {
+            let key = u.trim_start_matches("--");
+            let v = spec["tokens"]["colors"][key].as_str().or(spec["tokens"]["dimensions"][key].as_str()).unwrap_or("?");
+            out.push_str(&format!("{u}: {v}\n"));
+        }
+        out.push('\n');
+    }
+    if let Some(lib) = spec["libraryComponents"].as_array().filter(|l| !l.is_empty()) {
+        out.push_str("## Kit components\n");
+        for l in lib {
+            out.push_str(&format!("{} ({}): {}\n", l["name"].as_str().unwrap_or(""), l["kit"].as_str().unwrap_or(""), l["import"].as_str().unwrap_or("")));
+        }
+        out.push('\n');
+    }
+    if let Some(defs) = spec["componentDefinitions"].as_array().filter(|d| !d.is_empty()) {
+        out.push_str("## Component definitions\n");
+        for d in defs {
+            out.push_str(&format!("### {}\n", d["name"].as_str().unwrap_or("")));
+            compact_node(&d["layoutTree"], 0, &mut out);
+            out.push('\n');
+        }
+    }
+    out.push_str("## Tree\nFormat: Kind \"layer\" WxH layout style. hug/fill = sizing. Tokens as --name. Text: \"content\" size/lineHeight weight color.\n\n");
+    compact_node(&spec["layoutTree"], 0, &mut out);
+    out
+}
+
+fn collect_tokens(n: &Value, used: &mut std::collections::BTreeSet<String>) {
+    let mut add = |v: &Value| {
+        if let Some(s) = v.as_str() {
+            used.insert(s.to_owned());
+        }
+    };
+    add(&n["autoLayout"]["gapToken"]);
+    for t in n["autoLayout"]["paddingTokens"].as_array().into_iter().flatten() {
+        add(t);
+    }
+    for f in n["style"]["fills"].as_array().into_iter().flatten() {
+        add(&f["var"]);
+    }
+    add(&n["style"]["fillVar"]);
+    add(&n["style"]["strokeVar"]);
+    add(&n["style"]["cornerRadiusToken"]);
+    add(&n["text"]["fontSizeToken"]);
+    add(&n["icon"]["colorVar"]);
+    for c in n["children"].as_array().into_iter().flatten() {
+        collect_tokens(c, used);
+    }
+}
+
+/// A token name when bound, else the raw value.
+fn tok(var: &Value, value: &Value) -> String {
+    if let Some(v) = var.as_str() {
+        return v.to_owned();
+    }
+    match value {
+        Value::Number(n) => px_num(n.as_f64().unwrap_or(0.0)),
+        Value::String(s) => s.clone(),
+        _ => "0".into(),
+    }
+}
+
+fn compact_size(n: &Value) -> String {
+    let axis = |mode: &Value, px: &Value| match mode.as_str() {
+        Some("hug") => "hug".to_owned(),
+        Some("fill") => "fill".to_owned(),
+        _ => px_num(px.as_f64().unwrap_or(0.0)),
+    };
+    format!(
+        "{}×{}",
+        axis(&n["sizing"]["horizontal"], &n["bounds"]["width"]),
+        axis(&n["sizing"]["vertical"], &n["bounds"]["height"])
+    )
+}
+
+fn compact_layout(al: &Value) -> Vec<String> {
+    if al.is_null() {
+        return Vec::new();
+    }
+    let mut parts = vec![if al["direction"] == "row" { "row" } else { "col" }.to_owned()];
+    if al["wrap"] == true {
+        parts.push("wrap".into());
+    }
+    let gap = tok(&al["gapToken"], &al["gap"]);
+    if gap != "0" {
+        parts.push(format!("gap={gap}"));
+    }
+    let pad: Vec<&Value> = al["padding"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
+    if pad.iter().any(|v| v.as_f64().unwrap_or(0.0) != 0.0) {
+        let toks = al["paddingTokens"].as_array();
+        let parts_pad: Vec<String> = pad.iter().enumerate().map(|(i, v)| tok(toks.and_then(|t| t.get(i)).unwrap_or(&Value::Null), v)).collect();
+        parts.push(format!("pad=[{}]", parts_pad.join(",")));
+    }
+    if let Some(m) = al["alignMain"].as_str().filter(|m| *m != "start") {
+        parts.push(format!("main={m}"));
+    }
+    if let Some(c) = al["alignCross"].as_str().filter(|c| *c != "start") {
+        parts.push(format!("cross={c}"));
+    }
+    parts
+}
+
+fn compact_style(st: &Value) -> Vec<String> {
+    let mut parts = Vec::new();
+    for f in st["fills"].as_array().into_iter().flatten() {
+        if f["type"] == "solid" {
+            parts.push(format!("bg={}", tok(&f["var"], &f["color"])));
+        } else if let Some(t) = f["type"].as_str() {
+            parts.push(format!("bg={t}"));
+        }
+    }
+    if !st["stroke"].is_null() {
+        parts.push(format!("border={}/{}", tok(&st["strokeVar"], &st["stroke"]), px_num(st["strokeWidth"].as_f64().unwrap_or(1.0))));
+    }
+    if st["cornerRadius"].as_f64().unwrap_or(0.0) > 0.0 {
+        parts.push(format!("r={}", tok(&st["cornerRadiusToken"], &st["cornerRadius"])));
+    }
+    if let Some(o) = st["opacity"].as_f64().filter(|o| *o != 1.0) {
+        parts.push(format!("op={o}"));
+    }
+    if st["clip"] == true {
+        parts.push("clip".into());
+    }
+    parts
+}
+
+fn compact_node(n: &Value, depth: usize, out: &mut String) {
+    let ind = "  ".repeat(depth);
+    let name = n["name"].as_str().unwrap_or("");
+    let kind = n["kind"].as_str().unwrap_or("node");
+    let line = match kind {
+        "text" => {
+            let t = &n["text"];
+            let mut bits = vec![
+                format!("Text {name:?}"),
+                format!("{:?}", t["content"].as_str().unwrap_or("")),
+                format!("{}/{}", tok(&t["fontSizeToken"], &t["fontSize"]), px_num(t["lineHeight"].as_f64().unwrap_or(0.0))),
+                t["fontWeight"].as_u64().unwrap_or(400).to_string(),
+            ];
+            if let Some(a) = t["align"].as_str().filter(|a| *a != "left") {
+                bits.push(a.to_owned());
+            }
+            bits.push(format!("color={}", tok(&n["style"]["fillVar"], &n["style"]["fill"])));
+            if t["autoWidth"] != true {
+                bits.push(format!("w={}", px_num(n["bounds"]["width"].as_f64().unwrap_or(0.0))));
+            }
+            bits.join(" ")
+        }
+        "icon" => {
+            let i = &n["icon"];
+            format!(
+                "Icon {}:{} {} color={}",
+                i["set"].as_str().unwrap_or(""),
+                i["name"].as_str().unwrap_or(""),
+                px_num(i["size"][0].as_f64().unwrap_or(0.0)),
+                tok(&i["colorVar"], &i["color"])
+            )
+        }
+        "library" => {
+            let l = &n["library"];
+            let usage = l["usage"].as_str().filter(|u| !u.is_empty()).or(l["react"].as_str()).unwrap_or("");
+            format!("Kit {} {}", l["kit"].as_str().unwrap_or(""), usage.lines().next().unwrap_or(""))
+        }
+        _ if !n["instanceOf"].is_null() => {
+            let of = n["instanceOf"]["component"].as_str().unwrap_or("");
+            format!("Instance {name:?} of {of:?} {}", compact_size(n))
+        }
+        "vector" => format!("Vector {name:?} {}", compact_size(n)),
+        _ => {
+            let mut bits = vec![format!("{}{} {name:?}", kind[..1].to_ascii_uppercase(), &kind[1..]), compact_size(n)];
+            bits.extend(compact_layout(&n["autoLayout"]));
+            bits.extend(compact_style(&n["style"]));
+            bits.join(" ")
+        }
+    };
+    out.push_str(&format!("{ind}{line}\n"));
+    if matches!(kind, "icon" | "library") || !n["instanceOf"].is_null() {
+        return;
+    }
+    for c in n["children"].as_array().into_iter().flatten() {
+        compact_node(c, depth + 1, out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

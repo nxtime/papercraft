@@ -128,6 +128,51 @@ fn spec_describes_icons_vectors_text_tokens_and_components() {
 }
 
 #[test]
+fn compact_spec_is_one_line_per_node_with_tokens_and_no_reference_code() {
+    let mut h = host();
+    call(&mut h, "set_variables", json!({"variables": {"accent": "#cba6f7", "surface": "#181825"}}));
+    call(&mut h, "set_tokens", json!({"tokens": {"space-3": "12px", "text-sm": "14px"}}));
+    let board = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Card", "styles": {"width": "320px", "height": "fit-content", "padding": "12px", "gap": "12px", "backgroundColor": "var(--surface)", "display": "flex", "flexDirection": "column"}}),
+    );
+    let html = r##"<div layer-name="Icon / lucide:check" style="width:24px;height:24px"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7" fill="none" stroke="#cba6f7" stroke-width="2"/></svg></div><div layer-name="Title" style="font-size:14px;font-weight:700;line-height:20px;color:var(--accent)">Hello</div>"##;
+    call(&mut h, "write_html", json!({"targetNodeId": board["id"], "mode": "insert-children", "html": html}));
+    let json_len = call(&mut h, "get_design_spec", json!({"nodeId": board["id"], "format": "json"})).to_string().len();
+    let compact = call(&mut h, "get_design_spec", json!({"nodeId": board["id"], "format": "compact"}));
+    let text = compact.as_str().expect("compact is text");
+    assert!(text.contains("Frame \"Card\" 320×hug col gap=--space-3 pad=[--space-3,--space-3,--space-3,--space-3] bg=--surface"), "{text}");
+    assert!(text.contains("Icon lucide:check 24 color=--accent"), "{text}");
+    assert!(text.contains("Text \"Title\" \"Hello\" --text-sm/20 700 color=--accent"), "{text}");
+    assert!(text.contains("--surface: #181825") && text.contains("--space-3: 12px"), "{text}");
+    assert!(!text.contains("MUST") && !text.contains("<div"), "no rules or reference code: {text}");
+    assert!(text.len() * 4 < json_len, "compact {} vs json {json_len}", text.len());
+}
+
+#[test]
+fn inventory_lists_screens_by_size_class_and_open_questions() {
+    let mut h = host();
+    let phone = call(&mut h, "create_artboard", json!({"name": "Home", "styles": {"width": "390px", "height": "844px"}}));
+    call(&mut h, "create_artboard", json!({"name": "Dashboard", "styles": {"width": "1440px", "height": "900px"}}));
+    call(&mut h, "create_artboard", json!({"name": "Weekly e-mail", "styles": {"width": "640px", "height": "900px"}}));
+    call(&mut h, "annotate", json!({"notes": [
+        {"node": phone["id"], "text": "Check-in radius\n200 m ? (team)"},
+        {"node": phone["id"], "text": "Camera only\nNo gallery"}
+    ]}));
+    let inv = call(&mut h, "get_inventory", json!({}));
+    assert_eq!(inv["screens"], 3);
+    let page = &inv["pages"][0];
+    let classes: Vec<&str> = page["screens"].as_array().unwrap().iter().map(|s| s["class"].as_str().unwrap()).collect();
+    assert_eq!(classes, ["mobile", "desktop", "email"]);
+    assert_eq!(page["annotations"], 2);
+    let open = page["openQuestions"].as_array().unwrap();
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["layer"], "Home");
+    assert!(open[0]["text"].as_str().unwrap().contains("200 m"));
+}
+
+#[test]
 fn vector_svg_in_the_spec_starts_at_the_origin() {
     let mut h = host();
     let board = call(

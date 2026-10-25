@@ -292,6 +292,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "rename_pages" => rename_pages(ed, &a),
                 "delete_pages" => delete_pages(ed, &a),
                 "get_basic_info" => basic_info(host, &a),
+                "get_inventory" => get_inventory(ed),
                 "get_selection" => selection(ed),
                 "get_node_info" => node_info(ed, &a),
                 "get_children" => children(ed, &a),
@@ -649,6 +650,88 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
             .sum::<usize>(),
         "nodeIdFormat": "\"<page>:<n>\", e.g. \"".to_string() + &node_key(ed, page, NodeId(1)) + "\"",
         "viewport": viewport_json(ed),
+    }))
+}
+
+/// Which device a screen is drawn for, from its artboard size.
+fn size_class(w: f64, h: f64) -> &'static str {
+    let near = |a: f64, b: f64| (a - b).abs() < 1.0;
+    if (near(w, 1123.0) && near(h, 794.0)) || (near(w, 794.0) && near(h, 1123.0)) {
+        "pdf-a4"
+    } else if (600.0..=640.0).contains(&w) {
+        "email"
+    } else if w < 480.0 {
+        "mobile"
+    } else if w < 1100.0 {
+        "tablet"
+    } else {
+        "desktop"
+    }
+}
+
+/// The whole project for planning, in one call: every page's screens (top-level frames with a
+/// size class), its component, instance and note counts, the notes still marked `? (team)`,
+/// every component and the token groups. Replaces one `get_tree_summary` and one
+/// `get_annotations` per page.
+fn get_inventory(ed: &mut Editor) -> ToolResult {
+    ed.finish_loading();
+    let ed: &Editor = ed;
+    let pages: Vec<Value> = ed
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let doc = ed.page_doc(i);
+            let screens: Vec<Value> = doc
+                .root
+                .iter()
+                .filter_map(|id| doc.get(*id))
+                .filter(|n| n.is_frame() && !n.component)
+                .map(|n| {
+                    json!({"id": node_key(ed, i, n.id), "name": n.name, "width": r2(n.rect.w),
+                        "height": r2(n.rect.h), "class": size_class(n.rect.w, n.rect.h)})
+                })
+                .collect();
+            let open: Vec<Value> = doc
+                .annotations
+                .iter()
+                .filter(|a| a.label.contains("? (team)") || a.body.contains("? (team)"))
+                .map(|a| {
+                    let layer = a.target.and_then(|t| doc.get(t)).map(|n| n.name.clone());
+                    json!({"layer": layer, "text": format!("{}\n{}", a.label, a.body).trim()})
+                })
+                .collect();
+            json!({
+                "id": p.id, "name": p.name, "nodeCount": doc.nodes.len(),
+                "screens": screens,
+                "components": doc.nodes.values().filter(|n| n.component).count(),
+                "instances": doc.nodes.values().filter(|n| n.instance.is_some()).count(),
+                "annotations": doc.annotations.len(),
+                "openQuestions": open,
+            })
+        })
+        .collect();
+    let components: Vec<Value> = (0..ed.pages.len())
+        .flat_map(|i| {
+            let doc = ed.page_doc(i);
+            let mut comps: Vec<&Node> = doc.nodes.values().filter(|n| n.component).collect();
+            comps.sort_by_key(|n| n.id);
+            comps
+                .into_iter()
+                .map(|c| json!({"name": c.name, "page": ed.pages[i].name, "width": r2(c.rect.w), "height": r2(c.rect.h)}))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let doc = ed.page_doc(ed.active_page);
+    text(json!({
+        "pages": pages,
+        "screens": pages.iter().map(|p| p["screens"].as_array().map_or(0, Vec::len)).sum::<usize>(),
+        "components": components,
+        "tokens": {
+            "colors": doc.variables.len(),
+            "dimensions": doc.tokens.len(),
+            "modes": doc.modes.keys().collect::<Vec<_>>(),
+        },
     }))
 }
 
@@ -2014,8 +2097,12 @@ fn get_design_spec(ed: &mut Editor, a: &Args) -> ToolResult {
             let spec = super::codegen::to_ai_spec_with_categories(doc, id, target, &ed.design.categories())?;
             text(spec)
         }
+        "compact" => {
+            let s = super::codegen::to_ai_spec_compact_with_categories(doc, id, target, &ed.design.categories())?;
+            Ok(vec![Out::Text(s)])
+        }
         other => Err(format!(
-            "unknown format `{other}` (expected markdown or json)"
+            "unknown format `{other}` (expected markdown, json or compact)"
         )),
     }
 }
