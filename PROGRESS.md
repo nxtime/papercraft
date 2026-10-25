@@ -76,6 +76,11 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (prototype links tool, merge icon colours)
+
+* `set_prototype_links`: agents can link a layer to a screen for Present mode (back arrows, rows, tabs); before, only the inspector could.
+* `merge_variants` compares an icon's colour (keeping its variable), now that icons are compared as one unit.
+
 ### 2026-10-25: unreleased (data safety fixes)
 
 * Sync no longer throws away an instance written over a nested one the way older versions stored it (its own root, no swap): it becomes a swap of the main's child at that place. Projects built before #11 lost such layers (a checked checkbox, a status badge) on the next edit of the outer main.

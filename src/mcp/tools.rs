@@ -898,6 +898,21 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "set_prototype_links",
+            "Prototype links for Present mode: clicking a layer (a button, a row, a tab) goes to a \
+             screen on the same page. `to: null` removes a link. Link every entry point you design \
+             (back arrows, list rows, tabs) so the flow can be clicked through.",
+            json!({
+                "links": {"type": "array", "items": {"type": "object", "properties": {
+                    "nodeId": {"type": "string"},
+                    "to": {"type": ["string", "null"], "description": "The screen (a frame on the same page)."},
+                }, "required": ["nodeId"]}},
+                "pageId": page_id(),
+            }),
+            &["links"],
+            false,
+        ),
+        tool(
             "merge_variants",
             "Turn per-state components (`Tab bar / Hoje`, `Tab bar / Lojas`, `Status / Sucesso`...) \
              into one component with an enum property: each variant's differences from the base \
@@ -1175,7 +1190,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
         | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "apply_ui_kit" | "set_code_link"
-        | "set_component_props" | "set_instance_props" | "merge_variants"
+        | "set_component_props" | "set_instance_props" | "merge_variants" | "set_prototype_links"
         | "duplicate_nodes" | "move_nodes" | "undo" | "redo" => true,
         _ => return None,
     })

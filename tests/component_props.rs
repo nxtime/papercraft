@@ -179,3 +179,15 @@ fn a_merge_grows_the_base_with_hidden_layers_and_extends_an_existing_enum() {
     let main_check = named(&h, num(&base), "Check");
     assert!(!h.ed.doc.get(main_check).unwrap().visible, "the base keeps it hidden");
 }
+
+#[test]
+fn prototype_links_connect_a_button_to_a_screen() {
+    let mut h = host();
+    let a = call(&mut h, "create_artboard", json!({"name": "A", "styles": {"width": "100px", "height": "100px", "display": "flex"}}));
+    let b = call(&mut h, "create_artboard", json!({"name": "B", "styles": {"width": "100px", "height": "100px"}}));
+    let btn = call(&mut h, "write_html", json!({"targetNodeId": a["id"], "html": "<div style=\"width:40px;height:20px\"></div>"}))["createdNodeIds"][0].clone();
+    call(&mut h, "set_prototype_links", json!({"links": [{"nodeId": btn, "to": b["id"]}]}));
+    assert_eq!(h.ed.doc.get(num(&btn)).unwrap().link, Some(num(&b["id"])));
+    call(&mut h, "set_prototype_links", json!({"links": [{"nodeId": btn, "to": null}]}));
+    assert_eq!(h.ed.doc.get(num(&btn)).unwrap().link, None);
+}

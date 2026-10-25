@@ -328,6 +328,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "set_component_props" => set_component_props(ed, &a),
                 "set_instance_props" => set_instance_props(ed, &a),
                 "merge_variants" => merge_variants(ed, &a),
+                "set_prototype_links" => set_prototype_links(ed, &a),
                 "export" => export(host, &a),
                 "export_combined_pdf" => export_pdf(host, &a),
                 "create_artboard" => create_artboard(ed, &a),
@@ -4973,6 +4974,15 @@ fn recolor_vectors(tx: &mut Tx, id: NodeId, styles: &Styles) -> bool {
     true
 }
 
+/// An icon's colour as CSS: its first shape's fill variable (`var(--primary)`), else its colour.
+fn vector_paint_css(doc: &Document, id: NodeId) -> Option<String> {
+    let shape = doc.subtree(id).into_iter().filter_map(|i| doc.get(i)).find(|n| matches!(n.kind, NodeKind::Path { .. }))?;
+    match shape.style.fills.last() {
+        Some(Paint::Solid { var: Some(v), .. }) => Some(format!("var(--{v})")),
+        _ => vector_color(doc, id).map(|c| c.to_hex()),
+    }
+}
+
 /// The colour an icon's shapes are drawn in: the first shape's stroke, else its fill.
 fn vector_color(doc: &Document, id: NodeId) -> Option<Color> {
     doc.subtree(id).into_iter().filter_map(|i| doc.get(i)).filter(|n| matches!(n.kind, NodeKind::Path { .. })).find_map(|n| n.style.stroke.or_else(|| n.style.fill()))
@@ -5251,6 +5261,33 @@ fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
         .map(|n| json!({"id": node_key(ed, page, n.id), "name": n.name, "text": n.kind.text()}))
         .collect();
     text(json!({"id": node_key(ed, page, id), "textLayers": texts, "layers": layers}))
+}
+
+/// Prototype links: clicking `nodeId` in Present mode goes to frame `to` (same page); `to: null`
+/// removes the link.
+fn set_prototype_links(ed: &mut Editor, a: &Args) -> ToolResult {
+    let page = page_arg(ed, a)?;
+    let mut set = Vec::new();
+    for l in a.arr("links")? {
+        let l = Args(l.as_object().ok_or("each link must be an object")?);
+        let (p, from) = resolve(ed, l.req_str("nodeId")?, page)?;
+        let to = match l.str("to").filter(|t| !t.is_empty()) {
+            Some(t) => {
+                let (tp, to) = resolve(ed, t, p)?;
+                if tp != p || !ed.page_doc(p).get(to).is_some_and(|n| n.is_frame()) {
+                    return Err(format!("`{t}` must be a frame on the same page"));
+                }
+                Some(to)
+            }
+            None => None,
+        };
+        set.push((p, from, to));
+    }
+    let n = set.len();
+    for (p, from, to) in set {
+        ed.with_page(p, |ed| ed.edit("Prototype link", |tx| tx.node_mut(from).unwrap().link = to));
+    }
+    text(json!({"linked": n}))
 }
 
 /// The inspector's way to set instance properties on the page being viewed.
@@ -5691,6 +5728,10 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
             }
             if vn.name.starts_with("Icon / ") && bn.name.starts_with("Icon / ") {
                 record(real.clone(), "icon", at, json!(vn.name.trim_start_matches("Icon / ")));
+                // An icon's colour is its shapes' colour (`color` recolours them).
+                if let Some(c) = vector_paint_css(&doc, v) {
+                    record(real.clone(), "color", at, json!(c));
+                }
             }
             if include_text && bn.kind.text().is_some() && let Some(vt) = vn.kind.text() {
                 record(real.clone(), "text", at, json!(vt));
