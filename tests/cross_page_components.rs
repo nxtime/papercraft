@@ -374,9 +374,13 @@ fn a_scrolling_screen_keeps_its_size_and_the_wheel_scrolls_its_overflow() {
     h.ed.camera = Default::default();
     let over = v2(100.0, 100.0);
     let pan = h.ed.camera.pan;
+    let bar = call(&mut h, "write_html", json!({"targetNodeId": key, "html": "<div style=\"position:absolute;left:0px;bottom:0px;width:390px;height:64px;background:#fff\"></div>"}))["createdNodeIds"][0].clone();
+    let bar = num(&bar);
+    let bar_y = h.ed.doc.world_rect(bar).unwrap().y;
     h.ed.handle(InputEvent::Scroll { delta: v2(0.0, 200.0), pos: over });
     assert_eq!(h.ed.doc.get(ab).unwrap().scroll_y, 200.0);
     assert_eq!(h.ed.doc.world_rect(kid).unwrap().y, -200.0, "the content moved up");
+    assert_eq!(h.ed.doc.world_rect(bar).unwrap().y, bar_y, "an absolute bar stays pinned");
     assert_eq!(h.ed.camera.pan, pan, "the canvas stayed");
     h.ed.handle(InputEvent::Scroll { delta: v2(0.0, 1000.0), pos: over });
     assert_eq!(h.ed.doc.get(ab).unwrap().scroll_y, 356.0, "stops at the end of the content");

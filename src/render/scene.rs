@@ -234,7 +234,10 @@ impl SceneCache {
         }
         let o = wr.min() - crate::geom::v2(0.0, n.scroll_y);
         for c in &n.children {
-            self.walk(doc, *c, o, child_clip, opacity, bucket, tess, cull, out);
+            // Absolute children of a scrolled frame stay put (`Document::world_rect`).
+            let pinned = doc.get(*c).is_some_and(|k| k.layout_child.absolute);
+            let co = if pinned { wr.min() } else { o };
+            self.walk(doc, *c, co, child_clip, opacity, bucket, tess, cull, out);
         }
         if visible && draw::border_on_top(n) {
             let hit = self.borders.get(&id).is_some_and(|e| e.bucket == bucket && e.wr == wr && e.opacity == opacity && e.node == *n);

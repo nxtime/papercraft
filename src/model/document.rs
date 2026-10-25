@@ -103,12 +103,23 @@ impl Document {
 
     /// World-space position of a node's local coordinate origin's parent space.
     pub fn parent_origin(&self, parent: Option<NodeId>) -> V2 {
+        self.origin_below(parent, false)
+    }
+
+    /// Where `parent`'s content starts, for a child that is (`pinned`) or is not absolutely
+    /// positioned: a scrolled frame shifts its flow content up, while its absolute children (a
+    /// tab bar, a floating button) stay put, like `position: fixed` inside a scrolling screen.
+    fn origin_below(&self, parent: Option<NodeId>, pinned: bool) -> V2 {
         let mut o = V2::ZERO;
         let mut cur = parent;
+        let mut pinned = pinned;
         while let Some(id) = cur {
             let Some(n) = self.nodes.get(&id) else { break };
-            // A scrolled frame shifts its content up.
-            o = o + n.rect.min() - V2 { x: 0.0, y: n.scroll_y };
+            o = o + n.rect.min();
+            if !pinned {
+                o = o - V2 { x: 0.0, y: n.scroll_y };
+            }
+            pinned = n.layout_child.absolute;
             cur = n.parent;
         }
         o
@@ -116,7 +127,7 @@ impl Document {
 
     pub fn world_rect(&self, id: NodeId) -> Option<Rect> {
         let n = self.nodes.get(&id)?;
-        Some(n.rect.translate(self.parent_origin(n.parent)))
+        Some(n.rect.translate(self.origin_below(n.parent, n.layout_child.absolute)))
     }
 
     pub fn ancestors(&self, id: NodeId) -> Vec<NodeId> {

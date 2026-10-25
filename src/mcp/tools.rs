@@ -898,6 +898,26 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "merge_variants",
+            "Turn per-state components (`Tab bar / Hoje`, `Tab bar / Lojas`, `Status / Sucesso`...) \
+             into one component with an enum property: each variant's differences from the base \
+             (fills, colours, borders, weight, radius, visibility, icons; texts with includeText) \
+             become its option, every instance on every page moves to the base with its value, \
+             the base takes the family name and the emptied variants are deleted. A variant with \
+             layers the base lacks is left out (reported).",
+            json!({
+                "componentIds": {"type": "array", "items": {"type": "string"}, "description": "The variants (same page)."},
+                "name": {"type": "string", "description": "The property's name (Active, Status, State)."},
+                "baseId": {"type": "string", "description": "The variant kept (default: the first)."},
+                "values": {"type": "array", "items": {"type": "string"}, "description": "Option names, in componentIds order (default: each name after its last ' / ')."},
+                "includeText": {"type": "boolean", "description": "Texts that differ are part of the options (default false: instances keep their own texts)."},
+                "deleteMerged": {"type": "boolean", "description": "Delete the emptied variants (default true)."},
+                "pageId": page_id(),
+            }),
+            &["componentIds"],
+            false,
+        ),
+        tool(
             "set_instance_props",
             "Set property values on instances in one call ({\"Status\": \"Rejeitada\", \"Label\": \"NF 10.371\"}); \
              get_components lists each component's properties and options. In write_html: \
@@ -1155,7 +1175,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
         | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "apply_ui_kit" | "set_code_link"
-        | "set_component_props" | "set_instance_props"
+        | "set_component_props" | "set_instance_props" | "merge_variants"
         | "duplicate_nodes" | "move_nodes" | "undo" | "redo" => true,
         _ => return None,
     })

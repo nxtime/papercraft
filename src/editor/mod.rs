@@ -2590,6 +2590,7 @@ mod tests;
 pub fn scroll_range(doc: &crate::model::Document, id: NodeId) -> f64 {
     let Some(n) = doc.get(id) else { return 0.0 };
     let pad = n.layout.map_or(0.0, |l| l.padding[2]);
-    let bottom = n.children.iter().filter_map(|c| doc.get(*c)).filter(|c| c.visible).map(|c| c.rect.bottom()).fold(0.0, f64::max);
+    // Pinned (absolute) children do not scroll, so they do not add to the range.
+    let bottom = n.children.iter().filter_map(|c| doc.get(*c)).filter(|c| c.visible && !c.layout_child.absolute).map(|c| c.rect.bottom()).fold(0.0, f64::max);
     (bottom + pad - n.rect.h).max(0.0)
 }

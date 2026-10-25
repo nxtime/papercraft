@@ -89,3 +89,44 @@ fn the_active_template_highlights_one_item_of_a_tab_bar() {
     assert_eq!(fill_hex(&h, off.id), "#6b7280");
     assert!(on.text_style.bold && !off.text_style.bold, "{:?}", on.text_style);
 }
+
+#[test]
+fn per_state_components_merge_into_one_with_an_enum() {
+    let mut h = host();
+    let ds = call(&mut h, "get_basic_info", json!({}))["page"]["id"].clone();
+    let other = call(&mut h, "create_page", json!({"name": "Screens"}))["pageId"].clone();
+    let mut mains = Vec::new();
+    for (name, active) in [("Hoje", 0), ("Lojas", 1), ("Pedidos", 2)] {
+        let bar = call(&mut h, "create_artboard", json!({"pageId": ds, "name": format!("Tab bar / {name}"), "styles": {"width": "390px", "height": "64px", "display": "flex"}}));
+        let items: String = ["Hoje", "Lojas", "Pedidos"].iter().enumerate().map(|(i, t)| {
+            let c = if i == active { "#0f5132" } else { "#6b7280" };
+            format!("<div layer-name=\"{t}\" style=\"display:flex\"><span layer-name=\"Label\" style=\"font-size:12px;color:{c}\">{t}</span></div>")
+        }).collect();
+        call(&mut h, "write_html", json!({"pageId": ds, "targetNodeId": bar["id"], "html": items}));
+        mains.push(call(&mut h, "create_component", json!({"pageId": ds, "nodeId": bar["id"]}))["id"].clone());
+    }
+    // Instances of each variant on another page.
+    let screen = call(&mut h, "create_artboard", json!({"pageId": other, "name": "S", "styles": {"width": "400px", "height": "300px", "display": "flex", "flexDirection": "column"}}));
+    for v in &mains {
+        call(&mut h, "create_instance", json!({"pageId": other, "componentId": v, "parentId": screen["id"]}));
+    }
+    let r = call(&mut h, "merge_variants", json!({"pageId": ds, "componentIds": mains, "name": "Active"}));
+    assert_eq!(r["options"], json!(["Hoje", "Lojas", "Pedidos"]), "{r}");
+    assert_eq!(r["instancesMoved"], 3, "{r}");
+    let comps = call(&mut h, "get_components", json!({}));
+    let list = comps["components"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "the emptied variants are gone: {comps}");
+    assert_eq!(list[0]["name"], "Tab bar");
+    assert_eq!(list[0]["uses"], 3);
+    // The Pedidos instance shows Pedidos active.
+    let doc = h.ed.page_doc(1);
+    let s = doc.get(num(&screen["id"])).unwrap();
+    let third = s.children[2];
+    let label_of = |item: &str| {
+        let it = doc.subtree(third).into_iter().find(|i| doc.get(*i).is_some_and(|n| n.name == item)).unwrap();
+        let l = doc.subtree(it).into_iter().find(|i| doc.get(*i).is_some_and(|n| n.name == "Label")).unwrap();
+        match doc.get(l).unwrap().style.fills.last() { Some(Paint::Solid { color, .. }) => color.to_hex(), _ => String::new() }
+    };
+    assert_eq!((label_of("Pedidos"), label_of("Hoje")), ("#0f5132".into(), "#6b7280".into()));
+    assert_eq!(doc.get(third).unwrap().prop_values["Active"], "Pedidos");
+}

@@ -76,6 +76,11 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (merge variants, pinned bars)
+
+* `merge_variants`: per-state components (`Tab bar / Hoje`, `Status / Sucesso`...) become one component with an enum property. Each variant's differences from the base, matched by layer path (fills, colours, borders, weight, radius, visibility, icons; texts on request), become its option; every instance on every page moves to the base with its value; the base takes the family name; the emptied variants are deleted. A variant with layers the base lacks is left out and reported.
+* Absolute children of a scrolling screen stay pinned while its content scrolls (a tab bar, a floating button), and do not add to the scroll range.
+
 ### 2026-10-25: unreleased (fix #22)
 
 * #22: a hug column whose width comes from its parent (stretched or filled) re-measures its height once its text wraps at that width, and the parent measures again, instead of keeping a height measured while the text was narrow.
