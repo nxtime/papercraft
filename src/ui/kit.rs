@@ -666,3 +666,36 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, Option<&str>)], selected: usize) -
     }
     picked
 }
+
+/// Width of a skeleton's moving highlight, as a share of the shape.
+const SHIMMER_BAND: f32 = 0.35;
+/// Sweeps per second of a skeleton's highlight.
+const SHIMMER_SPEED: f32 = 0.8;
+
+/// A loading skeleton over `rect`: a soft fill with a highlight sweeping across, at `alpha`.
+pub fn skeleton(painter: &egui::Painter, rect: egui::Rect, t: f32, alpha: f32) {
+    if alpha <= 0.0 || !rect.is_positive() {
+        return;
+    }
+    let p = theme::pal_from_ctx(painter.ctx());
+    painter.rect_filled(rect, 6.0, p.field.gamma_multiply(alpha));
+    let band = rect.width() * SHIMMER_BAND;
+    let x = rect.left() - band + (t * SHIMMER_SPEED).fract() * (rect.width() + band);
+    let (l, r) = (x.max(rect.left()), (x + band).min(rect.right()));
+    if r <= l {
+        return;
+    }
+    let lit = p.hover.gamma_multiply(alpha * 2.0);
+    let clear = egui::Color32::TRANSPARENT;
+    let mut mesh = egui::Mesh::default();
+    let mid = x + band / 2.0;
+    for (px, c) in [(l, clear), (mid.clamp(l, r), lit), (r, clear)] {
+        mesh.colored_vertex(egui::pos2(px, rect.top()), c);
+        mesh.colored_vertex(egui::pos2(px, rect.bottom()), c);
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 2, 3);
+    mesh.add_triangle(2, 3, 4);
+    mesh.add_triangle(3, 4, 5);
+    painter.add(egui::Shape::mesh(mesh));
+}

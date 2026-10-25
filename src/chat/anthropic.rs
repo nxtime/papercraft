@@ -71,6 +71,9 @@ impl SseParser {
                 if !raw.is_object() {
                     return out.push(Event::Error(format!("unexpected content_block at index {idx}: {raw}")));
                 }
+                if raw["type"] == "tool_use" {
+                    out.push(Event::ToolDraft { id: str_of(&raw["id"]), name: str_of(&raw["name"]) });
+                }
                 self.blocks.insert(idx, Block { raw, json: String::new() });
             }
             Some("content_block_delta") => self.delta(idx, &v["delta"], out),
@@ -126,7 +129,13 @@ impl SseParser {
                 out.push(Event::Thinking(s));
             }
             Some("signature_delta") => append(&mut b.raw, "signature", d["signature"].as_str().unwrap_or("")),
-            Some("input_json_delta") => b.json.push_str(d["partial_json"].as_str().unwrap_or("")),
+            Some("input_json_delta") => {
+                let s = d["partial_json"].as_str().unwrap_or("");
+                b.json.push_str(s);
+                if b.raw["type"] == "tool_use" && !s.is_empty() {
+                    out.push(Event::ToolInput(s.into()));
+                }
+            }
             _ => {}
         }
     }
@@ -841,7 +850,7 @@ mod api {
             // One Context event per request: the latest call's input and cache tokens (120, then 160).
             let contexts: Vec<u64> = ev.iter().filter_map(|e| if let Event::Context(n) = e { Some(*n) } else { None }).collect();
             assert_eq!(contexts, [120, 160], "{ev:?}");
-            let ev: Vec<Event> = ev.into_iter().filter(|e| !matches!(e, Event::Context(_))).collect();
+            let ev: Vec<Event> = ev.into_iter().filter(|e| !matches!(e, Event::Context(_) | Event::ToolDraft { .. } | Event::ToolInput(_))).collect();
             let kinds: Vec<&str> = ev
                 .iter()
                 .map(|e| match e {
@@ -1014,8 +1023,10 @@ mod tests {
     /// Feed in awkward 7-byte chunks (fixtures are ASCII) to prove line buffering.
     fn run(src: &str) -> (SseParser, Vec<Event>) {
         let mut p = SseParser::default();
-        let ev = src.as_bytes().chunks(7).flat_map(|c| p.push(std::str::from_utf8(c).unwrap())).collect();
-        (p, ev)
+        let ev: Vec<Event> = src.as_bytes().chunks(7).flat_map(|c| p.push(std::str::from_utf8(c).unwrap())).collect();
+        // Tool calls are also announced while they stream; the rest of each test reads past that.
+        assert!(!src.contains("\"tool_use\"") || ev.iter().any(|e| matches!(e, Event::ToolDraft { .. })), "{ev:?}");
+        (p, ev.into_iter().filter(|e| !matches!(e, Event::ToolDraft { .. } | Event::ToolInput(_))).collect())
     }
 
     #[test]

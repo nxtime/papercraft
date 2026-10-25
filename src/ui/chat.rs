@@ -61,6 +61,31 @@ const AUTO_RULE: &str = "\n\nAuto mode is on: the user is away. Every ask_user c
 /// Added when the user set up a helper agent (Settings, Chat, Helper): the chat agent orchestrates.
 const HELPER_RULE: &str = "\n\nHelper. A helper agent on a cheaper model is available through delegate; you orchestrate. Keep the brief, design decisions and anything that needs taste. Hand it: qa after each built screen; read when the work needs many pages, frames, specs or references read (it returns key points; do not reread what it read); build for repetitive or fully specified edits (the same row in ten places, filling a table, applying given markup), with the variables, components and exact structure written into the task. It does not see this chat, so each task is self-contained. Check a build with one narrow read or a qa pass, not by redoing it.";
 
+/// A tool call being written by the model, from its first streamed byte until it ends.
+#[derive(Debug, Clone)]
+pub struct Drafting {
+    pub id: String,
+    pub name: String,
+    /// The start of its input, enough to find the target.
+    json: String,
+    /// The node it writes into or changes (`page:id`), once its input names one.
+    pub target: Option<String>,
+    pub since: web_time::Instant,
+}
+
+/// Input kept from a drafted call: the target is named in its first few keys.
+const DRAFT_JSON_MAX: usize = 2048;
+
+/// The node a partly written tool input names (`targetNodeId`, `parentId` or `nodeId`).
+fn draft_target(json: &str) -> Option<String> {
+    ["targetNodeId", "parentId", "nodeId"].iter().find_map(|k| {
+        let rest = &json[json.find(&format!("\"{k}\""))? + k.len() + 2..];
+        let rest = rest.trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+        let v = &rest[..rest.find('"')?];
+        v.contains(':').then(|| v.to_owned())
+    })
+}
+
 /// Characters of an added message shown in the composer's queue.
 const ADDED_PREVIEW: usize = 80;
 
@@ -413,7 +438,9 @@ pub struct ChatState {
     /// Chat the backend defaults were applied to.
     defaults_for: String,
     /// Node the agent just touched; the canvas pans to it.
-    follow: Option<String>,
+    pub follow: Option<String>,
+    /// The tool call the model is writing now: the canvas shows a skeleton where it lands.
+    pub drafting: Option<Drafting>,
     last_cam: Option<[f64; 3]>,
     cam_moved: Option<web_time::Instant>,
     /// Where API tool calls run; set by the app each frame (`App::tool_dispatch`).
@@ -630,7 +657,10 @@ impl ChatState {
                     w.edits = Some((w.edits.map_or(now, |e| e.0), now));
                 }
                 if let Some(n) = chat_msgs::follow_node(&args) {
-                    self.follow = Some(n);
+                    self.follow = Some(n.clone());
+                    if let Some(d) = self.drafting.as_mut().filter(|d| d.id == id) {
+                        d.target = Some(n);
+                    }
                 }
                 let m = last_assistant(chat, now);
                 match m.tools.iter_mut().find(|t| t.id == id) {
@@ -638,7 +668,22 @@ impl ChatState {
                     None => m.tools.push(ToolCall { id, name, args, ..Default::default() }),
                 }
             }
+            Event::ToolDraft { id, name } => {
+                self.drafting = Some(Drafting { id, name, json: String::new(), target: None, since: web_time::Instant::now() });
+            }
+            Event::ToolInput(piece) => {
+                if let Some(d) = self.drafting.as_mut().filter(|d| d.target.is_none() && d.json.len() < DRAFT_JSON_MAX) {
+                    d.json.push_str(&piece);
+                    d.target = draft_target(&d.json);
+                    if let Some(t) = &d.target {
+                        self.follow = Some(t.clone());
+                    }
+                }
+            }
             Event::ToolEnd { id, result, error } => {
+                if self.drafting.as_ref().is_some_and(|d| d.id == id) {
+                    self.drafting = None;
+                }
                 if let Some((_, last)) = self.window.as_mut().and_then(|w| w.edits.as_mut()) {
                     *last = now;
                 }
@@ -772,6 +817,7 @@ impl ChatState {
             }
         }
         self.added.clear();
+        self.drafting = None;
         self.turn = None;
         self.rx = None;
         self.stopped = std::mem::take(&mut self.stopping);
@@ -1492,12 +1538,15 @@ pub(super) fn send_draft(ctx: &egui::Context, ed: &Editor, c: &mut ChatState) {
 }
 
 /// Pans the canvas to a node the agent touched, unless the user moved the camera lately.
-fn follow(ed: &mut Editor, c: &mut ChatState) {
+/// Once a frame, in both modes: show the layer an agent is working on (Settings, Chat, Follow
+/// agents), unless the user moved the canvas a moment ago.
+pub fn follow(ed: &mut Editor, c: &mut ChatState) {
     let cam = |ed: &Editor| [ed.camera.pan.x, ed.camera.pan.y, ed.camera.zoom];
     if c.last_cam.is_some_and(|l| l != cam(ed)) {
         c.cam_moved = Some(web_time::Instant::now());
     }
     if let Some(key) = c.follow.take()
+        && c.prefs.follow_agents
         && c.cam_moved.is_none_or(|t| t.elapsed() >= SELF_FOLLOW_QUIET)
     {
         pan_to(ed, &key);
@@ -1506,10 +1555,11 @@ fn follow(ed: &mut Editor, c: &mut ChatState) {
 }
 
 fn pan_to(ed: &mut Editor, key: &str) {
-    let Some((prefix, num)) = key.split_once(':') else { return };
+    let Some((prefix, num)) = key.trim_start_matches('#').split_once(':') else { return };
     let (Ok(page), Ok(n)) = (crate::mcp::exec::find_page(ed, prefix), num.parse::<u64>()) else { return };
+    // Following goes to the page the agent works on.
     if page != ed.active_page {
-        return;
+        ed.switch_page(page);
     }
     let Some(r) = ed.page_doc(page).world_rect(crate::model::NodeId(n)) else { return };
     let v = ed.camera.visible_world(ed.viewport);
@@ -1614,7 +1664,6 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     st.chat.poll_detect(&ctx, &st.settings.chat);
     st.chat.ensure_defaults(&st.settings.chat);
     send_draft(&ctx, ed, &mut st.chat);
-    follow(ed, &mut st.chat);
     st.chat.refresh_ds(ed, false);
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::L)) {
         add_selection(ed, &mut st.chat);
@@ -2073,6 +2122,13 @@ pub fn mode_switch(ui: &mut Ui, chat_mode: bool) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_drafted_call_finds_its_target_in_partial_input() {
+        assert_eq!(draft_target(r#"{"mode": "replace", "targetNodeId" : "8f98b5:12", "ht"#).as_deref(), Some("8f98b5:12"));
+        assert_eq!(draft_target(r#"{"targetNodeId": "8f98b5:1"#), None, "not closed yet");
+        assert_eq!(draft_target(r#"{"targetNodeId": "root", "nodeId": "a1:2"}"#).as_deref(), Some("a1:2"), "root is not a node");
+    }
 
     #[test]
     fn messages_added_during_a_turn_wait_for_the_agent_then_follow_up() {

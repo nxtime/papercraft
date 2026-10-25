@@ -8,6 +8,11 @@ pub enum Event {
     Text(String),
     Thinking(String),
     ToolStart { id: String, name: String, args: Value },
+    /// The model began writing a tool call: its input streams in as [`Event::ToolInput`], and
+    /// the canvas shows a skeleton where it will land until the call ends.
+    ToolDraft { id: String, name: String },
+    /// A piece of the input of the call being drafted (raw JSON text).
+    ToolInput(String),
     /// `result` on success, `error` on failure; exactly one is set.
     ToolEnd { id: String, result: Option<Value>, error: Option<String> },
     TurnEnd { usage: Option<Usage>, session: Option<String>, stop_reason: Option<String> },

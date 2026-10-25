@@ -76,6 +76,12 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (follow agents, skeletons)
+
+* Follow agents (Settings, Chat; on by default): in Design and Chat mode alike, the canvas pans, and switches page, to the layer any agent changes (the chat, Claude Code over MCP, a helper). Moving the canvas yourself pauses it for a moment; off, a chip offers the agent's page.
+* Skeletons: the moment the model starts writing a tool call (`ToolDraft` and `ToolInput` events from Claude Code's stream and the API), the canvas shows a shimmering skeleton over its target, or where a new artboard goes, labelled with what it is doing, until the call has run. Fresh agent content comes in through a skeleton that fades, so an outline never frames empty space.
+* Top bar: the title and the agent pill leave room measured from the buttons on the right, so nothing overlaps at narrow widths.
+
 ### 2026-10-25: unreleased (fixes #14 to #18)
 
 * #14: `write_html` fits an `<svg>` viewBox into its width and height like a browser (centred, aspect kept).

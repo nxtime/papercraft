@@ -118,6 +118,8 @@ pub struct ChatPrefs {
     /// Auto mode (the composer's Auto chip): a turn that ends on questions is answered with the
     /// recommended options and the chat goes on, until Stop or the turn budget.
     pub auto: bool,
+    /// The canvas follows the layer agents work on (chat and outside agents alike), page included.
+    pub follow_agents: bool,
 }
 
 impl Default for ChatPrefs {
@@ -143,6 +145,7 @@ impl Default for ChatPrefs {
             issue_repo: ISSUE_REPO.into(),
             helper_command: String::new(),
             auto: false,
+            follow_agents: true,
         }
     }
 }
@@ -1193,6 +1196,12 @@ mod native {
             }
             note(ui, "Sent to api.anthropic.com only.");
         });
+        field_row(ui, "Follow agents", |ui| {
+            if kit::checkbox(ui, &mut prefs.follow_agents, "Show what agents work on").changed() {
+                ed.save = true;
+            }
+            note(ui, "The canvas pans, and switches page, to the layer an agent changes. Moving the canvas yourself pauses it for a moment.");
+        });
         field_row(ui, "Design system", |ui| {
             if kit::checkbox(ui, &mut prefs.ds_summary, "Send design-system summary").changed() {
                 ed.save = true;
@@ -1315,6 +1324,7 @@ mod tests {
             issue_repo: "https://example.com/me/repo".into(),
             helper_command: "pi -p {prompt}".into(),
             auto: true,
+            follow_agents: false,
         };
         assert_eq!(ChatPrefs::from_json(&prefs.to_json()), prefs);
         assert_eq!(ChatPrefs::from_json(&ChatPrefs::default().to_json()), ChatPrefs::default());

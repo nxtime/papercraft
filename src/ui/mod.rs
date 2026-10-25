@@ -319,6 +319,10 @@ impl UiState {
         }
         let over = self.agent_marks.len().saturating_sub(AGENT_MARKS_MAX);
         self.agent_marks.drain(..over);
+        // Any agent, not only the chat: the canvas follows the layer it just touched.
+        if let Some(m) = self.agent_marks.last().filter(|m| m.at == at) {
+            self.chat.follow = Some(format!("{}:{}", m.page_id, m.node.0));
+        }
     }
 
     /// Drops faded marks; true while any is still showing.
@@ -517,6 +521,9 @@ fn agent_glow(ctx: &egui::Context, st: &UiState, canvas: egui::Rect) {
         egui::StrokeKind::Inside,
     );
 }
+
+/// Room the title leaves beside the top bar's right-hand buttons: the agent pill's dots and gaps.
+const TITLE_ROOM: f32 = 72.0;
 
 /// The agent pill's own padding and gap, kept clear beside its text.
 const AGENT_PILL_PAD: f32 = 32.0;
@@ -983,6 +990,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     agent_glow(ui.ctx(), st, canvas);
     status(ui.ctx(), ed, canvas);
     review_overlay(ui.ctx(), ed, st, canvas);
+    chat::follow(ed, &mut st.chat);
     agent_overlay(ui.ctx(), ed, st, canvas);
     annotations_canvas::draw(ui.ctx(), ed, &mut st.annotations, &mut st.selected_annotation, canvas);
     run_toast(ui.ctx(), st, canvas);
@@ -1060,19 +1068,22 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         } else {
             st.project_name.clone()
         };
+        // The buttons on the right, as wide as last frame: the title and the agent pill leave
+        // them that room.
+        let right_id = egui::Id::new("top-bar-right-width");
+        let right_w = ui.ctx().data(|d| d.get_temp::<f32>(right_id)).unwrap_or(0.0);
         ui.horizontal(|ui| {
-            // Leave room for the zoom pill and icons on the right; long titles truncate.
-            ui.set_max_width(
-                (ui.available_width()
-                    - if tight {
-                        150.0
-                    } else if compact {
-                        300.0
-                    } else {
-                        420.0
-                    })
-                .max(40.0),
-            );
+            // Long titles truncate. Before the first measure, a guess by window width.
+            let reserve = if right_w > 0.0 {
+                right_w + TITLE_ROOM
+            } else if tight {
+                150.0
+            } else if compact {
+                300.0
+            } else {
+                420.0
+            };
+            ui.set_max_width((ui.available_width() - reserve).max(40.0));
             let state = if !st.save_state.is_empty() {
                 st.save_state.clone()
             } else if ed.is_dirty() {
@@ -1121,9 +1132,6 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 }
             });
         });
-        // The buttons on the right, as wide as last frame: the agent pill leaves them that room.
-        let right_id = egui::Id::new("top-bar-right-width");
-        let right_w = ui.ctx().data(|d| d.get_temp::<f32>(right_id)).unwrap_or(0.0);
         agent_pill(ui, st, !tight, right_w);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -2131,6 +2139,21 @@ fn review_overlay(ctx: &egui::Context, ed: &Editor, st: &UiState, canvas: egui::
 }
 
 const AGENT_OUTLINE: f32 = 2.0;
+/// How long fresh agent content takes to come in through its skeleton.
+const REVEAL_SECS: f32 = 0.35;
+/// The skeleton over the area a call being written will change.
+const DRAFT_SKELETON_ALPHA: f32 = 0.55;
+const DRAFT_OUTLINE_ALPHA: f32 = 0.8;
+/// Where a drafted call with no target (a new artboard) shows its skeleton, in world units.
+const DRAFT_SPOT: (f64, f64) = (390.0, 280.0);
+const DRAFT_SPOT_GAP: f64 = 80.0;
+
+/// The free spot right of the page's artboards, where a new one goes.
+fn draft_spot(doc: &crate::model::Document) -> crate::geom::Rect {
+    let rects: Vec<crate::geom::Rect> = doc.root.iter().filter_map(|id| doc.world_rect(*id)).collect();
+    let (x, y) = crate::geom::Rect::union_all(&rects).map_or((0.0, 0.0), |b| (b.x + b.w + DRAFT_SPOT_GAP, b.y));
+    crate::geom::Rect::new(x, y, DRAFT_SPOT.0, DRAFT_SPOT.1)
+}
 /// Size of the agent cursor's arrow (screen px).
 const AGENT_CURSOR: f32 = 12.0;
 
@@ -2138,7 +2161,9 @@ const AGENT_CURSOR: f32 = 12.0;
 /// [`AGENT_MARK_SECS`], and an agent cursor (verb and client) on the newest. When the newest is
 /// on another page, a chip "Agent on page X →" switches to it. Repaints only while a mark fades.
 fn agent_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect) {
-    if !st.live_marks() {
+    let marks = st.live_marks();
+    let draft = st.chat.drafting.clone().filter(|d| crate::mcp::tools::edits_doc(&d.name, &serde_json::Value::Null));
+    if !marks && draft.is_none() {
         return;
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(AGENT_PILL_FRAME_MS));
@@ -2158,9 +2183,33 @@ fn agent_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
         .interactable(false)
         .show(ctx, |ui| {
             let painter = ui.painter().with_clip_rect(canvas);
+            let t = ctx.input(|i| i.time) as f32;
+            // The call being written: a skeleton where it lands (its target, or the free spot a
+            // new artboard takes), until it has run.
+            if let Some(d) = &draft {
+                let at = match d.target.as_deref().and_then(|k| k.trim_start_matches('#').split_once(':')) {
+                    Some((prefix, n)) => crate::mcp::exec::find_page(ed, prefix).ok().filter(|p| *p == ed.active_page).and(n.parse().ok()).and_then(|n| ed.doc.world_rect(NodeId(n))),
+                    None => Some(draft_spot(&ed.doc)),
+                };
+                if let Some(r) = at.map(|r| to_screen(&r)) {
+                    kit::skeleton(&painter, r, t, DRAFT_SKELETON_ALPHA);
+                    let stroke = egui::Stroke::new(AGENT_OUTLINE, accent.gamma_multiply(DRAFT_OUTLINE_ALPHA));
+                    painter.add(egui::Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], stroke, 6.0, 4.0));
+                    let ink = kit::ink_on(accent);
+                    let galley = painter.layout_no_wrap(format!("{}\u{2026}", agent_verb(&d.name)), theme::semibold(theme::SECONDARY), ink);
+                    let tag = egui::Rect::from_min_size(r.left_top() - egui::vec2(0.0, galley.size().y + 8.0), galley.size() + egui::vec2(12.0, 4.0));
+                    painter.rect_filled(tag, 255, accent);
+                    painter.galley(tag.min + egui::vec2(6.0, 2.0), galley, ink);
+                }
+            }
             let rect = |m: &AgentMark| (m.page_id == page).then(|| ed.doc.world_rect(m.node)).flatten().map(|r| to_screen(&r));
             for m in &st.agent_marks {
                 let Some(r) = rect(m) else { continue };
+                // New content comes in through its skeleton, so the outline never frames nothing.
+                let age = m.at.elapsed().as_secs_f32();
+                if age < REVEAL_SECS {
+                    kit::skeleton(&painter, r, t, (1.0 - age / REVEAL_SECS).powi(2));
+                }
                 let stroke = egui::Stroke::new(AGENT_OUTLINE, accent.gamma_multiply(fade(m)));
                 painter.rect_stroke(r, REVIEW_RADIUS, stroke, egui::StrokeKind::Outside);
             }
@@ -2467,7 +2516,10 @@ mod layer_tests {
         let id = rect(&mut ed, None, true);
         let page = ed.active_page_id().to_string();
         ed.switch_page(0);
+        // Following off: a chip offers the agent's page.
         let mut st = UiState::default();
+        st.settings.chat.follow_agents = false;
+        st.chat.prefs.follow_agents = false;
         let key = crate::mcp::exec::node_key(&ed, other, id);
         st.mark_agent(&ed, String::new(), "get_screenshot", &serde_json::json!({ "nodeId": key }), &[]);
         assert_eq!((st.agent_marks.len(), st.agent_marks[0].page_id.as_str()), (1, page.as_str()));
@@ -2475,6 +2527,12 @@ mod layer_tests {
             frame(&ctx, &mut ed, &mut st, i, 800.0);
         }
         assert!(shown(&ctx, "agent-elsewhere"));
+        assert_eq!(ed.active_page, 0);
+        // Following on (the default): the canvas goes there itself.
+        let mut st = UiState::default();
+        st.mark_agent(&ed, String::new(), "get_screenshot", &serde_json::json!({ "nodeId": key }), &[]);
+        frame(&ctx, &mut ed, &mut st, 2, 800.0);
+        assert_eq!(ed.active_page, other);
     }
 
     #[test]

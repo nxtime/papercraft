@@ -84,6 +84,15 @@ fn push_text(out: &mut Vec<Event>, s: Option<&str>, thinking: bool) {
 
 fn delta(e: &Value) -> Vec<Event> {
     let mut out = vec![];
+    // A tool call starts streaming long before its `assistant` line: say so at once.
+    if e["type"] == "content_block_start" && e["content_block"]["type"] == "tool_use" {
+        let name = str_of(&e["content_block"]["name"]);
+        out.push(Event::ToolDraft {
+            id: str_of(&e["content_block"]["id"]),
+            name: name.strip_prefix(MCP_PREFIX).map_or(name.clone(), str::to_string),
+        });
+        return out;
+    }
     if e["type"] != "content_block_delta" {
         return out;
     }
@@ -91,6 +100,11 @@ fn delta(e: &Value) -> Vec<Event> {
     match d["type"].as_str() {
         Some("text_delta") => push_text(&mut out, d["text"].as_str(), false),
         Some("thinking_delta") => push_text(&mut out, d["thinking"].as_str(), true),
+        Some("input_json_delta") => {
+            if let Some(j) = d["partial_json"].as_str().filter(|j| !j.is_empty()) {
+                out.push(Event::ToolInput(j.into()));
+            }
+        }
         _ => {}
     }
     out
@@ -400,6 +414,14 @@ mod process {
         use std::sync::mpsc::channel;
 
         #[test]
+    fn a_tool_call_is_announced_as_it_starts_streaming() {
+        let start = r#"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t9","name":"mcp__papercraft__write_html","input":{}}}}"#;
+        assert_eq!(parse_line_partial(start), vec![Event::ToolDraft { id: "t9".into(), name: "write_html".into() }]);
+        let piece = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"targetNodeId\": \"8f98b5:1\""}}}"#;
+        assert_eq!(parse_line_partial(piece), vec![Event::ToolInput("{\"targetNodeId\": \"8f98b5:1\"".into())]);
+    }
+
+    #[test]
     fn a_sub_agent_shows_its_tool_calls_not_its_words() {
         let text = r#"{"type":"stream_event","parent_tool_use_id":"t1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"thinking aloud"}}}"#;
         assert!(parse_line_partial(text).is_empty());
