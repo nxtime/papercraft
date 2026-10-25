@@ -42,12 +42,19 @@ pub fn run(command: &str, chat: Option<&str>, args: &serde_json::Value) -> ToolR
     let task = args["task"].as_str().map(str::trim).filter(|t| !t.is_empty()).ok_or("give the task with everything the helper needs")?;
     let cli = crate::chat::path::which("papercraft-cli").ok_or("papercraft-cli is not installed, so a helper cannot reach PaperCraft")?;
     let prompt = format!("{}\n\n{}\n\nTask:\n{task}", preamble(&cli.display().to_string()), role_rules(role));
-    let mut cmd = Command::new("/bin/sh");
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("cmd.exe");
+        c.args(["/C", &command.replace("{prompt}", "%PAPERCRAFT_PROMPT%")]);
+        c
+    } else {
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", &command.replace("{prompt}", "\"$PAPERCRAFT_PROMPT\"")]);
+        c
+    };
     // Its own process group, so stopping it also ends the agent the shell started.
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = cmd
-        .args(["-c", &command.replace("{prompt}", "\"$PAPERCRAFT_PROMPT\"")])
         .env("PAPERCRAFT_PROMPT", &prompt)
         // An app opened from Finder has a bare PATH: give the helper the user's shell PATH.
         .env("PATH", crate::chat::path::resolved_path())
@@ -128,6 +135,7 @@ fn tail(s: &str, max: usize) -> &str {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use serde_json::json;

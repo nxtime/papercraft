@@ -155,8 +155,16 @@ fn run_command(template: &str, prompt: &str, aspect: &str) -> Result<Vec<PathBuf
     let out = std::env::temp_dir().join(format!("papercraft-imagegen-{}-{}-{:08x}", std::process::id(), crate::project::format::now_ms(), fastrand::u32(..)));
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let script = shell_script(template);
-    let mut child = Command::new("/bin/sh")
-        .args(["-c", &script])
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("cmd.exe");
+        c.args(["/C", &script]);
+        c
+    } else {
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", &script]);
+        c
+    };
+    let mut child = cmd
         .env("PAPERCRAFT_PROMPT", prompt)
         .env("PAPERCRAFT_ASPECT", aspect)
         .env("PAPERCRAFT_RATIO", ratio(aspect))
@@ -230,6 +238,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_custom_command_gets_the_prompt_as_data_not_as_shell() {
         // The prompt tries to run a command; it must arrive as plain text.
         let prompt = "dragon\"; touch pwned; echo \"";

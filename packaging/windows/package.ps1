@@ -59,7 +59,7 @@ function Get-PeHeader([string] $Path) {
   return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
 }
 $Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
-foreach ($name in @('papercraft.exe', 'papercraft-cli.exe', 'papercraft-mcp.exe')) {
+foreach ($name in @('papercraft.exe', 'papercraft-cli.exe', 'papercraft-mcp.exe', 'papercraft-relay.exe')) {
   $exePath = Join-Path $Bin $name
   if (Test-Path $exePath) {
     $h = Get-PeHeader $exePath
@@ -71,13 +71,13 @@ foreach ($name in @('papercraft.exe', 'papercraft-cli.exe', 'papercraft-mcp.exe'
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'papercraft.exe'), (Join-Path $Bin 'papercraft-cli.exe'), (Join-Path $Bin 'papercraft-mcp.exe') $Stage
+Copy-Item (Join-Path $Bin 'papercraft.exe'), (Join-Path $Bin 'papercraft-cli.exe'), (Join-Path $Bin 'papercraft-mcp.exe'), (Join-Path $Bin 'papercraft-relay.exe') $Stage
 foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'ATTRIBUTION.md', 'README.md') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Stage }
 }
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'papercraft.exe') (Join-Path $Stage 'papercraft-cli.exe') (Join-Path $Stage 'papercraft-mcp.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'papercraft.exe') (Join-Path $Stage 'papercraft-cli.exe') (Join-Path $Stage 'papercraft-mcp.exe') (Join-Path $Stage 'papercraft-relay.exe')
 
 # ---- MSI ---------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "papercraft-$Version-windows-$Arch.msi"
@@ -119,9 +119,22 @@ $CliZip = Join-Path $Dist "papercraft-cli-$Version-windows-$Arch.zip"
 Remove-Item -Force $CliZip -ErrorAction SilentlyContinue
 Compress-Archive -Path $CliPortable -DestinationPath $CliZip
 
+# ---- relay zip ---------------------------------------------------------------------------------
+$RelayPortable = Join-Path $TargetDir "windows-package\papercraft-relay-$Version-windows-$Arch"
+Remove-Item -Recurse -Force $RelayPortable -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $RelayPortable | Out-Null
+Copy-Item (Join-Path $Stage 'papercraft-relay.exe') $RelayPortable
+foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'ATTRIBUTION.md') {
+  $p = Join-Path $Root $f
+  if (Test-Path $p) { Copy-Item $p $RelayPortable }
+}
+$RelayZip = Join-Path $Dist "papercraft-relay-$Version-windows-$Arch.zip"
+Remove-Item -Force $RelayZip -ErrorAction SilentlyContinue
+Compress-Archive -Path $RelayPortable -DestinationPath $RelayZip
+
 # Smoke test
 Invoke-Native 'papercraft-cli --help' { & (Join-Path $Stage 'papercraft-cli.exe') --help | Out-Null }
 
-$artifacts = @($Zip, $CliZip)
+$artifacts = @($Zip, $CliZip, $RelayZip)
 if (Test-Path $Msi) { $artifacts += $Msi }
 Get-Item $artifacts | Format-Table Name, Length

@@ -76,32 +76,20 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
-### 2026-10-24: unreleased (QA sub-agent, helper agents)
+### 2026-10-25: 0.7.3 (QA sub-agent, helper agents, auto mode, mid-turn messages, isolated dev settings)
 
 * QA sub-agent: Claude Code chats always get a Sonnet `qa` agent that lints and screenshots built frames and returns only findings, so screenshots stay out of the main context.
 * Helper agents (`src/mcp/delegate.rs`, Settings, Chat, Helper): `delegate` hands `qa`, `read` or `build` tasks to a cheaper agent CLI (pi with MiniMax M3.1 Flash, opencode, an Ollama-backed agent, any command taking `{prompt}`). It drives PaperCraft through `papercraft-cli`, runs off the UI thread, and only its last 6,000 characters come back. With a helper set, the chat agent orchestrates: keeps the brief and taste, delegates review, bulk reading and fully specified edits.
-
-### 2026-10-25: unreleased (dev config isolation, live check fixes)
-
-* `PAPERCRAFT_HOME` also isolates the chat settings (`$PAPERCRAFT_HOME/.config`), so a second copy for testing never touches the installed app's settings.
+* Dev config isolation: `PAPERCRAFT_HOME` also isolates the chat settings (`$PAPERCRAFT_HOME/.config`), so a second copy for testing never touches the installed app's settings.
 * Live check in an isolated copy: `delegate` ran the pi helper (MiniMax M3.1 Flash) as QA, a message added mid-turn went Waiting then Seen, and the agent drafted #13.
-* #13: `get_computed_styles` reports a text colour bound to a variable as `var(--name)`.
-* Composer: the chips wrap instead of running under Stop and Add; the Enter hint is gone (the placeholder says it). Top bar: the agent pill drops its text when it would run under the buttons on the right.
-
-### 2026-10-24: unreleased (auto mode, Present icon)
-
+* Fixes #10, #11, #12, #13:
+  * #10: `move_nodes` to another page keeps mains' component keys and relinks every instance to moved nodes; new `rename_file` renames a project.
+  * #11: swapped nested instances persist as swap overrides (`InstanceLink.swap`), preserving component identity across outer component updates and copies.
+  * #12: `move_nodes` to another page takes the moved nodes' annotations along; detached notes resolve as `Detached #n`.
+  * #13: `get_computed_styles` reports a text colour bound to a variable as `var(--name)`.
 * Auto mode (the composer's Auto chip): when a turn ends on `ask_user` questions, the first (recommended) option of each is sent and the chat goes on, until Stop or a turn hits its budget. The agent is told to put its recommendation first, default what only the user can know, and end each turn with next steps.
-* The Present button uses a play icon drawn like the icons beside it; the composer's Enter hint hides when the chips need the room.
-
-### 2026-10-24: unreleased (add to a running turn)
-
+* The Present button uses a play icon drawn like the icons beside it. Composer chips wrap instead of running under Stop and Add. Top bar: the agent pill drops its text when it would run under the buttons on the right.
 * While a chat turn works, the composer's Add (or Enter) queues a message (`src/mcp/steer.rs`). It rides on the agent's next PaperCraft tool result for that chat, so every backend reads it mid-turn; the composer shows each as Waiting or Seen. What no tool call picked up is sent as the next message when the turn ends, or goes back into the box after Stop.
-
-### 2026-10-24: unreleased (fixes #10, #11, #12)
-
-* #10: `move_nodes` to another page keeps mains' component keys and relinks every instance (same page, other pages, destination) to the moved nodes; links from moved instances to mains left behind stay. New `rename_file` renames a project (the open one stays open). Cross-page duplicates keep links to mains on the source page too.
-* #11: a nested instance swapped inside an instance (`swap_instance` on it, or `write_html` replace with an `<x-paper-instance>`) is a swap override (`InstanceLink.swap`): later edits to the outer main and copies keep it; code export and the AI spec name the swapped component.
-* #12: `move_nodes` to another page takes the moved nodes' annotations along; detached notes resolve as `Detached #n`.
 
 ### 2026-10-24: 0.7.2 (UI kits, code links, issues from the app, design playbook)
 
