@@ -386,3 +386,18 @@ fn a_scrolling_screen_keeps_its_size_and_the_wheel_scrolls_its_overflow() {
     call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [key], "styles": {"overflow": "hidden"}}]}));
     assert!(!h.ed.doc.get(ab).unwrap().scroll);
 }
+
+#[test]
+fn a_hug_column_with_full_width_text_wraps_its_text_not_more() {
+    // Issue #22.
+    let mut h = host();
+    let ab = call(&mut h, "create_artboard", json!({"name": "Sheet", "styles": {"width": "390px", "height": "844px"}}));
+    let made = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"position:absolute;left:0px;top:400px;width:390px;height:fit-content;display:flex;flex-direction:column;align-items:center;padding:24px\"><div style=\"display:flex;flex-direction:column;align-items:center;gap:8px;width:100%\"><div style=\"font-size:20px;line-height:28px;text-align:center\">Short title</div><div style=\"width:100%;font-size:16px;line-height:24px;text-align:center\">A sentence long enough to wrap onto two or three lines in this column.</div></div></div>"}));
+    let outer = num(&made["createdNodeIds"][0]);
+    let doc = &h.ed.doc;
+    let inner = doc.get(outer).unwrap().children[0];
+    let n = doc.get(inner).unwrap();
+    let kids: Vec<_> = n.children.iter().map(|c| doc.get(*c).unwrap().rect).collect();
+    assert!(n.rect.h < 140.0, "inner column {:?} kids {kids:?}", n.rect);
+    assert!(doc.get(outer).unwrap().rect.h < 200.0, "the sheet wraps it: {:?}", doc.get(outer).unwrap().rect);
+}

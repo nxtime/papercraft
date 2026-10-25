@@ -167,27 +167,44 @@ pub fn layout_frame(tx: &mut Tx, id: NodeId) -> bool {
             layout_frame(tx, k);
         }
     }
-    // 2. This frame's hug size.
+    // 2. This frame's hug size, then 3. its children. A child that hugs its content and got a
+    // new width here (stretched, filled) re-measures: its height depended on that width. If it
+    // changed, this frame measures and arranges once more.
     let ma = main_axis(&l);
     let ca = 1 - ma;
-    let n = tx.doc().get(id).unwrap().clone();
-    let sizing = n.layout_child.sizing;
-    let mut rect = n.rect;
-    for axis in [0, 1] {
-        // Hug fits the content, growing children's included (CSS fit-content); a min size
-        // leaves room that the growing children then fill.
-        if sizing[axis] == Sizing::Hug {
-            let s = hug_size(tx.doc(), id, axis);
-            let (p, _) = get(&rect, axis);
-            set(&mut rect, axis, p, s.max(0.0));
+    for pass in 0..2 {
+        let n = tx.doc().get(id).unwrap().clone();
+        let sizing = n.layout_child.sizing;
+        let mut rect = n.rect;
+        for axis in [0, 1] {
+            // Hug fits the content, growing children's included (CSS fit-content); a min size
+            // leaves room that the growing children then fill.
+            if sizing[axis] == Sizing::Hug {
+                let s = hug_size(tx.doc(), id, axis);
+                let (p, _) = get(&rect, axis);
+                set(&mut rect, axis, p, s.max(0.0));
+            }
+            let (p, cur_s) = get(&rect, axis);
+            set(&mut rect, axis, p, clamp_size(&n.layout_child, axis, cur_s));
         }
-        let (p, cur_s) = get(&rect, axis);
-        set(&mut rect, axis, p, clamp_size(&n.layout_child, axis, cur_s));
+        if rect != n.rect {
+            tx.node_mut(id).unwrap().rect = rect;
+        }
+        arrange(tx, id, &l, rect, ma, ca);
+        let stale: Vec<NodeId> = flow_children(tx.doc(), id)
+            .into_iter()
+            .filter(|k| {
+                let kn = tx.doc().get(*k).unwrap();
+                kn.layout.is_some() && (0..2).any(|ax| kn.layout_child.sizing[ax] == Sizing::Hug && (hug_size(tx.doc(), *k, ax) - get(&kn.rect, ax).1).abs() > 0.5)
+            })
+            .collect();
+        if stale.is_empty() || pass == 1 {
+            break;
+        }
+        for k in stale {
+            layout_frame(tx, k);
+        }
     }
-    if rect != n.rect {
-        tx.node_mut(id).unwrap().rect = rect;
-    }
-    arrange(tx, id, &l, rect, ma, ca);
     let after: Vec<(NodeId, Rect)> = tx
         .doc()
         .subtree(id)

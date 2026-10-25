@@ -76,6 +76,10 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (fix #22)
+
+* #22: a hug column whose width comes from its parent (stretched or filled) re-measures its height once its text wraps at that width, and the parent measures again, instead of keeping a height measured while the text was narrow.
+
 ### 2026-10-25: unreleased (component properties)
 
 * Main components carry properties (`Node.props`): `text`, `bool`, `icon` and `enum`, whose options are changes in the overrides format (a layer name, `$root` or a path `Item > Label`, to a text or styles that may hold `text`, `icon` and `visibility`), so they restyle, retext, show, hide or re-icon any layer. Instances keep their values (`prop_values`) as overrides, so main edits keep them; changing the definitions re-applies every instance on every page.
