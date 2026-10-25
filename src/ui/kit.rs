@@ -636,7 +636,8 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, Option<&str>)], selected: usize) -
         );
         x += w;
         let sense = if off.is_some() { Sense::hover() } else { Sense::click() };
-        let resp = ui.interact(rect, ui.id().with(("segmented", i)), sense);
+        // Keyed by the control's labels: two controls in one row must not share ids.
+        let resp = ui.interact(rect, ui.id().with(("segmented", items.first().map(|(l, _)| *l), items.len(), i)), sense);
         let on = i == selected;
         let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("seg"), &resp);
         if on {

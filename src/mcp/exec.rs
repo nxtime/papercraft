@@ -5555,9 +5555,16 @@ fn template_props(doc: &Document, id: NodeId, template: &str, a: &Args) -> Resul
                 .iter()
                 .map(|o| {
                     let value = o["value"].as_str().unwrap_or_default().to_owned();
-                    let color = o["color"].as_str().unwrap_or("#6b7280").to_owned();
+                    let raw = o["color"].as_str().unwrap_or("#6b7280").to_owned();
+                    // A colour the project has as a variable is written as that variable.
+                    let as_var = |hex: &str| css::color(hex).and_then(|c| doc.variables.iter().find(|(_, v)| **v == c)).map(|(n, _)| format!("var(--{n})"));
+                    let color = as_var(&raw).unwrap_or_else(|| raw.clone());
                     // The root gets a light tint of the colour (hex) or the colour itself (a variable).
-                    let tint = if color.starts_with('#') && color.len() == 7 { format!("{color}1f") } else { o["background"].as_str().unwrap_or(&color).to_owned() };
+                    let tint = match o["background"].as_str() {
+                        Some(bg) => as_var(bg).unwrap_or_else(|| bg.to_owned()),
+                        None if raw.starts_with('#') && raw.len() == 7 => format!("{raw}1f"),
+                        None => color.clone(),
+                    };
                     let mut set = Map::new();
                     set.insert("$root".into(), json!({"background": tint}));
                     if let Some(l) = &label {

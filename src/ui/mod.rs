@@ -514,7 +514,7 @@ fn agent_glow(ctx: &egui::Context, st: &UiState, canvas: egui::Rect) {
     let t = ctx.input(|i| i.time) as f32;
     let pulse = 0.35 + 0.25 * (t * 3.0).sin();
     ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Middle,
         "agent-glow".into(),
     ))
     .rect_stroke(
@@ -2097,7 +2097,7 @@ fn review_overlay(ctx: &egui::Context, ed: &Editor, st: &UiState, canvas: egui::
         )
     };
     egui::Area::new("review-overlay".into())
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Middle)
         .fixed_pos(canvas.min)
         .interactable(false)
         .show(ctx, |ui| {
@@ -2222,7 +2222,7 @@ fn agent_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
     };
     let fade = |m: &AgentMark| (1.0 - m.at.elapsed().as_secs_f32() / AGENT_MARK_SECS).clamp(0.0, 1.0);
     egui::Area::new("agent-overlay".into())
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Middle)
         .fixed_pos(canvas.min)
         .interactable(false)
         .show(ctx, |ui| {
@@ -2275,7 +2275,7 @@ fn agent_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
     let text = format!("Agent on page {} \u{2192}", ed.pages[i].name);
     let mut go = false;
     egui::Area::new("agent-elsewhere".into())
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Middle)
         .pivot(Align2::CENTER_TOP)
         .fixed_pos(canvas.center_top() + egui::vec2(0.0, 14.0))
         .show(ctx, |ui| {
@@ -2516,7 +2516,7 @@ mod layer_tests {
     }
 
     fn shown(ctx: &egui::Context, area: &str) -> bool {
-        ctx.memory(|m| m.areas().visible_last_frame(&egui::LayerId::new(egui::Order::Foreground, egui::Id::new(area))))
+        ctx.memory(|m| m.areas().visible_last_frame(&egui::LayerId::new(egui::Order::Middle, egui::Id::new(area))))
     }
 
     #[test]

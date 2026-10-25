@@ -78,7 +78,8 @@ are credited in `THIRD_PARTY.md`.
 
 ### 2026-10-25: unreleased (properties modal, row merges)
 
-* Properties modal (inspector, on a main: Edit properties…): each property's name, kind (text, show / hide, icon, options), layer and default; an options property's values with their changes as editable JSON; add properties or start from a template; Save replaces them all. The inline list is now name, kind and a remove button.
+* Properties modal (inspector, on a main: Edit properties…): a tab per property (name, kind, layer, default, delete); an options property as a Table (a row per option, a column per layer · style; colours picked from the project's variables with a swatch, visibility as a toggle, icon, image and text fields; add or remove options and columns) or as Source (each option's changes as JSON with syntax highlighting); templates from the + Property menu; Save replaces them all. The inline list is name, kind and a remove button. The `status` template writes colours the project has as variables as those variables.
+* Canvas overlays (agent glow, agent outlines, review outlines, the agent-elsewhere chip) sit below modals instead of showing through them. Two segmented controls in one row no longer share widget ids (the second did not respond).
 * `merge_variants` keeps what each moved instance shows (texts that came from its old variant), carries nested instances' property values (a badge's Tone) in the options, and takes `textLayers` for state texts only.
 
 ### 2026-10-25: unreleased (prototype links tool, merge icon colours)
