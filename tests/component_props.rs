@@ -130,3 +130,17 @@ fn per_state_components_merge_into_one_with_an_enum() {
     assert_eq!((label_of("Pedidos"), label_of("Hoje")), ("#0f5132".into(), "#6b7280".into()));
     assert_eq!(doc.get(third).unwrap().prop_values["Active"], "Pedidos");
 }
+
+#[test]
+fn a_variant_with_another_layout_is_left_out_of_a_merge() {
+    let mut h = host();
+    let mut mains = Vec::new();
+    for (name, justify) in [("Mensagem / Recebida", "flex-start"), ("Mensagem / Enviada", "flex-end")] {
+        let m = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": "360px", "height": "60px", "display": "flex", "justifyContent": justify}}));
+        call(&mut h, "write_html", json!({"targetNodeId": m["id"], "html": "<span layer-name=\"Text\">Oi</span>"}));
+        mains.push(call(&mut h, "create_component", json!({"nodeId": m["id"]}))["id"].clone());
+    }
+    let r = call(&mut h, "merge_variants", json!({"componentIds": mains, "name": "Side"}));
+    assert!(r["warnings"][0].as_str().unwrap().contains("justifyContent"), "{r}");
+    assert_eq!(call(&mut h, "get_components", json!({}))["components"].as_array().unwrap().len(), 2, "nothing deleted");
+}

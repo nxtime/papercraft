@@ -5580,6 +5580,26 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
             warnings.push(format!("left `{}` out: it has layers the base lacks ({})", doc.get(*id).unwrap().name, extra.join(", ")));
             continue;
         }
+        // Differences an option cannot carry (layout, size, spacing) would be lost: leave it out.
+        let mut pairs = vec![(String::from("$root"), base, *id)];
+        pairs.extend(base_paths.iter().filter_map(|(bk, real, b)| paths.iter().find(|(k, _, _)| k == bk).map(|(_, _, v)| (real.clone(), *b, *v))));
+        let lost: Vec<String> = pairs
+            .iter()
+            .flat_map(|(real, b, v)| {
+                let (bs, vs) = (style_of(*b), style_of(*v));
+                let keys: BTreeSet<&String> = bs.keys().chain(vs.keys()).collect();
+                // Where a main sits on the canvas is not part of its look.
+                let placement = |k: &str| real == "$root" && ["left", "top", "right", "bottom", "position"].contains(&k);
+                keys.into_iter()
+                    .filter(|k| !placement(k) && !VARIANT_KEYS.iter().any(|(vk, _)| vk == k) && bs.get(*k) != vs.get(*k))
+                    .map(|k| format!("{real}: {k}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if !lost.is_empty() {
+            warnings.push(format!("left `{}` out: it differs in what an option cannot carry ({})", doc.get(*id).unwrap().name, lost.join(", ")));
+            continue;
+        }
         kept.push((i, *id));
     }
     let n = kept.len();
