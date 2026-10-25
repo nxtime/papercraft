@@ -402,16 +402,19 @@ pub(crate) fn code_link<'a>(doc: &'a Document, n: &'a Node) -> Option<&'a crate:
     n.code.as_ref().or_else(|| n.instance.as_ref().and_then(|l| doc.get(l.target().0)).and_then(|m| m.code.as_ref()))
 }
 
-/// A code link template with `{Name}` replaced by the text of the layer named `Name` under `id`
-/// (the instance's own text, overrides included). An unknown name stays as written.
+/// A code link template with `{Name}` replaced by the instance's property `Name`, else the text
+/// of the layer named `Name` under `id` (overrides included). An unknown name stays as written.
 fn fill_template(doc: &Document, id: NodeId, template: &str, escape: fn(&str) -> String) -> String {
     let mut out = String::new();
     let mut rest = template;
     while let Some(i) = rest.find('{') {
         let Some(j) = rest[i..].find('}').map(|j| i + j) else { break };
         let name = &rest[i + 1..j];
+        // A property value of the instance first (`{Status}`), else a layer's text (`{Label}`).
         let text = (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || " _-".contains(c)))
-            .then(|| doc.subtree(id).into_iter().filter_map(|d| doc.get(d)).find(|d| d.name == name).and_then(|d| d.kind.text().map(|t| t.to_string())))
+            .then(|| {
+                doc.get(id).and_then(|n| n.prop_values.get(name).cloned()).or_else(|| doc.subtree(id).into_iter().filter_map(|d| doc.get(d)).find(|d| d.name == name).and_then(|d| d.kind.text().map(|t| t.to_string())))
+            })
             .flatten();
         out.push_str(&rest[..i]);
         match text {

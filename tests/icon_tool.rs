@@ -11,6 +11,10 @@ const STROKE_ICON: &str = r#"<!-- @license test -->
  fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5" /></svg>"#;
 const FILL_ICON: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect x="32" y="32" width="192" height="192" fill="currentColor"/></svg>"#;
 
+fn num_of(id: &Value) -> NodeId {
+    NodeId(id.as_str().unwrap().rsplit(':').next().unwrap().parse().unwrap())
+}
+
 fn call(h: &mut exec::SessionHost, name: &str, args: Value) -> Result<Value, String> {
     exec::call(h, name, &args).map(|outs| match outs.into_iter().next() {
         Some(Out::Text(t)) => serde_json::from_str(&t).unwrap_or(Value::String(t)),
@@ -137,5 +141,22 @@ fn icons_place_as_vector_layers_that_follow_a_variable() {
         node(&h, &ids[0]).kind,
         NodeKind::Group | NodeKind::Frame { .. } | NodeKind::Path { .. }
     ));
+
+    // An icon property swaps an instance's icon, and the swap survives a sync of the main.
+    let chip = call(&mut h, "create_artboard", json!({"name": "Chip", "styles": {"width": "fit-content", "height": "fit-content", "display": "flex", "gap": "4px"}})).unwrap();
+    call(&mut h, "write_html", json!({"targetNodeId": chip["id"], "html": "<x-paper-icon name=\"test:check\" size=\"16\"/><span layer-name=\"Label\">Ok</span>"})).unwrap();
+    let main = call(&mut h, "create_component", json!({"nodeId": chip["id"]})).unwrap()["id"].clone();
+    call(&mut h, "set_component_props", json!({"componentId": main, "props": [{"name": "Icon", "kind": "icon", "layer": "Icon / test:check"}]})).unwrap();
+    let row = call(&mut h, "create_artboard", json!({"name": "Row", "styles": {"width": "200px", "height": "40px", "display": "flex"}})).unwrap();
+    let made = call(&mut h, "write_html", json!({"targetNodeId": row["id"], "html": "<x-paper-instance component=\"Chip\" props='{\"Icon\":\"test:square\"}'/>"})).unwrap();
+    let inst = NodeId(made["createdNodeIds"][0].as_str().unwrap().rsplit(':').next().unwrap().parse().unwrap());
+    // The square icon is filled, the check is stroked: the instance shows the square.
+    let stroked = |h: &exec::SessionHost, icon: NodeId| h.ed.doc.subtree(icon).into_iter().filter_map(|i| h.ed.doc.get(i)).any(|n| matches!(n.kind, NodeKind::Path { .. }) && n.style.stroke.is_some());
+    let icon = h.ed.doc.get(inst).unwrap().children[0];
+    assert!(!stroked(&h, icon), "the swapped icon is the filled square");
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [main], "styles": {"gap": "8px"}}]})).unwrap();
+    let icon = h.ed.doc.get(inst).unwrap().children[0];
+    assert!(!stroked(&h, icon) && !h.ed.doc.get(icon).unwrap().children.is_empty(), "kept after the main changed");
+    assert!(stroked(&h, h.ed.doc.get(num_of(&main)).unwrap().children[0]), "the main keeps its check");
     std::fs::remove_dir_all(root).ok();
 }

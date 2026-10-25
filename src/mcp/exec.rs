@@ -22,7 +22,7 @@ use crate::variables::{self, DesignSystem, Kind, Value as DsVal};
 use crate::render::gpu::Headless;
 use crate::session::Session;
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -325,6 +325,8 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 #[cfg(not(target_arch = "wasm32"))]
                 "delegate" => super::delegate::run(&crate::ui::settings::ChatPrefs::load().helper_command, None, &Value::Object(a.0.clone())),
                 "find_nodes" => find_nodes(ed, &a),
+                "set_component_props" => set_component_props(ed, &a),
+                "set_instance_props" => set_instance_props(ed, &a),
                 "export" => export(host, &a),
                 "export_combined_pdf" => export_pdf(host, &a),
                 "create_artboard" => create_artboard(ed, &a),
@@ -3266,6 +3268,16 @@ impl Builder<'_, '_> {
             self.tx.node_mut(id).unwrap().name = name;
         }
         self.apply_overrides(el, id);
+        if let Some(raw) = el.attr("props") {
+            match serde_json::from_str::<Map<String, Value>>(raw) {
+                Ok(m) => {
+                    let values = m.into_iter().map(|(k, v)| (k, v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect();
+                    let defs = self.main_props(id);
+                    self.apply_props(id, &defs, &values);
+                }
+                Err(_) => self.warnings.push("x-paper-instance: `props` must be a JSON object".into()),
+            }
+        }
         Some(id)
     }
 
@@ -3280,17 +3292,25 @@ impl Builder<'_, '_> {
                 .push("x-paper-instance: `overrides` must be a JSON object".into());
             return;
         };
+        self.apply_override_map(instance, &map);
+    }
+
+    /// The layer an override key names under `instance`: `$root`, a layer name, or a path of
+    /// names joined by ` > ` (`Lojas > Label`) for repeated names.
+    fn override_target(&self, instance: NodeId, key: &str) -> Option<NodeId> {
+        if key == "$root" {
+            return Some(instance);
+        }
+        let doc = self.tx.doc();
+        key.split(" > ").try_fold(instance, |at, name| doc.subtree(at).into_iter().skip(1).find(|i| doc.get(*i).is_some_and(|n| n.name == name.trim())))
+    }
+
+    /// Apply a map of layer key (see [`Self::override_target`]) to a text (string) or styles
+    /// (object; `icon` swaps an icon layer's icon, `visibility` shows or hides) on an instance.
+    fn apply_override_map(&mut self, instance: NodeId, map: &Map<String, Value>) {
         for (layer, v) in map {
-            let found = self
-                .tx
-                .doc()
-                .subtree(instance)
-                .into_iter()
-                .find(|i| self.tx.doc().get(*i).is_some_and(|n| n.name == layer));
-            let Some(target) = found else {
-                self.warnings.push(format!(
-                    "x-paper-instance: no layer named `{layer}` in the instance"
-                ));
+            let Some(target) = self.override_target(instance, layer) else {
+                self.warnings.push(format!("no layer named `{layer}` in the instance"));
                 continue;
             };
             match v {
@@ -3299,18 +3319,27 @@ impl Builder<'_, '_> {
                         continue;
                     };
                     let Some(slot) = n.kind.text_mut() else {
-                        self.warnings
-                            .push(format!("x-paper-instance: `{layer}` is not a text layer"));
+                        self.warnings.push(format!("`{layer}` is not a text layer"));
                         continue;
                     };
-                    *slot = t;
+                    *slot = t.clone();
                     crate::editor::structure::mark_overrides(self.tx, target, &["text"]);
                     fit_text(self.tx, target, false);
                 }
-                Value::Object(_) => {
-                    let Ok(styles) = css::from_json(&v) else {
+                Value::Object(o) => {
+                    let mut o = o.clone();
+                    if let Some(icon) = o.remove("icon").and_then(|i| i.as_str().map(str::to_owned)) {
+                        self.swap_icon(target, &icon);
+                    }
+                    if let Some(t) = o.remove("text").and_then(|t| t.as_str().map(str::to_owned)) {
+                        self.apply_override_map(instance, &[(layer.clone(), json!(t))].into_iter().collect());
+                    }
+                    let Ok(styles) = css::from_json(&Value::Object(o)) else {
                         continue;
                     };
+                    if styles.is_empty() {
+                        continue;
+                    }
                     let parent = Parent::of(
                         self.tx.doc(),
                         &self.page_id,
@@ -3328,6 +3357,67 @@ impl Builder<'_, '_> {
                 _ => {}
             }
         }
+    }
+
+    /// Replace the artwork of icon layer `target` with icon `name` (`set:name`), same size and
+    /// colour; the layer keeps its place, name and link, and its new content is an override.
+    fn swap_icon(&mut self, target: NodeId, name: &str) {
+        let Some(n) = self.tx.doc().get(target).cloned() else { return };
+        let color = vector_color(self.tx.doc(), target).map_or_else(|| "currentColor".to_owned(), |c| c.to_hex());
+        let markup = format!("<x-paper-icon name=\"{name}\" size=\"{}\" color=\"{color}\"/>", n.rect.w.max(n.rect.h));
+        let Some(Html::Element(el)) = html::parse(&markup).into_iter().next() else { return };
+        let parent = Parent::of(self.tx.doc(), &self.page_id, Some(target));
+        let Some(made) = self.icon_el(&el, &Vec::new(), &Vec::new(), &parent, &mut None) else { return };
+        for old in n.children.clone() {
+            self.tx.remove(old);
+        }
+        for k in self.tx.doc().get(made).map(|m| m.children.clone()).unwrap_or_default() {
+            self.tx.reparent(k, Some(target), None);
+        }
+        self.tx.remove(made);
+        // The layer keeps its name: properties find it by that name.
+        crate::editor::structure::mark_overrides(self.tx, target, &["children"]);
+    }
+
+    /// Apply property `values` (by name) of an instance, using its main's definitions: each
+    /// becomes overrides on its layers. The values are kept on the instance root.
+    fn apply_props(&mut self, root: NodeId, defs: &[crate::model::PropDef], values: &BTreeMap<String, String>) {
+        for (name, value) in values {
+            let Some(d) = defs.iter().find(|d| d.name == *name) else {
+                self.warnings.push(format!("the component has no property `{name}`"));
+                continue;
+            };
+            let layer = d.layer.clone().unwrap_or_default();
+            let map: Map<String, Value> = match d.kind.as_str() {
+                "text" => [(layer, json!(value))].into_iter().collect(),
+                "bool" => [(layer, json!({"visibility": if value == "true" { "visible" } else { "hidden" }}))].into_iter().collect(),
+                "icon" => [(layer, json!({"icon": value}))].into_iter().collect(),
+                _ => match d.options.iter().find(|o| o.value == *value) {
+                    Some(o) => o.set.as_object().cloned().unwrap_or_default(),
+                    None => {
+                        let opts: Vec<&str> = d.options.iter().map(|o| o.value.as_str()).collect();
+                        self.warnings.push(format!("`{value}` is not an option of `{name}` ({})", opts.join(", ")));
+                        continue;
+                    }
+                },
+            };
+            self.apply_override_map(root, &map);
+        }
+        if let Some(n) = self.tx.node_mut(root) {
+            n.prop_values.extend(values.clone());
+        }
+    }
+
+    /// The property definitions of the main an instance root follows (this page or another).
+    fn main_props(&self, root: NodeId) -> Vec<crate::model::PropDef> {
+        let Some(l) = self.tx.doc().get(root).and_then(|n| n.instance.clone()) else { return Vec::new() };
+        let (main, source) = l.target();
+        let doc = match source {
+            None => Some(self.tx.doc()),
+            Some(Source::Page(p)) => self.all_pages.iter().find(|(id, _, _)| id == p).map(|(_, _, d)| d),
+            Some(Source::Library(_)) => None,
+        };
+        doc.and_then(|d| d.get(main)).map(|m| m.props.clone()).unwrap_or_default()
     }
 
     /// `<x-plugin use="avataaars" size="64" …/>`: an asset from a plugin the user turned on
@@ -4811,10 +4901,14 @@ fn get_components(ed: &mut Editor, a: &Args) -> ToolResult {
         comps.sort_by_key(|n| n.id);
         for c in comps {
             let n = uses.get(&(page, c.id)).copied().unwrap_or(0);
-            items.push(json!({"id": node_key(ed, page, c.id), "name": c.name,
+            let mut item = json!({"id": node_key(ed, page, c.id), "name": c.name,
                 "componentKey": c.component_key, "pageId": ed.pages[page].id,
                 "pageName": ed.pages[page].name,
-                "width": r2(c.rect.w), "height": r2(c.rect.h), "uses": n, "instances": n}));
+                "width": r2(c.rect.w), "height": r2(c.rect.h), "uses": n, "instances": n});
+            if !c.props.is_empty() {
+                item["props"] = json!(c.props.iter().map(|d| json!({"name": d.name, "kind": d.kind, "options": d.options.iter().map(|o| o.value.clone()).collect::<Vec<_>>(), "default": d.default})).collect::<Vec<_>>());
+            }
+            items.push(item);
         }
     }
     if only.is_none() {
@@ -4869,9 +4963,16 @@ fn recolor_vectors(tx: &mut Tx, id: NodeId, styles: &Styles) -> bool {
                 n.style.stroke = Some(color);
             }
         }
+        // Inside an instance the shapes keep their new colour when the main syncs.
+        crate::editor::structure::mark_overrides(tx, s, &["fills", "stroke"]);
     }
     crate::editor::structure::mark_overrides(tx, id, &["fills", "stroke"]);
     true
+}
+
+/// The colour an icon's shapes are drawn in: the first shape's stroke, else its fill.
+fn vector_color(doc: &Document, id: NodeId) -> Option<Color> {
+    doc.subtree(id).into_iter().filter_map(|i| doc.get(i)).filter(|n| matches!(n.kind, NodeKind::Path { .. })).find_map(|n| n.style.stroke.or_else(|| n.style.fill()))
 }
 
 /// Copy main components from another page (a design-system page) onto this one, so instances can
@@ -5147,6 +5248,261 @@ fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
         .map(|n| json!({"id": node_key(ed, page, n.id), "name": n.name, "text": n.kind.text()}))
         .collect();
     text(json!({"id": node_key(ed, page, id), "textLayers": texts, "layers": layers}))
+}
+
+/// The inspector's way to set instance properties on the page being viewed.
+pub fn set_props_ui(ed: &mut Editor, ids: &[NodeId], name: &str, value: &str) -> Result<(), String> {
+    let page = ed.active_page;
+    let keys: Vec<String> = ids.iter().map(|i| node_key(ed, page, *i)).collect();
+    let args = json!({"nodeIds": keys, "values": {name: value}});
+    set_instance_props(ed, &Args(args.as_object().unwrap())).map(|_| ())
+}
+
+/// The inspector's way to add properties to a main component from a template.
+pub fn props_template_ui(ed: &mut Editor, main: NodeId, template: &str) -> Result<(), String> {
+    let key = node_key(ed, ed.active_page, main);
+    let args = json!({"componentId": key, "template": template});
+    set_component_props(ed, &Args(args.as_object().unwrap())).map(|_| ())
+}
+
+/// Every page as (id, name, document), for a [`Builder`] that resolves mains on other pages.
+fn all_pages(ed: &Editor) -> Vec<(String, String, Document)> {
+    ed.pages.iter().enumerate().map(|(i, p)| (p.id.clone(), p.name.clone(), ed.page_doc(i).clone())).collect()
+}
+
+/// Define a main component's properties: `props` (added or replaced by name), a `template`
+/// (`text`, `active`, `status`), `remove` (names). Instances everywhere re-apply their values.
+fn set_component_props(ed: &mut Editor, a: &Args) -> ToolResult {
+    let def = page_arg(ed, a)?;
+    let key = a.str("componentId").or(a.str("nodeId")).ok_or("give componentId (the main component)")?;
+    let (page, id) = resolve(ed, key, def)?;
+    let doc = ed.page_doc(page);
+    let main = doc.get(id).filter(|n| n.component).ok_or("not a main component: create_component first")?;
+    let mut defs = main.props.clone();
+    let mut renames: Vec<(NodeId, String)> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut incoming: Vec<crate::model::PropDef> = match a.get("props") {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("props: {e}"))?,
+        None => Vec::new(),
+    };
+    if let Some(t) = a.str("template") {
+        let (made, r) = template_props(doc, id, t, a)?;
+        incoming.extend(made);
+        renames = r;
+    }
+    let names: BTreeSet<String> = doc.subtree(id).into_iter().filter_map(|i| doc.get(i)).map(|n| n.name.clone()).collect();
+    for d in incoming {
+        if !["text", "bool", "icon", "enum"].contains(&d.kind.as_str()) {
+            return Err(format!("`{}`: kind must be text, bool, icon or enum", d.name));
+        }
+        if d.kind == "enum" && d.options.is_empty() {
+            return Err(format!("`{}`: an enum needs options", d.name));
+        }
+        if d.kind != "enum" && !d.layer.as_ref().is_some_and(|l| names.contains(l) || renames.iter().any(|(_, n)| n == l)) {
+            warnings.push(format!("`{}`: no layer named `{}` in the component", d.name, d.layer.clone().unwrap_or_default()));
+        }
+        match defs.iter_mut().find(|x| x.name == d.name) {
+            Some(x) => *x = d,
+            None => defs.push(d),
+        }
+    }
+    for r in a.strs("remove").unwrap_or_default() {
+        defs.retain(|d| d.name != r);
+    }
+    let stored = defs.clone();
+    ed.with_page(page, |ed| {
+        ed.edit("Component properties", |tx| {
+            for (n, name) in &renames {
+                if let Some(x) = tx.node_mut(*n) {
+                    x.name = name.clone();
+                }
+            }
+            tx.node_mut(id).unwrap().props = stored;
+        })
+    });
+    let instances = reapply_props(ed, page, id, &mut warnings);
+    let summary: Vec<Value> = defs.iter().map(|d| json!({"name": d.name, "kind": d.kind, "layer": d.layer, "options": d.options.iter().map(|o| o.value.clone()).collect::<Vec<_>>()})).collect();
+    let mut v = json!({"props": summary, "instancesUpdated": instances, "next": "Set values with set_instance_props, or place with <x-paper-instance component=\"Name\" props='{\"Prop\":\"Value\"}'/>."});
+    if !warnings.is_empty() {
+        v["warnings"] = json!(warnings);
+    }
+    text(v)
+}
+
+/// Re-apply every instance's property values after main `main` (on `main_page`) changed its
+/// definitions, on every page. Returns how many instances were updated.
+fn reapply_props(ed: &mut Editor, main_page: usize, main: NodeId, warnings: &mut Vec<String>) -> usize {
+    ed.finish_loading();
+    let main_id = ed.pages[main_page].id.clone();
+    let defs = ed.page_doc(main_page).get(main).map(|n| n.props.clone()).unwrap_or_default();
+    let mut count = 0;
+    for page in 0..ed.pages.len() {
+        let want = if page == main_page { None } else { Some(Source::Page(main_id.clone())) };
+        let roots: Vec<(NodeId, BTreeMap<String, String>)> = ed
+            .page_doc(page)
+            .nodes
+            .values()
+            .filter(|n| !n.prop_values.is_empty() && n.instance.as_ref().is_some_and(|l| l.target() == (main, &want)))
+            .map(|n| (n.id, n.prop_values.clone()))
+            .collect();
+        if roots.is_empty() {
+            continue;
+        }
+        let pages = all_pages(ed);
+        let page_id = ed.pages[page].id.clone();
+        let w = ed.with_page(page, |ed| {
+            ed.edit("Component properties", |tx| {
+                let mut b = Builder { tx, page_id, all_pages: &pages, ignored: BTreeSet::new(), warnings: Vec::new() };
+                for (r, values) in &roots {
+                    b.apply_props(*r, &defs, values);
+                }
+                b.warnings
+            })
+        });
+        warnings.extend(w);
+        count += roots.len();
+    }
+    count
+}
+
+/// Set property values on instances: `nodeIds` and `values` ({"Status": "Rejeitada"}).
+fn set_instance_props(ed: &mut Editor, a: &Args) -> ToolResult {
+    let def = page_arg(ed, a)?;
+    let (page, ids) = resolve_all(ed, &a.strs("nodeIds")?, def)?;
+    let values: BTreeMap<String, String> = a
+        .get("values")
+        .and_then(Value::as_object)
+        .ok_or("values must be an object of property name to value")?
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned)))
+        .collect();
+    let pages = all_pages(ed);
+    let page_id = ed.pages[page].id.clone();
+    let (done, warnings) = ed.with_page(page, |ed| {
+        ed.edit("Instance properties", |tx| {
+            let mut b = Builder { tx, page_id, all_pages: &pages, ignored: BTreeSet::new(), warnings: Vec::new() };
+            let mut done = 0;
+            for id in &ids {
+                let defs = b.main_props(*id);
+                if defs.is_empty() {
+                    b.warnings.push(format!("{} is not an instance of a component with properties", id.0));
+                    continue;
+                }
+                b.apply_props(*id, &defs, &values);
+                done += 1;
+            }
+            (done, b.warnings)
+        })
+    });
+    let mut v = json!({"updated": done});
+    if !warnings.is_empty() {
+        v["warnings"] = json!(warnings);
+    }
+    text(v)
+}
+
+/// Properties made from a template on main `id`, and item renames it needs (repeated item names
+/// cannot be told apart in an option's changes).
+fn template_props(doc: &Document, id: NodeId, template: &str, a: &Args) -> Result<(Vec<crate::model::PropDef>, Vec<(NodeId, String)>), String> {
+    use crate::model::{PropDef, PropOption};
+    let first_text = |at: NodeId| doc.subtree(at).into_iter().skip(1).find(|i| doc.get(*i).is_some_and(|n| n.kind.text().is_some()));
+    let first_icon = |at: NodeId| doc.subtree(at).into_iter().skip(1).find(|i| doc.get(*i).is_some_and(|n| n.name.starts_with("Icon / ")));
+    let var_or = |names: &[&str], fallback: &str| names.iter().find(|n| doc.variables.contains_key(**n)).map_or_else(|| fallback.to_owned(), |n| format!("var(--{n})"));
+    let name = a.str("name");
+    match template {
+        "text" => {
+            let mut seen = BTreeSet::new();
+            let defs = doc
+                .subtree(id)
+                .into_iter()
+                .skip(1)
+                .filter_map(|i| doc.get(i))
+                .filter(|n| n.kind.text().is_some() && seen.insert(n.name.clone()))
+                .map(|n| PropDef { name: n.name.clone(), kind: "text".into(), layer: Some(n.name.clone()), default: n.kind.text().map(|t| t.to_string()), ..Default::default() })
+                .collect();
+            Ok((defs, Vec::new()))
+        }
+        "active" => {
+            let root = doc.get(id).unwrap();
+            let container = match root.children.as_slice() {
+                [only] if doc.get(*only).is_some_and(|c| c.children.len() >= 2) => *only,
+                _ => id,
+            };
+            let items = doc.get(container).map(|c| c.children.clone()).unwrap_or_default();
+            if items.len() < 2 {
+                return Err("the active template needs a row of two or more items (tabs, nav, segments)".into());
+            }
+            // Each item is told apart by name: repeated names take their label's text.
+            let mut renames = Vec::new();
+            let mut item_names = Vec::new();
+            for it in &items {
+                let n = doc.get(*it).unwrap();
+                let label = first_text(*it).and_then(|t| doc.get(t)).and_then(|t| t.kind.text().map(|s| s.to_string()));
+                let repeated = items.iter().filter(|o| doc.get(**o).is_some_and(|x| x.name == n.name)).count() > 1;
+                let nm = if repeated { label.clone().unwrap_or_else(|| format!("{} {}", n.name, item_names.len() + 1)) } else { n.name.clone() };
+                if nm != n.name {
+                    renames.push((*it, nm.clone()));
+                }
+                item_names.push((nm, label));
+            }
+            let on = a.get("activeStyle").cloned().unwrap_or_else(|| json!({"color": var_or(&["primary", "accent", "brand"], "#111827"), "fontWeight": "600"}));
+            let off = a.get("inactiveStyle").cloned().unwrap_or_else(|| json!({"color": var_or(&["text-muted", "muted", "text-secondary"], "#6b7280"), "fontWeight": "400"}));
+            let color_of = |s: &Value| json!({"color": s["color"].clone()});
+            let options = item_names
+                .iter()
+                .enumerate()
+                .map(|(i, (nm, label))| {
+                    let mut set = Map::new();
+                    for (j, it) in items.iter().enumerate() {
+                        let style = if i == j { &on } else { &off };
+                        let item_name = &item_names[j].0;
+                        if let Some(t) = first_text(*it).and_then(|t| doc.get(t)) {
+                            set.insert(format!("{item_name} > {}", t.name), style.clone());
+                        }
+                        if let Some(ic) = first_icon(*it).and_then(|t| doc.get(t)) {
+                            set.insert(format!("{item_name} > {}", ic.name), color_of(style));
+                        }
+                    }
+                    PropOption { value: label.clone().unwrap_or_else(|| nm.clone()), set: Value::Object(set) }
+                })
+                .collect::<Vec<_>>();
+            let default = options.first().map(|o| o.value.clone());
+            Ok((vec![PropDef { name: name.unwrap_or("Active").into(), kind: "enum".into(), options, default, ..Default::default() }], renames))
+        }
+        "status" => {
+            let opts = a.get("options").and_then(Value::as_array).ok_or("the status template needs options: [{\"value\": \"Autorizada\", \"color\": \"#16a34a\"}, ...]")?;
+            let label = a.str("label").map(str::to_owned).or_else(|| first_text(id).and_then(|t| doc.get(t)).map(|t| t.name.clone()));
+            let icon = first_icon(id).and_then(|t| doc.get(t)).map(|t| t.name.clone());
+            let options = opts
+                .iter()
+                .map(|o| {
+                    let value = o["value"].as_str().unwrap_or_default().to_owned();
+                    let color = o["color"].as_str().unwrap_or("#6b7280").to_owned();
+                    // The root gets a light tint of the colour (hex) or the colour itself (a variable).
+                    let tint = if color.starts_with('#') && color.len() == 7 { format!("{color}1f") } else { o["background"].as_str().unwrap_or(&color).to_owned() };
+                    let mut set = Map::new();
+                    set.insert("$root".into(), json!({"background": tint}));
+                    if let Some(l) = &label {
+                        set.insert(l.clone(), json!({"text": value, "color": color}));
+                    }
+                    if let Some(i) = &icon {
+                        let mut s = json!({"color": color});
+                        if let Some(name) = o["icon"].as_str() {
+                            s["icon"] = json!(name);
+                        }
+                        set.insert(i.clone(), s);
+                    }
+                    PropOption { value, set: Value::Object(set) }
+                })
+                .collect::<Vec<_>>();
+            if options.is_empty() {
+                return Err("the status template needs at least one option".into());
+            }
+            let default = options.first().map(|o| o.value.clone());
+            Ok((vec![PropDef { name: name.unwrap_or("Status").into(), kind: "enum".into(), options, default, ..Default::default() }], Vec::new()))
+        }
+        t => Err(format!("unknown template `{t}`: text, active or status")),
+    }
 }
 
 fn swap_instance(ed: &mut Editor, a: &Args) -> ToolResult {

@@ -440,6 +440,35 @@ pub struct Node {
     /// How far a [`Node::scroll`] frame is scrolled, in world units. A view state: not saved.
     #[serde(skip)]
     pub scroll_y: f64,
+    /// A main component's properties (status, active tab, label, icon...), set per instance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub props: Vec<PropDef>,
+    /// An instance root's property values, by property name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub prop_values: BTreeMap<String, String>,
+}
+
+/// One property of a component. `kind`: `text` (the text of `layer`), `bool` (shows `layer`),
+/// `icon` (the icon of `layer`) or `enum` (one of `options`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PropDef {
+    pub name: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<PropOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// An enum option: what choosing it changes, in the `overrides` format (layer name, or `$root`,
+/// to a text or a style object; a style object may hold `icon` and `visibility`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PropOption {
+    pub value: String,
+    #[serde(default)]
+    pub set: serde_json::Value,
 }
 
 /// What a component is in code: its library, the import, and a usage template per target.
@@ -564,6 +593,8 @@ impl Node {
             code: None,
             scroll: false,
             scroll_y: 0.0,
+            props: Vec::new(),
+            prop_values: BTreeMap::new(),
         }
     }
 

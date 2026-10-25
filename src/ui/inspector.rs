@@ -442,6 +442,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             }
             let first = ed.doc.get(ids[0]).cloned().unwrap();
             header(ui, ed, &ids, &first);
+            props_section(ui, ed, &ids, &first);
             separator(ui);
             feedback_section(ui, ed, st, &ids, &first);
             align_row(ui, ed, &ids);
@@ -1030,6 +1031,88 @@ fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
         let mut all = screens.iter().all(|id| ed.doc.get(*id).is_some_and(|n| n.scroll));
         if super::kit::checkbox(ui, &mut all, "Screens scroll").on_hover_text("Every screen on this page keeps its size and scrolls what overflows").changed() {
             ed.set_scroll(&screens, all);
+        }
+    }
+}
+
+/// Component properties: a control per property on instances, templates on a main.
+fn props_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
+    // The main an instance follows, on this page or another.
+    let defs = match &first.instance {
+        Some(l) if !first.component => {
+            let (main, source) = l.target();
+            let doc = match source {
+                None => Some(&ed.doc),
+                Some(crate::model::Source::Page(p)) => ed.pages.iter().position(|s| &s.id == p).map(|i| ed.page_doc(i)),
+                _ => None,
+            };
+            doc.and_then(|d| d.get(main)).map(|m| m.props.clone()).unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    if first.component && ids.len() == 1 {
+        separator(ui);
+        section(ui, "Properties");
+        for d in &first.props {
+            let detail = if d.kind == "enum" { d.options.iter().map(|o| o.value.as_str()).collect::<Vec<_>>().join(", ") } else { d.layer.clone().unwrap_or_default() };
+            row(ui, &d.name, |ui| {
+                ui.add(egui::Label::new(RichText::new(format!("{} \u{b7} {detail}", d.kind)).size(theme::SECONDARY).color(theme::pal(ui).secondary)).truncate());
+            });
+        }
+        let mut pick = None;
+        ui.horizontal_wrapped(|ui| {
+            for (t, label, tip) in [
+                ("text", "Texts", "A property for each text layer"),
+                ("active", "Active item", "Which item of a tab bar, nav or segmented row is active"),
+            ] {
+                if super::kit::chip(ui, &format!("+ {label}"), false).on_hover_text(tip).clicked() {
+                    pick = Some(t);
+                }
+            }
+        });
+        if let Some(t) = pick
+            && let Err(e) = crate::mcp::exec::props_template_ui(ed, first.id, t)
+        {
+            ed.status = e;
+        }
+        return;
+    }
+    if defs.is_empty() {
+        return;
+    }
+    separator(ui);
+    section(ui, "Properties");
+    for d in &defs {
+        let current = first.prop_values.get(&d.name).cloned().or_else(|| d.default.clone()).unwrap_or_default();
+        let mut set = None;
+        row(ui, &d.name, |ui| {
+            let width = ui.available_width();
+            match d.kind.as_str() {
+                "enum" => {
+                    let options: Vec<(&str, &str)> = d.options.iter().map(|o| (o.value.as_str(), o.value.as_str())).collect();
+                    if let Some(v) = super::kit::select(ui, current.as_str(), &options, width) {
+                        set = Some(v.to_owned());
+                    }
+                }
+                "bool" => {
+                    let mut on = current != "false";
+                    if super::kit::checkbox(ui, &mut on, "").changed() {
+                        set = Some(on.to_string());
+                    }
+                }
+                _ => {
+                    let mut v = current.clone();
+                    let r = ui.add(egui::TextEdit::singleline(&mut v).margin(crate::theme::INPUT_MARGIN).desired_width(width));
+                    if r.lost_focus() && v != current {
+                        set = Some(v);
+                    }
+                }
+            }
+        });
+        if let Some(v) = set
+            && let Err(e) = crate::mcp::exec::set_props_ui(ed, ids, &d.name, &v)
+        {
+            ed.status = e;
         }
     }
 }

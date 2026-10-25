@@ -76,6 +76,13 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (component properties)
+
+* Main components carry properties (`Node.props`): `text`, `bool`, `icon` and `enum`, whose options are changes in the overrides format (a layer name, `$root` or a path `Item > Label`, to a text or styles that may hold `text`, `icon` and `visibility`), so they restyle, retext, show, hide or re-icon any layer. Instances keep their values (`prop_values`) as overrides, so main edits keep them; changing the definitions re-applies every instance on every page.
+* Templates: `text` (a property per text layer), `active` (which item of a tab bar, nav or segmented row is active) and `status` (options with a colour tint the root and colour the label and icon).
+* `set_component_props`, `set_instance_props`, `props='{...}'` on `<x-paper-instance>`, properties in `get_components`, `{Prop}` in code link templates, and an inspector section (a control per property on an instance; Texts and Active item templates on a main). Icon swaps keep the layer's name and link (a `children` override); recoloured icon shapes inside instances now keep their colour after a sync.
+* Spec: `specs/component-props/spec.md`.
+
 ### 2026-10-25: unreleased (scrolling screens)
 
 * Screens keep their size and scroll what overflows: a frame's `scroll` flag (CSS `overflow: auto|scroll`, `overflow-y-auto` in the Tailwind export) makes it fixed height and clipped, and the wheel over it scrolls its content on the canvas and in Present, then pans once the content ends. The offset is view state, not saved; hit-testing and overlays follow it.

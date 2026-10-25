@@ -112,6 +112,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Copy, move, delete | `duplicate_nodes`, `move_nodes`, `delete_nodes` |
 | Tokens | `get_variables` (`format` css, json or tailwind), `set_variables` (`collection`, `type`, `mode`, `alias`), `create_collection`, `delete_variables`, `set_variable_mode`, `bind_variable` |
 | Reuse | `create_component`, `create_instance`, `swap_instance` (also a nested badge inside a row instance: a swap that survives main edits), `get_components`, `<x-paper-instance>` |
+| Component properties | One component with properties instead of one per state: `set_component_props` (`text`, `bool`, `icon`, `enum` options in the overrides format; templates `text`, `active` for tab bars and navs, `status` with [{value, color}]), then `set_instance_props {nodeIds, values}` or `<x-paper-instance component="Badge" props='{"Status":"Rejeitada"}'/>`; `get_components` lists them |
 | Screens | Fixed size (390x844, 1440x900...); content longer than the screen: `overflow: auto` on the screen frame, so it keeps its size and the overflow scrolls on the canvas and in Present (inspector: Scroll overflow; page: Screens scroll) |
 | Project | `rename_file {name}` (open project stays open), `move_nodes {toPageId}` keeps instances linked and notes attached |
 | Shared libraries | `publish_library`, `list_libraries`, `enable_library`, `update_library`, `disable_library` |

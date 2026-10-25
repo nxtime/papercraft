@@ -866,6 +866,51 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "set_component_props",
+            "Give a main component properties that each instance sets: `text` (a layer's text), \
+             `bool` (shows a layer), `icon` (an icon layer's icon, any set:name) and `enum` (one of \
+             options, each a set of changes in the overrides format: layer name, `$root` or a path \
+             `Item > Label`, to a text or a style object that may also hold `text`, `icon` and \
+             `visibility`). Or start from a template: `text` (a property per text layer), `active` \
+             (which item of a tab bar, nav or segmented row is active; activeStyle/inactiveStyle \
+             optional) or `status` (options [{value, color, icon?}] tint the root and colour the \
+             label and icon). Use one component with properties instead of a component per state. \
+             Instances on every page re-apply their values.",
+            json!({
+                "componentId": node_id("The main component."),
+                "props": {"type": "array", "items": {"type": "object", "properties": {
+                    "name": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["text", "bool", "icon", "enum"]},
+                    "layer": {"type": "string", "description": "text, bool, icon: the layer's name."},
+                    "options": {"type": "array", "items": {"type": "object", "properties": {"value": {"type": "string"}, "set": {"type": "object"}}, "required": ["value", "set"]}},
+                    "default": {"type": "string"},
+                }, "required": ["name", "kind"]}},
+                "template": {"type": "string", "enum": ["text", "active", "status"]},
+                "name": {"type": "string", "description": "Template: the property's name (Active, Status)."},
+                "options": {"type": "array", "description": "status template: [{value, color, icon?}].", "items": {"type": "object"}},
+                "label": {"type": "string", "description": "status template: the label layer (default: the first text)."},
+                "activeStyle": {"type": "object"},
+                "inactiveStyle": {"type": "object"},
+                "remove": {"type": "array", "items": {"type": "string"}, "description": "Property names to drop."},
+                "pageId": page_id(),
+            }),
+            &["componentId"],
+            false,
+        ),
+        tool(
+            "set_instance_props",
+            "Set property values on instances in one call ({\"Status\": \"Rejeitada\", \"Label\": \"NF 10.371\"}); \
+             get_components lists each component's properties and options. In write_html: \
+             <x-paper-instance component=\"Badge\" props='{\"Status\":\"Rejeitada\"}'/>.",
+            json!({
+                "nodeIds": {"type": "array", "items": {"type": "string"}},
+                "values": {"type": "object", "additionalProperties": {"type": ["string", "boolean"]}},
+                "pageId": page_id(),
+            }),
+            &["nodeIds", "values"],
+            false,
+        ),
+        tool(
             "swap_instance",
             "Swap an instance to point at a different main component. An instance root keeps \
              overrides on descendants matched by name and layer type. A nested instance (a badge \
@@ -1110,6 +1155,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
         | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "apply_ui_kit" | "set_code_link"
+        | "set_component_props" | "set_instance_props"
         | "duplicate_nodes" | "move_nodes" | "undo" | "redo" => true,
         _ => return None,
     })

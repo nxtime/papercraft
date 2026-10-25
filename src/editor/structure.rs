@@ -166,6 +166,7 @@ pub fn instantiate_from(
     n.children = Vec::new();
     n.component = false;
     n.component_key = None;
+    n.props.clear();
     n.comments.clear();
     n.instance = Some(InstanceLink {
         main,
@@ -236,6 +237,10 @@ pub(super) fn sync_node(tx: &mut Tx, inst: NodeId, is_root: bool, ext: Option<&D
     copy_props(&main, &mut updated, &link.overrides, is_root);
     if updated != *n {
         *tx.node_mut(inst).unwrap() = updated;
+    }
+    // A layer whose content was replaced (an icon swapped by a property) keeps its children.
+    if link.overrides.iter().any(|o| o == "children") {
+        return;
     }
     // Children: match by link; create missing, remove stale, follow main's order.
     let kids: Vec<NodeId> = tx.doc().get(inst).unwrap().children.clone();
