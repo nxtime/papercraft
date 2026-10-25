@@ -6,7 +6,7 @@ use crate::geom::{Rect, V2, v2};
 use crate::history::Tx;
 use crate::layout;
 use crate::model::{
-    AutoLayout, Direction, Document, InstanceLink, Node, NodeId, NodeKind, Sizing, Source,
+    AutoLayout, Direction, Document, InstanceLink, Node, NodeId, NodeKind, Sizing, Source, Swap,
 };
 use std::collections::{BTreeSet, HashSet};
 
@@ -162,6 +162,7 @@ pub fn instantiate_from(
         main,
         overrides: Vec::new(),
         source: source.clone(),
+        swap: None,
     });
     if let Some(r) = root_rect {
         n.rect = r;
@@ -199,17 +200,24 @@ pub fn sync_library_instance(tx: &mut Tx, inst: NodeId, ext: &Document) {
 
 /// Bring one instance subtree in line with its main counterpart. `ext` is the document of
 /// the main's page when the link has a `source`; without it such an instance is left alone.
+/// A swapped nested instance syncs from the component it was swapped to (`ext` is then that
+/// component's page) and keeps its own place, like a root.
 pub(super) fn sync_node(tx: &mut Tx, inst: NodeId, is_root: bool, ext: Option<&Document>) {
     let Some(n) = tx.doc().get(inst) else { return };
     let Some(link) = n.instance.clone() else {
         return;
     };
-    let ext = ext.filter(|_| link.source.is_some());
-    let main = match ext {
-        None => tx.doc().get(link.main),
-        Some(d) => d.get(link.main),
+    let (main_id, source) = match &link.swap {
+        Some(s) => (s.main, s.source.clone()),
+        None => (link.main, link.source.clone()),
     };
-    if link.source.is_some() && ext.is_none() {
+    let is_root = is_root || link.swap.is_some();
+    let ext = ext.filter(|_| source.is_some());
+    let main = match ext {
+        None => tx.doc().get(main_id),
+        Some(d) => d.get(main_id),
+    };
+    if source.is_some() && ext.is_none() {
         return;
     }
     let Some(main) = main.cloned() else {
@@ -236,23 +244,28 @@ pub(super) fn sync_node(tx: &mut Tx, inst: NodeId, is_root: bool, ext: Option<&D
             .doc()
             .get(*k)
             .and_then(|c| c.instance.as_ref())
-            .is_none_or(|l| !main.children.contains(&l.main) || l.source != link.source);
+            .is_none_or(|l| !main.children.contains(&l.main) || l.source != source);
         if stale {
             tx.remove(*k);
             by_main.retain(|(_, _, x)| x != k);
         }
     }
     for (i, mc) in main.children.iter().enumerate() {
-        match by_main.iter().find(|(m, s, _)| m == mc && *s == link.source) {
+        match by_main.iter().find(|(m, s, _)| m == mc && *s == source) {
             Some((_, _, k)) => {
                 let k = *k;
                 if tx.doc().children(Some(inst)).iter().position(|x| *x == k) != Some(i) {
                     tx.move_to_index(k, i);
                 }
-                sync_node(tx, k, false, ext);
+                // A kid swapped to a component on another page syncs from there (cross-page flush).
+                let kid_ext = match tx.doc().get(k).and_then(|c| c.instance.as_ref()).and_then(|l| l.swap.as_ref()) {
+                    Some(s) if s.source != source => None,
+                    _ => ext,
+                };
+                sync_node(tx, k, false, kid_ext);
             }
             None => {
-                instantiate_from(tx, ext, link.source.clone(), *mc, Some(inst), Some(i), None);
+                instantiate_from(tx, ext, source.clone(), *mc, Some(inst), Some(i), None);
             }
         }
     }
@@ -316,9 +329,10 @@ impl Editor {
                     .nodes
                     .values()
                     .filter(|n| {
-                        n.instance
-                            .as_ref()
-                            .is_some_and(|l| l.main == *c && l.source.is_none())
+                        n.instance.as_ref().is_some_and(|l| match &l.swap {
+                            Some(s) => s.main == *c && s.source.is_none(),
+                            None => l.main == *c && l.source.is_none(),
+                        })
                     })
                     .map(|n| n.id)
                     .collect();
@@ -592,7 +606,8 @@ impl Editor {
 
     /// The page and node a link points at, when that node exists.
     fn link_main(&self, l: &InstanceLink) -> Option<(usize, &Node)> {
-        let page = match &l.source {
+        let (main, source) = l.target();
+        let page = match source {
             None => self.edit_page_index(),
             Some(Source::Page(p)) => self.pages.iter().position(|s| s.id == *p)?,
             Some(Source::Library(_)) => return None,
@@ -602,19 +617,19 @@ impl Editor {
         } else {
             &self.pages[page].stash.as_ref()?.doc
         };
-        doc.get(l.main).map(|n| (page, n))
+        doc.get(main).map(|n| (page, n))
     }
 
     /// The main of `l` is on a page that is still being read, so it cannot be looked at yet.
     fn link_pending(&self, l: &InstanceLink) -> bool {
-        matches!(&l.source, Some(Source::Page(p)) if self.pages.iter().any(|s| s.id == *p && s.pending))
+        matches!(l.target().1, Some(Source::Page(p)) if self.pages.iter().any(|s| s.id == *p && s.pending))
     }
 
     /// A clone of the document holding the main of instance node `id`, when it is another page.
     pub(super) fn source_doc(&self, id: NodeId) -> Option<Document> {
         let l = self.doc.get(id)?.instance.as_ref()?;
-        let Source::Page(_) = l.source.as_ref()? else {
-            return match l.source.as_ref()? {
+        let Source::Page(_) = l.target().1.as_ref()? else {
+            return match l.target().1.as_ref()? {
                 Source::Library(id) => self.library_docs.get(id).cloned(),
                 Source::Page(_) => None,
             };
@@ -1007,6 +1022,28 @@ pub fn swap_instance_tx(
         {
             root.name = new_comp.name;
         }
+    }
+    sync_node(tx, inst, true, ext);
+    true
+}
+
+/// Swap a nested instance (one inside an instance) to another component: it keeps its place in
+/// the outer instance, so later syncs of the outer main keep the swap.
+pub fn swap_nested_tx(tx: &mut Tx, ext: Option<&Document>, source: Option<Source>, inst: NodeId, new_main: NodeId) -> bool {
+    let src = ext.unwrap_or(tx.doc());
+    if !src.get(new_main).is_some_and(|c| c.component) {
+        return false;
+    }
+    let name = src.get(new_main).unwrap().name.clone();
+    for k in tx.doc().children(Some(inst)).to_vec() {
+        tx.remove(k);
+    }
+    let Some(n) = tx.node_mut(inst) else { return false };
+    let Some(link) = n.instance.as_mut() else { return false };
+    link.swap = Some(Swap { main: new_main, source });
+    link.overrides.retain(|o| o == "name");
+    if !link.overrides.iter().any(|o| o == "name") {
+        n.name = name;
     }
     sync_node(tx, inst, true, ext);
     true

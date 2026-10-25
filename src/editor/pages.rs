@@ -506,9 +506,10 @@ impl Editor {
                     .nodes
                     .values()
                     .filter(|n| {
+                        // A swapped nested instance follows the component it was swapped to.
                         n.instance.as_ref().is_some_and(|l| {
-                            matches!(&l.source, Some(Source::Page(p)) if *p == src_id)
-                                && mains.contains(&l.main)
+                            let (main, source) = l.swap.as_ref().map_or((l.main, &l.source), |s| (s.main, &s.source));
+                            matches!(source, Some(Source::Page(p)) if *p == src_id) && mains.contains(&main)
                         })
                     })
                     .map(|n| n.id)

@@ -399,7 +399,7 @@ fn instance_comp_attr(doc: &Document, n: &Node) -> String {
 
 /// The code link of a node: its own (a main component) or its main component's (an instance).
 pub(crate) fn code_link<'a>(doc: &'a Document, n: &'a Node) -> Option<&'a crate::model::CodeLink> {
-    n.code.as_ref().or_else(|| n.instance.as_ref().and_then(|l| doc.get(l.main)).and_then(|m| m.code.as_ref()))
+    n.code.as_ref().or_else(|| n.instance.as_ref().and_then(|l| doc.get(l.target().0)).and_then(|m| m.code.as_ref()))
 }
 
 /// A code link template with `{Name}` replaced by the text of the layer named `Name` under `id`
@@ -2009,6 +2009,7 @@ mod tests {
             main: comp_id,
             overrides: Vec::new(),
             source: None,
+            swap: None,
         });
         frame.layout = Some(AutoLayout {
             direction: Direction::Vertical,
@@ -2232,7 +2233,7 @@ mod tests {
             let inst = frame(&mut doc, "Button / Outline");
             label(&mut doc, inst, text);
             let n = doc.nodes.get_mut(&inst).unwrap();
-            n.instance = Some(InstanceLink { main, overrides: Vec::new(), source: None });
+            n.instance = Some(InstanceLink { main, overrides: Vec::new(), source: None, swap: None });
             n.parent = Some(screen);
             doc.nodes.get_mut(&screen).unwrap().children.push(inst);
         }

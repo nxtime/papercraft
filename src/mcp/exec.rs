@@ -15,7 +15,7 @@ use crate::history::Tx;
 use crate::model::annotation::AnnotationCategory;
 use crate::model::{
     AutoLayout, Binding, Color, Direction, Document, Head, ImageMode, Node, NodeId, NodeKind,
-    Paint, PathPoint, Route, Sizing, Source, SubPath, TextAlign,
+    InstanceLink, Paint, PathPoint, Route, Sizing, Source, SubPath, Swap, TextAlign,
 };
 use crate::project::{Project, Store};
 use crate::variables::{self, DesignSystem, Kind, Value as DsVal};
@@ -38,6 +38,8 @@ pub trait Host {
     fn open_project(&mut self, dir: &Path) -> Result<(), String>;
     /// Save the open project now.
     fn save(&mut self) -> Result<(), String>;
+    /// Rename the open project (its manifest and folder); returns the new folder.
+    fn rename_project(&mut self, name: &str) -> Result<PathBuf, String>;
     /// An offscreen renderer for screenshots and PNG export.
     fn gpu(&mut self) -> Option<Headless>;
     /// The host cannot render synchronously but will render a [`ShotRequest`] itself and answer
@@ -100,6 +102,9 @@ impl Host for SessionHost {
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+    fn rename_project(&mut self, name: &str) -> Result<PathBuf, String> {
+        self.session.rename_open(&mut self.ed, name)
     }
     fn gpu(&mut self) -> Option<Headless> {
         if !self.gpu_tried {
@@ -262,6 +267,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
         "list_resources" => list_resources(host, &a),
         "open_file" => open_file(host, &a),
         "create_file" => create_file(host, &a),
+        "rename_file" => rename_file(host, &a),
         "get_font_family_info" => font_info(&a),
         "get_guide" => guide(&a),
         "publish_library" | "list_libraries" | "enable_library" | "update_library"
@@ -316,6 +322,8 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                     let provider = crate::ui::settings::ChatPrefs::load().image_provider();
                     super::imagegen::generate(host.project().map(|p| p.dir.clone()).as_deref(), None, &provider, &Value::Object(a.0.clone()))
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                "delegate" => super::delegate::run(&crate::ui::settings::ChatPrefs::load().helper_command, None, &Value::Object(a.0.clone())),
                 "find_nodes" => find_nodes(ed, &a),
                 "export" => export(host, &a),
                 "export_combined_pdf" => export_pdf(host, &a),
@@ -480,6 +488,25 @@ fn create_file(host: &mut dyn Host, a: &Args) -> ToolResult {
         "pageId": page.id,
         "next": "call open_file with this fileId to work in it",
     }))
+}
+
+/// Rename a project: the open one by default (saved first), or any project by `fileId`.
+fn rename_file(host: &mut dyn Host, a: &Args) -> ToolResult {
+    let name = a.req_str("name")?.trim();
+    if name.is_empty() {
+        return Err("name must not be empty".into());
+    }
+    let open = host.project().map(|p| p.dir.clone());
+    let dir = match a.str("fileId").filter(|f| !f.is_empty()) {
+        Some(f) => find_project(host.store(), f)?,
+        None => open.clone().ok_or("no project is open: pass fileId")?,
+    };
+    let path = if open.is_some_and(|o| same_dir(&o, &dir)) {
+        host.rename_project(name)?
+    } else {
+        host.store().rename(&dir, name).map_err(|e| e.to_string())?
+    };
+    text(json!({"name": name, "path": path}))
 }
 
 fn create_page(ed: &mut Editor, a: &Args) -> ToolResult {
@@ -1862,10 +1889,12 @@ fn annotation_ref(ed: &Editor, value: &Value, page: usize) -> Result<u64, String
         .iter()
         .filter(|n| {
             let (root, num) = numbers[&n.id];
+            // get_annotations lists notes without a frame as "Detached #n".
             num == number
-                && root
-                    .and_then(|id| doc.get(id))
-                    .is_some_and(|node| node.name.eq_ignore_ascii_case(frame))
+                && match root.and_then(|id| doc.get(id)) {
+                    Some(node) => node.name.eq_ignore_ascii_case(frame),
+                    None => frame.eq_ignore_ascii_case("Detached"),
+                }
         })
         .collect();
     match matches.as_slice() {
@@ -3499,7 +3528,8 @@ impl Builder<'_, '_> {
             let w = src_doc
                 .world_rect(src)
                 .unwrap_or_else(|| src_doc.get(src).unwrap().rect);
-            clone_subtree_from_doc(self.tx, src_doc, src, parent.id, *index, -w.min()).0
+            let pid = self.all_pages.iter().find(|(_, _, d)| std::ptr::eq(d, src_doc)).map(|(pid, _, _)| pid.as_str());
+            clone_subtree_from_doc(self.tx, src_doc, src, parent.id, *index, -w.min(), pid.map(|p| (p, self.page_id.as_str())), false).0
         } else {
             self.warnings
                 .push(format!("x-paper-clone: node `{key}` not found"));
@@ -3524,6 +3554,9 @@ impl Builder<'_, '_> {
 
 /// Deep-copy a subtree from `src_doc` into `tx` under `parent` (keeping its world position plus
 /// `offset`). Returns the new root and the (old → new) id pairs.
+/// `pages`: the (source, destination) page ids, so links to mains left on the source page and
+/// links that become same-page are kept. `keep_keys`: a move, so mains keep their component keys.
+#[allow(clippy::too_many_arguments)]
 fn clone_subtree_from_doc(
     tx: &mut Tx,
     src_doc: &Document,
@@ -3531,6 +3564,8 @@ fn clone_subtree_from_doc(
     parent: Option<NodeId>,
     index: Option<usize>,
     offset: V2,
+    pages: Option<(&str, &str)>,
+    keep_keys: bool,
 ) -> (NodeId, Vec<(NodeId, NodeId)>) {
     let ids = src_doc.subtree(src);
     let nodes: Vec<Node> = ids
@@ -3553,18 +3588,24 @@ fn clone_subtree_from_doc(
             .iter()
             .filter_map(|x| map.get(x).copied())
             .collect();
-        if c.component && c.component_key.is_some() {
+        if c.component && c.component_key.is_some() && !keep_keys {
             c.component_key = Some(crate::variables::new_id());
         }
-        // Only a same-page link can point into the copied subtree; cross-page and library links
-        // keep their main.
-        if let Some(l) = &mut c.instance
-            && l.source.is_none()
-        {
-            if let Some(m) = map.get(&l.main) {
-                l.main = *m;
-            } else if !tx.doc().get(l.main).is_some_and(|mn| mn.component) {
-                c.instance = None;
+        // Only a same-page link can point into the copied subtree; one to a main left on the
+        // source page becomes a cross-page link, one to the destination page a same-page link.
+        if let Some(l) = &mut c.instance {
+            match &l.source {
+                None => {
+                    if let Some(m) = map.get(&l.main) {
+                        l.main = *m;
+                    } else if let Some((from, _)) = pages {
+                        l.source = Some(Source::Page(from.to_owned()));
+                    } else if !tx.doc().get(l.main).is_some_and(|mn| mn.component) {
+                        c.instance = None;
+                    }
+                }
+                Some(Source::Page(p)) if pages.is_some_and(|(_, to)| to == p) => l.source = None,
+                _ => {}
             }
         }
         if let NodeKind::Connector { start, end, .. } = &mut c.kind {
@@ -3789,6 +3830,17 @@ fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
             };
             let flex = parent.layout.is_some();
             let made = b.nodes(&tree, &inherited, &parent, &mut index, flex);
+            // An instance written over a nested instance becomes a swap override: it keeps the
+            // old node's place in the outer instance, so the next sync of the outer main keeps it.
+            if let (Some(o), [id]) = (&old, made.as_slice())
+                && let Some(place) = o.instance.clone()
+                && parent_id.and_then(|p| b.tx.doc().get(p)).is_some_and(|p| p.instance.is_some())
+                && let Some(n) = b.tx.node_mut(*id)
+                && let Some(l) = n.instance.as_mut()
+            {
+                let to = l.swap.take().unwrap_or(Swap { main: l.main, source: l.source.take() });
+                *l = InstanceLink { main: place.main, source: place.source, swap: Some(to), overrides: std::mem::take(&mut l.overrides) };
+            }
             // Root-level content without a position goes where the replaced node was, or
             // into free space.
             if parent_id.is_none() {
@@ -5094,17 +5146,22 @@ fn swap_instance(ed: &mut Editor, a: &Args) -> ToolResult {
             && n.parent
                 .and_then(|p| ed.doc.get(p))
                 .is_none_or(|p| p.instance.is_none());
-        if !is_root {
+        if n.instance.is_none() {
             return Err(format!(
-                "`{}` is not a component instance root",
+                "`{}` is not a component instance",
                 a.req_str("nodeId").unwrap_or_default()
             ));
         }
         if cpage == page && lib.is_none() && (inst == new_main || ed.doc.is_ancestor(inst, new_main)) {
             return Err("could not swap instance to that component".into());
         }
+        // A nested instance (inside another instance) keeps its place in it: a swap override.
         let ok = ed.edit("Swap instance", |tx| {
-            crate::editor::structure::swap_instance_tx(tx, src_doc.as_ref(), source, inst, new_main)
+            if is_root {
+                crate::editor::structure::swap_instance_tx(tx, src_doc.as_ref(), source, inst, new_main)
+            } else {
+                crate::editor::structure::swap_nested_tx(tx, src_doc.as_ref(), source, inst, new_main)
+            }
         });
         if !ok {
             return Err("could not swap instance to that component".into());
@@ -5518,6 +5575,7 @@ fn duplicate_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
             })
         } else {
             let src_doc = ed.page_doc(src_page).clone();
+            let ids = (ed.pages[src_page].id.clone(), ed.pages[dest_page].id.clone());
             ed.with_page(dest_page, |ed| {
                 ed.edit("Duplicate", |tx| {
                     let n = src_doc.get(id).unwrap();
@@ -5528,7 +5586,7 @@ fn duplicate_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                     } else {
                         -w.min()
                     };
-                    let r = clone_subtree_from_doc(tx, &src_doc, id, target, None, offset);
+                    let r = clone_subtree_from_doc(tx, &src_doc, id, target, None, offset, Some((&ids.0, &ids.1)), false);
                     copy_annotations(tx, &src_doc.annotations, &r.1);
                     relayout(tx, target.or(Some(r.0)));
                     r
@@ -5653,13 +5711,20 @@ fn move_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                 return Err("the destination can't have children".into());
             }
             let src_doc = ed.page_doc(src_page).clone();
+            let ids = (ed.pages[src_page].id.clone(), ed.pages[dest_page].id.clone());
+            // Notes on the moved nodes go with them instead of staying behind detached.
+            let sub: HashSet<NodeId> = src_doc.subtree(id).into_iter().collect();
+            let notes: Vec<u64> = src_doc.annotations.iter().filter(|n| n.target.is_some_and(|t| sub.contains(&t))).map(|n| n.id).collect();
             ed.with_page(src_page, |ed| {
                 ed.edit("Move", |tx| {
+                    for n in &notes {
+                        tx.delete_annotation(*n);
+                    }
                     tx.remove(id);
                 });
                 ed.selection.retain(|s| ed.doc.get(*s).is_some());
             });
-            ed.with_page(dest_page, |ed| {
+            let pairs = ed.with_page(dest_page, |ed| {
                 ed.edit("Move", |tx| {
                     let w = src_doc
                         .world_rect(id)
@@ -5679,15 +5744,49 @@ fn move_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                             .map(|p| p + usize::from(after.is_some())),
                         None => Some(index.unwrap_or(list_len).min(list_len)),
                     };
-                    let (new_root, _) =
-                        clone_subtree_from_doc(tx, &src_doc, id, target, idx, offset);
+                    let (new_root, pairs) =
+                        clone_subtree_from_doc(tx, &src_doc, id, target, idx, offset, Some((&ids.0, &ids.1)), true);
+                    copy_annotations(tx, &src_doc.annotations, &pairs);
                     relayout(tx, target.or(Some(new_root)));
-                });
+                    pairs
+                })
             });
+            relink_moved(ed, src_page, dest_page, &pairs.into_iter().collect());
         }
         done += 1;
     }
     text(json!({"moved": done}))
+}
+
+/// After nodes moved from `src` to `dest` page (`moved`: old id to new id), instances anywhere
+/// that used them as their main follow them, so moving components keeps every instance linked.
+fn relink_moved(ed: &mut Editor, src: usize, dest: usize, moved: &HashMap<NodeId, NodeId>) {
+    ed.finish_loading();
+    let (src_id, dest_id) = (ed.pages[src].id.clone(), ed.pages[dest].id.clone());
+    for page in 0..ed.pages.len() {
+        // On the source page the links were same-page; elsewhere they named the source page.
+        let was = if page == src { None } else { Some(Source::Page(src_id.clone())) };
+        let now = if page == dest { None } else { Some(Source::Page(dest_id.clone())) };
+        let hits: Vec<NodeId> = ed
+            .page_doc(page)
+            .nodes
+            .values()
+            .filter(|n| n.instance.as_ref().is_some_and(|l| l.source == was && moved.contains_key(&l.main)))
+            .map(|n| n.id)
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        ed.with_page(page, |ed| {
+            ed.edit("Move", |tx| {
+                for id in hits {
+                    let l = tx.node_mut(id).unwrap().instance.as_mut().unwrap();
+                    l.main = moved[&l.main];
+                    l.source = now.clone();
+                }
+            })
+        });
+    }
 }
 
 fn select_nodes(ed: &mut Editor, a: &Args) -> ToolResult {

@@ -1485,12 +1485,16 @@ impl App {
         }
         for c in calls {
             // Network and Codex work runs off the editor thread; it only reads the project folder.
-            if [crate::mcp::refs::TOOL, crate::mcp::imagegen::TOOL].contains(&c.name.as_str()) {
+            // The helper calls back into this app through papercraft-cli, so it must not hold the UI thread.
+            if [crate::mcp::refs::TOOL, crate::mcp::imagegen::TOOL, crate::mcp::delegate::TOOL].contains(&c.name.as_str()) {
                 let dir = self.session.project.as_ref().map(|p| p.dir.clone());
                 let chat = (c.client.name == crate::mcp::CHAT_CLIENT).then(|| c.client.session.clone());
                 let provider = self.st.settings.chat.image_provider();
+                let helper = self.st.settings.chat.helper_command.clone();
                 std::thread::spawn(move || {
-                    let r = if c.name == crate::mcp::refs::TOOL {
+                    let r = if c.name == crate::mcp::delegate::TOOL {
+                        crate::mcp::delegate::run(&helper, chat.as_deref(), &c.args)
+                    } else if c.name == crate::mcp::refs::TOOL {
                         crate::mcp::refs::fetch(dir.as_deref(), chat.as_deref(), &c.args)
                     } else {
                         crate::mcp::imagegen::generate(dir.as_deref(), chat.as_deref(), &provider, &c.args)
@@ -1563,6 +1567,11 @@ impl crate::mcp::exec::Host for App {
             self.st.save_state = "Saved".into();
         }
         Ok(())
+    }
+    fn rename_project(&mut self, name: &str) -> Result<std::path::PathBuf, String> {
+        let dir = self.session.rename_open(&mut self.ed, name)?;
+        self.st.project_name = self.session.project_name();
+        Ok(dir)
     }
     fn gpu(&mut self) -> Option<Headless> {
         self.offscreen().or_else(|| Headless::new().ok())

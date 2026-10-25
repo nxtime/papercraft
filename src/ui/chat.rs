@@ -55,6 +55,9 @@ const RESEARCH_LINE: &str = "[Research] Web research is on";
 /// Added when the design-playbook CLI is installed: the agent reaches it through `design_rules`.
 const PLAYBOOK_RULE: &str = "\n\nDesign playbook: the design-playbook rules are available through design_rules. Add a seventh question to the brief: follow the playbook (recommended) or not. If yes, before building look up the rules for what you design (for example the screen's patterns, forms, states, accessibility, motion) with one or two design_rules calls, follow them, and cite the rule ids you applied in the finish report. Thresholds (contrast, target sizes, durations) come from the playbook, not memory.";
 
+/// Added when the user set up a helper agent (Settings, Chat, Helper): the chat agent orchestrates.
+const HELPER_RULE: &str = "\n\nHelper. A helper agent on a cheaper model is available through delegate; you orchestrate. Keep the brief, design decisions and anything that needs taste. Hand it: qa after each built screen; read when the work needs many pages, frames, specs or references read (it returns key points; do not reread what it read); build for repetitive or fully specified edits (the same row in ten places, filling a table, applying given markup), with the variables, components and exact structure written into the task. It does not see this chat, so each task is self-contained. Check a build with one narrow read or a qa pass, not by redoing it.";
+
 const CHAT_RULES: &str = "In-app chat: the user is watching and can answer at once.
 
 Brief. Before the first design in a project or on an empty page, ask first, even when the request looks specific, unless the user said to go ahead:
@@ -67,6 +70,7 @@ Build.
 * Anything that repeats (a card, a row, a button, a slot) is a component, built once and placed as instances, with variants for its states. Once a component exists, place it inside write_html with <x-paper-instance component=\"Name\" overrides='{\"Label\":\"Text\"}'/> instead of writing its markup again: rewritten markup is most of what a turn costs.
 * Sizes follow the agreed density. WCAG 2.2 AA asks 24px targets for a pointer, so compact desktop controls are fine; touch screens need 44px.
 * Few, large steps: one write_html per region or per set of components, not one per element. Read narrowly: get_tree_summary or find_nodes on the frame you change, not the page; get_jsx only for what you will copy. One screenshot per screen you changed, at the end, after one lint: every image stays in the context and is re-read on each later step.
+* Review. When a qa agent (Agent tool) or delegate with role qa is available, hand the end-of-turn lint and screenshot check to it instead (delegate first when on: it is cheaper), naming the frames and the brief; fix what it reports with narrow reads, and screenshot yourself only what a finding leaves unclear.
 
 Finish. Report in at most 80 words, flat bullets: what you built, what is a component, what the user should confirm. Then call ask_user with two to four next steps (for example: turn the repeats into components, add the light mode, a mobile layout, the next screen).
 
@@ -529,6 +533,10 @@ impl ChatState {
             t.stop();
             self.stopping = true;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(chat) = &self.turn_chat {
+            crate::mcp::delegate::stop(chat);
+        }
     }
 
     /// Once: whether the app should close the open agent run (the turn that edited is over).
@@ -738,11 +746,12 @@ impl ChatState {
         let dir = self.project.as_deref().map(|d| d.display().to_string()).unwrap_or_default();
         let art = if self.prefs.image_provider() == crate::mcp::imagegen::Provider::Off { "" } else { ART_RULE };
         let playbook = if crate::chat::path::which("playbook").is_some() { PLAYBOOK_RULE } else { "" };
+        let helper = if self.prefs.helper_command.trim().is_empty() { "" } else { HELPER_RULE };
         // Plugins the user turned on, one usage line each.
         let on: Vec<&str> = crate::plugins::PLUGINS.iter().filter(|p| self.prefs.plugins.iter().any(|id| id == p.id)).map(|p| p.hint).collect();
         let plugins = if on.is_empty() { String::new() } else { format!("\n\nPlugins on, placed inside write_html (prefer them to drawn placeholders: avatars for people, real icons):\n- {}", on.join("\n- ")) };
         format!(
-            "{skill}\n\n{CHAT_RULES}{art}{playbook}{plugins}\n\nProject context: the open project is \"{}\" (folder {dir}). Read and edit it only through the papercraft tools.",
+            "{skill}\n\n{CHAT_RULES}{art}{playbook}{helper}{plugins}\n\nProject context: the open project is \"{}\" (folder {dir}). Read and edit it only through the papercraft tools.",
             self.project_name
         )
     }

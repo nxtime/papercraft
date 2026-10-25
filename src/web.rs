@@ -898,6 +898,11 @@ impl Host for Web {
         }
         Ok(())
     }
+    fn rename_project(&mut self, name: &str) -> Result<std::path::PathBuf, String> {
+        let dir = self.session.rename_open(&mut self.ed, name)?;
+        self.st.project_name = self.session.project_name();
+        Ok(dir)
+    }
     /// Pixels are read back asynchronously here: `get_screenshot` defers to the shell.
     fn gpu(&mut self) -> Option<Headless> {
         None

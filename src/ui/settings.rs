@@ -113,6 +113,8 @@ pub struct ChatPrefs {
     pub plugins: Vec<String>,
     /// Where PaperCraft's own issues go (the form and the agent's drafts).
     pub issue_repo: String,
+    /// The helper agent `delegate` runs (`{prompt}`); empty: no helper, the chat agent does it all.
+    pub helper_command: String,
 }
 
 impl Default for ChatPrefs {
@@ -136,6 +138,7 @@ impl Default for ChatPrefs {
             image_offer_seen: false,
             plugins: Vec::new(),
             issue_repo: ISSUE_REPO.into(),
+            helper_command: String::new(),
         }
     }
 }
@@ -1216,6 +1219,37 @@ mod native {
                 note(ui, "Lets the agent make card art, heroes and reference images. Off by default.");
             }
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        field_row(ui, "Helper", |ui| {
+            use crate::mcp::delegate::{OPENCODE_COMMAND, PI_COMMAND};
+            let width = ui.available_width();
+            let cmd = prefs.helper_command.trim();
+            let current = if cmd.is_empty() {
+                ""
+            } else if cmd.starts_with("pi ") {
+                "pi"
+            } else if cmd.starts_with("opencode ") {
+                "opencode"
+            } else {
+                "command"
+            };
+            let options = [("", "Off"), ("pi", "pi"), ("opencode", "opencode"), ("command", "Custom command")];
+            if let Some(v) = kit::select(ui, current, &options, width) {
+                prefs.helper_command = match v {
+                    "pi" => PI_COMMAND.into(),
+                    "opencode" => OPENCODE_COMMAND.into(),
+                    "command" => "my-agent {prompt}".into(),
+                    _ => String::new(),
+                };
+                ed.save = true;
+            }
+            if current.is_empty() {
+                note(ui, "A cheaper agent the chat agent hands review, reading and simple builds to. Off by default.");
+            } else {
+                text_edit(ui, &mut prefs.helper_command, "my-agent {prompt}", ed);
+                note(ui, "Any agent CLI with a shell that takes {prompt} and prints its answer; it drives PaperCraft with papercraft-cli. Change --model / -m to pick its model (opencode with ollama/... runs locally).");
+            }
+        });
         field_row(ui, "Turn budget", |ui| {
             let width = ui.available_width();
             if let Some(b) = kit::select(ui, prefs.turn_budget, &TURN_BUDGETS, width) {
@@ -1275,6 +1309,7 @@ mod tests {
             image_offer_seen: true,
             plugins: vec!["avataaars".into()],
             issue_repo: "https://example.com/me/repo".into(),
+            helper_command: "pi -p {prompt}".into(),
         };
         assert_eq!(ChatPrefs::from_json(&prefs.to_json()), prefs);
         assert_eq!(ChatPrefs::from_json(&ChatPrefs::default().to_json()), ChatPrefs::default());

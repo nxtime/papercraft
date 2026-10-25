@@ -111,13 +111,15 @@ Full flows: [recipes.md](references/recipes.md).
 | Whiteboard shapes, sticky notes, arrows | `create_shape` |
 | Copy, move, delete | `duplicate_nodes`, `move_nodes`, `delete_nodes` |
 | Tokens | `get_variables` (`format` css, json or tailwind), `set_variables` (`collection`, `type`, `mode`, `alias`), `create_collection`, `delete_variables`, `set_variable_mode`, `bind_variable` |
-| Reuse | `create_component`, `create_instance`, `swap_instance`, `get_components`, `<x-paper-instance>` |
+| Reuse | `create_component`, `create_instance`, `swap_instance` (also a nested badge inside a row instance: a swap that survives main edits), `get_components`, `<x-paper-instance>` |
+| Project | `rename_file {name}` (open project stays open), `move_nodes {toPageId}` keeps instances linked and notes attached |
 | Shared libraries | `publish_library`, `list_libraries`, `enable_library`, `update_library`, `disable_library` |
 | Icons | `search_icons`, `<x-paper-icon name="set:name">`; CLI: `papercraft-cli icons add\|list\|search` |
 | Design in a library's look, hand off its code | `apply_ui_kit` (shadcn, antd, reactbits, egui), then `<x-paper-instance>` of its components; `set_code_link` for a component of your own; `get_jsx` / `get_design_spec` then write `<Button variant="outline">` instead of divs |
 | Avatars, more icons, photos, flags, QR | `<x-plugin use="avataaars\|dicebear\|iconify\|picsum\|flags\|qr" …/>` inside `write_html` (plugins the user turned on) |
 | References and art | `fetch_reference_images`, `zoom_image`, `generate_image` (when the user turned image generation on) |
 | Ask the user | `ask_user` (clickable answers; end your turn after it) |
+| Hand work to the helper agent | `delegate` (`role` qa, read or build, a self-contained `task`; only when Settings, Chat, Helper is set) |
 | Design rules (design-playbook) | `design_rules` (`query` or `rule` id; needs the `playbook` CLI; cite ids in the report) |
 | Report a PaperCraft problem | `report_issue` (a draft the user sends; synthetic repro only) |
 | Check quality | `lint_design` |

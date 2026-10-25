@@ -742,6 +742,7 @@ mod tests {
             main: comp_id,
             overrides: Vec::new(),
             source: None,
+            swap: None,
         });
 
         let drift_code = r#"

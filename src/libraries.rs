@@ -732,7 +732,7 @@ mod tests {
             start_head: Default::default(),
             end_head: Default::default(),
         };
-        inner.instance = Some(InstanceLink { main: NodeId(1), overrides: vec![], source: None });
+        inner.instance = Some(InstanceLink { main: NodeId(1), overrides: vec![], source: None, swap: None });
         root.children = vec![NodeId(2), NodeId(3)];
         inner.parent = Some(NodeId(1));
         line.parent = Some(NodeId(1));

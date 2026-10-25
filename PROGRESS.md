@@ -76,6 +76,17 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-24: unreleased (QA sub-agent, helper agents)
+
+* QA sub-agent: Claude Code chats always get a Sonnet `qa` agent that lints and screenshots built frames and returns only findings, so screenshots stay out of the main context.
+* Helper agents (`src/mcp/delegate.rs`, Settings, Chat, Helper): `delegate` hands `qa`, `read` or `build` tasks to a cheaper agent CLI (pi with MiniMax M3.1 Flash, opencode, an Ollama-backed agent, any command taking `{prompt}`). It drives PaperCraft through `papercraft-cli`, runs off the UI thread, and only its last 6,000 characters come back. With a helper set, the chat agent orchestrates: keeps the brief and taste, delegates review, bulk reading and fully specified edits.
+
+### 2026-10-24: unreleased (fixes #10, #11, #12)
+
+* #10: `move_nodes` to another page keeps mains' component keys and relinks every instance (same page, other pages, destination) to the moved nodes; links from moved instances to mains left behind stay. New `rename_file` renames a project (the open one stays open). Cross-page duplicates keep links to mains on the source page too.
+* #11: a nested instance swapped inside an instance (`swap_instance` on it, or `write_html` replace with an `<x-paper-instance>`) is a swap override (`InstanceLink.swap`): later edits to the outer main and copies keep it; code export and the AI spec name the swapped component.
+* #12: `move_nodes` to another page takes the moved nodes' annotations along; detached notes resolve as `Detached #n`.
+
 ### 2026-10-24: 0.7.2 (UI kits, code links, issues from the app, design playbook)
 
 * Code links (Figma Code Connect style): a main component carries its library import and a React and an egui template (`set_code_link`). The React, Tailwind, inline JSX and egui exports write linked instances as that code, with overrides filled in and imports gathered once; the AI spec lists them as Library Components with a "use it, do not rebuild it" rule and stops describing their inner layers.

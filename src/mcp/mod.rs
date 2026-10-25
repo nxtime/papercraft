@@ -22,6 +22,8 @@ pub mod lint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod imagegen;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod delegate;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod refs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod relay;

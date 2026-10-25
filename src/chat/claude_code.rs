@@ -179,7 +179,11 @@ mod process {
     /// Research runs in a Haiku sub-agent: its searches and fetches stay out of the main
     /// context, which gets only the kept references (a research step cost $0.03 instead of the
     /// $1.71 it cost in a long main session).
-    const RESEARCHER: &str = r#"{"researcher": {"description": "Finds interface references on the web and brings the useful ones in. Use it for all reference research.", "prompt": "You research UI references for a designer. Search the web, then call mcp__papercraft__fetch_reference_images once with the best image or page URLs (nicelydone.club/apps/<app> for SaaS web apps, banani.co/references/apps and screenlane.com for mobile, App Store and Google Play listings; Dribbble, Behance and Figma Community block fetching). Look at what came back and keep only images that show an interface like the one asked for: no logos, icons, social cards or illustrations. If fewer than two qualify, search once more. Reply with only the kept images, one line each: the path, then what to take from it (layout, density, color, type).", "tools": ["WebSearch", "WebFetch", "mcp__papercraft__fetch_reference_images"], "model": "haiku"}}"#;
+    const RESEARCHER: &str = r#"{"description": "Finds interface references on the web and brings the useful ones in. Use it for all reference research.", "prompt": "You research UI references for a designer. Search the web, then call mcp__papercraft__fetch_reference_images once with the best image or page URLs (nicelydone.club/apps/<app> for SaaS web apps, banani.co/references/apps and screenlane.com for mobile, App Store and Google Play listings; Dribbble, Behance and Figma Community block fetching). Look at what came back and keep only images that show an interface like the one asked for: no logos, icons, social cards or illustrations. If fewer than two qualify, search once more. Reply with only the kept images, one line each: the path, then what to take from it (layout, density, color, type).", "tools": ["WebSearch", "WebFetch", "mcp__papercraft__fetch_reference_images"], "model": "haiku"}"#;
+
+    /// Review runs in a Sonnet sub-agent: its screenshots and lint output stay out of the main
+    /// context (every image there is re-read on each later step), which gets only the findings.
+    const QA: &str = r#"{"description": "Reviews built screens: lints and screenshots them and reports only what is wrong. Use it for the end-of-turn check instead of taking screenshots yourself.", "prompt": "You are the QA reviewer for a design made in PaperCraft. You get the frames to check and the brief (size, density, palette, library). Call mcp__papercraft__lint_design without fix, then one mcp__papercraft__get_screenshot per frame, and get_tree_summary or get_computed_styles only to confirm a suspicion. Check: overflow and clipped text, misalignment and uneven spacing, off-palette or literal colors, contrast, target sizes for the density, empty or placeholder content, repeated look-alikes that should be instances. Do not edit anything. Reply with at most 12 findings, most severe first, one line each: frame or node id, the problem, the fix. Reply 'No findings' when it is clean.", "tools": ["mcp__papercraft__lint_design", "mcp__papercraft__get_screenshot", "mcp__papercraft__get_tree_summary", "mcp__papercraft__find_nodes", "mcp__papercraft__get_node_info", "mcp__papercraft__get_computed_styles"], "model": "sonnet"}"#;
 
     /// Measured in specs/chat-tokens: 42.7k prompt tokens down to 20.6k. Bash, Edit, Write and
     /// the web tools need a permission `-p` never grants, so they only cost tokens.
@@ -191,21 +195,23 @@ mod process {
         let mut a: Vec<String> = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--include-partial-messages", "--mcp-config", &mcp.to_string(), "--strict-mcp-config",
-            "--allowedTools", "mcp__papercraft__*",
+            "--allowedTools",
         ]
         .map(String::from)
         .into();
-        if cfg.research {
-            let i = a.iter().position(|x| x == "--allowedTools").unwrap() + 1;
-            a[i].push_str(",WebSearch,WebFetch,Agent");
-            a.extend(["--agents".into(), RESEARCHER.to_string()]);
-        }
+        let mut agents = serde_json::json!({"qa": serde_json::from_str::<Value>(QA).unwrap()});
+        let extra = if cfg.research {
+            agents["researcher"] = serde_json::from_str(RESEARCHER).unwrap();
+            ",WebSearch,WebFetch,Agent"
+        } else {
+            ",Agent"
+        };
+        a.push(format!("mcp__papercraft__*{extra}"));
+        a.extend(["--agents".into(), agents.to_string()]);
         if cfg.lean {
             // Without ToolSearch the CLI loads every PaperCraft tool schema up front.
             a.extend(LEAN_ARGS.map(String::from));
-            if cfg.research {
-                a.last_mut().unwrap().push_str(",WebSearch,WebFetch,Agent");
-            }
+            a.last_mut().unwrap().push_str(extra);
         }
         if let Some(f) = system_file {
             a.extend(["--append-system-prompt-file".into(), f.display().to_string()]);
@@ -414,7 +420,10 @@ mod process {
             let a = args(&cfg, Some(Path::new("/tmp/sys.txt")));
             let at = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].as_str();
             assert_eq!(at("--output-format"), "stream-json");
-            assert_eq!(at("--allowedTools"), "mcp__papercraft__*");
+            assert_eq!(at("--allowedTools"), "mcp__papercraft__*,Agent");
+            let agents: Value = serde_json::from_str(at("--agents")).unwrap();
+            assert_eq!(agents["qa"]["model"], "sonnet");
+            assert!(agents.get("researcher").is_none(), "research is off");
             assert_eq!(at("--append-system-prompt-file"), "/tmp/sys.txt");
             assert!(!a.iter().any(|x| x == "SYS" || x == "--append-system-prompt"), "the prompt text is not in argv");
             assert_eq!(at("--model"), "m");
@@ -426,7 +435,7 @@ mod process {
             assert!(!a.contains(&"--tools".to_string()), "not lean: the user's own setup");
             let lean = args(&TurnConfig { lean: true, effort: Some("high".into()), ..cfg }, None);
             let at = |f: &str| lean[lean.iter().position(|x| x == f).unwrap() + 1].as_str();
-            assert_eq!(at("--tools"), "Read,TodoWrite,ToolSearch", "ToolSearch keeps the PaperCraft schemas deferred");
+            assert_eq!(at("--tools"), "Read,TodoWrite,ToolSearch,Agent", "ToolSearch keeps the PaperCraft schemas deferred");
             assert_eq!(at("--setting-sources"), "project,local");
             assert_eq!(at("--effort"), "high");
             assert!(lean.contains(&"--disable-slash-commands".to_string()));
@@ -436,6 +445,7 @@ mod process {
             assert_eq!(at("--allowedTools"), "mcp__papercraft__*,WebSearch,WebFetch,Agent", "allowed, so -p does not deny them");
             let agents: Value = serde_json::from_str(at("--agents")).unwrap();
             assert_eq!(agents["researcher"]["model"], "haiku");
+            assert_eq!(agents["qa"]["model"], "sonnet");
         }
 
         #[test]

@@ -265,6 +265,16 @@ impl Session {
     }
 
     /// Save the camera too (on close / leaving the project), plus everything dirty.
+    /// Rename the open project: saved first, then its manifest and folder follow the new name.
+    pub fn rename_open(&mut self, ed: &mut Editor, name: &str) -> Result<std::path::PathBuf, String> {
+        self.save_all(ed).map_err(|e| format!("could not save the open project: {e}"))?;
+        let p = self.project.as_mut().ok_or("no project is open")?;
+        let dir = self.store.rename(&p.dir, name).map_err(|e| e.to_string())?;
+        p.dir = dir.clone();
+        p.manifest.name = name.trim().to_owned();
+        Ok(dir)
+    }
+
     pub fn save_all(&mut self, ed: &mut Editor) -> Result<(), FormatError> {
         self.save(ed)?;
         if let Some(p) = &self.project {

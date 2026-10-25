@@ -635,6 +635,25 @@ pub struct InstanceLink {
     /// Where the main lives. `None` = same page as this instance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Source>,
+    /// A nested instance swapped to another component inside its instance: it keeps its place
+    /// (`main`) and takes its content from this component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swap: Option<Swap>,
+}
+
+impl InstanceLink {
+    /// The main this node takes its content from, and where it lives: the swap when there is one.
+    pub fn target(&self) -> (NodeId, &Option<Source>) {
+        self.swap.as_ref().map_or((self.main, &self.source), |s| (s.main, &s.source))
+    }
+}
+
+/// The component a nested instance was swapped to, and where it lives (`None` = this page).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Swap {
+    pub main: NodeId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
 }
 
 /// The document holding a main component, when it is not the instance's own page.

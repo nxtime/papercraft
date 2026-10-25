@@ -58,7 +58,7 @@ fn tool(name: &str, desc: &str, props: Value, required: &[&str], read_only: bool
         && !m.contains_key("fileId")
         && !matches!(
             name,
-            "list_resources" | "create_file" | "get_font_family_info" | "get_guide" | "open_file" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules"
+            "list_resources" | "create_file" | "get_font_family_info" | "get_guide" | "open_file" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "delegate"
         )
     {
         m.insert("fileId".into(), file_id());
@@ -143,6 +143,14 @@ pub fn definitions() -> Vec<Value> {
             "Creates a new empty project and returns its id. Call open_file with the id to work in it.",
             json!({"name": {"type": "string", "description": "Optional project name."}}),
             &[],
+            false,
+        ),
+        tool(
+            "rename_file",
+            "Renames a project: its name and its folder. Without fileId, the open project (saved \
+             first; it stays open). Returns the new folder path.",
+            json!({"name": {"type": "string", "description": "The new project name."}}),
+            &["name"],
             false,
         ),
         tool(
@@ -336,6 +344,21 @@ pub fn definitions() -> Vec<Value> {
                 "body": {"type": "string", "description": "**Expected:** … **Actual:** … **Repro:** the smallest tool call that shows it. **Workaround:** … **Impact:** …"},
             }),
             &["kind", "title", "body"],
+            true,
+        ),
+        tool(
+            "delegate",
+            "Hand a task to the helper agent the user set up (a cheaper model with PaperCraft's CLI, \
+             weaker at design): `qa` reviews frames and returns findings, `read` reads many pages, \
+             frames, specs or URLs and returns key points, `build` makes edits you fully specify. \
+             It does not see this chat: the task carries everything (frame names or ids, the brief, \
+             the variables and components to use, exact markup for a build). Only its short answer \
+             comes back.",
+            json!({
+                "role": {"type": "string", "enum": ["qa", "read", "build"]},
+                "task": {"type": "string", "description": "The complete, self-contained instructions."},
+            }),
+            &["role", "task"],
             true,
         ),
         tool(
@@ -844,10 +867,12 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "swap_instance",
-            "Swap an instance root to point at a different main component, preserving overrides \
-             on descendants matched by name and layer type. componentKey may be a component on \
-             any page or an enabled library; no import needed.",
-            json!({"nodeId": node_id("The instance root node to swap."),
+            "Swap an instance to point at a different main component. An instance root keeps \
+             overrides on descendants matched by name and layer type. A nested instance (a badge \
+             inside a row instance) becomes a swap override: it keeps its place, and later edits \
+             to the outer main keep the swap; set its texts after. componentKey may be a component \
+             on any page or an enabled library; no import needed.",
+            json!({"nodeId": node_id("The instance (root or nested) to swap."),
                    "componentId": node_id("The new main component id."),
                    "componentKey": {"type": "string", "description": "Instead of componentId: a key from get_components, including a library component."},
                    "pageId": page_id()}),
@@ -1072,11 +1097,11 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
     Some(match name {
         "list_resources" | "get_basic_info" | "get_selection" | "get_node_info" | "get_children"
         | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
-        | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "find_nodes" | "get_font_family_info"
+        | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "delegate" | "find_nodes" | "get_font_family_info"
         | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
         | "diff_frames" | "publish_library" | "list_libraries" => false,
         "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"
-        | "create_file" | "finish_working_on_nodes" => false,
+        | "create_file" | "rename_file" | "finish_working_on_nodes" => false,
         "lint_design" => args["fix"] == true,
         "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html"
         | "create_shape" | "update_styles" | "set_text_content" | "rename_nodes"

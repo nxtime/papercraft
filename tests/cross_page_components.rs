@@ -139,3 +139,99 @@ fn write_html_instance_of_another_pages_main_links_instead_of_copying() {
     call(&mut h, "update_styles", json!({"pageId": a, "updates": [{"nodeIds": [comp], "styles": {"background": "#0000ff"}}]}));
     assert!(!bg_red(&h, 1, &key), "the instance follows the main on A");
 }
+
+#[test]
+fn moving_mains_to_another_page_keeps_every_instance_linked() {
+    // Issue #10: a frame of mains moved to a Design System page kept no links.
+    let mut h = host();
+    let (a, b, comp) = setup(&mut h);
+    let c = call(&mut h, "create_page", json!({"name": "C"}))["pageId"].clone();
+    let key = call(&mut h, "get_components", json!({}))["components"][0]["componentKey"].clone();
+    let same = call(&mut h, "create_instance", json!({"pageId": a, "componentId": comp}));
+    let other = call(&mut h, "create_instance", json!({"pageId": c, "componentId": comp}));
+    call(&mut h, "move_nodes", json!({"pageId": a, "moves": [{"nodeId": comp, "parentId": "root", "toPageId": b}]}));
+    let comps = call(&mut h, "get_components", json!({"pageId": b}));
+    let moved = &comps["components"][0];
+    assert_eq!(moved["componentKey"], key, "the key survives the move: {comps}");
+    assert_eq!(moved["uses"], 2, "{comps}");
+    call(&mut h, "update_styles", json!({"pageId": b, "updates": [{"nodeIds": [moved["id"]], "styles": {"background": "#0000ff"}}]}));
+    assert!(!bg_red(&h, 0, &same["id"]), "the instance left on A follows the moved main");
+    assert!(!bg_red(&h, 2, &other["id"]), "the instance on C follows it too");
+}
+
+#[test]
+fn rename_file_renames_the_open_project_and_keeps_it_open() {
+    let mut h = host();
+    let r = call(&mut h, "rename_file", json!({"name": "Renamed"}));
+    let dir = std::path::PathBuf::from(r["path"].as_str().unwrap());
+    assert!(dir.ends_with("Renamed") && dir.is_dir(), "{r}");
+    assert_eq!(h.session.project_name(), "Renamed");
+    call(&mut h, "create_artboard", json!({"name": "After", "styles": {"width": "10px", "height": "10px"}}));
+    call(&mut h, "finish_working_on_nodes", json!({}));
+    assert!(dir.is_dir(), "saves go to the renamed folder");
+    assert!(try_call(&mut h, "rename_file", json!({"name": "  "})).is_err());
+}
+
+/// Badge / Green and Badge / Amber mains, a Row main holding a Green badge, and a Screen with
+/// one Row instance. Returns (row main id, screen id, the nested badge inside the row instance).
+fn rows(h: &mut exec::SessionHost) -> (Value, Value, NodeId) {
+    for (name, bg, label) in [("Badge / Green", "#00ff00", "OK"), ("Badge / Amber", "#ffbf00", "-")] {
+        let ab = call(h, "create_artboard", json!({"name": name, "styles": {"width": "60px", "height": "20px", "background": bg, "display": "flex"}}));
+        call(h, "write_html", json!({"targetNodeId": ab["id"], "html": format!("<span layer-name=\"Label\">{label}</span>")}));
+        call(h, "create_component", json!({"nodeId": ab["id"]}));
+    }
+    let row = call(h, "create_artboard", json!({"name": "Row", "styles": {"width": "200px", "height": "40px", "display": "flex", "gap": "8px"}}));
+    call(h, "write_html", json!({"targetNodeId": row["id"], "html": "<x-paper-instance component=\"Badge / Green\"/>"}));
+    call(h, "create_component", json!({"nodeId": row["id"]}));
+    let screen = call(h, "create_artboard", json!({"name": "Screen", "styles": {"width": "300px", "height": "200px", "display": "flex"}}));
+    call(h, "write_html", json!({"targetNodeId": screen["id"], "html": "<x-paper-instance component=\"Row\"/>"}));
+    let row_inst = h.ed.doc.get(num(&screen["id"])).unwrap().children[0];
+    let badge = h.ed.doc.get(row_inst).unwrap().children[0];
+    (row["id"].clone(), screen["id"].clone(), badge)
+}
+
+fn badge_state(h: &exec::SessionHost, screen: &Value) -> (String, String) {
+    use papercraft::model::Paint;
+    let doc = &h.ed.doc;
+    let row_inst = doc.get(num(screen)).unwrap().children[0];
+    let badge = doc.get(doc.get(row_inst).unwrap().children[0]).unwrap();
+    let label = doc.get(badge.children[0]).unwrap().kind.text().map(|t| t.to_string()).unwrap_or_default();
+    let fill = match badge.style.fills.first() {
+        Some(Paint::Solid { color, .. }) => color.to_hex(),
+        _ => String::new(),
+    };
+    (label, fill)
+}
+
+#[test]
+fn a_nested_instance_replaced_inside_an_instance_survives_edits_to_the_outer_main() {
+    // Issue #11.
+    let mut h = host();
+    let (row, screen, badge) = rows(&mut h);
+    let key = format!("{}:{}", &h.ed.pages[0].id[..6], badge.0);
+    call(&mut h, "write_html", json!({"mode": "replace", "targetNodeId": key,
+        "html": "<x-paper-instance component=\"Badge / Amber\" overrides='{\"Label\":\"Late\"}'/>"}));
+    assert_eq!(badge_state(&h, &screen), ("Late".into(), "#ffbf00".into()));
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [row], "styles": {"gap": "0px"}}]}));
+    assert_eq!(badge_state(&h, &screen), ("Late".into(), "#ffbf00".into()), "the swap survives the outer main's edit");
+    // Copies of the screen keep it too.
+    let copy = call(&mut h, "create_artboard", json!({"name": "Copy", "styles": {"width": "300px", "height": "200px", "display": "flex"}}));
+    let row_inst = h.ed.doc.get(num(&screen)).unwrap().children[0];
+    let clone = format!("<x-paper-clone node-id=\"{}:{}\"/>", &h.ed.pages[0].id[..6], row_inst.0);
+    call(&mut h, "write_html", json!({"targetNodeId": copy["id"], "html": clone}));
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [row], "styles": {"gap": "4px"}}]}));
+    assert_eq!(badge_state(&h, &copy["id"]), ("Late".into(), "#ffbf00".into()));
+}
+
+#[test]
+fn swap_instance_swaps_a_nested_instance_and_keeps_it() {
+    let mut h = host();
+    let (row, screen, badge) = rows(&mut h);
+    let key = format!("{}:{}", &h.ed.pages[0].id[..6], badge.0);
+    let comps = call(&mut h, "get_components", json!({}));
+    let amber = comps["components"].as_array().unwrap().iter().find(|c| c["name"] == "Badge / Amber").unwrap()["id"].clone();
+    call(&mut h, "swap_instance", json!({"nodeId": key, "componentId": amber}));
+    assert_eq!(badge_state(&h, &screen).1, "#ffbf00");
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [row], "styles": {"gap": "0px"}}]}));
+    assert_eq!(badge_state(&h, &screen).1, "#ffbf00", "kept after the outer main changed");
+}

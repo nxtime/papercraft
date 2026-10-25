@@ -43,6 +43,28 @@ fn duplicate_nodes_copies_annotations_same_page_and_across_pages() {
 }
 
 
+#[test]
+fn moving_a_frame_to_another_page_takes_its_notes() {
+    // Issue #12.
+    let mut fixture = Fixture::new();
+    let h = &mut fixture.host;
+    h.session.create(&mut h.ed, "Ann").unwrap();
+    let ab = call(h, "create_artboard", json!({"name": "A", "styles": {"width": "100px", "height": "40px", "display": "flex"}}));
+    let kid = call(h, "write_html", json!({"targetNodeId": ab["id"], "html": "<span>Hi</span>"}))["createdNodeIds"][0].clone();
+    h.ed.add_annotation(Annotation::new(Some(num(&kid)), "rule", "data"));
+    let b = call(h, "create_page", json!({"name": "B"}))["pageId"].clone();
+    call(h, "move_nodes", json!({"moves": [{"nodeId": ab["id"], "parentId": "root", "toPageId": b}]}));
+    assert!(h.ed.page_doc(0).annotations.is_empty(), "nothing left behind detached");
+    let doc = h.ed.page_doc(1);
+    let note = &doc.annotations[0];
+    assert!(!note.detached && doc.get(note.target.unwrap()).is_some_and(|n| n.kind.text().is_some_and(|t| t == "Hi")));
+    // A detached note is reachable by the reference get_annotations shows for it.
+    let id = h.ed.add_annotation(Annotation::new(Some(NodeId(9999)), "lost", ""));
+    h.ed.update_annotation(id, |a| { a.target = None; a.detached = true; });
+    call(h, "delete_annotations", json!({"refs": ["Detached #1"]}));
+}
+
+
 struct Fixture {
     host: exec::SessionHost,
     path: std::path::PathBuf,
