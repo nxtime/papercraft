@@ -22,7 +22,7 @@ Options:
   -h, --help     Print this help and exit.
 
 Environment:
-  CARGO_TARGET_DIR     Build directory (default: $HOME/Library/Caches/PaperCraft/build).
+  CARGO_TARGET_DIR     Build directory (default: <repo>/target, shared with cargo test).
   PAPERCRAFT_SIGN_IDENTITY  Code-signing identity (default: "PaperCraft Local" when present, else ad hoc).
   PAPERCRAFT_APP_PATH  Install destination (default: /Applications/PaperCraft.app).
 
@@ -89,7 +89,8 @@ main() {
   [ -d "$dest_dir" ] || die "install directory does not exist: $dest_dir"
   [ -w "$dest_dir" ] || die "$dest_dir is not writable; set PAPERCRAFT_APP_PATH to a writable folder (this script never uses sudo)"
 
-  local target_dir="${CARGO_TARGET_DIR:-$HOME/Library/Caches/PaperCraft/build}"
+  # The repo's own target dir: one shared build cache, on the same volume as the checkout.
+  local target_dir="${CARGO_TARGET_DIR:-$ROOT/target}"
   case "$target_dir" in /*) ;; *) target_dir="$ROOT/$target_dir" ;; esac
   mkdir -p "$target_dir"
 
@@ -194,6 +195,8 @@ main() {
       n=$((n + 1))
     done
     echo "==> keeping the current app as $(basename "$backup")"
+    # Only the newest previous bundle is kept; a day of installs once left twelve.
+    ls -dt "$dest_dir/$dest_base".backup-* 2>/dev/null | tail -n +2 | while read -r old; do rm -rf "$old"; done
     mv "$dest" "$backup"
   fi
   swapped=1
