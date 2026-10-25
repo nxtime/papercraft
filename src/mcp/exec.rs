@@ -3416,16 +3416,28 @@ impl Builder<'_, '_> {
         }
     }
 
-    /// The property definitions of the main an instance root follows (this page or another).
+    /// The property definitions of the component an instance follows (this page or another). A
+    /// nested instance's main is a layer inside the outer main: its own link leads on to the
+    /// component (a badge inside a row).
     fn main_props(&self, root: NodeId) -> Vec<crate::model::PropDef> {
-        let Some(l) = self.tx.doc().get(root).and_then(|n| n.instance.clone()) else { return Vec::new() };
-        let (main, source) = l.target();
-        let doc = match source {
-            None => Some(self.tx.doc()),
-            Some(Source::Page(p)) => self.all_pages.iter().find(|(id, _, _)| id == p).map(|(_, _, d)| d),
-            Some(Source::Library(_)) => None,
-        };
-        doc.and_then(|d| d.get(main)).map(|m| m.props.clone()).unwrap_or_default()
+        let Some(mut l) = self.tx.doc().get(root).and_then(|n| n.instance.clone()) else { return Vec::new() };
+        let mut page = self.page_id.clone();
+        for _ in 0..MAX_LINK_HOPS {
+            let (main, source) = l.target();
+            let at = match source {
+                None => page.clone(),
+                Some(Source::Page(p)) => p.clone(),
+                Some(Source::Library(_)) => return Vec::new(),
+            };
+            let doc = if at == self.page_id { Some(self.tx.doc()) } else { self.all_pages.iter().find(|(id, _, _)| *id == at).map(|(_, _, d)| d) };
+            let Some(m) = doc.and_then(|d| d.get(main)) else { return Vec::new() };
+            if m.component || m.instance.is_none() {
+                return m.props.clone();
+            }
+            l = m.instance.clone().unwrap();
+            page = at;
+        }
+        Vec::new()
     }
 
     /// `<x-plugin use="avataaars" size="64" …/>`: an asset from a plugin the user turned on
@@ -5320,6 +5332,9 @@ pub fn props_template_ui(ed: &mut Editor, main: NodeId, template: &str) -> Resul
     let args = json!({"componentId": key, "template": template});
     set_component_props(ed, &Args(args.as_object().unwrap())).map(|_| ())
 }
+
+/// Links followed from a nested instance to its component (row, badge inside it, ...).
+const MAX_LINK_HOPS: usize = 6;
 
 /// Every page as (id, name, document), for a [`Builder`] that resolves mains on other pages.
 fn all_pages(ed: &Editor) -> Vec<(String, String, Document)> {

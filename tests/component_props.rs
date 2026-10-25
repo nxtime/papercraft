@@ -229,4 +229,8 @@ fn merging_rows_keeps_what_each_row_shows_and_sets_the_nested_badge_state() {
     assert_eq!(text_of("Nota"), "Não enviada", "the row keeps the text it showed");
     assert_eq!(text_of("Label"), "Erro", "the nested badge takes its state");
     assert_eq!(fill_hex(&h, named(&h, i, "Label")), "#dc2626");
+    let nested = named(&h, i, "Badge");
+    assert_eq!(h.ed.doc.get(nested).unwrap().prop_values.get("Status").map(String::as_str), Some("Erro"), "the nested badge has its own value");
+    let again = call(&mut h, "set_instance_props", json!({"nodeIds": [row["id"]], "values": {"State": "Erro"}}));
+    assert!(again.get("warnings").is_none(), "the nested badge's property is found through the row: {again}");
 }
