@@ -61,9 +61,6 @@ const AUTO_RULE: &str = "\n\nAuto mode is on: the user is away. Every ask_user c
 /// Added when the user set up a helper agent (Settings, Chat, Helper): the chat agent orchestrates.
 const HELPER_RULE: &str = "\n\nHelper. A helper agent on a cheaper model is available through delegate; you orchestrate. Keep the brief, design decisions and anything that needs taste. Hand it: qa after each built screen; read when the work needs many pages, frames, specs or references read (it returns key points; do not reread what it read); build for repetitive or fully specified edits (the same row in ten places, filling a table, applying given markup), with the variables, components and exact structure written into the task. It does not see this chat, so each task is self-contained. Check a build with one narrow read or a qa pass, not by redoing it.";
 
-/// Room the composer keeps between its chips and the Enter hint before dropping the hint.
-const HINT_ROOM: f32 = 8.0;
-
 /// Characters of an added message shown in the composer's queue.
 const ADDED_PREVIEW: usize = 80;
 
@@ -452,7 +449,7 @@ struct Prefs {
 impl Prefs {
     fn path() -> Option<PathBuf> {
         #[cfg(not(target_arch = "wasm32"))]
-        return dirs::config_dir().map(|d| d.join("papercraft").join("chat_ui.json"));
+        return crate::project::config_dir().map(|d| d.join("chat_ui.json"));
         #[cfg(target_arch = "wasm32")]
         None
     }
@@ -2007,56 +2004,51 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
                     .lock_focus(true),
             );
         });
-        ui.horizontal(|ui| {
-            if kit::chip(ui, "@ Selection", false).on_hover_text("Add the selection (Cmd+L)").clicked() {
-                add_selection(ed, &mut st.chat);
+        // Buttons on the right; the chips wrap in what is left instead of running under them.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if running {
+                let stopping = st.chat.stopping;
+                let label = if stopping { "Stopping\u{2026}" } else { "Stop" };
+                if ui.add_enabled_ui(!stopping, |ui| kit::button(ui, kit::ButtonKind::Danger, None, label).clicked()).inner {
+                    st.chat.stop();
+                }
+                let can = !stopping && !st.chat.draft.trim().is_empty();
+                let add = ui.add_enabled_ui(can, |ui| kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::ArrowRight), "Add").clicked()).inner;
+                if add {
+                    st.chat.add_to_turn();
+                }
+            } else {
+                let can = backend_ok && !no_project && (!st.chat.draft.trim().is_empty() || !st.chat.images.is_empty());
+                ui.add_enabled_ui(can, |ui| {
+                    submit = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::ArrowRight), "Send").clicked();
+                });
             }
-            let tip = "Point at the canvas: click a layer or Shift+drag an area (Esc cancels). Option+click adds a layer too.";
-            if kit::chip(ui, "Pick", st.chat.picking).on_hover_text(tip).clicked() {
-                st.chat.picking = !st.chat.picking;
-            }
-            super::actions::chip(ui, ed, st);
-            let tip = "Let the agent search the web and bring back reference images";
-            if kit::chip(ui, "Web", st.settings.chat.research).on_hover_text(tip).clicked() {
-                st.settings.chat.research = !st.settings.chat.research;
-                st.settings.chat.save();
-            }
-            let tip = "Keep going on its own: questions get the recommended answer and the next step starts, until you press Stop or a turn hits its budget";
-            if kit::chip(ui, "Auto", st.settings.chat.auto).on_hover_text(tip).clicked() {
-                st.settings.chat.auto = !st.settings.chat.auto;
-                st.settings.chat.save();
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            if theme::icon_button(ui, Icon::Image, 24.0, false).on_hover_text("Attach an image (or paste, or drop one)").clicked()
-                && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"]).pick_file()
-                && let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned())
-                && let (Some(mime), Ok(data)) = (image_mime(&name), std::fs::read(&path))
-            {
-                st.chat.add_image(name, mime, data);
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if running {
-                    let stopping = st.chat.stopping;
-                    let label = if stopping { "Stopping\u{2026}" } else { "Stop" };
-                    if ui.add_enabled_ui(!stopping, |ui| kit::button(ui, kit::ButtonKind::Danger, None, label).clicked()).inner {
-                        st.chat.stop();
-                    }
-                    let can = !stopping && !st.chat.draft.trim().is_empty();
-                    let add = ui.add_enabled_ui(can, |ui| kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::ArrowRight), "Add").clicked()).inner;
-                    if add {
-                        st.chat.add_to_turn();
-                    }
-                } else {
-                    let can = backend_ok && !no_project && (!st.chat.draft.trim().is_empty() || !st.chat.images.is_empty());
-                    ui.add_enabled_ui(can, |ui| {
-                        submit = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::ArrowRight), "Send").clicked();
-                    });
-                    // The hint only where the chips leave room for it.
-                    let hint = RichText::new("Enter sends \u{b7} Shift+Enter newline").size(theme::SECONDARY).color(p.tertiary);
-                    let w = egui::WidgetText::from(hint.clone()).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body).size().x;
-                    if ui.available_width() > w + HINT_ROOM {
-                        ui.label(hint);
-                    }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true), |ui| {
+                if kit::chip(ui, "@ Selection", false).on_hover_text("Add the selection (Cmd+L)").clicked() {
+                    add_selection(ed, &mut st.chat);
+                }
+                let tip = "Point at the canvas: click a layer or Shift+drag an area (Esc cancels). Option+click adds a layer too.";
+                if kit::chip(ui, "Pick", st.chat.picking).on_hover_text(tip).clicked() {
+                    st.chat.picking = !st.chat.picking;
+                }
+                super::actions::chip(ui, ed, st);
+                let tip = "Let the agent search the web and bring back reference images";
+                if kit::chip(ui, "Web", st.settings.chat.research).on_hover_text(tip).clicked() {
+                    st.settings.chat.research = !st.settings.chat.research;
+                    st.settings.chat.save();
+                }
+                let tip = "Keep going on its own: questions get the recommended answer and the next step starts, until you press Stop or a turn hits its budget";
+                if kit::chip(ui, "Auto", st.settings.chat.auto).on_hover_text(tip).clicked() {
+                    st.settings.chat.auto = !st.settings.chat.auto;
+                    st.settings.chat.save();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if theme::icon_button(ui, Icon::Image, 24.0, false).on_hover_text("Attach an image (or paste, or drop one)").clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"]).pick_file()
+                    && let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    && let (Some(mime), Ok(data)) = (image_mime(&name), std::fs::read(&path))
+                {
+                    st.chat.add_image(name, mime, data);
                 }
             });
         });

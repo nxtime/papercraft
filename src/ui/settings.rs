@@ -213,7 +213,7 @@ impl ChatPrefs {
 
     fn path() -> Option<PathBuf> {
         #[cfg(not(target_arch = "wasm32"))]
-        return dirs::config_dir().map(|d| d.join("papercraft").join("chat_settings.json"));
+        return crate::project::config_dir().map(|d| d.join("chat_settings.json"));
         #[cfg(target_arch = "wasm32")]
         None
     }

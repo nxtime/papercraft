@@ -113,6 +113,16 @@ pub fn folder_name(name: &str) -> String {
     if s.is_empty() { "Untitled".into() } else { s }
 }
 
+/// Where the app keeps its chat settings: `$PAPERCRAFT_HOME/.config` when set (so a second
+/// copy for testing has its own), else `papercraft` in the OS config folder.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn config_dir() -> Option<PathBuf> {
+    match std::env::var_os("PAPERCRAFT_HOME") {
+        Some(h) => Some(PathBuf::from(h).join(".config")),
+        None => dirs::config_dir().map(|d| d.join("papercraft")),
+    }
+}
+
 impl Store {
     /// `$PAPERCRAFT_HOME`, else `~/Documents/papercraft` (`~/Documents/paper-rs` when only that exists).
     pub fn default_root() -> PathBuf {

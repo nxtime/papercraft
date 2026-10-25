@@ -238,3 +238,13 @@ fn swap_instance_swaps_a_nested_instance_and_keeps_it() {
     let uses = |name: &str| comps["components"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap()["uses"].clone();
     assert_eq!(uses("Badge / Amber"), 1, "the swapped badge counts for Amber: {comps}");
 }
+
+#[test]
+fn computed_styles_name_the_variable_a_text_colour_is_bound_to() {
+    let mut h = host();
+    call(&mut h, "set_variables", json!({"variables": {"text": "#cdd6f4"}}));
+    let ab = call(&mut h, "create_artboard", json!({"name": "T", "styles": {"width": "100px", "height": "40px", "display": "flex"}}));
+    let t = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<span style=\"color: var(--text)\">Hi</span>"}))["createdNodeIds"][0].clone();
+    let s = call(&mut h, "get_computed_styles", json!({"nodeIds": [t]}));
+    assert_eq!(s[t.as_str().unwrap()]["color"], "var(--text)", "{s}");
+}

@@ -1815,7 +1815,14 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
                 }
                 .into(),
             );
-            if let Some(c) = n.style.fill() {
+            // A colour bound to a variable reads as that variable, like a background does.
+            let var = n.style.fills.iter().find_map(|p| match p {
+                Paint::Solid { var: Some(v), .. } => Some(v.clone()),
+                _ => None,
+            });
+            if let Some(v) = var.or_else(|| n.bindings.get("text-color").cloned()) {
+                put("color", format!("var(--{})", v.trim_start_matches("--")));
+            } else if let Some(c) = n.style.fill() {
                 put("color", color_css(c));
             }
         }

@@ -81,6 +81,13 @@ are credited in `THIRD_PARTY.md`.
 * QA sub-agent: Claude Code chats always get a Sonnet `qa` agent that lints and screenshots built frames and returns only findings, so screenshots stay out of the main context.
 * Helper agents (`src/mcp/delegate.rs`, Settings, Chat, Helper): `delegate` hands `qa`, `read` or `build` tasks to a cheaper agent CLI (pi with MiniMax M3.1 Flash, opencode, an Ollama-backed agent, any command taking `{prompt}`). It drives PaperCraft through `papercraft-cli`, runs off the UI thread, and only its last 6,000 characters come back. With a helper set, the chat agent orchestrates: keeps the brief and taste, delegates review, bulk reading and fully specified edits.
 
+### 2026-10-25: unreleased (dev config isolation, live check fixes)
+
+* `PAPERCRAFT_HOME` also isolates the chat settings (`$PAPERCRAFT_HOME/.config`), so a second copy for testing never touches the installed app's settings.
+* Live check in an isolated copy: `delegate` ran the pi helper (MiniMax M3.1 Flash) as QA, a message added mid-turn went Waiting then Seen, and the agent drafted #13.
+* #13: `get_computed_styles` reports a text colour bound to a variable as `var(--name)`.
+* Composer: the chips wrap instead of running under Stop and Add; the Enter hint is gone (the placeholder says it). Top bar: the agent pill drops its text when it would run under the buttons on the right.
+
 ### 2026-10-24: unreleased (auto mode, Present icon)
 
 * Auto mode (the composer's Auto chip): when a turn ends on `ask_user` questions, the first (recommended) option of each is sent and the chat goes on, until Stop or a turn hits its budget. The agent is told to put its recommendation first, default what only the user can know, and end each turn with next steps.

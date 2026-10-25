@@ -436,7 +436,7 @@ impl UiState {
 }
 
 /// A pill with three bouncing dots and what the agent is doing; nothing when it is idle.
-fn agent_pill(ui: &mut Ui, st: &UiState, with_text: bool) {
+fn agent_pill(ui: &mut Ui, st: &UiState, with_text: bool, keep_free: f32) {
     let Some(verb) = st.agent_working() else {
         return;
     };
@@ -460,16 +460,15 @@ fn agent_pill(ui: &mut Ui, st: &UiState, with_text: bool) {
                     ui.painter()
                         .circle_filled(egui::pos2(x, r.center().y - hop), 2.5, accent);
                 }
-                if with_text {
-                    let text = match run_progress(&st.run_open) {
-                        Some(n) => format!("{verb} \u{b7} {n}"),
-                        None => format!("{verb}…"),
-                    };
-                    ui.label(
-                        RichText::new(text)
-                            .size(theme::SECONDARY)
-                            .color(p.text),
-                    );
+                let text = match run_progress(&st.run_open) {
+                    Some(n) => format!("{verb} \u{b7} {n}"),
+                    None => format!("{verb}…"),
+                };
+                let text = RichText::new(text).size(theme::SECONDARY).color(p.text);
+                // Only the dots when the text would run under the buttons on the right.
+                let w = egui::WidgetText::from(text.clone()).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body).size().x;
+                if with_text && ui.available_width() - keep_free > w + AGENT_PILL_PAD {
+                    ui.label(text);
                 }
             });
         });
@@ -518,6 +517,9 @@ fn agent_glow(ctx: &egui::Context, st: &UiState, canvas: egui::Rect) {
         egui::StrokeKind::Inside,
     );
 }
+
+/// The agent pill's own padding and gap, kept clear beside its text.
+const AGENT_PILL_PAD: f32 = 32.0;
 
 /// Gap between the floating panels and around the canvas.
 pub(crate) const PANEL_GAP: f32 = 12.0;
@@ -1119,7 +1121,10 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 }
             });
         });
-        agent_pill(ui, st, !tight);
+        // The buttons on the right, as wide as last frame: the agent pill leaves them that room.
+        let right_id = egui::Id::new("top-bar-right-width");
+        let right_w = ui.ctx().data(|d| d.get_temp::<f32>(right_id)).unwrap_or(0.0);
+        agent_pill(ui, st, !tight, right_w);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             let share = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::Export), "Share");
@@ -1221,6 +1226,8 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         });
                     });
             }
+            let w = ui.min_rect().width();
+            ui.ctx().data_mut(|d| d.insert_temp(right_id, w));
         });
     });
 }
