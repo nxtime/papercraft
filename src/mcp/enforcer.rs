@@ -87,24 +87,11 @@ fn strip_token_declaration_blocks(code: &str) -> String {
     let mut i = 0;
     while i < code.len() {
         let rest = &code[i..];
-        let starts_decl = ["root", "theme", "host", "data-mode", "data-theme"]
+        // Byte-safe prefix test: slicing `rest[..n]` panics when byte n falls inside a
+        // multibyte char (a `ó` in "Rótulo" took the app down on a real screen's code).
+        let starts_decl = [":root", "@theme", ":host", "[data-mode", "[data-theme"]
             .iter()
-            .any(|kw| {
-                let pfx_len = match *kw {
-                    "root" | "host" => 1 + kw.len(), // :root, :host
-                    "theme" => 1 + kw.len(),         // @theme
-                    _ => 1 + kw.len(),               // [data-mode, [data-theme
-                };
-                if rest.len() < pfx_len {
-                    return false;
-                }
-                let head = &rest[..pfx_len];
-                head.eq_ignore_ascii_case(":root")
-                    || head.eq_ignore_ascii_case("@theme")
-                    || head.eq_ignore_ascii_case(":host")
-                    || head.eq_ignore_ascii_case("[data-mode")
-                    || head.eq_ignore_ascii_case("[data-theme")
-            });
+            .any(|p| rest.get(..p.len()).is_some_and(|head| head.eq_ignore_ascii_case(p)));
         if starts_decl && let Some(open_rel) = rest.find('{') {
             let mut depth = 0usize;
             let mut end_idx = None;

@@ -1,0 +1,47 @@
+- generic [active] [ref=f3e1]:
+  - button "Open Next.js Dev Tools" [ref=f3e46] [cursor=pointer]
+  - alert [ref=f3e50]: Bom dia, Ana
+  - generic [ref=f3e128]:
+    - complementary [ref=f3e129]:
+      - generic [ref=f3e130]:
+        - generic [ref=f3e136]:
+          - generic [ref=f3e137]: Rota Fresca
+          - generic [ref=f3e138]: Distribuição de alimentos
+        - navigation [ref=f3e139]:
+          - link "Painel" [ref=f3e140] [cursor=pointer]:
+            - /url: /painel
+          - link "Roteiro do dia" [ref=f3e143] [cursor=pointer]:
+            - /url: /roteiro
+          - link "Lojas (PDVs)" [ref=f3e146] [cursor=pointer]:
+            - /url: /lojas
+          - link "Pedidos" [ref=f3e149] [cursor=pointer]:
+            - /url: /pedidos
+          - link "Entregas" [ref=f3e152] [cursor=pointer]:
+            - /url: /entregas
+          - link "Validade e lotes" [ref=f3e155] [cursor=pointer]:
+            - /url: /validade
+          - link "Relatórios" [ref=f3e158] [cursor=pointer]:
+            - /url: /relatorios
+          - link "Integrações e notas" [ref=f3e161] [cursor=pointer]:
+            - /url: /integracoes
+          - link "Leitura de documentos" [ref=f3e164] [cursor=pointer]:
+            - /url: /documentos
+          - link "Contatos e mensagens" [ref=f3e167] [cursor=pointer]:
+            - /url: /contatos
+          - link "Configurações" [ref=f3e170] [cursor=pointer]:
+            - /url: /configuracoes
+      - generic [ref=f3e173]:
+        - generic [aria-hidden] [ref=f3e174]: A
+        - generic [ref=f3e175]:
+          - generic [ref=f3e176]: Ana Souza
+          - generic [ref=f3e177]: Consultora · Zona Oeste
+    - main [ref=f3e178]:
+      - generic [ref=f3e179]:
+        - generic [ref=f3e180]:
+          - heading "Bom dia, Ana" [level=1] [ref=f3e181]
+          - paragraph [ref=f3e182]: domingo, 25 de outubro
+        - generic [ref=f3e183]:
+          - textbox "Buscar loja, pedido ou produto" [ref=f3e187]
+          - button "Notificações" [ref=f3e188]
+          - button "Importar / Exportar" [ref=f3e189]
+          - button "Novo pedido" [ref=f3e190]

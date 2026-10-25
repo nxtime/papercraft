@@ -1,0 +1,32 @@
+- generic [active] [ref=f2e1]:
+  - generic [ref=f2e2]:
+    - complementary [ref=f2e3]:
+      - generic [ref=f2e9]:
+        - generic [ref=f2e10]: Rota Fresca
+        - generic [ref=f2e11]: Distribuição de alimentos
+      - generic [ref=f2e12]:
+        - heading "Do depósito à prateleira, na hora certa." [level=2] [ref=f2e13]
+        - paragraph [ref=f2e14]: Pedidos, entregas e notas da sua rede no mesmo lugar.
+    - main [ref=f2e15]:
+      - link "Precisa de ajuda?" [ref=f2e17] [cursor=pointer]:
+        - /url: mailto:suporte@rotafresca.com.br
+      - generic [ref=f2e18]:
+        - generic [ref=f2e19]:
+          - heading "Entrar" [level=1] [ref=f2e20]
+          - paragraph [ref=f2e21]: Use o e-mail da sua conta. Conforme o tipo de conta, pedimos a senha ou mandamos um link de acesso.
+        - generic [ref=f2e22]:
+          - generic [ref=f2e23]:
+            - generic [ref=f2e24]: E-mail
+            - textbox "E-mail" [ref=f2e25]:
+              - /placeholder: nome@empresa.com.br
+          - button "Continuar" [ref=f2e26]
+        - generic [ref=f2e27]: ou
+        - button "Entrar com chave de acesso (passkey)" [ref=f2e31]
+        - generic [ref=f2e35]:
+          - paragraph [ref=f2e36]: É motorista?
+          - paragraph [ref=f2e37]: Entre pelo app Rota Fresca no celular, com o seu número. Não precisa de e-mail.
+      - generic [ref=f2e38]:
+        - paragraph [ref=f2e39]: Recebeu um convite? Abra o link do e-mail para criar seu acesso.
+        - paragraph [ref=f2e40]: Termos de uso · Privacidade
+  - button "Open Next.js Dev Tools" [ref=f2e46] [cursor=pointer]
+  - alert [ref=f2e50]

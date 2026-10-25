@@ -1,0 +1,33 @@
+- generic [active] [ref=f3e1]:
+  - button "Open Next.js Dev Tools" [ref=f3e46] [cursor=pointer]
+  - alert [ref=f3e50]
+  - generic [ref=f3e92]:
+    - complementary [ref=f3e93]:
+      - generic [ref=f3e99]:
+        - generic [ref=f3e100]: Rota Fresca
+        - generic [ref=f3e101]: Distribuição de alimentos
+      - generic [ref=f3e102]:
+        - heading "Do depósito à prateleira, na hora certa." [level=2] [ref=f3e103]
+        - paragraph [ref=f3e104]: Pedidos, entregas e notas da sua rede no mesmo lugar.
+    - main [ref=f3e105]:
+      - link "Precisa de ajuda?" [ref=f3e107] [cursor=pointer]:
+        - /url: mailto:suporte@rotafresca.com.br
+      - generic [ref=f3e108]:
+        - heading "Confirme que é você" [level=1] [ref=f3e113]
+        - generic [ref=f3e114]:
+          - generic [ref=f3e115]:
+            - generic [ref=f3e116]:
+              - generic [ref=f3e117]: Código
+              - textbox "Código" [ref=f3e118]
+            - generic [ref=f3e119]:
+              - checkbox "Não pedir de novo neste computador por 30 dias" [checked] [ref=f3e120]
+              - checkbox [checked] [aria-hidden]
+              - text: Não pedir de novo neste computador por 30 dias
+          - button "Confirmar" [ref=f3e121]
+        - generic [ref=f3e122]:
+          - link "Usar um código de recuperação" [ref=f3e123] [cursor=pointer]:
+            - /url: /entrar/codigo?recuperacao=1
+          - paragraph [ref=f3e124]: Perdeu o celular? Peça ao administrador da conta para refazer o autenticador.
+      - generic [ref=f3e125]:
+        - paragraph [ref=f3e126]: Recebeu um convite? Abra o link do e-mail para criar seu acesso.
+        - paragraph [ref=f3e127]: Termos de uso · Privacidade

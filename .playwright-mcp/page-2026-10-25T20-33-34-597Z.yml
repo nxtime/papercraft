@@ -1,0 +1,38 @@
+- generic [active] [ref=f3e1]:
+  - button "Open Next.js Dev Tools" [ref=f3e46] [cursor=pointer]
+  - alert [ref=f3e50]
+  - generic [ref=f3e51]:
+    - complementary [ref=f3e52]:
+      - generic [ref=f3e58]:
+        - generic [ref=f3e59]: Rota Fresca
+        - generic [ref=f3e60]: Distribuição de alimentos
+      - generic [ref=f3e61]:
+        - heading "Do depósito à prateleira, na hora certa." [level=2] [ref=f3e62]
+        - paragraph [ref=f3e63]: Pedidos, entregas e notas da sua rede no mesmo lugar.
+    - main [ref=f3e64]:
+      - link "Precisa de ajuda?" [ref=f3e66] [cursor=pointer]:
+        - /url: mailto:suporte@rotafresca.com.br
+      - generic [ref=f3e67]:
+        - generic [ref=f3e68]:
+          - generic [ref=f3e69]: ana.souza@rotafresca.com.br
+          - button "Trocar" [ref=f3e74]
+        - generic [ref=f3e75]:
+          - heading "Digite sua senha" [level=1] [ref=f3e76]
+          - paragraph [ref=f3e77]: Conta de consultor. Depois da senha pedimos o código do autenticador.
+        - generic [ref=f3e78]:
+          - generic [ref=f3e79]:
+            - generic [ref=f3e80]:
+              - generic [ref=f3e81]: Senha
+              - textbox "Senha" [ref=f3e82]
+            - generic [ref=f3e83]:
+              - generic [ref=f3e84]:
+                - checkbox "Mostrar senha" [ref=f3e85]
+                - checkbox [aria-hidden]
+                - text: Mostrar senha
+              - link "Esqueci minha senha" [ref=f3e86] [cursor=pointer]:
+                - /url: /entrar/redefinir
+          - button "Entrar" [ref=f3e87]
+        - paragraph [ref=f3e88]: Pode colar a senha ou usar o gerenciador de senhas do navegador.
+      - generic [ref=f3e89]:
+        - paragraph [ref=f3e90]: Recebeu um convite? Abra o link do e-mail para criar seu acesso.
+        - paragraph [ref=f3e91]: Termos de uso · Privacidade

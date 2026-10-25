@@ -1,0 +1,20 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - generic [ref=f1e3]:
+      - generic [ref=f1e8]:
+        - generic [ref=f1e9]: Rota Fresca
+        - generic [ref=f1e10]: App do motorista
+      - banner [ref=f1e11]:
+        - heading "Entrar" [level=1] [ref=f1e12]
+        - paragraph [ref=f1e13]: Use o número de celular que a central cadastrou. Mandamos um código, sem senha.
+      - generic [ref=f1e14]:
+        - generic [ref=f1e15]: Celular
+        - generic [ref=f1e16]:
+          - generic [ref=f1e17]: "+55"
+          - textbox "(21) 98877-4410" [ref=f1e18]
+    - generic [ref=f1e19]:
+      - button "Receber código no WhatsApp" [ref=f1e20]
+      - button "Receber por SMS" [ref=f1e21]
+      - paragraph [ref=f1e22]: Trocou de número? Fale com a central.
+  - button "Open Next.js Dev Tools" [ref=f1e28] [cursor=pointer]
+  - alert [ref=f1e32]

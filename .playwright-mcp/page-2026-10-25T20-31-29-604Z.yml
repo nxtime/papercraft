@@ -1,0 +1,28 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e8]:
+      - generic [ref=e9]: Rota Fresca
+      - generic [ref=e10]: Distribuição de alimentos
+    - generic [ref=e11]:
+      - heading "Do depósito à prateleira, na hora certa." [level=2] [ref=e12]
+      - paragraph [ref=e13]: Pedidos, entregas e notas da sua rede no mesmo lugar.
+  - main [ref=e14]:
+    - link "Precisa de ajuda?" [ref=e16] [cursor=pointer]:
+      - /url: mailto:suporte@rotafresca.com.br
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - heading "Entrar" [level=1] [ref=e19]
+        - paragraph [ref=e20]: Use o e-mail da sua conta. Conforme o tipo de conta, pedimos a senha ou mandamos um link de acesso.
+      - generic [ref=e21]:
+        - generic [ref=e22]:
+          - generic [ref=e23]: E-mail
+          - textbox "E-mail" [ref=e24]:
+            - /placeholder: nome@empresa.com.br
+        - button "Continuar" [ref=e25]
+      - generic [ref=e26]: ou
+      - generic [ref=e33]:
+        - paragraph [ref=e34]: É motorista?
+        - paragraph [ref=e35]: Entre pelo app Rota Fresca no celular, com o seu número. Não precisa de e-mail.
+    - generic [ref=e36]:
+      - paragraph [ref=e37]: Recebeu um convite? Abra o link do e-mail para criar seu acesso.
+      - paragraph [ref=e38]: Termos de uso · Privacidade

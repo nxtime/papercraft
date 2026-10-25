@@ -1,0 +1,13 @@
+[      93ms] [LOG] [Fast Refresh] done in 99ms @ http://localhost:3000/_next/static/chunks/1bba_next_dist_041c6vio7na_y._.js:719
+[     953ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:3000/_next/static/chunks/1bba_next_dist_041c6vio7na_y._.js:719
+[     963ms] [LOG] [HMR] connected @ http://localhost:3000/_next/static/chunks/1bba_next_dist_041c6vio7na_y._.js:719
+[    4345ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/1bba_next_dist_041c6vio7na_y._.js:719
+[    4433ms] [LOG] [Fast Refresh] done in 189ms @ http://localhost:3000/_next/static/chunks/1bba_next_dist_041c6vio7na_y._.js:719
+[    4548ms] [VERBOSE] [DOM] Password forms should have (optionally hidden) username fields for accessibility: (More info: https://goo.gl/9p2vKq) %o @ http://localhost:3000/entrar/senha:0
+[    9731ms] [LOG] [Fast Refresh] done in 5486ms @ http://localhost:3000/_next/static/chunks/1bba_next_dist_041c6vio7na_y._.js:719
+[    9777ms] [LOG] [Fast Refresh] done in 5486ms @ http://localhost:3000/_next/static/chunks/1bba_next_dist_041c6vio7na_y._.js:719
+[   11070ms] [LOG] [Fast Refresh] done in 5486ms @ http://localhost:3000/_next/static/chunks/1bba_next_dist_041c6vio7na_y._.js:719
+[   30758ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/hmr?id=fBVPvwqt_6CU4TU3WWYmu' failed:  @ http://localhost:3000/_next/static/chunks/1bba_next_dist_client_0ru2jkh0js1s8._.js:16225
+[   31764ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/hmr?id=fBVPvwqt_6CU4TU3WWYmu' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:3000/_next/static/chunks/1bba_next_dist_client_0ru2jkh0js1s8._.js:16225
+[   32766ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/hmr?id=fBVPvwqt_6CU4TU3WWYmu' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:3000/_next/static/chunks/1bba_next_dist_client_0ru2jkh0js1s8._.js:16225
+[   33776ms] [LOG] [HMR] connected @ http://localhost:3000/_next/static/chunks/1bba_next_dist_041c6vio7na_y._.js:719
