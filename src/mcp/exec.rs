@@ -5834,8 +5834,10 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
         let want = if p == page { None } else { Some(Source::Page(base_page_id.clone())) };
         let mut by_value: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut swaps = Vec::new();
-        // What each moving instance shows now, so its own texts survive the move.
+        // What each moving instance shows now, so its own texts and its nested instances' own
+        // values (a checked checkbox) survive the move.
         let mut shown: Vec<(NodeId, Vec<(String, String)>)> = Vec::new();
+        let mut nested: Vec<(NodeId, Vec<(String, BTreeMap<String, String>)>)> = Vec::new();
         for n in ed.page_doc(p).nodes.values() {
             let Some(l) = &n.instance else { continue };
             let (main, source) = l.target();
@@ -5849,6 +5851,9 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
                 let pd = ed.page_doc(p);
                 let texts = variant_paths(pd, n.id).into_iter().filter(|(_, real, _)| !text_of_state(real)).filter_map(|(_, real, t)| pd.get(t).and_then(|t| t.kind.text()).map(|s| (real, s.to_string()))).collect();
                 shown.push((n.id, texts));
+                let state_props: Vec<&String> = table.keys().filter(|(_, k)| k == "props").map(|(l, _)| l).collect();
+                let values = variant_paths(pd, n.id).into_iter().filter(|(_, real, _)| !state_props.contains(&real)).filter_map(|(_, real, t)| pd.get(t).filter(|t| !t.prop_values.is_empty()).map(|t| (real, t.prop_values.clone()))).collect();
+                nested.push((n.id, values));
             }
             // Instances of a base that already had the enum keep their own value.
             let value = match (&existing, *id == base) {
@@ -5876,6 +5881,14 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
             ed.with_page(p, |ed| {
                 ed.edit("Merge variants", |tx| {
                     let mut b = Builder { tx, page_id: pid.clone(), all_pages: &pages, ignored: BTreeSet::new(), warnings: Vec::new() };
+                    for (root, values) in &nested {
+                        for (path, v) in values {
+                            if let Some(t) = b.override_target(*root, path) {
+                                let defs = b.main_props(t);
+                                b.apply_props(t, &defs, v);
+                            }
+                        }
+                    }
                     for (root, texts) in &shown {
                         let changed: Map<String, Value> = texts
                             .iter()

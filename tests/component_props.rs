@@ -234,3 +234,26 @@ fn merging_rows_keeps_what_each_row_shows_and_sets_the_nested_badge_state() {
     let again = call(&mut h, "set_instance_props", json!({"nodeIds": [row["id"]], "values": {"State": "Erro"}}));
     assert!(again.get("warnings").is_none(), "the nested badge's property is found through the row: {again}");
 }
+
+#[test]
+fn merging_keeps_a_rows_own_nested_values() {
+    let mut h = host();
+    let chk = call(&mut h, "create_artboard", json!({"name": "Check", "styles": {"width": "16px", "height": "16px", "display": "flex", "background": "#ffffff"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": chk["id"], "html": "<div layer-name=\"Mark\" style=\"width:8px;height:8px;background:#000;visibility:hidden\"></div>"}));
+    let cmain = call(&mut h, "create_component", json!({"nodeId": chk["id"]}))["id"].clone();
+    call(&mut h, "set_component_props", json!({"componentId": cmain, "props": [{"name": "On", "kind": "enum", "options": [{"value": "No", "set": {"$root": {"background": "#ffffff"}, "Mark": {"visibility": "hidden"}}}, {"value": "Yes", "set": {"$root": {"background": "#0f5132"}, "Mark": {"visibility": "visible"}}}]}]}));
+    let mut mains = Vec::new();
+    for (name, bg) in [("Linha / A", "#eeeeee"), ("Linha / B", "#dddddd")] {
+        let m = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": "200px", "height": "30px", "display": "flex", "background": bg}}));
+        call(&mut h, "write_html", json!({"targetNodeId": m["id"], "html": "<x-paper-instance component=\"Check\"/>"}));
+        mains.push(call(&mut h, "create_component", json!({"nodeId": m["id"]}))["id"].clone());
+    }
+    let screen = call(&mut h, "create_artboard", json!({"name": "S", "styles": {"width": "300px", "height": "60px", "display": "flex"}}));
+    let row = num(&call(&mut h, "create_instance", json!({"componentId": mains[1], "parentId": screen["id"]}))["id"]);
+    let check = named(&h, row, "Check");
+    let key = format!("{}:{}", &h.ed.pages[0].id[..6], check.0);
+    call(&mut h, "set_instance_props", json!({"nodeIds": [key], "values": {"On": "Yes"}}));
+    call(&mut h, "merge_variants", json!({"componentIds": mains, "name": "Tone"}));
+    assert_eq!(fill_hex(&h, named(&h, row, "Check")), "#0f5132", "the row's checked box stays checked");
+    assert!(h.ed.doc.get(named(&h, row, "Mark")).unwrap().visible, "with its mark");
+}
