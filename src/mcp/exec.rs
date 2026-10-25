@@ -5596,10 +5596,13 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
             .flat_map(|(real, b, v)| {
                 let (bs, vs) = (style_of(*b), style_of(*v));
                 let keys: BTreeSet<&String> = bs.keys().chain(vs.keys()).collect();
-                // Where a main sits on the canvas is not part of its look.
+                // Where a main sits on the canvas is not part of its look; neither is how a frame with
+                // nothing visible inside would arrange its content, nor flex-shrink (no effect here).
                 let placement = |k: &str| real == "$root" && ["left", "top", "right", "bottom", "position"].contains(&k);
+                let empty = |id: NodeId| doc.get(id).is_none_or(|n| !n.children.iter().any(|c| doc.get(*c).is_some_and(|c| c.visible)));
+                let arranging = |k: &str| ["alignItems", "justifyContent", "flexDirection", "gap", "flexWrap"].contains(&k) && (empty(*b) || empty(*v));
                 keys.into_iter()
-                    .filter(|k| !placement(k) && !VARIANT_KEYS.iter().any(|(vk, _)| vk == k) && bs.get(*k) != vs.get(*k))
+                    .filter(|k| !placement(k) && !arranging(k) && k.as_str() != "flexShrink" && !VARIANT_KEYS.iter().any(|(vk, _)| vk == k) && bs.get(*k) != vs.get(*k))
                     .map(|k| format!("{real}: {k}"))
                     .collect::<Vec<_>>()
             })
@@ -5639,6 +5642,12 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
                     };
                     let Some(parent) = parent else { continue };
                     let vn = tx.doc().get(*v).unwrap().clone();
+                    // An empty base arranges nothing yet: it takes the variant's arrangement, so
+                    // the layer lands where it does there (a centred check).
+                    let empty = tx.doc().get(parent).is_some_and(|p| !p.children.iter().any(|c| tx.doc().get(*c).is_some_and(|c| c.visible)));
+                    if empty && let Some(l) = vn.parent.and_then(|vp| tx.doc().get(vp)).and_then(|p| p.layout) {
+                        tx.node_mut(parent).unwrap().layout = Some(l);
+                    }
                     let index = vn.parent.and_then(|vp| tx.doc().children(Some(vp)).iter().position(|c| c == v));
                     let offset = tx.doc().parent_origin(Some(parent)) - tx.doc().parent_origin(vn.parent);
                     let (made, _) = clone_subtree(tx, *v, Some(parent), index, offset);
