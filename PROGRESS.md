@@ -76,6 +76,12 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (fixes #19, #20, #21)
+
+* #19: a clipping frame draws its border after its children, so filled rows no longer hide it. Clipping stays rectangular: children's square corners still show past a rounded border.
+* #20: a border written with a colour variable (`1px solid var(--border)`) binds the stroke, a literal one unbinds it, and reads show `var(--name)` for bound strokes. `find_nodes` says when it stopped at 500 matches.
+* #21: hug (fit-content) frames grow around growing children (CSS flex-basis auto) instead of staying at their min height; with short content the min height stays and the growing child fills it, so a pinned footer works.
+
 ### 2026-10-25: unreleased (follow agents, skeletons)
 
 * Follow agents (Settings, Chat; on by default): in Design and Chat mode alike, the canvas pans, and switches page, to the layer any agent changes (the chat, Claude Code over MCP, a helper). Moving the canvas yourself pauses it for a moment; off, a chip offers the agent's page.

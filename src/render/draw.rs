@@ -354,94 +354,114 @@ pub fn node_draw(n: &Node, wr: Rect, opacity: f64) -> NodeDraw {
                     }
                 }
             }
-            if let Some(c) = n.style.stroke {
-                if let Some(sides) = n.style.stroke_sides
-                    && matches!(n.kind, NodeKind::Frame { .. } | NodeKind::Rect)
-                    && sides.iter().any(|&w| (w - sides[0]).abs() > 1e-9)
-                {
-                    let col = rgba(c, opacity);
-                    let side_specs = [
-                        (
-                            sides[0],
-                            Rect::new(wr.x, wr.y, wr.w, sides[0].min(wr.h)),
-                            [
-                                v2(wr.x, wr.y + sides[0] * 0.5),
-                                v2(wr.right(), wr.y + sides[0] * 0.5),
-                            ],
-                        ),
-                        (
-                            sides[1],
-                            Rect::new(
-                                (wr.right() - sides[1]).max(wr.x),
-                                wr.y,
-                                sides[1].min(wr.w),
-                                wr.h,
-                            ),
-                            [
-                                v2(wr.right() - sides[1] * 0.5, wr.y),
-                                v2(wr.right() - sides[1] * 0.5, wr.bottom()),
-                            ],
-                        ),
-                        (
-                            sides[2],
-                            Rect::new(
-                                wr.x,
-                                (wr.bottom() - sides[2]).max(wr.y),
-                                wr.w,
-                                sides[2].min(wr.h),
-                            ),
-                            [
-                                v2(wr.x, wr.bottom() - sides[2] * 0.5),
-                                v2(wr.right(), wr.bottom() - sides[2] * 0.5),
-                            ],
-                        ),
-                        (
-                            sides[3],
-                            Rect::new(wr.x, wr.y, sides[3].min(wr.w), wr.h),
-                            [
-                                v2(wr.x + sides[3] * 0.5, wr.y),
-                                v2(wr.x + sides[3] * 0.5, wr.bottom()),
-                            ],
-                        ),
-                    ];
-                    for (w, sr, line_pts) in side_specs {
-                        if w > 0.0 && sr.w > 0.0 && sr.h > 0.0 {
-                            if !n.style.dash.is_empty() {
-                                ops.push(DrawOp::Stroke {
-                                    path: VPath::polyline(&line_pts, false),
-                                    color: col,
-                                    width: w,
-                                    cap: Cap::Butt,
-                                    join: n.style.join,
-                                    dash: n.style.dash.clone(),
-                                });
-                            } else {
-                                ops.push(DrawOp::Fill {
-                                    path: vector::rounded_rect(sr, [0.0; 4]),
-                                    paint: PaintSpec::Solid(col),
-                                    even_odd: false,
-                                });
-                            }
-                        }
-                    }
-                } else if n.style.stroke_width > 0.0
-                    && let Some(sp) = stroke_path(n, wr)
-                {
-                    ops.push(DrawOp::Stroke {
-                        path: sp,
-                        color: rgba(c, opacity),
-                        width: n.style.stroke_width,
-                        cap: n.style.cap,
-                        join: n.style.join,
-                        dash: n.style.dash.clone(),
-                    });
-                }
+            // A clipping frame's border goes over its children (`border_draw`), as in CSS.
+            if !border_on_top(n) {
+                stroke_ops(n, wr, opacity, &mut ops);
             }
         }
     }
     NodeDraw {
         ops,
         blend: n.style.blend,
+    }
+}
+
+/// A clipping frame with children draws its border after them, so filled children cannot hide it.
+pub fn border_on_top(n: &Node) -> bool {
+    matches!(n.kind, NodeKind::Frame { clip: true }) && !n.children.is_empty() && n.style.stroke.is_some() && n.style.rough.is_none()
+}
+
+/// The border of a [`border_on_top`] frame, drawn after its children.
+pub fn border_draw(n: &Node, wr: Rect, opacity: f64) -> NodeDraw {
+    let mut ops = Vec::new();
+    stroke_ops(n, wr, opacity, &mut ops);
+    NodeDraw { ops, blend: n.style.blend }
+}
+
+/// A shape's stroke: per-side borders for frames and rectangles, else along its outline.
+fn stroke_ops(n: &Node, wr: Rect, opacity: f64, ops: &mut Vec<DrawOp>) {
+    if let Some(c) = n.style.stroke {
+        if let Some(sides) = n.style.stroke_sides
+            && matches!(n.kind, NodeKind::Frame { .. } | NodeKind::Rect)
+            && sides.iter().any(|&w| (w - sides[0]).abs() > 1e-9)
+        {
+            let col = rgba(c, opacity);
+            let side_specs = [
+                (
+                    sides[0],
+                    Rect::new(wr.x, wr.y, wr.w, sides[0].min(wr.h)),
+                    [
+                        v2(wr.x, wr.y + sides[0] * 0.5),
+                        v2(wr.right(), wr.y + sides[0] * 0.5),
+                    ],
+                ),
+                (
+                    sides[1],
+                    Rect::new(
+                        (wr.right() - sides[1]).max(wr.x),
+                        wr.y,
+                        sides[1].min(wr.w),
+                        wr.h,
+                    ),
+                    [
+                        v2(wr.right() - sides[1] * 0.5, wr.y),
+                        v2(wr.right() - sides[1] * 0.5, wr.bottom()),
+                    ],
+                ),
+                (
+                    sides[2],
+                    Rect::new(
+                        wr.x,
+                        (wr.bottom() - sides[2]).max(wr.y),
+                        wr.w,
+                        sides[2].min(wr.h),
+                    ),
+                    [
+                        v2(wr.x, wr.bottom() - sides[2] * 0.5),
+                        v2(wr.right(), wr.bottom() - sides[2] * 0.5),
+                    ],
+                ),
+                (
+                    sides[3],
+                    Rect::new(wr.x, wr.y, sides[3].min(wr.w), wr.h),
+                    [
+                        v2(wr.x + sides[3] * 0.5, wr.y),
+                        v2(wr.x + sides[3] * 0.5, wr.bottom()),
+                    ],
+                ),
+            ];
+            for (w, sr, line_pts) in side_specs {
+                if w > 0.0 && sr.w > 0.0 && sr.h > 0.0 {
+                    if !n.style.dash.is_empty() {
+                        ops.push(DrawOp::Stroke {
+                            path: VPath::polyline(&line_pts, false),
+                            color: col,
+                            width: w,
+                            cap: Cap::Butt,
+                            join: n.style.join,
+                            dash: n.style.dash.clone(),
+                        });
+                    } else {
+                        ops.push(DrawOp::Fill {
+                            path: vector::rounded_rect(sr, [0.0; 4]),
+                            paint: PaintSpec::Solid(col),
+                            even_odd: false,
+                        });
+                    }
+                }
+            }
+        } else if n.style.stroke_width > 0.0
+            && let Some(sp) = stroke_path(n, wr)
+        {
+            ops.push(DrawOp::Stroke {
+                path: sp,
+                color: rgba(c, opacity),
+                width: n.style.stroke_width,
+                cap: n.style.cap,
+                join: n.style.join,
+                dash: n.style.dash.clone(),
+            });
+        }
     }
 }
 

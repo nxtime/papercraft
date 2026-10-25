@@ -107,6 +107,8 @@ struct Entry {
 #[derive(Default)]
 pub struct SceneCache {
     entries: HashMap<NodeId, Entry>,
+    /// Borders drawn after a clipping frame's children (`draw::border_on_top`).
+    borders: HashMap<NodeId, Entry>,
     /// Item list of the previous frame and what it was built for (doc stamp, zoom bucket,
     /// culled world rect): reused while the view stays inside that rect.
     last: Option<(u64, i32, Rect, Vec<Item>)>,
@@ -122,6 +124,7 @@ pub fn zoom_bucket(zoom: f64) -> i32 {
 impl SceneCache {
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.borders.clear();
         self.last = None;
     }
 
@@ -154,6 +157,7 @@ impl SceneCache {
         let used = self.entries.values().filter(|e| e.used).count();
         if self.entries.len() > used * 4 + 2000 {
             self.entries.retain(|_, e| e.used);
+            self.borders.retain(|id, _| self.entries.contains_key(id));
         }
         out
     }
@@ -231,6 +235,19 @@ impl SceneCache {
         let o = wr.min();
         for c in &n.children {
             self.walk(doc, *c, o, child_clip, opacity, bucket, tess, cull, out);
+        }
+        if visible && draw::border_on_top(n) {
+            let hit = self.borders.get(&id).is_some_and(|e| e.bucket == bucket && e.wr == wr && e.opacity == opacity && e.node == *n);
+            if !hit {
+                self.last_misses += 1;
+                let d = draw::border_draw(n, wr, opacity);
+                let pieces = Arc::new(tess.ops(&d.ops));
+                self.borders.insert(id, Entry { node: n.clone(), wr, opacity, bucket, pieces, used: true });
+            }
+            let e = &self.borders[&id];
+            if !e.pieces.is_empty() {
+                out.push(Item { id, pieces: e.pieces.clone(), clip, blend: n.style.blend });
+            }
         }
     }
 }

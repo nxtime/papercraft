@@ -71,7 +71,10 @@ fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
             let kn = doc.get(*k).unwrap();
             match kn.layout_child.sizing[axis] {
                 Sizing::Hug => clamp_size(&kn.layout_child, axis, hug_size(doc, *k, axis)),
-                Sizing::Fill => 0.0,
+                // A growing child still brings its content (CSS flex-basis auto); its current
+                // size is what it grew to, so it is not used.
+                Sizing::Fill if kn.layout.is_some() => clamp_size(&kn.layout_child, axis, hug_size(doc, *k, axis)),
+                Sizing::Fill => clamp_size(&kn.layout_child, axis, 0.0),
                 Sizing::Fixed => clamp_size(&kn.layout_child, axis, get(&kn.rect, axis).1),
             }
         })
@@ -171,16 +174,12 @@ pub fn layout_frame(tx: &mut Tx, id: NodeId) -> bool {
     let sizing = n.layout_child.sizing;
     let mut rect = n.rect;
     for axis in [0, 1] {
+        // Hug fits the content, growing children's included (CSS fit-content); a min size
+        // leaves room that the growing children then fill.
         if sizing[axis] == Sizing::Hug {
-            let any_fill = flow_children(tx.doc(), id)
-                .iter()
-                .any(|k| tx.doc().get(*k).unwrap().layout_child.sizing[axis] == Sizing::Fill);
-            // A fill child on the main axis turns hug into fixed (Figma rule).
-            if !(any_fill && axis == ma) {
-                let s = hug_size(tx.doc(), id, axis);
-                let (p, _) = get(&rect, axis);
-                set(&mut rect, axis, p, s.max(0.0));
-            }
+            let s = hug_size(tx.doc(), id, axis);
+            let (p, _) = get(&rect, axis);
+            set(&mut rect, axis, p, s.max(0.0));
         }
         let (p, cur_s) = get(&rect, axis);
         set(&mut rect, axis, p, clamp_size(&n.layout_child, axis, cur_s));

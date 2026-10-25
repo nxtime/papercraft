@@ -1439,13 +1439,22 @@ fn find_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                 "pageId": ed.pages[page].id,
                 "matched": matched,
             }));
-            if results.len() >= 500 {
+            if results.len() >= FIND_MAX {
                 break;
             }
         }
     }
-    text(json!({"count": results.len(), "results": results}))
+    // Say when there are more, so a caller narrows the query instead of trusting a partial list.
+    let mut v = json!({"count": results.len(), "results": results});
+    if results.len() >= FIND_MAX {
+        v["truncated"] = json!(true);
+        v["note"] = json!(format!("only the first {FIND_MAX} matches; narrow the query (pageId, a frame, a filter)"));
+    }
+    text(v)
 }
+
+/// Most matches `find_nodes` returns.
+const FIND_MAX: usize = 500;
 
 /// Case- and spacing-insensitive text match: a substring unless `q` has `*` wildcards, which
 /// match the whole value. Line breaks, non-breaking spaces and curly quotes compare as typed.

@@ -654,8 +654,30 @@ pub fn apply(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applie
             missing.is_empty().then_some((k, text))
         })
         .collect();
+    // A border naming a color variable (`1px solid var(--border)`) binds the stroke to it, so a
+    // mode switch reaches it; a border written with a literal colour drops that binding.
+    let stroke_link: Option<Option<String>> = styles.iter().rev().find(|(k, _)| BORDER_PROPS.contains(&k.as_str())).map(|(_, v)| {
+        let mut rest = v.as_str();
+        while let Some(i) = rest.find("var(--") {
+            let name = rest[i + 6..].split([')', ',']).next().unwrap_or_default().trim();
+            if VARS.with(|m| m.borrow().contains_key(name)) {
+                return Some(name.to_owned());
+            }
+            rest = &rest[i + 6..];
+        }
+        None
+    });
     let mut a = apply_resolved(n, &resolved, ctx);
     a.ignored.extend(unknown);
+    match stroke_link {
+        Some(Some(name)) => {
+            n.bindings.insert("stroke".into(), name);
+        }
+        Some(None) => {
+            n.bindings.remove("stroke");
+        }
+        None => {}
+    }
     for name in linked {
         if let Some(Paint::Solid { var, .. }) = n.style.fills.last_mut() {
             *var = Some(name.to_string());
@@ -663,6 +685,9 @@ pub fn apply(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applie
     }
     a
 }
+
+/// Properties whose colour is the stroke's.
+const BORDER_PROPS: [&str; 9] = ["border", "outline", "borderColor", "stroke", "borderTop", "borderRight", "borderBottom", "borderLeft", "borderTopColor"];
 
 const COLOR_PROPS: [&str; 5] = [
     "backgroundColor",
@@ -1851,6 +1876,8 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
     if let Some(s) = n.style.stroke
         && n.style.stroke_width > 0.0
     {
+        // A stroke bound to a variable reads as that variable.
+        let stroke = n.bindings.get("stroke").map_or_else(|| color_css(s), |v| format!("var(--{})", v.trim_start_matches("--")));
         let kind = if n.style.dash.is_empty() {
             "solid"
         } else if n.style.dash[0] <= n.style.stroke_width * 1.5 {
@@ -1866,14 +1893,11 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
                 .enumerate()
             {
                 if sides[i] > 0.0 {
-                    put(key, format!("{} {kind} {}", px(sides[i]), color_css(s)));
+                    put(key, format!("{} {kind} {stroke}", px(sides[i])));
                 }
             }
         } else {
-            put(
-                "border",
-                format!("{} {kind} {}", px(n.style.stroke_width), color_css(s)),
-            );
+            put("border", format!("{} {kind} {stroke}", px(n.style.stroke_width)));
         }
     }
     if let Some(r) = n.style.radii {

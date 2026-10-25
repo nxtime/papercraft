@@ -302,3 +302,54 @@ fn lint_binds_hard_coded_borders_so_dark_mode_reaches_them() {
     let s = h.ed.doc.get(num(&d)).unwrap().style.stroke.unwrap();
     assert_eq!(s.to_hex(), "#26302b");
 }
+
+#[test]
+fn a_border_written_with_a_variable_stays_bound_to_it() {
+    // Issue #20.
+    let mut h = host();
+    call(&mut h, "set_variables", json!({"mode": "Light", "variables": {"border": "#cccccc"}}));
+    call(&mut h, "set_variables", json!({"mode": "Dark", "variables": {"border": "#333333"}}));
+    let ab = call(&mut h, "create_artboard", json!({"name": "A", "styles": {"width": "200px", "height": "100px", "display": "flex"}}));
+    let d = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"width:100px;height:40px;border:1px solid #ccc\"></div>"}))["createdNodeIds"][0].clone();
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [d], "styles": {"border": "1px solid var(--border)"}}]}));
+    let s = call(&mut h, "get_computed_styles", json!({"nodeIds": [d]}));
+    assert_eq!(s[d.as_str().unwrap()]["border"], "1px solid var(--border)", "{s}");
+    call(&mut h, "set_variable_mode", json!({"mode": "Dark"}));
+    assert_eq!(h.ed.doc.get(num(&d)).unwrap().style.stroke.unwrap().to_hex(), "#333333");
+    // A literal border unbinds it again.
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [d], "styles": {"border": "1px solid #ff0000"}}]}));
+    assert!(!h.ed.doc.get(num(&d)).unwrap().bindings.contains_key("stroke"));
+}
+
+#[test]
+fn a_fit_content_artboard_grows_around_a_growing_child() {
+    // Issue #21.
+    let mut h = host();
+    let ab = call(&mut h, "create_artboard", json!({"name": "Phone", "styles": {"width": "390px", "height": "fit-content", "minHeight": "844px", "display": "flex", "flexDirection": "column"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"display:flex;flex-direction:column;flex-grow:1\"><div style=\"height:1200px;width:100px\"></div></div>"}));
+    let doc = &h.ed.doc;
+    let a = doc.get(num(&ab["id"])).unwrap();
+    let k = doc.get(a.children[0]).unwrap();
+    assert_eq!((a.rect.h, k.rect.h), (1200.0, 1200.0));
+    // Short content: the screen keeps its min height and the growing area pins the footer down.
+    let ab = call(&mut h, "create_artboard", json!({"name": "Short", "styles": {"width": "390px", "height": "fit-content", "minHeight": "844px", "display": "flex", "flexDirection": "column"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"display:flex;flex-direction:column;flex-grow:1\"><div style=\"height:100px;width:100px\"></div></div><div style=\"height:60px;width:390px\"></div>"}));
+    let doc = &h.ed.doc;
+    let a = doc.get(num(&ab["id"])).unwrap();
+    let (body, footer) = (doc.get(a.children[0]).unwrap(), doc.get(a.children[1]).unwrap());
+    assert_eq!((a.rect.h, body.rect.h, footer.rect.y), (844.0, 784.0, 784.0));
+}
+
+#[test]
+fn a_clipping_frame_draws_its_border_over_its_filled_children() {
+    // Issue #19.
+    let mut h = host();
+    let ab = call(&mut h, "create_artboard", json!({"name": "A", "styles": {"width": "400px", "height": "200px", "display": "flex"}}));
+    let card = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"display:flex;flex-direction:column;border:1px solid #ccc;border-radius:14px;overflow:hidden;width:300px\"><div style=\"align-self:stretch;height:40px;background:#eee\"></div><div style=\"align-self:stretch;height:40px;background:#fff\"></div></div>"}))["createdNodeIds"][0].clone();
+    let card = num(&card);
+    let items = papercraft::render::scene::SceneCache::default().items(&h.ed.doc, None, 1.0, None);
+    let order: Vec<NodeId> = items.iter().map(|i| i.id).collect();
+    let kids = h.ed.doc.get(card).unwrap().children.clone();
+    let last_kid = order.iter().rposition(|i| kids.contains(i)).unwrap();
+    assert_eq!(order.iter().rposition(|i| *i == card), Some(last_kid + 1), "the border comes after the rows: {order:?}");
+}
