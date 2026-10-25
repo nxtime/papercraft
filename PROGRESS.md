@@ -76,6 +76,12 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (data safety fixes)
+
+* Sync no longer throws away an instance written over a nested one the way older versions stored it (its own root, no swap): it becomes a swap of the main's child at that place. Projects built before #11 lost such layers (a checked checkbox, a status badge) on the next edit of the outer main.
+* Icons: the HTML parser keeps attribute names in lowercase, so the icon and plugin code never removed the SVG's original `viewBox`; since #14 that made `<x-paper-icon>` (and icon swaps) scale twice and come out tiny. Unreleased builds only; 0.7.3 is not affected.
+* `merge_variants` refuses merges that would leave one option and changes nothing then.
+
 ### 2026-10-25: unreleased (merge variants, pinned bars)
 
 * `merge_variants`: per-state components (`Tab bar / Hoje`, `Status / Sucesso`...) become one component with an enum property. Each variant's differences from the base, matched by layer path (fills, colours, borders, weight, radius, visibility, icons; texts on request), become its option; every instance on every page moves to the base with its value; the base takes the family name; the emptied variants are deleted. A variant with layers the base lacks is left out and reported.

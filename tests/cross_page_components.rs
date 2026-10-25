@@ -405,3 +405,26 @@ fn a_hug_column_with_full_width_text_wraps_its_text_not_more() {
     assert!(n.rect.h < 140.0, "inner column {:?} kids {kids:?}", n.rect);
     assert!(doc.get(outer).unwrap().rect.h < 200.0, "the sheet wraps it: {:?}", doc.get(outer).unwrap().rect);
 }
+
+#[test]
+fn a_legacy_nested_replacement_becomes_a_swap_instead_of_being_lost() {
+    use papercraft::model::InstanceLink;
+    let mut h = host();
+    let (row, screen, badge) = rows(&mut h);
+    let key = format!("{}:{}", &h.ed.pages[0].id[..6], badge.0);
+    call(&mut h, "write_html", json!({"mode": "replace", "targetNodeId": key,
+        "html": "<x-paper-instance component=\"Badge / Amber\" overrides='{\"Label\":\"Late\"}'/>"}));
+    // Rewrite it the way older versions stored it: its own instance root, no swap.
+    let row_inst = h.ed.doc.get(num(&screen)).unwrap().children[0];
+    let nested = h.ed.doc.get(row_inst).unwrap().children[0];
+    let amber = h.ed.doc.get(nested).unwrap().instance.clone().unwrap().swap.unwrap().main;
+    h.ed.edit("legacy", |tx| {
+        let n = tx.node_mut(nested).unwrap();
+        let l = n.instance.as_mut().unwrap();
+        *l = InstanceLink { main: amber, overrides: l.overrides.clone(), source: None, swap: None };
+    });
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [row], "styles": {"gap": "2px"}}]}));
+    assert_eq!(badge_state(&h, &screen), ("Late".into(), "#ffbf00".into()), "kept, now as a swap");
+    let l = h.ed.doc.get(h.ed.doc.get(row_inst).unwrap().children[0]).unwrap().instance.clone().unwrap();
+    assert_eq!(l.swap.map(|s| s.main), Some(amber));
+}

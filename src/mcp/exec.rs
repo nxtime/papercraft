@@ -3121,7 +3121,7 @@ impl Builder<'_, '_> {
         }
         let mut open = String::from("<svg");
         for (k, v) in &el.attrs {
-            if matches!(k.as_str(), "width" | "height" | "style") || (fitted.is_some() && k == "viewBox") {
+            if matches!(k.as_str(), "width" | "height" | "style") || (fitted.is_some() && k.eq_ignore_ascii_case("viewbox")) {
                 continue;
             }
             open += &format!(" {k}=\"{}\"", v.replace('"', "&quot;"));
@@ -3486,7 +3486,8 @@ impl Builder<'_, '_> {
                     let k = lw / vw;
                     let defs_ns = "xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
                     svg_el.raw = Some(format!("<svg {defs_ns}><g transform=\"scale({k}) translate({} {})\">{inner}</g></svg>", -vx, -vy));
-                    svg_el.attrs.retain(|(k, _)| !matches!(k.as_str(), "viewBox" | "width" | "height"));
+                    // The parser keeps attribute names in lowercase.
+                    svg_el.attrs.retain(|(k, _)| !k.eq_ignore_ascii_case("viewbox") && !matches!(k.as_str(), "width" | "height"));
                     svg_el.attrs.push(("viewBox".into(), format!("0 0 {lw} {lh}")));
                     svg_el.attrs.push(("width".into(), lw.to_string()));
                     svg_el.attrs.push(("height".into(), lh.to_string()));
@@ -3575,7 +3576,8 @@ impl Builder<'_, '_> {
                 "<svg><g transform=\"scale({k}) translate({} {})\">{inner}</g></svg>",
                 -vx, -vy
             ));
-            svg_el.attrs.retain(|(k, _)| k != "viewBox");
+            // The parser keeps attribute names in lowercase.
+            svg_el.attrs.retain(|(k, _)| !k.eq_ignore_ascii_case("viewbox"));
             svg_el
                 .attrs
                 .push(("viewBox".into(), format!("0 0 {size} {size}")));

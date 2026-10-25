@@ -142,6 +142,13 @@ fn icons_place_as_vector_layers_that_follow_a_variable() {
         NodeKind::Group | NodeKind::Frame { .. } | NodeKind::Path { .. }
     ));
 
+    // A 256-unit icon at size 20 is drawn 20 wide: its 192-unit square comes out 15 wide.
+    let probe = call(&mut h, "create_artboard", json!({"name": "Probe", "styles": {"width": "40px", "height": "40px", "display": "flex"}})).unwrap();
+    let placed = call(&mut h, "write_html", json!({"targetNodeId": probe["id"], "html": "<x-paper-icon name=\"test:square\" size=\"20\"/>"})).unwrap();
+    let icon = num_of(&placed["createdNodeIds"][0]);
+    let shape = h.ed.doc.subtree(icon).into_iter().skip(1).find_map(|i| h.ed.doc.get(i)).unwrap().rect;
+    assert!((shape.w - 15.0).abs() < 0.5, "drawn once at its size, not scaled twice: {shape:?}");
+
     // An icon property swaps an instance's icon, and the swap survives a sync of the main.
     let chip = call(&mut h, "create_artboard", json!({"name": "Chip", "styles": {"width": "fit-content", "height": "fit-content", "display": "flex", "gap": "4px"}})).unwrap();
     call(&mut h, "write_html", json!({"targetNodeId": chip["id"], "html": "<x-paper-icon name=\"test:check\" size=\"16\"/><span layer-name=\"Label\">Ok</span>"})).unwrap();

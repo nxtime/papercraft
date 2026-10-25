@@ -253,16 +253,30 @@ pub(super) fn sync_node(tx: &mut Tx, inst: NodeId, is_root: bool, ext: Option<&D
                 .map(|l| (l.main, l.source.clone(), *k))
         })
         .collect();
-    for k in &kids {
-        let stale = tx
-            .doc()
-            .get(*k)
-            .and_then(|c| c.instance.as_ref())
-            .is_none_or(|l| !main.children.contains(&l.main) || l.source != source);
-        if stale {
-            tx.remove(*k);
-            by_main.retain(|(_, _, x)| x != k);
+    for (at, k) in kids.iter().enumerate() {
+        let link = tx.doc().get(*k).and_then(|c| c.instance.clone());
+        let stale = link.as_ref().is_none_or(|l| !main.children.contains(&l.main) || l.source != source);
+        if !stale {
+            continue;
         }
+        // An instance written over a nested one (before swaps existed) takes the place of the
+        // main's child at its index, as a swap, instead of being thrown away.
+        let free = main.children.get(at).filter(|mc| !by_main.iter().any(|(m, s, _)| m == *mc && *s == source));
+        let of_a_component = |l: &InstanceLink| match &l.source {
+            None => tx.doc().get(l.main).is_some_and(|m| m.component),
+            s if *s == source => ext.and_then(|d| d.get(l.main)).is_some_and(|m| m.component),
+            _ => false,
+        };
+        if let (Some(l), Some(mc)) = (link.filter(|l| l.swap.is_none() && of_a_component(l)), free) {
+            let mc = *mc;
+            let n = tx.node_mut(*k).unwrap();
+            n.instance = Some(InstanceLink { main: mc, overrides: l.overrides, source: source.clone(), swap: Some(Swap { main: l.main, source: l.source }) });
+            by_main.retain(|(_, _, x)| x != k);
+            by_main.push((mc, source.clone(), *k));
+            continue;
+        }
+        tx.remove(*k);
+        by_main.retain(|(_, _, x)| x != k);
     }
     for (i, mc) in main.children.iter().enumerate() {
         match by_main.iter().find(|(m, s, _)| m == mc && *s == source) {
