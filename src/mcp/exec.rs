@@ -5304,6 +5304,16 @@ pub fn set_props_ui(ed: &mut Editor, ids: &[NodeId], name: &str, value: &str) ->
     set_instance_props(ed, &Args(args.as_object().unwrap())).map(|_| ())
 }
 
+/// The properties modal's Save: exactly these properties on `main` (page being viewed); the
+/// ones left out are removed, with their values on instances.
+pub fn save_props_ui(ed: &mut Editor, main: NodeId, defs: Vec<crate::model::PropDef>) -> Result<(), String> {
+    let old: Vec<String> = ed.doc.get(main).map(|n| n.props.iter().map(|d| d.name.clone()).collect()).unwrap_or_default();
+    let remove: Vec<String> = old.into_iter().filter(|o| !defs.iter().any(|d| d.name == *o)).collect();
+    let key = node_key(ed, ed.active_page, main);
+    let args = json!({"componentId": key, "props": defs, "remove": remove});
+    set_component_props(ed, &Args(args.as_object().unwrap())).map(|_| ())
+}
+
 /// The inspector's way to add properties to a main component from a template.
 pub fn props_template_ui(ed: &mut Editor, main: NodeId, template: &str) -> Result<(), String> {
     let key = node_key(ed, ed.active_page, main);

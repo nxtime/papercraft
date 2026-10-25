@@ -13,6 +13,7 @@ pub mod confirm;
 pub mod design;
 pub mod home;
 pub mod inspector;
+pub mod props_modal;
 pub mod kit;
 pub mod library;
 pub mod lottie_icon;
@@ -167,6 +168,8 @@ pub struct UiState {
     pub chat: chat::ChatState,
     /// Annotation view state (mode, hidden categories, collapsed notes); not saved.
     pub annotations: annotations_canvas::AnnotationsView,
+    /// The "Edit properties" modal of a main component.
+    pub props_modal: props_modal::PropsModal,
     /// Annotation picked on the canvas, for the side view and inspector.
     pub selected_annotation: Option<u64>,
     /// Annotations UI state (popover, Customize modal, inline edit), not saved.
@@ -996,6 +999,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     }
     agent_overlay(ui.ctx(), ed, st, canvas);
     annotations_canvas::draw(ui.ctx(), ed, &mut st.annotations, &mut st.selected_annotation, canvas);
+    props_modal::show(ui.ctx(), ed, st);
     run_toast(ui.ctx(), st, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
     if st.show_help {

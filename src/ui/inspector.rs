@@ -442,7 +442,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             }
             let first = ed.doc.get(ids[0]).cloned().unwrap();
             header(ui, ed, &ids, &first);
-            props_section(ui, ed, &ids, &first);
+            props_section(ui, ed, st, &ids, &first);
             separator(ui);
             feedback_section(ui, ed, st, &ids, &first);
             align_row(ui, ed, &ids);
@@ -1036,7 +1036,7 @@ fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
 }
 
 /// Component properties: a control per property on instances, templates on a main.
-fn props_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
+fn props_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, ids: &[NodeId], first: &Node) {
     // The main an instance follows, on this page or another.
     let defs = match &first.instance {
         Some(l) if !first.component => {
@@ -1053,27 +1053,26 @@ fn props_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     if first.component && ids.len() == 1 {
         separator(ui);
         section(ui, "Properties");
+        let mut drop = None;
         for d in &first.props {
-            let detail = if d.kind == "enum" { d.options.iter().map(|o| o.value.as_str()).collect::<Vec<_>>().join(", ") } else { d.layer.clone().unwrap_or_default() };
+            let kind = match d.kind.as_str() { "enum" => format!("{} options", d.options.len()), "bool" => "show / hide".into(), k => k.to_owned() };
             row(ui, &d.name, |ui| {
-                ui.add(egui::Label::new(RichText::new(format!("{} \u{b7} {detail}", d.kind)).size(theme::SECONDARY).color(theme::pal(ui).secondary)).truncate());
+                ui.add(egui::Label::new(RichText::new(kind).size(theme::SECONDARY).color(theme::pal(ui).secondary)).truncate());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if super::kit::chip(ui, "×", false).on_hover_text("Remove this property").clicked() {
+                        drop = Some(d.name.clone());
+                    }
+                });
             });
         }
-        let mut pick = None;
-        ui.horizontal_wrapped(|ui| {
-            for (t, label, tip) in [
-                ("text", "Texts", "A property for each text layer"),
-                ("active", "Active item", "Which item of a tab bar, nav or segmented row is active"),
-            ] {
-                if super::kit::chip(ui, &format!("+ {label}"), false).on_hover_text(tip).clicked() {
-                    pick = Some(t);
-                }
+        if let Some(n) = drop {
+            let keep: Vec<_> = first.props.iter().filter(|d| d.name != n).cloned().collect();
+            if let Err(e) = crate::mcp::exec::save_props_ui(ed, first.id, keep) {
+                ed.status = e;
             }
-        });
-        if let Some(t) = pick
-            && let Err(e) = crate::mcp::exec::props_template_ui(ed, first.id, t)
-        {
-            ed.status = e;
+        }
+        if super::kit::chip(ui, if first.props.is_empty() { "+ Add properties…" } else { "Edit properties…" }, false).clicked() {
+            st.props_modal.open(ed, first.id);
         }
         return;
     }

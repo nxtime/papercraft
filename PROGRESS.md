@@ -76,6 +76,11 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (properties modal, row merges)
+
+* Properties modal (inspector, on a main: Edit properties…): each property's name, kind (text, show / hide, icon, options), layer and default; an options property's values with their changes as editable JSON; add properties or start from a template; Save replaces them all. The inline list is now name, kind and a remove button.
+* `merge_variants` keeps what each moved instance shows (texts that came from its old variant), carries nested instances' property values (a badge's Tone) in the options, and takes `textLayers` for state texts only.
+
 ### 2026-10-25: unreleased (prototype links tool, merge icon colours)
 
 * `set_prototype_links`: agents can link a layer to a screen for Present mode (back arrows, rows, tabs); before, only the inspector could.
