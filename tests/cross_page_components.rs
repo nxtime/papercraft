@@ -248,3 +248,41 @@ fn computed_styles_name_the_variable_a_text_colour_is_bound_to() {
     let s = call(&mut h, "get_computed_styles", json!({"nodeIds": [t]}));
     assert_eq!(s[t.as_str().unwrap()]["color"], "var(--text)", "{s}");
 }
+
+#[test]
+fn an_instance_with_its_own_text_keeps_its_own_width_when_the_main_text_changes() {
+    // Issue #17.
+    let mut h = host();
+    let btn = call(&mut h, "create_artboard", json!({"name": "Btn", "styles": {"width": "fit-content", "height": "fit-content", "display": "flex", "padding": "0px 16px"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": btn["id"], "html": "<span layer-name=\"Label\" style=\"font-size:14px;font-weight:400\">Button</span>"}));
+    call(&mut h, "create_component", json!({"nodeId": btn["id"]}));
+    let screen = call(&mut h, "create_artboard", json!({"name": "S", "styles": {"width": "400px", "height": "100px", "display": "flex"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": screen["id"], "html": "<x-paper-instance component=\"Btn\" overrides='{\"Label\":\"Confirm order\"}'/>"}));
+    let inst = h.ed.doc.get(num(&screen["id"])).unwrap().children[0];
+    let label_main = h.ed.doc.get(num(&btn["id"])).unwrap().children[0];
+    let label_key = format!("{}:{}", &h.ed.pages[0].id[..6], label_main.0);
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [label_key], "styles": {"fontWeight": "700"}}]}));
+    let doc = &h.ed.doc;
+    let root = doc.get(inst).unwrap();
+    let text = doc.get(root.children[0]).unwrap();
+    let main_w = doc.get(num(&btn["id"])).unwrap().rect.w;
+    assert!(text.rect.w + 32.0 <= root.rect.w + 0.5, "the label fits its button: {} in {}", text.rect.w, root.rect.w);
+    assert!(root.rect.w > main_w + 10.0, "\"Confirm order\" is wider than \"Button\": {} vs {main_w}", root.rect.w);
+}
+
+#[test]
+fn an_svg_viewbox_is_fitted_to_its_width_and_height() {
+    // Issue #14.
+    let mut h = host();
+    let row = call(&mut h, "create_artboard", json!({"name": "Row", "styles": {"width": "300px", "height": "40px", "display": "flex"}}));
+    let made = call(&mut h, "write_html", json!({"targetNodeId": row["id"],
+        "html": "<svg width=\"100\" height=\"20\" viewBox=\"0 0 200 40\"><path d=\"M0 20H200\" stroke=\"#000\" stroke-width=\"2\"/></svg><div>Text</div>"}));
+    let svg = num(&made["createdNodeIds"][0]);
+    let doc = &h.ed.doc;
+    let frame = doc.world_rect(svg).unwrap();
+    assert_eq!((frame.w, frame.h), (100.0, 20.0));
+    for id in doc.subtree(svg).into_iter().skip(1) {
+        let r = doc.world_rect(id).unwrap();
+        assert!(r.x >= frame.x - 1.5 && r.x + r.w <= frame.x + frame.w + 1.5, "artwork {r:?} stays inside {frame:?}");
+    }
+}

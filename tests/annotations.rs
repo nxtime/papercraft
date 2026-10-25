@@ -65,6 +65,31 @@ fn moving_a_frame_to_another_page_takes_its_notes() {
 }
 
 
+#[test]
+fn tidy_keeps_notes_off_a_narrow_screen() {
+    // Issue #15: a 390px phone artboard, notes on its sections.
+    let mut fixture = Fixture::new();
+    let h = &mut fixture.host;
+    h.session.create(&mut h.ed, "Ann").unwrap();
+    let ab = call(h, "create_artboard", json!({"name": "Phone", "styles": {"width": "390px", "height": "944px", "display": "flex", "flexDirection": "column", "gap": "16px", "padding": "24px"}}));
+    let html: String = (0..4).map(|i| format!("<div layer-name=\"S{i}\" style=\"width:300px;height:160px;display:flex\"><div style=\"width:120px;height:40px;background:#888\"></div></div>")).collect();
+    let kids = call(h, "write_html", json!({"targetNodeId": ab["id"], "html": html}))["createdNodeIds"].clone();
+    let notes: Vec<_> = (0..4).map(|i| json!({"node": kids[i], "text": format!("Rule {i}\nWhat happens: something")})).collect();
+    call(h, "annotate", json!({"notes": notes}));
+    call(h, "annotate", json!({"frame": ab["id"], "tidy": true}));
+    let doc = h.ed.page_doc(0);
+    let screen = doc.world_rect(num(&ab["id"])).unwrap();
+    for a in &doc.annotations {
+        let t = doc.world_rect(a.target.unwrap()).unwrap();
+        let at = t.min() + a.position;
+        let s = papercraft::model::annotation_layout::card_size(a);
+        let card = papercraft::geom::Rect::new(at.x, at.y, s.x, s.y);
+        let inside = card.x < screen.right() && card.right() > screen.x && card.y < screen.bottom() && card.bottom() > screen.y;
+        assert!(!inside, "note {:?} {card:?} sits on the screen {screen:?}", a.label);
+    }
+}
+
+
 struct Fixture {
     host: exec::SessionHost,
     path: std::path::PathBuf,

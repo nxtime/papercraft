@@ -76,6 +76,13 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (fixes #14, #15, #16, #17)
+
+* #14: `write_html` fits an `<svg>` viewBox into its width and height like a browser (centred, aspect kept).
+* #15: a note on something placed straight in its artboard treats the artboard as the screen: tidy keeps cards off it instead of in its free space.
+* #16: `not-an-instance` no longer matches look-alikes with a different icon; its fix names the `<x-paper-instance>` to write (swap_instance refuses plain frames).
+* #17: instances with their own text re-measure it when the main's text style changes, so hug buttons keep fitting their labels (also covers the size reset after a swap).
+
 ### 2026-10-25: 0.7.3 (QA sub-agent, helper agents, auto mode, mid-turn messages, isolated dev settings)
 
 * QA sub-agent: Claude Code chats always get a Sonnet `qa` agent that lints and screenshots built frames and returns only findings, so screenshots stay out of the main context.

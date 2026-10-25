@@ -270,8 +270,11 @@ pub fn place_among(doc: &Document, a: &Annotation, placed: &[Placed]) -> Option<
     let mut obs = obstacles(doc, Some(target));
     obs.push(t);
     // The screen holding the target: a card never sits on its
-    // background, only the line may enter it.
-    let screen = screen_of(doc, target);
+    // background, only the line may enter it. A target placed straight in its artboard has no
+    // inner screen: the artboard is the screen (a phone frame), not a board for notes.
+    let inner = screen_of(doc, target);
+    let screen = inner.or(frame);
+    let frame = frame.filter(|_| inner.is_some());
     let route_obs = route_obstacles(doc, target);
     let blocked = |r: &Rect| {
         let g = r.inflate(MARGIN);

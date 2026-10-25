@@ -3087,16 +3087,35 @@ impl Builder<'_, '_> {
                 .and_then(|v| css::length(v, fs))
                 .or_else(|| el.attr(k).and_then(|v| css::length(v, fs)))
         };
-        let (w, h) = (size_of("width"), size_of("height"));
-        // Rebuild the opening tag with the final size so the importer scales the content.
+        let (mut w, mut h) = (size_of("width"), size_of("height"));
         let body = raw.find('>').map_or("", |i| &raw[i + 1..]);
         let self_closing = raw[..raw.find('>').unwrap_or(0)].ends_with('/');
+        // The importer keeps viewBox units: fit the viewBox into width × height ourselves, as a
+        // browser does (centred, aspect kept), and make the viewBox the final size.
+        let vb: Vec<f64> = el.attr("viewBox").map(|v| v.split([' ', ',']).filter_map(|n| n.trim().parse().ok()).collect()).unwrap_or_default();
+        let mut fitted = None;
+        if let [vx, vy, vw, vh] = vb[..]
+            && vw > 0.0
+            && vh > 0.0
+            && (w.is_some() || h.is_some())
+            && !self_closing
+        {
+            let (fw, fh) = (w.unwrap_or_else(|| h.unwrap() * vw / vh), h.unwrap_or_else(|| w.unwrap() * vh / vw));
+            let k = (fw / vw).min(fh / vh);
+            let (ox, oy) = ((fw - vw * k) / 2.0, (fh - vh * k) / 2.0);
+            let inner = body.trim_end().strip_suffix("</svg>").unwrap_or(body);
+            fitted = Some(format!("<g transform=\"translate({ox} {oy}) scale({k}) translate({} {})\">{inner}</g></svg>", -vx, -vy));
+            (w, h) = (Some(fw), Some(fh));
+        }
         let mut open = String::from("<svg");
         for (k, v) in &el.attrs {
-            if matches!(k.as_str(), "width" | "height" | "style") {
+            if matches!(k.as_str(), "width" | "height" | "style") || (fitted.is_some() && k == "viewBox") {
                 continue;
             }
             open += &format!(" {k}=\"{}\"", v.replace('"', "&quot;"));
+        }
+        if fitted.is_some() {
+            open += &format!(" viewBox=\"0 0 {} {}\"", w.unwrap(), h.unwrap());
         }
         if !el.attrs.iter().any(|(k, _)| k == "xmlns") {
             open += " xmlns=\"http://www.w3.org/2000/svg\"";
@@ -3107,7 +3126,7 @@ impl Builder<'_, '_> {
         if let Some(h) = h {
             open += &format!(" height=\"{h}\"");
         }
-        let src = format!("{open}>{}", if self_closing { "</svg>" } else { body })
+        let src = format!("{open}>{}", fitted.as_deref().unwrap_or(if self_closing { "</svg>" } else { body }))
             .replace("currentColor", &color.to_hex());
         // var(--name) inside the markup (fill="var(--accent)", stroke=...) resolves to its value.
         let src = if src.contains("var(--") {

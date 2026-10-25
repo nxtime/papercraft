@@ -109,6 +109,15 @@ fn copy_props(main: &Node, inst: &mut Node, overrides: &[String], is_root: bool)
     if !ov("size") {
         inst.rect.w = main.rect.w;
         inst.rect.h = main.rect.h;
+        // Its own text gets its own box: the main's was measured for the main's words.
+        if ov("text")
+            && let Some(l) = crate::text::layout_node(inst)
+        {
+            if matches!(inst.kind, NodeKind::Text { auto_width: true, .. }) {
+                inst.rect.w = l.width.max(1.0);
+            }
+            inst.rect.h = l.height;
+        }
     }
     // Bindings follow the main, field by field, except in overridden groups.
     let fields: BTreeSet<String> = main.bindings.keys().chain(inst.bindings.keys()).cloned().collect();

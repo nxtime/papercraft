@@ -283,6 +283,11 @@ fn same_shape(a: &Document, ia: NodeId, b: &Document, ib: NodeId) -> bool {
     if na.kind.type_name() != nb.kind.type_name() || na.children.len() != nb.children.len() {
         return false;
     }
+    // An instance cannot swap its icon, so a different icon is a different component.
+    let icon = |n: &Node| n.name.strip_prefix(ICON_PREFIX).map(str::to_owned);
+    if (icon(na).is_some() || icon(nb).is_some()) && icon(na) != icon(nb) {
+        return false;
+    }
     if na.is_frame()
         && (na.style.fills.first() != nb.style.fills.first()
             || (na.style.corner_radius - nb.style.corner_radius).abs() > COPY_RADIUS_TOLERANCE
@@ -304,6 +309,9 @@ pub fn component_mains(ed: &crate::editor::Editor) -> Vec<(&Document, NodeId)> {
     docs.flat_map(|d| d.nodes.values().filter(|n| n.component).map(move |n| (d, n.id))).collect()
 }
 
+/// Name prefix of a layer placed with `<x-paper-icon>` (`Icon / lucide:check`).
+const ICON_PREFIX: &str = "Icon / ";
+
 /// `not-an-instance`: frames under `roots` built by hand to look like one of `mains` (same
 /// structure, size within 4px) instead of being an instance of it. `lint_design {fix}` leaves
 /// these alone; swapping is the user's call.
@@ -317,13 +325,12 @@ pub fn not_an_instance(doc: &Document, roots: &[NodeId], mains: &[(&Document, No
         let near = |m: &Node| (m.rect.w - n.rect.w).abs() <= COPY_SIZE_TOLERANCE && (m.rect.h - n.rect.h).abs() <= COPY_SIZE_TOLERANCE;
         let hit = mains.iter().find(|(d, m)| d.get(*m).is_some_and(near) && same_shape(doc, id, d, *m));
         let Some(m) = hit.and_then(|(d, m)| d.get(*m)) else { continue };
-        let key = m.component_key.as_deref().unwrap_or(&m.name);
         out.push(Issue {
             rule: "not-an-instance",
             severity: "warning",
             node: id,
             message: format!("`{}` looks like component `{}` but is not an instance of it", n.name, m.name),
-            fix: format!("swap_instance with componentKey {key}"),
+            fix: format!("write_html mode replace on it with <x-paper-instance component=\"{}\"/> (plus overrides for its texts)", m.name),
         });
     }
     out
@@ -511,9 +518,31 @@ mod tests {
         let found = hits(&r);
         assert_eq!(found.len(), 1, "only the hand-made copy: {r}");
         assert_eq!(found[0]["node"], copy["createdNodeIds"][0]);
-        assert!(found[0]["fix"].as_str().unwrap().starts_with("swap_instance with componentKey "), "{}", found[0]);
+        assert!(found[0]["fix"].as_str().unwrap().contains("<x-paper-instance component=\"Button\"/>"), "{}", found[0]);
         let r = call("lint_design", json!({"fix": true}));
         assert_eq!(hits(&r).len(), 1, "fix does not swap: {r}");
+    }
+
+    #[test]
+    fn a_different_icon_is_a_different_component() {
+        // Issue #16.
+        let mut doc = Document::default();
+        use crate::geom::Rect;
+        use crate::model::NodeKind;
+        let chip = |doc: &mut Document, icon: &str| {
+            let (root, kid) = (doc.alloc_id(), doc.alloc_id());
+            let mut r = Node::new(root, NodeKind::Frame { clip: false }, Rect::new(0.0, 0.0, 60.0, 20.0));
+            r.children = vec![kid];
+            let mut i = Node::new(kid, NodeKind::Frame { clip: false }, Rect::new(0.0, 0.0, 14.0, 14.0));
+            i.name = format!("Icon / {icon}");
+            i.parent = Some(root);
+            doc.nodes.insert(root, r);
+            doc.nodes.insert(kid, i);
+            root
+        };
+        let (star, heart, star2) = (chip(&mut doc, "phosphor:star"), chip(&mut doc, "phosphor:heart"), chip(&mut doc, "phosphor:star"));
+        assert!(!same_shape(&doc, star, &doc, heart));
+        assert!(same_shape(&doc, star, &doc, star2));
     }
 
     #[test]
