@@ -1396,7 +1396,7 @@ fn build_spec_tree(
 
     let mut instance_of: Option<Value> = None;
     if let Some(link) = &n.instance
-        && let Some(main) = doc.get(link.main)
+        && let Some(main) = doc.get(link.target().0)
         && main.component
     {
         instance_of = Some(
@@ -1756,7 +1756,7 @@ pub(crate) fn to_ai_spec_with_categories(
         else {
             continue;
         };
-        let Some(main) = inst.instance.as_ref().map(|l| l.main) else {
+        let Some(main) = inst.instance.as_ref().map(|l| l.target().0) else {
             continue;
         };
         if seen.contains(&main) {
@@ -1806,7 +1806,7 @@ fn library_components(doc: &Document, root: NodeId) -> Vec<Value> {
             stack.extend(n.children.iter().rev());
             continue;
         };
-        let main = n.instance.as_ref().map_or(id, |l| l.main);
+        let main = n.instance.as_ref().map_or(id, |l| l.target().0);
         let name = doc.get(main).map_or_else(|| n.name.clone(), |m| m.name.clone());
         match out.iter_mut().find(|e| e["mainId"] == json!(main.0)) {
             Some(e) => e["usedBy"].as_array_mut().unwrap().push(json!(id.0)),

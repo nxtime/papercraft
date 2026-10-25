@@ -4761,7 +4761,9 @@ fn get_components(ed: &mut Editor, a: &Args) -> ToolResult {
     for page in 0..ed.pages.len() {
         for n in ed.page_doc(page).nodes.values() {
             let Some(l) = &n.instance else { continue };
-            let main_page = match &l.source {
+            // A swapped nested instance counts for the component it was swapped to.
+            let (main, source) = l.target();
+            let main_page = match source {
                 None => page,
                 Some(Source::Page(p)) => match ed.pages.iter().position(|s| s.id == *p) {
                     Some(i) => i,
@@ -4769,8 +4771,8 @@ fn get_components(ed: &mut Editor, a: &Args) -> ToolResult {
                 },
                 Some(Source::Library(_)) => continue,
             };
-            if n.id != l.main || main_page != page {
-                *uses.entry((main_page, l.main)).or_default() += 1;
+            if n.id != main || main_page != page {
+                *uses.entry((main_page, main)).or_default() += 1;
             }
         }
     }
@@ -5401,7 +5403,7 @@ fn set_code_link(ed: &mut Editor, a: &Args) -> ToolResult {
     let n = doc.get(id).ok_or("no such node")?;
     let main = match (&n.instance, n.component) {
         (_, true) => id,
-        (Some(l), false) if doc.get(l.main).is_some() => l.main,
+        (Some(l), false) if l.target().1.is_none() && doc.get(l.target().0).is_some() => l.target().0,
         (Some(_), false) => return Err("the main component is on another page: link it there".into()),
         (None, false) => return Err("set_code_link needs a main component or an instance of one (create_component first)".into()),
     };

@@ -1,5 +1,6 @@
-//! Headless GPU tests: render real scenes through wgpu (lavapipe on CI/VPS), save screenshots to
-//! `docs/screenshots/`, and assert pixels at known positions.
+//! Headless GPU tests: render real scenes through wgpu (lavapipe on CI/VPS), save screenshots
+//! (to `docs/screenshots/` with `PAPERCRAFT_UPDATE_SHOTS=1`, see `common::shot`), and assert
+//! pixels at known positions.
 
 mod common;
 

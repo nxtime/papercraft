@@ -33,8 +33,14 @@ pub fn gpu() -> Option<&'static Headless> {
     .as_ref()
 }
 
+/// Where a test screenshot goes: the build's temp folder, or `docs/screenshots` when
+/// `PAPERCRAFT_UPDATE_SHOTS` is set, so a test run does not rewrite the committed images.
 pub fn shot(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/screenshots");
+    let dir = if std::env::var_os("PAPERCRAFT_UPDATE_SHOTS").is_some() {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/screenshots")
+    } else {
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("screenshots")
+    };
     std::fs::create_dir_all(&dir).unwrap();
     dir.join(name)
 }

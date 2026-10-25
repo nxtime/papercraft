@@ -234,4 +234,7 @@ fn swap_instance_swaps_a_nested_instance_and_keeps_it() {
     assert_eq!(badge_state(&h, &screen).1, "#ffbf00");
     call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [row], "styles": {"gap": "0px"}}]}));
     assert_eq!(badge_state(&h, &screen).1, "#ffbf00", "kept after the outer main changed");
+    let comps = call(&mut h, "get_components", json!({}));
+    let uses = |name: &str| comps["components"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap()["uses"].clone();
+    assert_eq!(uses("Badge / Amber"), 1, "the swapped badge counts for Amber: {comps}");
 }

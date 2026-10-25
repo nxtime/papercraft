@@ -683,7 +683,7 @@ fn agent_design_screenshot() {
     let Out::Image { data, .. } = &outs[0] else {
         panic!()
     };
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/screenshots");
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     std::fs::write(dir.join("milestone7_mcp.png"), data).unwrap();
     let ab_node = h.ed.doc.get(num(&id)).unwrap();
     assert!(

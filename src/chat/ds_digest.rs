@@ -46,15 +46,16 @@ fn components(ed: &Editor) -> Vec<Comp> {
     for page in 0..ed.pages.len() {
         for n in ed.page_doc(page).nodes.values() {
             let Some(l) = &n.instance else { continue };
-            match &l.source {
-                None if n.id != l.main => *page_uses.entry((page, l.main)).or_default() += 1,
+            let (main, source) = l.target();
+            match source {
+                None if n.id != main => *page_uses.entry((page, main)).or_default() += 1,
                 None => {}
                 Some(Source::Page(p)) => {
                     if let Some(i) = ed.pages.iter().position(|s| s.id == *p) {
-                        *page_uses.entry((i, l.main)).or_default() += 1;
+                        *page_uses.entry((i, main)).or_default() += 1;
                     }
                 }
-                Some(Source::Library(lib)) => *lib_uses.entry((lib.as_str(), l.main)).or_default() += 1,
+                Some(Source::Library(lib)) => *lib_uses.entry((lib.as_str(), main)).or_default() += 1,
             }
         }
     }
