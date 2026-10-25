@@ -1225,9 +1225,14 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 // Accepted without an equivalent; harmless. fontFamily: Inter is the only face.
                 true
             }
-            "overflow" if n.is_frame() => {
+            "overflow" | "overflowY" if n.is_frame() => {
                 if let NodeKind::Frame { clip } = &mut n.kind {
                     *clip = matches!(lower.as_str(), "hidden" | "clip" | "scroll" | "auto");
+                }
+                // A scrolling screen: fixed size, its overflow scrolls on the canvas.
+                n.scroll = matches!(lower.as_str(), "scroll" | "auto");
+                if !n.scroll {
+                    n.scroll_y = 0.0;
                 }
                 true
             }
@@ -1801,7 +1806,7 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
         }
     }
     if let NodeKind::Frame { clip: true } = n.kind {
-        put("overflow", "hidden".into());
+        put("overflow", if n.scroll { "auto" } else { "hidden" }.into());
     }
     if !n.visible {
         put("display", "none".into());

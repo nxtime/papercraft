@@ -353,3 +353,36 @@ fn a_clipping_frame_draws_its_border_over_its_filled_children() {
     let last_kid = order.iter().rposition(|i| kids.contains(i)).unwrap();
     assert_eq!(order.iter().rposition(|i| *i == card), Some(last_kid + 1), "the border comes after the rows: {order:?}");
 }
+
+#[test]
+fn a_scrolling_screen_keeps_its_size_and_the_wheel_scrolls_its_overflow() {
+    use papercraft::editor::InputEvent;
+    use papercraft::geom::v2;
+    let mut h = host();
+    let ab = call(&mut h, "create_artboard", json!({"name": "Phone", "styles": {"width": "390px", "height": "fit-content", "minHeight": "844px", "display": "flex", "flexDirection": "column"}}));
+    let kid = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"height:1200px;width:390px;background:#eee\"></div>"}))["createdNodeIds"][0].clone();
+    let (ab, kid) = (num(&ab["id"]), num(&kid));
+    assert_eq!(h.ed.doc.get(ab).unwrap().rect.h, 1200.0, "fit-content grew");
+    h.ed.set_scroll(&[ab], true);
+    let n = h.ed.doc.get(ab).unwrap();
+    assert!(n.scroll && n.rect.h == 844.0, "back to its screen height: {:?}", n.rect);
+    let key = format!("{}:{}", &h.ed.pages[0].id[..6], ab.0);
+    let s = call(&mut h, "get_computed_styles", json!({"nodeIds": [key]}));
+    assert!(s.to_string().contains("\"overflow\":\"auto\""), "{s}");
+    // The wheel over the screen scrolls it, up to the end of its content, then pans the canvas.
+    h.ed.viewport = v2(1000.0, 800.0);
+    h.ed.camera = Default::default();
+    let over = v2(100.0, 100.0);
+    let pan = h.ed.camera.pan;
+    h.ed.handle(InputEvent::Scroll { delta: v2(0.0, 200.0), pos: over });
+    assert_eq!(h.ed.doc.get(ab).unwrap().scroll_y, 200.0);
+    assert_eq!(h.ed.doc.world_rect(kid).unwrap().y, -200.0, "the content moved up");
+    assert_eq!(h.ed.camera.pan, pan, "the canvas stayed");
+    h.ed.handle(InputEvent::Scroll { delta: v2(0.0, 1000.0), pos: over });
+    assert_eq!(h.ed.doc.get(ab).unwrap().scroll_y, 356.0, "stops at the end of the content");
+    h.ed.handle(InputEvent::Scroll { delta: v2(0.0, 50.0), pos: over });
+    assert_ne!(h.ed.camera.pan, pan, "past the end the canvas pans");
+    // overflow: auto from markup does the same; hidden turns it off.
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [key], "styles": {"overflow": "hidden"}}]}));
+    assert!(!h.ed.doc.get(ab).unwrap().scroll);
+}

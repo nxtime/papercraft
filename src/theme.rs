@@ -628,6 +628,8 @@ pub enum Icon {
     Restore,
     /// Present (play).
     Play,
+    /// A scrolling screen (vertical double arrow).
+    Scroll,
     Group,
     Pen,
     Polygon,
@@ -1181,6 +1183,11 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 start,
                 start + vec2(3.0 * u, 0.3 * u),
             ]);
+        }
+        Icon::Scroll => {
+            line(&[pt(8.0, 2.0), pt(8.0, 14.0)]);
+            line(&[pt(5.0, 5.0), pt(8.0, 2.0), pt(11.0, 5.0)]);
+            line(&[pt(5.0, 11.0), pt(8.0, 14.0), pt(11.0, 11.0)]);
         }
         Icon::Play => {
             // Lucide's play, with its corners softened like the stroked icons around it.

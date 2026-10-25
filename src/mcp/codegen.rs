@@ -312,7 +312,7 @@ fn tw_classes(doc: &Document, n: &Node, is_root: bool) -> String {
         tw_padding(l.padding, &mut c);
     }
     if matches!(n.kind, NodeKind::Frame { clip: true }) {
-        c.push("overflow-hidden".into());
+        c.push(if n.scroll { "overflow-y-auto" } else { "overflow-hidden" }.into());
     }
     match &n.kind {
         NodeKind::Text {

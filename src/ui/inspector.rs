@@ -1024,6 +1024,14 @@ fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
         .size(theme::SECONDARY)
         .color(theme::pal(ui).secondary),
     );
+    // Every screen on the page at once: fixed size, overflow scrolls.
+    let screens = ed.screens();
+    if !screens.is_empty() {
+        let mut all = screens.iter().all(|id| ed.doc.get(*id).is_some_and(|n| n.scroll));
+        if super::kit::checkbox(ui, &mut all, "Screens scroll").on_hover_text("Every screen on this page keeps its size and scrolls what overflows").changed() {
+            ed.set_scroll(&screens, all);
+        }
+    }
 }
 
 fn header(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
@@ -1306,6 +1314,10 @@ fn geometry(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         let mut c = clip;
         if super::kit::checkbox(ui, &mut c, "Clip content").changed() {
             apply(ed, "clip", ids, |n| n.kind = NodeKind::Frame { clip: c });
+        }
+        let mut s = first.scroll;
+        if super::kit::checkbox(ui, &mut s, "Scroll overflow").on_hover_text("Fixed height; the content past it scrolls with the wheel over the frame").changed() {
+            ed.set_scroll(ids, s);
         }
     }
 }

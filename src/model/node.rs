@@ -433,6 +433,13 @@ pub struct Node {
     /// (`set_code_link`, `apply_ui_kit`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<CodeLink>,
+    /// A frame of fixed size whose overflowing content scrolls (CSS `overflow: auto`): the
+    /// wheel over it on the canvas and in Present scrolls it instead of the canvas.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scroll: bool,
+    /// How far a [`Node::scroll`] frame is scrolled, in world units. A view state: not saved.
+    #[serde(skip)]
+    pub scroll_y: f64,
 }
 
 /// What a component is in code: its library, the import, and a usage template per target.
@@ -555,6 +562,8 @@ impl Node {
             bindings: BTreeMap::new(),
             component_key: None,
             code: None,
+            scroll: false,
+            scroll_y: 0.0,
         }
     }
 

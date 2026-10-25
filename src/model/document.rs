@@ -107,7 +107,8 @@ impl Document {
         let mut cur = parent;
         while let Some(id) = cur {
             let Some(n) = self.nodes.get(&id) else { break };
-            o = o + n.rect.min();
+            // A scrolled frame shifts its content up.
+            o = o + n.rect.min() - V2 { x: 0.0, y: n.scroll_y };
             cur = n.parent;
         }
         o

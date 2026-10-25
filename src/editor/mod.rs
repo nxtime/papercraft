@@ -560,6 +560,54 @@ impl Editor {
 
     // ------------------------------------------------------------------ queries
 
+    /// Make frames scrolling screens (fixed height, clipped, overflow scrolls) or plain again.
+    /// A screen that grew to fit its content (fit-content) goes back to its min height.
+    pub fn set_scroll(&mut self, ids: &[NodeId], on: bool) {
+        self.edit(if on { "Scroll screen" } else { "Stop scrolling" }, |tx| {
+            for id in ids {
+                let Some(n) = tx.node_mut(*id).filter(|n| n.is_frame()) else { continue };
+                n.scroll = on;
+                n.scroll_y = 0.0;
+                if on {
+                    n.kind = NodeKind::Frame { clip: true };
+                    if n.layout_child.sizing[1] != crate::model::Sizing::Fixed {
+                        n.layout_child.sizing[1] = crate::model::Sizing::Fixed;
+                        if let Some(h) = n.layout_child.min_size[1] {
+                            n.rect.h = h;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// The page's screens: its top-level frames.
+    pub fn screens(&self) -> Vec<NodeId> {
+        self.doc.root.iter().copied().filter(|id| self.doc.get(*id).is_some_and(|n| n.is_frame())).collect()
+    }
+
+    /// Scroll the innermost scrollable frame under `pos` (screen) by `dy` world units, when its
+    /// content overflows and it can still move that way. False: the canvas pans instead.
+    pub fn scroll_frame(&mut self, pos: V2, dy: f64) -> bool {
+        let world = self.screen_to_world(pos);
+        let hit = self
+            .doc
+            .nodes
+            .values()
+            .filter(|n| n.scroll && n.visible && dy != 0.0)
+            .filter(|n| self.doc.world_rect(n.id).is_some_and(|r| r.contains(world)))
+            .filter_map(|n| {
+                let max = scroll_range(&self.doc, n.id);
+                let next = (n.scroll_y + dy).clamp(0.0, max);
+                ((next - n.scroll_y).abs() > 1e-9).then(|| (self.doc.ancestors(n.id).len(), n.id, next))
+            })
+            .max_by_key(|(depth, ..)| *depth);
+        let Some((_, id, next)) = hit else { return false };
+        self.doc.nodes.get_mut(&id).unwrap().scroll_y = next;
+        self.doc_stamp = next_stamp();
+        true
+    }
+
     pub fn screen_to_world(&self, p: V2) -> V2 {
         self.camera.screen_to_world(p)
     }
@@ -731,7 +779,7 @@ impl Editor {
                 if self.mods.ctrl || self.mods.logo {
                     let factor = (-delta.y * ZOOM_PER_SCROLL_PX).exp();
                     self.camera.zoom_about(pos, self.camera.zoom * factor);
-                } else {
+                } else if !self.scroll_frame(pos, delta.y / self.camera.zoom) {
                     self.camera.pan_by_screen(-delta);
                 }
                 self.revision += 1;
@@ -2537,3 +2585,11 @@ fn dedup(mut v: Vec<NodeId>) -> Vec<NodeId> {
 
 #[cfg(test)]
 mod tests;
+
+/// How far a scrollable frame's content reaches past its bottom edge (0 when it fits).
+pub fn scroll_range(doc: &crate::model::Document, id: NodeId) -> f64 {
+    let Some(n) = doc.get(id) else { return 0.0 };
+    let pad = n.layout.map_or(0.0, |l| l.padding[2]);
+    let bottom = n.children.iter().filter_map(|c| doc.get(*c)).filter(|c| c.visible).map(|c| c.rect.bottom()).fold(0.0, f64::max);
+    (bottom + pad - n.rect.h).max(0.0)
+}

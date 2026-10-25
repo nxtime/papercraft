@@ -991,6 +991,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     status(ui.ctx(), ed, canvas);
     review_overlay(ui.ctx(), ed, st, canvas);
     chat::follow(ed, &mut st.chat);
+    if !st.present {
+        screen_scroll_toggles(ui.ctx(), ed, canvas);
+    }
     agent_overlay(ui.ctx(), ed, st, canvas);
     annotations_canvas::draw(ui.ctx(), ed, &mut st.annotations, &mut st.selected_annotation, canvas);
     run_toast(ui.ctx(), st, canvas);
@@ -2136,6 +2139,43 @@ fn review_overlay(ctx: &egui::Context, ed: &Editor, st: &UiState, canvas: egui::
                 painter.galley(tag.min + egui::vec2(8.0, 3.0), galley, p.warning);
             }
         });
+}
+
+/// Narrowest screen (on screen, px) that gets its scroll toggle.
+const SCROLL_TOGGLE_MIN_W: f64 = 120.0;
+const SCROLL_TOGGLE: f32 = 18.0;
+
+/// Beside each screen's name: a toggle that makes it scroll what overflows (fixed size). Shown
+/// on screens that scroll or overflow, and on the one under the pointer.
+fn screen_scroll_toggles(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
+    let hover = ctx.pointer_hover_pos().map(|p| ed.screen_to_world(crate::geom::v2(f64::from(p.x - canvas.min.x), f64::from(p.y - canvas.min.y))));
+    let mut toggle = None;
+    for (id, label) in ed.frame_labels() {
+        let Some(n) = ed.doc.get(id) else { continue };
+        let Some(wr) = ed.doc.world_rect(id) else { continue };
+        let sr = ed.camera.world_rect_to_screen(&wr);
+        if sr.w < SCROLL_TOGGLE_MIN_W {
+            continue;
+        }
+        let overflows = crate::editor::scroll_range(&ed.doc, id) > 0.0;
+        if !n.scroll && !overflows && !hover.is_some_and(|p| wr.contains(p)) {
+            continue;
+        }
+        let at = canvas.min + egui::vec2((sr.x + sr.w) as f32 - SCROLL_TOGGLE, label.y as f32);
+        let on = n.scroll;
+        egui::Area::new(egui::Id::new(("screen-scroll", id)))
+            .order(egui::Order::Middle)
+            .fixed_pos(at)
+            .show(ctx, |ui| {
+                let tip = if on { "Scrolls what overflows: click for a plain frame" } else if overflows { "Content overflows: click to keep the size and scroll it" } else { "Keep this screen's size and scroll what overflows" };
+                if theme::icon_button(ui, Icon::Scroll, SCROLL_TOGGLE, on).on_hover_text(tip).clicked() {
+                    toggle = Some((id, !on));
+                }
+            });
+    }
+    if let Some((id, on)) = toggle {
+        ed.set_scroll(&[id], on);
+    }
 }
 
 const AGENT_OUTLINE: f32 = 2.0;

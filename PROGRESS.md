@@ -76,6 +76,12 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-25: unreleased (scrolling screens)
+
+* Screens keep their size and scroll what overflows: a frame's `scroll` flag (CSS `overflow: auto|scroll`, `overflow-y-auto` in the Tailwind export) makes it fixed height and clipped, and the wheel over it scrolls its content on the canvas and in Present, then pans once the content ends. The offset is view state, not saved; hit-testing and overlays follow it.
+* Toggles: a scroll button beside each screen's name (shown when it scrolls, overflows, or is hovered), Scroll overflow on a selected frame, and Screens scroll on the page for every screen at once. A fit-content screen that grew goes back to its min height.
+* Agents are told to keep screens at their size and use overflow:auto for long content.
+
 ### 2026-10-25: unreleased (fixes #19, #20, #21)
 
 * #19: a clipping frame draws its border after its children, so filled rows no longer hide it. Clipping stays rectangular: children's square corners still show past a rounded border.

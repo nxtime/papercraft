@@ -232,7 +232,7 @@ impl SceneCache {
         {
             return;
         }
-        let o = wr.min();
+        let o = wr.min() - crate::geom::v2(0.0, n.scroll_y);
         for c in &n.children {
             self.walk(doc, *c, o, child_clip, opacity, bucket, tess, cull, out);
         }
