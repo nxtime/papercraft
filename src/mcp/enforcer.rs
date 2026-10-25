@@ -125,7 +125,28 @@ fn web_var_referenced(code: &str, var_name: &str) -> bool {
     let outside = strip_token_declaration_blocks(code);
     let css_var = format!("--{var_name}");
     let tw_color_var = format!("--color-{var_name}");
-    outside.contains(&css_var) || outside.contains(&tw_color_var)
+    outside.contains(&css_var) || outside.contains(&tw_color_var) || tailwind_utility_references(&outside, var_name)
+}
+
+/// `bg-primary`, `text-muted-foreground/80`, `hover:border-ring`: Tailwind v4 utilities generated
+/// from `@theme` colour tokens reference the variable without spelling `--name`. A hit needs a
+/// utility prefix letter before `-name` and no identifier char after it (`bg-primary-foreground`
+/// is not a reference to `primary`).
+fn tailwind_utility_references(code: &str, var_name: &str) -> bool {
+    let needle = format!("-{var_name}");
+    let bytes = code.as_bytes();
+    let mut from = 0;
+    while let Some(pos) = code[from..].find(&needle) {
+        let start = from + pos;
+        let end = start + needle.len();
+        let before_ok = start > 0 && bytes[start - 1].is_ascii_alphabetic();
+        let after_ok = end >= bytes.len() || !(bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-' || bytes[end] == b'_');
+        if before_ok && after_ok {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 fn count_web_absolute(code: &str) -> usize {
@@ -743,5 +764,22 @@ mod tests {
         assert!(rules.contains(&"missing-layout"), "{rules:?}");
         assert!(rules.contains(&"missing-component"), "{rules:?}");
         assert!(rules.contains(&"spacing-drift"), "{rules:?}");
+    }
+}
+
+#[cfg(test)]
+mod tailwind_reference_tests {
+    use super::*;
+
+    #[test]
+    fn tailwind_v4_utilities_count_as_variable_references() {
+        assert!(web_var_referenced(r#"<div className="bg-background text-foreground">"#, "background"));
+        assert!(web_var_referenced(r#"className="hover:text-muted-foreground/80""#, "muted-foreground"));
+        assert!(web_var_referenced(r#"className="border-ring""#, "ring"));
+        // `bg-primary-foreground` references primary-foreground, not primary.
+        assert!(!web_var_referenced(r#"className="bg-primary-foreground""#, "primary"));
+        // A word that merely ends with the name is not a utility.
+        assert!(!web_var_referenced("const x = 'anything-ring_'", "ring"));
+        assert!(web_var_referenced("style={{ color: 'var(--primary)' }}", "primary"));
     }
 }
