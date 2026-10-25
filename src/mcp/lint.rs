@@ -254,6 +254,15 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
                 e.0 += 1;
             }
         }
+        // Borders too: a theme change must reach them like it reaches fills.
+        if let Some(name) = hard_stroke(n, &vars) {
+            add(
+                "hard-coded-color",
+                "warning",
+                format!("border {} is the value of --{name}", n.style.stroke.unwrap().to_hex()),
+                format!("bind_variable {{field:\"stroke\", variable:\"{name}\"}} so a theme change reaches it"),
+            );
+        }
     }
     for (hex, (count, first)) in literal {
         out.push(Issue {
@@ -307,6 +316,15 @@ fn same_shape(a: &Document, ia: NodeId, b: &Document, ib: NodeId) -> bool {
 pub fn component_mains(ed: &crate::editor::Editor) -> Vec<(&Document, NodeId)> {
     let docs = (0..ed.pages.len()).map(|p| ed.page_doc(p)).chain(ed.library_docs.values());
     docs.flat_map(|d| d.nodes.values().filter(|n| n.component).map(move |n| (d, n.id))).collect()
+}
+
+/// The color variable an unbound, opaque border's colour equals.
+fn hard_stroke(n: &Node, vars: &BTreeMap<String, Color>) -> Option<String> {
+    let s = n.style.stroke.filter(|s| s.a == 255 && n.style.stroke_width > 0.0)?;
+    if n.bindings.contains_key("stroke") {
+        return None;
+    }
+    vars.iter().find(|(_, v)| **v == s).map(|(name, _)| name.clone())
 }
 
 /// Name prefix of a layer placed with `<x-paper-icon>` (`Icon / lucide:check`).
@@ -404,6 +422,10 @@ pub fn autofix_node(tx: &mut crate::history::Tx, id: NodeId, scale: &[f64]) -> b
         }
     }
 
+    // Hard-coded borders that equal a color variable get bound to it.
+    let stroke_var = hard_stroke(&n, &vars);
+    changed |= stroke_var.is_some();
+
     // 3. Snap text size to >= 12px and nearest type-scale value.
     let mut new_kind = n.kind.clone();
     if let crate::model::NodeKind::Text { font_size, .. } = &mut new_kind {
@@ -443,6 +465,9 @@ pub fn autofix_node(tx: &mut crate::history::Tx, id: NodeId, scale: &[f64]) -> b
     }
 
     if changed && let Some(m) = tx.node_mut(id) {
+        if let Some(v) = stroke_var {
+            m.bindings.insert("stroke".into(), v);
+        }
         m.layout = new_layout;
         m.style.fills = new_fills;
         m.kind = new_kind;

@@ -286,3 +286,19 @@ fn an_svg_viewbox_is_fitted_to_its_width_and_height() {
         assert!(r.x >= frame.x - 1.5 && r.x + r.w <= frame.x + frame.w + 1.5, "artwork {r:?} stays inside {frame:?}");
     }
 }
+
+#[test]
+fn lint_binds_hard_coded_borders_so_dark_mode_reaches_them() {
+    // Issue #18.
+    let mut h = host();
+    call(&mut h, "set_variables", json!({"mode": "Light", "variables": {"border": "#e2e6df"}}));
+    call(&mut h, "set_variables", json!({"mode": "Dark", "variables": {"border": "#26302b"}}));
+    let ab = call(&mut h, "create_artboard", json!({"name": "A", "styles": {"width": "200px", "height": "100px", "display": "flex"}}));
+    let d = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"border:1px solid #e2e6df;width:100px;height:40px\"></div>"}))["createdNodeIds"][0].clone();
+    let r = call(&mut h, "lint_design", json!({}));
+    assert!(r["issues"].as_array().unwrap().iter().any(|i| i["rule"] == "hard-coded-color" && i["node"] == d), "{r}");
+    call(&mut h, "lint_design", json!({"fix": true}));
+    call(&mut h, "set_variable_mode", json!({"mode": "Dark"}));
+    let s = h.ed.doc.get(num(&d)).unwrap().style.stroke.unwrap();
+    assert_eq!(s.to_hex(), "#26302b");
+}
