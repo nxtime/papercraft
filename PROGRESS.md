@@ -81,6 +81,11 @@ are credited in `THIRD_PARTY.md`.
 * QA sub-agent: Claude Code chats always get a Sonnet `qa` agent that lints and screenshots built frames and returns only findings, so screenshots stay out of the main context.
 * Helper agents (`src/mcp/delegate.rs`, Settings, Chat, Helper): `delegate` hands `qa`, `read` or `build` tasks to a cheaper agent CLI (pi with MiniMax M3.1 Flash, opencode, an Ollama-backed agent, any command taking `{prompt}`). It drives PaperCraft through `papercraft-cli`, runs off the UI thread, and only its last 6,000 characters come back. With a helper set, the chat agent orchestrates: keeps the brief and taste, delegates review, bulk reading and fully specified edits.
 
+### 2026-10-24: unreleased (auto mode, Present icon)
+
+* Auto mode (the composer's Auto chip): when a turn ends on `ask_user` questions, the first (recommended) option of each is sent and the chat goes on, until Stop or a turn hits its budget. The agent is told to put its recommendation first, default what only the user can know, and end each turn with next steps.
+* The Present button uses a play icon drawn like the icons beside it; the composer's Enter hint hides when the chips need the room.
+
 ### 2026-10-24: unreleased (add to a running turn)
 
 * While a chat turn works, the composer's Add (or Enter) queues a message (`src/mcp/steer.rs`). It rides on the agent's next PaperCraft tool result for that chat, so every backend reads it mid-turn; the composer shows each as Waiting or Seen. What no tool call picked up is sent as the next message when the turn ends, or goes back into the box after Stop.

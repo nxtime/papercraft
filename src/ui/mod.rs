@@ -1153,7 +1153,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             {
                 st.updater.open = true;
             }
-            if kit::play_button(ui, "Present").clicked() {
+            if theme::icon_button(ui, theme::Icon::Play, 26.0, false).on_hover_text("Present").clicked() {
                 start_present(ed, st);
             }
             if st.chat_mode

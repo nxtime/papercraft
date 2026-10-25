@@ -1097,6 +1097,16 @@ fn question_card(ui: &mut Ui, t: &ToolCall, open: bool, acts: &mut Acts) {
     ui.data_mut(|d| d.insert_temp(id, picks));
 }
 
+/// Auto mode's reply when the chat's last message ends on questions: every question answered
+/// with its first (recommended) option.
+pub(crate) fn auto_answers(messages: &[crate::chat::Message]) -> Option<String> {
+    let last = messages.last().filter(|m| m.role == crate::chat::Role::Assistant)?;
+    let t = last.tools.iter().rev().find(|t| is_question(t))?;
+    let qs = t.args["questions"].as_array()?;
+    let picks: Vec<Vec<usize>> = qs.iter().map(|q| if q["options"].as_array().is_some_and(|o| !o.is_empty()) { vec![0] } else { vec![] }).collect();
+    Some(format!("{}\n\n(Auto mode: your recommended answers were taken. Go on.)", answers_text(qs, &picks)))
+}
+
 /// "Answers:" then one line per question; one left unpicked is the agent's call.
 fn answers_text(qs: &[Value], picks: &[Vec<usize>]) -> String {
     let lines = qs.iter().zip(picks).map(|(q, pick)| {
@@ -1472,6 +1482,20 @@ mod tests {
         t.error = None;
         t.result = Some(json!([]));
         assert_eq!(tool_state(&t, true, &[]), ToolState::Done);
+    }
+
+    #[test]
+    fn auto_mode_takes_the_first_option_of_the_last_questions() {
+        use crate::chat::{Message, Role, ToolCall};
+        let ask = ToolCall { id: "a".into(), name: ASK_TOOL.into(), args: serde_json::json!({"questions": [
+            {"question": "Density?", "options": [{"label": "Compact"}, {"label": "Touch"}]},
+            {"question": "Next?", "options": [{"label": "Mobile layout"}]}]}), ..Default::default() };
+        let mut msgs = vec![Message { role: Role::Assistant, tools: vec![ask], ..Default::default() }];
+        let a = auto_answers(&msgs).unwrap();
+        assert!(a.contains("Density? Compact") && a.contains("Next? Mobile layout"), "{a}");
+        msgs.push(Message { role: Role::User, text: "hi".into(), ..Default::default() });
+        assert_eq!(auto_answers(&msgs), None, "already answered");
+        assert_eq!(auto_answers(&[Message { role: Role::Assistant, text: "done".into(), ..Default::default() }]), None);
     }
 
     #[test]

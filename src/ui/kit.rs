@@ -609,21 +609,6 @@ pub fn history_button(ui: &mut Ui, redo: bool, enabled: bool) -> Response {
     resp.unwrap_or_else(|| ui.label(""))
 }
 
-/// Play triangle button (Present).
-pub fn play_button(ui: &mut Ui, tip: &str) -> Response {
-    draw_button(ui, tip, 26.0, true, |ui, rect, tint| {
-        let c = rect.center();
-        let r = rect.width() * 0.46;
-        let pts = vec![
-            c + vec2(-r * 0.6, -r),
-            c + vec2(r, 0.0),
-            c + vec2(-r * 0.6, r),
-        ];
-        ui.painter()
-            .add(egui::Shape::closed_line(pts, Stroke::new(1.6, tint)));
-    })
-}
-
 /// Height of [`segmented`].
 pub const SEGMENTED_H: f32 = 28.0;
 

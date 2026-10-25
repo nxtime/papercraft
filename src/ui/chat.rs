@@ -55,8 +55,14 @@ const RESEARCH_LINE: &str = "[Research] Web research is on";
 /// Added when the design-playbook CLI is installed: the agent reaches it through `design_rules`.
 const PLAYBOOK_RULE: &str = "\n\nDesign playbook: the design-playbook rules are available through design_rules. Add a seventh question to the brief: follow the playbook (recommended) or not. If yes, before building look up the rules for what you design (for example the screen's patterns, forms, states, accessibility, motion) with one or two design_rules calls, follow them, and cite the rule ids you applied in the finish report. Thresholds (contrast, target sizes, durations) come from the playbook, not memory.";
 
+/// Added in auto mode: nobody is there to answer, the first option of every question is taken.
+const AUTO_RULE: &str = "\n\nAuto mode is on: the user is away. Every ask_user call is answered at once with the first option of each question, so always put the option you recommend first, and never ask for what only the user can know (brand assets, real data, credentials): choose a sensible default and say which. End every turn with ask_user next steps, so the work goes on.";
+
 /// Added when the user set up a helper agent (Settings, Chat, Helper): the chat agent orchestrates.
 const HELPER_RULE: &str = "\n\nHelper. A helper agent on a cheaper model is available through delegate; you orchestrate. Keep the brief, design decisions and anything that needs taste. Hand it: qa after each built screen; read when the work needs many pages, frames, specs or references read (it returns key points; do not reread what it read); build for repetitive or fully specified edits (the same row in ten places, filling a table, applying given markup), with the variables, components and exact structure written into the task. It does not see this chat, so each task is self-contained. Check a build with one narrow read or a qa pass, not by redoing it.";
+
+/// Room the composer keeps between its chips and the Enter hint before dropping the hint.
+const HINT_ROOM: f32 = 8.0;
 
 /// Characters of an added message shown in the composer's queue.
 const ADDED_PREVIEW: usize = 80;
@@ -722,7 +728,17 @@ impl ChatState {
             self.stop();
         }
         if done {
+            let turn = self.turn_chat.clone();
             self.finish_turn();
+            // Auto mode: questions the turn ended on get the recommended answers, and it goes on.
+            if self.followup.is_none()
+                && self.prefs.auto
+                && !self.stopped
+                && !self.budget_hit
+                && let Some(chat) = self.chat.as_ref().filter(|c| turn.as_deref() == Some(c.id.as_str()))
+            {
+                self.followup = chat_msgs::auto_answers(&chat.messages);
+            }
             if let Some(f) = self.followup.take() {
                 let _ = self.send(ctx, &f);
             }
@@ -776,11 +792,12 @@ impl ChatState {
         let art = if self.prefs.image_provider() == crate::mcp::imagegen::Provider::Off { "" } else { ART_RULE };
         let playbook = if crate::chat::path::which("playbook").is_some() { PLAYBOOK_RULE } else { "" };
         let helper = if self.prefs.helper_command.trim().is_empty() { "" } else { HELPER_RULE };
+        let auto = if self.prefs.auto { AUTO_RULE } else { "" };
         // Plugins the user turned on, one usage line each.
         let on: Vec<&str> = crate::plugins::PLUGINS.iter().filter(|p| self.prefs.plugins.iter().any(|id| id == p.id)).map(|p| p.hint).collect();
         let plugins = if on.is_empty() { String::new() } else { format!("\n\nPlugins on, placed inside write_html (prefer them to drawn placeholders: avatars for people, real icons):\n- {}", on.join("\n- ")) };
         format!(
-            "{skill}\n\n{CHAT_RULES}{art}{playbook}{helper}{plugins}\n\nProject context: the open project is \"{}\" (folder {dir}). Read and edit it only through the papercraft tools.",
+            "{skill}\n\n{CHAT_RULES}{art}{playbook}{helper}{auto}{plugins}\n\nProject context: the open project is \"{}\" (folder {dir}). Read and edit it only through the papercraft tools.",
             self.project_name
         )
     }
@@ -2004,6 +2021,11 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
                 st.settings.chat.research = !st.settings.chat.research;
                 st.settings.chat.save();
             }
+            let tip = "Keep going on its own: questions get the recommended answer and the next step starts, until you press Stop or a turn hits its budget";
+            if kit::chip(ui, "Auto", st.settings.chat.auto).on_hover_text(tip).clicked() {
+                st.settings.chat.auto = !st.settings.chat.auto;
+                st.settings.chat.save();
+            }
             #[cfg(not(target_arch = "wasm32"))]
             if theme::icon_button(ui, Icon::Image, 24.0, false).on_hover_text("Attach an image (or paste, or drop one)").clicked()
                 && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"]).pick_file()
@@ -2029,7 +2051,12 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
                     ui.add_enabled_ui(can, |ui| {
                         submit = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::ArrowRight), "Send").clicked();
                     });
-                    ui.label(RichText::new("Enter sends \u{b7} Shift+Enter newline").size(theme::SECONDARY).color(p.tertiary));
+                    // The hint only where the chips leave room for it.
+                    let hint = RichText::new("Enter sends \u{b7} Shift+Enter newline").size(theme::SECONDARY).color(p.tertiary);
+                    let w = egui::WidgetText::from(hint.clone()).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body).size().x;
+                    if ui.available_width() > w + HINT_ROOM {
+                        ui.label(hint);
+                    }
                 }
             });
         });

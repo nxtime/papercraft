@@ -115,6 +115,9 @@ pub struct ChatPrefs {
     pub issue_repo: String,
     /// The helper agent `delegate` runs (`{prompt}`); empty: no helper, the chat agent does it all.
     pub helper_command: String,
+    /// Auto mode (the composer's Auto chip): a turn that ends on questions is answered with the
+    /// recommended options and the chat goes on, until Stop or the turn budget.
+    pub auto: bool,
 }
 
 impl Default for ChatPrefs {
@@ -139,6 +142,7 @@ impl Default for ChatPrefs {
             plugins: Vec::new(),
             issue_repo: ISSUE_REPO.into(),
             helper_command: String::new(),
+            auto: false,
         }
     }
 }
@@ -1310,6 +1314,7 @@ mod tests {
             plugins: vec!["avataaars".into()],
             issue_repo: "https://example.com/me/repo".into(),
             helper_command: "pi -p {prompt}".into(),
+            auto: true,
         };
         assert_eq!(ChatPrefs::from_json(&prefs.to_json()), prefs);
         assert_eq!(ChatPrefs::from_json(&ChatPrefs::default().to_json()), ChatPrefs::default());

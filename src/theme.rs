@@ -626,6 +626,8 @@ pub enum Icon {
     More,
     Page,
     Restore,
+    /// Present (play).
+    Play,
     Group,
     Pen,
     Polygon,
@@ -1179,6 +1181,13 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 start,
                 start + vec2(3.0 * u, 0.3 * u),
             ]);
+        }
+        Icon::Play => {
+            // Lucide's play, with its corners softened like the stroked icons around it.
+            closed(&[pt(4.5, 2.5), pt(13.0, 8.0), pt(4.5, 13.5)]);
+            for p in [pt(4.5, 2.5), pt(13.0, 8.0), pt(4.5, 13.5)] {
+                painter.circle_filled(p, w / 2.0, color);
+            }
         }
         Icon::Export => {
             line(&[
