@@ -79,6 +79,10 @@ pub enum Start {
 impl App {
     pub fn new(start: Start, store: Store) -> App {
         let ctx = egui::Context::default();
+        theme::set_material(theme::Material::load());
+        theme::set_roundness(theme::Roundness::load());
+        theme::set_ui_font(theme::load_ui_font());
+        theme::set_accent_choice(theme::load_accent_choice());
         theme::apply_choice(&ctx, theme::Choice::load());
         theme::apply_ui_scale(&ctx, theme::load_ui_scale(), false);
         let library = crate::library::Library::load(&crate::library::Library::path_in(&store.root));
@@ -100,6 +104,7 @@ impl App {
             runs: Default::default(),
         };
         app.st.library.library = library;
+        app.st.perf.prefs = crate::ui::perf::PerfPrefs::load();
         app.ed.clipboard_io = crate::io::clipboard::System::new()
             .map(|c| Box::new(c) as Box<dyn crate::io::clipboard::Provider>);
         match start {
@@ -732,6 +737,7 @@ impl App {
             self.st.chat.gpu = self.offscreen();
         }
         let Some(g) = self.gfx.as_mut() else { return };
+        let work = Instant::now();
         let input = g.egui.take_egui_input(&g.window);
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
         self.canvas = l.canvas;
@@ -782,6 +788,7 @@ impl App {
             &self.ed,
             !self.st.show_grid_off,
         );
+        self.st.perf.record(self.start.elapsed().as_secs_f64(), work.elapsed().as_secs_f32() * 1000.0);
         g.window.pre_present_notify();
         g.queue.present(frame);
 
@@ -1050,6 +1057,7 @@ impl ApplicationHandler<UserEvent> for App {
             Some(device.limits().max_texture_dimension_2d as usize),
         );
         window.request_redraw();
+        self.st.perf.gpu = format!("{} ({:?})", adapter_info.name, adapter_info.backend);
         self.gfx = Some(Gfx {
             window,
             surface,

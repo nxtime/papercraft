@@ -1052,6 +1052,9 @@ pub struct ShotRequest {
     /// Draw the notes on the captured roots (see [`with_notes`]).
     #[serde(default)]
     pub annotations: bool,
+    /// Render in this variable mode (see [`Editor::page_doc_in_mode`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 impl ShotRequest {
@@ -1106,16 +1109,23 @@ fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
         None => (def, ed.page_doc(def).root.clone()),
     };
     let annotations = a.bool("annotations").unwrap_or(false);
-    let noted = annotations.then(|| with_notes(ed.page_doc(page), &roots, &ed.design.categories()));
+    // `mode`: the page as it looks in that variable mode, without switching the document.
+    let moded = match a.str("mode").filter(|m| !m.is_empty()) {
+        Some(m) => Some(ed.page_doc_in_mode(page, m)?),
+        None => None,
+    };
+    let base = moded.as_ref().unwrap_or_else(|| ed.page_doc(page));
+    let noted = annotations.then(|| with_notes(base, &roots, &ed.design.categories()));
     let (doc, shot_roots) = match &noted {
         Some((d, r)) => (d, r),
-        None => (ed.page_doc(page), &roots),
+        None => (base, &roots),
     };
     let b = crate::io::svg::export_bounds(doc, shot_roots).ok_or("nothing to capture (empty)")?;
     let want = a.num("scale").unwrap_or(1.0).clamp(0.1, 4.0);
     let mut scale = want.min(SHOT_MAX_EDGE / b.w.max(b.h).max(1.0));
     let Some(gpu) = gpu else {
-        let req = ShotRequest { page, roots, scale, annotations };
+        let mode = a.str("mode").filter(|m| !m.is_empty()).map(str::to_owned);
+        let req = ShotRequest { page, roots, scale, annotations, mode };
         return Err(format!(
             "{NEEDS_RENDER}{}",
             serde_json::to_string(&req).map_err(|e| e.to_string())?

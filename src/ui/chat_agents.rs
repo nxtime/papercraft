@@ -2,6 +2,7 @@
 //! column. `group_agents`, `backend_for`, `current_pick` and `auth_error` are plain functions so
 //! they are tested without a frame; the drawing only calls them.
 
+use crate::theme::Surface as _;
 use super::{Detect, EndpointState};
 use crate::chat::agents::{self, AgentKind, AgentState};
 use crate::chat::{Backend, BackendKind};
@@ -272,6 +273,68 @@ pub struct PanelIn<'a> {
 enum Badge<'a> {
     Letter(&'a str),
     Icon(Icon),
+    /// A brand mark: an SVG drawn in `currentColor`, tinted with the row's ink.
+    Logo(&'static str, &'static [u8]),
+}
+
+/// The vendor's mark for an agent (LobeHub icons, MIT); agents without one keep their letter.
+fn logo(agent: &str) -> Option<(&'static str, &'static [u8])> {
+    macro_rules! svg {
+        ($f:literal) => {
+            ($f, include_bytes!(concat!("../../assets/agents/", $f, ".svg")).as_slice())
+        };
+    }
+    Some(match agent {
+        "claude-code" | "claude-acp" => svg!("claude"),
+        "codex" | "codex-acp" => svg!("openai"),
+        "gemini" => svg!("gemini"),
+        "cursor" => svg!("cursor"),
+        "goose" => svg!("goose"),
+        "kimi" => svg!("kimi"),
+        "vibe" => svg!("mistral"),
+        "hermes" => svg!("nousresearch"),
+        "qwen" => svg!("qwen"),
+        "cline" => svg!("cline"),
+        "copilot" => svg!("githubcopilot"),
+        "codebuddy" => svg!("tencent"),
+        _ => return None,
+    })
+}
+
+/// The mark of the agent behind `b`: its registry logo, Claude's for a Claude API endpoint.
+pub fn backend_logo(b: &Backend, prefs: &ChatPrefs) -> Option<(&'static str, &'static [u8])> {
+    match current_pick(b, prefs) {
+        Pick::Agent(id) => logo(&id),
+        Pick::Endpoint(id) => prefs.endpoint(Some(&id)).is_claude_host().then(|| logo("claude-code")).flatten(),
+    }
+}
+
+/// Paints `b`'s logo into `rect` tinted `ink`; false when it has none.
+pub fn paint_backend_logo(ui: &Ui, rect: Rect, b: &Backend, prefs: &ChatPrefs, ink: Color32) -> bool {
+    let Some((name, svg)) = backend_logo(b, prefs) else { return false };
+    let Some(t) = logo_texture(ui.ctx(), name, svg) else { return false };
+    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    ui.painter().image(t.id(), rect, uv, ink);
+    true
+}
+
+/// Pixels a logo is rasterised at (white, so the tint gives its colour).
+const LOGO_PX: u32 = 64;
+
+fn logo_texture(ctx: &egui::Context, name: &str, svg: &[u8]) -> Option<egui::TextureHandle> {
+    let id = Id::new(("agent-logo", name));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(t);
+    }
+    let svg = std::str::from_utf8(svg).ok()?.replace("currentColor", "#fff");
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
+    let scale = LOGO_PX as f32 / tree.size().width().max(tree.size().height());
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(LOGO_PX, LOGO_PX)?;
+    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    let img = egui::ColorImage::from_rgba_premultiplied([LOGO_PX as usize; 2], pixmap.data());
+    let t = ctx.load_texture(format!("agent-logo-{name}"), img, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    Some(t)
 }
 
 struct Spec<'a> {
@@ -292,18 +355,24 @@ fn shell(ui: &mut Ui, s: &Spec) -> (Rect, bool) {
     let resp = ui.interact(rect, s.id, Sense::click());
     let hover = s.click && resp.hovered();
     if let Some(f) = s.fill.or(hover.then_some(p.hover)) {
-        ui.painter().rect_filled(rect, theme::RADIUS_LG, f);
+        ui.painter().rect_filled(rect, theme::radius_lg(), f);
     }
     if hover {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let badge = Rect::from_min_size(pos2(rect.left() + PAD, rect.center().y - BADGE / 2.0), vec2(BADGE, BADGE));
-    ui.painter().rect_filled(badge, theme::RADIUS_LG, p.field);
+    theme::fill_control(ui, badge, theme::radius_lg(), p.field);
     match s.badge {
         Badge::Letter(l) => {
             ui.painter().text(badge.center(), egui::Align2::CENTER_CENTER, l, theme::semibold(theme::BODY), s.ink);
         }
         Badge::Icon(i) => theme::paint_icon(ui.painter(), badge.shrink(7.0), i, s.ink),
+        Badge::Logo(name, svg) => {
+            if let Some(t) = logo_texture(ui.ctx(), name, svg) {
+                let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                ui.painter().image(t.id(), badge.shrink(7.0), uv, s.ink);
+            }
+        }
     }
     let x = badge.right() + PAD + 2.0;
     let text = ui.painter().with_clip_rect(Rect::from_min_max(rect.min, pos2(rect.right() - RIGHT_W, rect.bottom())));
@@ -345,7 +414,10 @@ fn agent_row(ui: &mut Ui, scope: &str, r: &Row, selected: bool, focused: bool) -
     let letter = r.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
     let spec = Spec {
         id,
-        badge: Badge::Letter(&letter),
+        badge: match &r.pick {
+            Pick::Agent(a) => logo(a).map_or(Badge::Letter(&letter), |(n, svg)| Badge::Logo(n, svg)),
+            Pick::Endpoint(_) => Badge::Letter(&letter),
+        },
         name: &r.name,
         version: &r.version,
         // A missing agent's sub line is drawn below, with its links.
@@ -412,11 +484,11 @@ fn nav_row(ui: &mut Ui, scope: &str, icon: Icon, name: &str, sub: &str, card: bo
 
 enum Fold {
     None,
-    Action(&'static str),
+    Action(Icon),
     Open(bool),
 }
 
-/// "DETECTED  7" with an action ("Add") or a fold chevron on the right. True when clicked.
+/// "DETECTED  7" with an action (a + icon) or a fold chevron on the right. True when clicked.
 fn section(ui: &mut Ui, title: &str, count: Option<usize>, fold: Fold) -> bool {
     let p = theme::pal(ui);
     ui.add_space(6.0);
@@ -434,8 +506,8 @@ fn section(ui: &mut Ui, title: &str, count: Option<usize>, fold: Fold) -> bool {
                 ui.painter().text(pos2(edge, rect.center().y), egui::Align2::RIGHT_CENTER, n.to_string(), font, p.tertiary);
             }
         }
-        Fold::Action(t) => {
-            ui.painter().text(pos2(edge, rect.center().y), egui::Align2::RIGHT_CENTER, t, font, theme::accent());
+        Fold::Action(icon) => {
+            theme::paint_icon(ui.painter(), Rect::from_center_size(pos2(edge - 7.0, rect.center().y), vec2(14.0, 14.0)), icon, theme::accent());
         }
         Fold::Open(open) => {
             let icon = if open { Icon::ChevronDown } else { Icon::ChevronRight };
@@ -475,7 +547,7 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
     // Dimmed backdrop over the column: a click outside the panel closes it.
     egui::Area::new("chat-agent-backdrop".into()).order(egui::Order::Foreground).fade_in(false).fixed_pos(i.column.min).show(ctx, |ui| {
         let (r, resp) = ui.allocate_exact_size(i.column.size(), Sense::click());
-        ui.painter().rect_filled(r, theme::RADIUS_PANEL, Color32::from_black_alpha(BACKDROP_ALPHA));
+        ui.painter().rect_filled(r, theme::radius_panel(), Color32::from_black_alpha(BACKDROP_ALPHA));
         if resp.clicked() {
             act = Some(Act::Close);
         }
@@ -488,10 +560,10 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
         egui::Frame::new()
             .fill(p.popover)
             .stroke(egui::Stroke::new(1.0, p.separator))
-            .corner_radius(theme::RADIUS_PANEL)
+            .corner_radius(theme::radius_panel())
             .inner_margin(PANEL_PAD)
             .shadow(egui::Shadow { offset: [0, 12], blur: SHADOW_BLUR, spread: 0, color: Color32::from_black_alpha(SHADOW_ALPHA) })
-            .show(ui, |ui| {
+            .show_surface(ui, |ui| {
                 ui.set_width(i.column.width() - 2.0 * PANEL_PAD);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.horizontal(|ui| {
@@ -503,7 +575,7 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
                     });
                 });
                 ui.add_space(4.0);
-                let search = ui.add(egui::TextEdit::singleline(&mut ps.query).hint_text("Search agents").margin(theme::INPUT_MARGIN).desired_width(f32::INFINITY));
+                let search = kit::icon_field(ui, Icon::Search, &mut ps.query, "Search agents");
                 if std::mem::take(&mut ps.fresh) {
                     search.request_focus();
                 }
@@ -529,7 +601,7 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
                     if !g.missing.is_empty() && ps.missing_open {
                         draw_rows(ui, &g.missing, &selected, ps.sel, &mut n, i.running, &mut act);
                     }
-                    if !g.endpoints.is_empty() && section(ui, "API endpoints", None, Fold::Action("Add")) {
+                    if !g.endpoints.is_empty() && section(ui, "API endpoints", None, Fold::Action(Icon::Plus)) {
                         act = Some(Act::Settings);
                     }
                     draw_rows(ui, &g.endpoints, &selected, ps.sel, &mut n, i.running, &mut act);
@@ -611,7 +683,7 @@ pub fn setup(ui: &mut Ui, d: &Detect, prefs: &ChatPrefs) -> Option<Act> {
     let ready: Vec<&Row> = g.detected.iter().chain(g.custom.iter().filter(|r| r.is_selectable())).collect();
     let mut act = None;
     ui.add_space(ui.available_height() * 0.04);
-    egui::Frame::new().fill(p.popover).corner_radius(theme::RADIUS_PANEL).inner_margin(PANEL_PAD).show(ui, |ui| {
+    egui::Frame::new().fill(p.popover).corner_radius(theme::radius_panel()).inner_margin(PANEL_PAD).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 4.0;
         kit::badge(ui, Icon::Laser, theme::accent(), 40.0);

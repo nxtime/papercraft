@@ -121,12 +121,13 @@ impl UpdaterUi {
         let mut installer = None;
         let frame = egui::Frame::new()
             .fill(theme::pal_from_ctx(ctx).sidebar)
-            .corner_radius(24.0)
+            .corner_radius(crate::theme::r(24.0))
             .inner_margin(24.0);
         let modal = egui::Modal::new(egui::Id::new("updater-modal"))
             .frame(frame)
             .show(ctx, |ui| {
                 ui.multiply_opacity(t);
+                theme::modal_backing(ui, theme::pal(ui).sidebar, theme::ru(24));
                 ui.set_width(WINDOW_WIDTH);
                 ui.spacing_mut().item_spacing.y = 10.0;
                 let p = theme::pal(ui);
@@ -171,10 +172,10 @@ impl UpdaterUi {
                     State::Downloading { received, total } => {
                         let progress = if *total > 0 { *received as f32 / *total as f32 } else { 0.0 };
                         let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
-                        ui.painter().rect_filled(r, 4.0, p.field);
+                        ui.painter().rect_filled(r, crate::theme::r(4.0), p.field);
                         let mut fill = r;
                         fill.set_width(r.width() * progress.clamp(0.0, 1.0));
-                        ui.painter().rect_filled(fill, 4.0, theme::accent());
+                        ui.painter().rect_filled(fill, crate::theme::r(4.0), theme::accent());
                         ui.label(egui::RichText::new(format!("Downloaded {received} of {total} bytes")).size(theme::SECONDARY).color(p.secondary));
                     }
                     State::Ready(_) => {}

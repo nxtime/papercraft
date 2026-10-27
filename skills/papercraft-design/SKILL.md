@@ -33,7 +33,7 @@ Allowed spacing values: **4, 8, 12, 16, 24, 32, 48, 64** (and 96 for page sectio
 ## 2. Tokens first (variables)
 
 * All colors are variables (`var(--name)`), named by role: `bg`, `surface`, `border`, `text`, `text-muted`, `accent`, `on-accent`, `success`, `warning`, `danger`. Two to three surface levels at most (`bg` < `surface` < `surface-2`).
-* Define at least two modes if the product may be dark or light (`set_variables` with `mode`), and check both: lint contrast in each mode after `set_variable_mode`.
+* Define at least two modes if the product may be dark or light (`set_variables` with `mode`), and check both: lint contrast in each mode after `set_variable_mode`, or look with `get_screenshot {mode}` without switching. Themes are modes, never copies: one artboard per screen, never a light and a dark duplicate (`lint_design` flags them as `theme-copy`).
 * Semantic colors carry meaning only: red means error or destructive, green means success. Do not use them decoratively.
 * If a color you need is not a variable, add the variable, then use it. `lint_design` reports hard-coded colors that equal a variable.
 * Spacing, radius and type sizes are number variables (`space/md`, `radius/sm`, `font/body`): define them once, in a collection of their own, and bind fields with `bind_variable`. Keep the values on the lists in this skill. Group names with `/` and alias semantic names to base ones (`color/button/bg` to `color/brand/primary`).

@@ -196,7 +196,7 @@ main() {
     done
     echo "==> keeping the current app as $(basename "$backup")"
     # Only the newest previous bundle is kept; a day of installs once left twelve.
-    ls -dt "$dest_dir/$dest_base".backup-* 2>/dev/null | tail -n +2 | while read -r old; do rm -rf "$old"; done
+    ls -dt "$dest_dir/$dest_base".backup-* 2>/dev/null | tail -n +2 | while read -r old; do rm -rf "$old"; done || true
     mv "$dest" "$backup"
   fi
   swapped=1

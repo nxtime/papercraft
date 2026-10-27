@@ -151,6 +151,21 @@ fn compact_spec_is_one_line_per_node_with_tokens_and_no_reference_code() {
 }
 
 #[test]
+fn compact_spec_writes_a_bound_stroke_as_its_variable() {
+    let mut h = host();
+    call(&mut h, "set_variables", json!({"variables": {"border": "#e2e6df"}}));
+    let board = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Card", "styles": {"width": "200px", "height": "100px", "border": "1px solid #e2e6df"}}),
+    );
+    call(&mut h, "bind_variable", json!({"nodeIds": [board["id"]], "field": "stroke", "variable": "border"}));
+    let compact = call(&mut h, "get_design_spec", json!({"nodeId": board["id"], "format": "compact"}));
+    let text = compact.as_str().expect("compact is text");
+    assert!(text.contains("border=--border/1"), "{text}");
+}
+
+#[test]
 fn inventory_lists_screens_by_size_class_and_open_questions() {
     let mut h = host();
     let phone = call(&mut h, "create_artboard", json!({"name": "Home", "styles": {"width": "390px", "height": "844px"}}));
@@ -210,4 +225,38 @@ fn vector_svg_in_the_spec_starts_at_the_origin() {
         vector["svgBounds"]["width"].as_f64().unwrap()
             >= vector["bounds"]["width"].as_f64().unwrap()
     );
+}
+
+#[test]
+fn theme_copies_are_flagged_and_a_mode_previews_without_switching() {
+    let mut h = host();
+    call(&mut h, "set_variables", json!({"mode": "Light", "variables": {"bg": "#ffffff"}}));
+    call(&mut h, "set_variables", json!({"mode": "Dark", "variables": {"bg": "#111111"}}));
+    let board = |h: &mut exec::SessionHost, name: &str, x: u32, bg: &str| {
+        let b = call(h, "create_artboard", json!({"name": name, "styles": {"width": "200px", "height": "100px", "left": format!("{x}px"), "backgroundColor": bg}}));
+        call(h, "write_html", json!({"targetNodeId": b["id"], "mode": "insert-children", "html": "<div layer-name=\"Title\" style=\"font-size:16px\">Hi</div>"}));
+        b
+    };
+    let a = board(&mut h, "Home", 0, "var(--bg)");
+    let b = board(&mut h, "Home copy", 400, "#222222");
+    let issues = |h: &mut exec::SessionHost, b: &Value| call(h, "lint_design", json!({"nodeId": b["id"]}));
+    let lint = issues(&mut h, &b).to_string();
+    assert!(lint.contains("theme-copy"), "same layers, other colours: {lint}");
+    let named = board(&mut h, "Home / Dark", 800, "var(--bg)");
+    assert!(issues(&mut h, &named).to_string().contains("theme-copy"), "name differs by a theme word");
+    let other = call(&mut h, "create_artboard", json!({"name": "Settings", "styles": {"width": "200px", "height": "100px", "left": "1200px", "backgroundColor": "#222222"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": other["id"], "mode": "insert-children", "html": "<div layer-name=\"Title\" style=\"font-size:16px\">Account</div>"}));
+    let lo = issues(&mut h, &other).to_string(); assert!(!lo.contains("theme-copy"), "a different screen is not a copy: {lo}");
+
+    // Preview Dark while the document stays Light.
+    let page = h.ed.active_page;
+    let before = h.ed.page_doc(page).clone();
+    let dark = h.ed.page_doc_in_mode(page, "Dark").unwrap();
+    let id = a["id"].as_str().unwrap();
+    let fill = |d: &papercraft::model::Document| {
+        let n = d.nodes.values().find(|n| n.name == "Home").unwrap();
+        n.style.fills.last().unwrap().preview_color().to_hex()
+    };
+    assert_eq!(fill(&dark).to_lowercase(), "#111111", "{id}");
+    assert_eq!(fill(h.ed.page_doc(page)), fill(&before), "document untouched");
 }

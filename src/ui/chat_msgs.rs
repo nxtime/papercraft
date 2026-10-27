@@ -2,6 +2,7 @@
 //! groups, plan, approval, checkpoint and run cards, usage line, empty state. Drawing returns the
 //! user's choices in [`Acts`]; `chat.rs` applies them (it owns the state and the editor).
 
+use crate::theme::Surface as _;
 use super::chat::Approval;
 use super::chat_md;
 use super::kit;
@@ -21,7 +22,8 @@ const ASK_TOOL: &str = "ask_user";
 const REFS_TOOL: &str = "fetch_reference_images";
 const ISSUE_TOOL: &str = "report_issue";
 /// Lines of an issue draft's body shown on its card.
-const ISSUE_PREVIEW_LINES: usize = 6;
+/// Fields of an issue body shown before "Show all".
+const ISSUE_PREVIEW_FIELDS: usize = 3;
 const GEN_TOOL: &str = "generate_image";
 const REF_THUMB_H: f32 = 96.0;
 /// Opacity of a fetched image the agent did not keep.
@@ -429,7 +431,7 @@ fn mark(ui: &mut Ui, state: ToolState) {
 fn card(ui: &Ui) -> egui::Frame {
     egui::Frame::new()
         .fill(theme::pal(ui).popover)
-        .corner_radius(theme::RADIUS_LG)
+        .corner_radius(theme::radius_lg())
         .inner_margin(egui::Margin::symmetric(12, 8))
 }
 
@@ -464,7 +466,7 @@ fn code_section(ui: &mut Ui, id: Id, label: &str, value: impl FnOnce() -> Value,
         }
         made
     });
-    egui::Frame::new().fill(p.field).corner_radius(theme::RADIUS_MD).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+    egui::Frame::new().fill(p.field).corner_radius(theme::radius_md()).inner_margin(egui::Margin::symmetric(10, 8)).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         let ink = if error { p.danger } else { p.secondary };
         ui.label(RichText::new(label).size(theme::SECONDARY).color(ink));
@@ -532,7 +534,7 @@ pub fn image_thumb(ui: &mut Ui, key: &str, h: f32, bytes: impl FnOnce() -> Optio
     let [w, th] = tex.size();
     let w = (h * w as f32 / th.max(1) as f32).clamp(h * 0.5, h * 3.0);
     let resp = ui
-        .add(egui::Image::new(&tex).fit_to_exact_size(vec2(w, h)).corner_radius(theme::RADIUS_MD).sense(Sense::click()))
+        .add(egui::Image::new(&tex).fit_to_exact_size(vec2(w, h)).corner_radius(theme::radius_md()).sense(Sense::click()))
         .on_hover_cursor(egui::CursorIcon::ZoomIn);
     if resp.clicked() {
         ui.data_mut(|d| d.insert_temp(Id::new("chat-lightbox"), Some(tex)));
@@ -548,7 +550,7 @@ pub fn lightbox(ctx: &egui::Context) {
     let size = tex.size_vec2();
     let size = size * (max.x / size.x).min(max.y / size.y).min(1.0);
     let modal = egui::Modal::new(id.with("modal")).frame(egui::Frame::NONE).show(ctx, |ui| {
-        ui.add(egui::Image::new(&tex).fit_to_exact_size(size).corner_radius(theme::RADIUS_MD).sense(Sense::click())).clicked()
+        ui.add(egui::Image::new(&tex).fit_to_exact_size(size).corner_radius(theme::radius_md()).sense(Sense::click())).clicked()
     });
     if modal.inner || modal.should_close() {
         ctx.data_mut(|d| d.remove::<Option<egui::TextureHandle>>(id));
@@ -563,7 +565,7 @@ fn tool_card(ui: &mut Ui, t: &ToolCall, state: ToolState, acts: &mut Acts) {
     let open = get_open(ui, id, false);
     let shot = t.result.as_ref().and_then(|r| thumb(ui, &t.id, r));
     let target = tool_target(&t.args);
-    card(ui).show(ui, |ui| {
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 6.0;
         let ink = match state {
@@ -594,7 +596,7 @@ fn tool_card(ui: &mut Ui, t: &ToolCall, state: ToolState, acts: &mut Acts) {
             ui.horizontal(|ui| {
                 let h = THUMB_H;
                 let w = h * s.size[0] as f32 / s.size[1].max(1) as f32;
-                ui.add(egui::Image::new(&s.tex).fit_to_exact_size(vec2(w.clamp(24.0, 120.0), h)).corner_radius(theme::RADIUS_MD));
+                ui.add(egui::Image::new(&s.tex).fit_to_exact_size(vec2(w.clamp(24.0, 120.0), h)).corner_radius(theme::radius_md()));
                 ui.vertical(|ui| {
                     muted(ui, format!("{} x {}", s.size[0], s.size[1]));
                     muted(ui, format!("Result image, {} KB", (s.bytes / KB).max(1)));
@@ -736,7 +738,7 @@ fn user_bubble(ui: &mut Ui, text: &str) {
         if prompt.is_empty() {
             return;
         }
-        egui::Frame::new().fill(p.popover).corner_radius(theme::RADIUS_PANEL).inner_margin(egui::Margin::symmetric(12, 9)).show(ui, |ui| {
+        egui::Frame::new().fill(p.popover).corner_radius(theme::radius_panel()).inner_margin(egui::Margin::symmetric(12, 9)).show_surface(ui, |ui| {
             ui.set_max_width(ui.available_width() * 0.88);
             ui.add(egui::Label::new(prompt).wrap());
         });
@@ -764,7 +766,7 @@ fn checkpoint(ui: &mut Ui, run: &Run, acts: &mut Acts) {
 fn run_card(ui: &mut Ui, run: &Run, acts: &mut Acts) {
     let p = theme::pal(ui);
     let changes = run.added + run.changed + run.removed;
-    card(ui).show(ui, |ui| {
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             kit::badge(ui, Icon::Pen, theme::accent(), 30.0);
@@ -805,7 +807,7 @@ fn run_card(ui: &mut Ui, run: &Run, acts: &mut Acts) {
 pub fn approval_card(ui: &mut Ui, a: &Approval, acts: &mut Acts) {
     let p = theme::pal(ui);
     let (title, detail) = approval_text(a);
-    card(ui).show(ui, |ui| {
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
@@ -833,7 +835,7 @@ pub fn plan_card(ui: &mut Ui, todos: &[Todo]) {
     let id = Id::new("chat-plan");
     let open = get_open(ui, id, true);
     let done = todos.iter().filter(|t| t.status == TodoStatus::Done).count();
-    card(ui).show(ui, |ui| {
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 4.0;
         if header(
@@ -931,7 +933,7 @@ fn issue_card(ui: &mut Ui, t: &ToolCall, state: Option<&super::chat::IssueState>
     let p = theme::pal(ui);
     let s = |k: &str| t.args[k].as_str().unwrap_or_default().to_owned();
     let draft = super::chat::IssueDraft { kind: s("kind"), title: s("title"), body: s("body") };
-    card(ui).show(ui, |ui| {
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.horizontal(|ui| {
@@ -941,7 +943,23 @@ fn issue_card(ui: &mut Ui, t: &ToolCall, state: Option<&super::chat::IssueState>
             kit::chip_ink(ui, &draft.kind, None);
         });
         ui.label(RichText::new(&draft.title).font(theme::semibold(theme::BODY)));
-        ui.add(egui::Label::new(RichText::new(draft.body.lines().take(ISSUE_PREVIEW_LINES).collect::<Vec<_>>().join("\n")).size(theme::SECONDARY).color(p.secondary)).wrap());
+        // `**Expected:** …` lines read as a field list: the label above its value (markdown).
+        let fields = issue_fields(&draft.body);
+        let more_id = Id::new(("issue-more", &t.id));
+        let all = ui.data(|d| d.get_temp::<bool>(more_id)).unwrap_or(false);
+        let shown = if all { fields.len() } else { fields.len().min(ISSUE_PREVIEW_FIELDS) };
+        for (i, (label, value)) in fields.iter().take(shown).enumerate() {
+            if !label.is_empty() {
+                ui.label(RichText::new(label.to_uppercase()).size(theme::SECONDARY - 1.0).color(p.tertiary));
+            }
+            ui.scope(|ui| {
+                ui.visuals_mut().override_text_color = Some(p.secondary);
+                super::chat_md::render(ui, Id::new(("issue-field", &t.id, i)), value, theme::SECONDARY + 1.0);
+            });
+        }
+        if fields.len() > ISSUE_PREVIEW_FIELDS && ui.link(RichText::new(if all { "Show less" } else { "Show all" }).size(theme::SECONDARY)).clicked() {
+            ui.data_mut(|d| d.insert_temp(more_id, !all));
+        }
         match state {
             Some(IssueState::Sending) => {
                 ui.horizontal(|ui| {
@@ -968,6 +986,27 @@ fn issue_card(ui: &mut Ui, t: &ToolCall, state: Option<&super::chat::IssueState>
             }
         }
     });
+}
+
+/// An issue body as `(label, value)` pairs: a `**Label:** value` line starts a field, other lines
+/// continue it; text before the first label has an empty label.
+fn issue_fields(body: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in body.lines() {
+        let field = line.trim_start().strip_prefix("**").and_then(|r| r.split_once(":**"));
+        match field {
+            Some((label, rest)) => out.push((label.trim().to_owned(), rest.trim().to_owned())),
+            None => match out.last_mut() {
+                Some((_, v)) => {
+                    v.push('\n');
+                    v.push_str(line);
+                }
+                None => out.push((String::new(), line.to_owned())),
+            },
+        }
+    }
+    out.retain(|(l, v)| !l.is_empty() || !v.trim().is_empty());
+    out
 }
 
 /// An `ask_user` call that went through: drawn as a question card, not a tool card.
@@ -1003,7 +1042,7 @@ fn reference_gallery(ui: &mut Ui, t: &ToolCall, offered: &[String], acts: &mut A
     if images.is_empty() {
         return;
     }
-    card(ui).show(ui, |ui| {
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.horizontal(|ui| {
@@ -1042,59 +1081,163 @@ fn reference_gallery(ui: &mut Ui, t: &ToolCall, offered: &[String], acts: &mut A
     });
 }
 
-/// The agent's `ask_user` questions as a card: a row of answer chips per question (a palette
-/// option shows its swatches), then Send. Picks live in egui memory until sent.
-fn question_card(ui: &mut Ui, t: &ToolCall, open: bool, acts: &mut Acts) {
+/// The agent's `ask_user` questions as a card: a row of answers per question (a palette option
+/// shows its swatches), an inline field for another answer, then Send.
+///
+/// One single-choice question answers on click (or its number key). Several questions, or
+/// several picks, collect in egui memory until Send. Once answered (`answer` is the next user
+/// message), the card shows what was picked and dims the rest.
+fn question_card(ui: &mut Ui, t: &ToolCall, open: bool, answer: Option<&str>, acts: &mut Acts) {
     let Some(qs) = t.args["questions"].as_array() else { return };
     let id = Id::new(("chat-ask", &t.id));
+    let other_id = id.with("other");
     let mut picks: Vec<Vec<usize>> = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| vec![Vec::new(); qs.len()]);
-    card(ui).show(ui, |ui| {
+    let mut other: String = ui.data(|d| d.get_temp(other_id)).unwrap_or_default();
+    let one_click = qs.len() == 1 && !qs[0]["multiple"].as_bool().unwrap_or(false);
+    // What the answer message picked, per question (labels), when the card is closed.
+    let answered: Option<Vec<Vec<String>>> = answer.filter(|_| !open).map(|a| qs.iter().map(|q| picked_in(a, q)).collect());
+    let p = theme::pal(ui);
+    // Number keys pick an option of a single open question while no field has focus.
+    let key_pick = (open && qs.len() == 1 && ui.memory(|m| m.focused().is_none()))
+        .then(|| ui.input(|i| (1..=9).find(|n| i.key_pressed(digit_key(*n)))))
+        .flatten()
+        .map(|n| n - 1);
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 6.0;
         for (qi, q) in qs.iter().enumerate() {
-            ui.label(RichText::new(q["question"].as_str().unwrap_or_default()).font(theme::semibold(theme::BODY)));
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                theme::paint_icon(ui.painter(), r, Icon::Question, theme::accent());
+                ui.add(egui::Label::new(RichText::new(q["question"].as_str().unwrap_or_default()).font(theme::semibold(theme::BODY))).wrap());
+            });
             let multiple = q["multiple"].as_bool().unwrap_or(false);
+            let options: Vec<&Value> = q["options"].as_array().into_iter().flatten().collect();
             ui.horizontal_wrapped(|ui| {
-                for (oi, o) in q["options"].as_array().into_iter().flatten().enumerate() {
+                for (oi, o) in options.iter().enumerate() {
                     let colors: Vec<Color32> = o["colors"].as_array().into_iter().flatten().filter_map(|c| crate::model::Color::from_hex(c.as_str()?)).map(super::c32).collect();
-                    let on = picks[qi].contains(&oi);
                     let label = o["label"].as_str().unwrap_or_default();
+                    let on = match &answered {
+                        Some(a) => a[qi].iter().any(|l| l == label),
+                        None => picks[qi].contains(&oi),
+                    };
+                    let dim = answered.as_ref().is_some_and(|a| !a[qi].is_empty() && !on);
+                    let hint = (open && qs.len() == 1 && oi < 9).then_some(oi + 1);
                     // A reference option shows its image; a double click opens it in the lightbox.
                     let tex = o["image"].as_str().and_then(|path| image_tex(ui, path, || crate::vfs::read(path).ok()));
-                    let mut r = match &tex {
-                        Some(tex) => option_tile(ui, label, tex, on, oi == 0),
-                        None => option_chip(ui, label, &colors, on, oi == 0),
-                    };
+                    let mut r = ui
+                        .scope(|ui| {
+                            if dim {
+                                ui.multiply_opacity(ANSWER_DIM);
+                            }
+                            match &tex {
+                                Some(tex) => option_tile(ui, label, tex, on, oi == 0),
+                                None => option_chip(ui, label, &colors, on, oi == 0, hint),
+                            }
+                        })
+                        .inner;
                     if let Some(tex) = tex.filter(|_| r.double_clicked()) {
                         ui.data_mut(|d| d.insert_temp(Id::new("chat-lightbox"), Some(tex)));
                     }
                     if let Some(d) = o["detail"].as_str() {
                         r = r.on_hover_text(d);
                     }
-                    if r.clicked() && open {
-                        match (multiple, on) {
-                            (true, true) => picks[qi].retain(|&x| x != oi),
-                            (true, false) => picks[qi].push(oi),
-                            (false, _) => picks[qi] = vec![oi],
-                        }
+                    let picked = (r.clicked() || key_pick == Some(oi)) && open;
+                    if !picked {
+                        continue;
+                    }
+                    match (multiple, picks[qi].contains(&oi)) {
+                        (true, true) => picks[qi].retain(|&x| x != oi),
+                        (true, false) => picks[qi].push(oi),
+                        (false, _) => picks[qi] = vec![oi],
+                    }
+                    if one_click {
+                        acts.send = Some(answers_text(qs, &picks));
                     }
                 }
+            });
+            // An answer in the message that is none of the options (typed, or Auto mode's note).
+            if let (Some(a), Some(text)) = (&answered, answer)
+                && a[qi].is_empty()
+                && let Some(own) = own_answer(text, q)
+            {
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                    theme::paint_icon(ui.painter(), r, Icon::ArrowRight, p.tertiary);
+                    ui.add(egui::Label::new(RichText::new(own).size(theme::SECONDARY + 1.0).color(p.secondary)).wrap());
+                });
+            }
+        }
+        if answered.is_some() {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+                let c = r.center();
+                let s = egui::Stroke::new(1.6, p.success);
+                ui.painter().line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.0, 3.5)], s);
+                ui.painter().line_segment([c + vec2(-1.0, 3.5), c + vec2(4.5, -3.0)], s);
+                muted(ui, "Answered");
             });
         }
         if !open {
             return;
         }
+        // Another answer, typed: Enter sends it (for the single question, or as a note).
+        let typed = kit::icon_field(ui, Icon::Pencil, &mut other, if qs.len() == 1 { "Other answer\u{2026}" } else { "Add a note\u{2026}" });
+        if typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !other.trim().is_empty() {
+            let text = std::mem::take(&mut other);
+            acts.send = Some(match qs.len() {
+                1 => format!("Answers:\n- {} {}", qs[0]["question"].as_str().unwrap_or_default(), text.trim()),
+                _ => format!("{}\n\nNote: {}", answers_text(qs, &picks), text.trim()),
+            });
+        }
         ui.horizontal(|ui| {
-            if kit::button(ui, kit::ButtonKind::Primary, Some(Icon::ArrowRight), "Send answers").clicked() {
+            if !one_click && kit::button(ui, kit::ButtonKind::Primary, Some(Icon::ArrowRight), "Send answers").clicked() {
                 acts.send = Some(answers_text(qs, &picks));
             }
-            if kit::chip(ui, "Use your defaults", false).on_hover_text("The option the agent recommends for each question").clicked() {
+            if kit::chip(ui, "Use recommended", false).on_hover_text("The option the agent recommends (marked with a dot) for each question").clicked() {
                 acts.send = Some("Go with the option you recommended for each question.".into());
             }
-            muted(ui, "or type your own answer below");
+            if one_click {
+                muted(ui, "Click an answer or press its number");
+            }
         });
     });
-    ui.data_mut(|d| d.insert_temp(id, picks));
+    ui.data_mut(|d| {
+        d.insert_temp(id, picks);
+        d.insert_temp(other_id, other);
+    });
+}
+
+/// Opacity of the answers not picked, once a question is answered.
+const ANSWER_DIM: f32 = 0.45;
+
+fn digit_key(n: usize) -> egui::Key {
+    use egui::Key::*;
+    [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9][n - 1]
+}
+
+/// The text after `- {question} ` in an answers message, if the message has that line.
+fn answer_line<'a>(answer: &'a str, q: &Value) -> Option<&'a str> {
+    let question = q["question"].as_str()?;
+    answer.lines().find_map(|l| l.strip_prefix("- ")?.strip_prefix(question)).map(str::trim)
+}
+
+/// Labels of `q`'s options that the answers message picked.
+fn picked_in(answer: &str, q: &Value) -> Vec<String> {
+    let Some(line) = answer_line(answer, q) else { return vec![] };
+    let parts: Vec<&str> = line.split(", ").map(str::trim).collect();
+    q["options"].as_array().into_iter().flatten().filter_map(|o| o["label"].as_str()).filter(|l| parts.contains(l)).map(str::to_owned).collect()
+}
+
+/// A typed answer to `q`: its line in the message when it is no option, else the whole
+/// message when it is not an answers list at all ("go with your recommendation").
+fn own_answer(answer: &str, q: &Value) -> Option<String> {
+    match answer_line(answer, q) {
+        Some("your call") => None,
+        Some(line) => Some(line.to_owned()),
+        None if !answer.starts_with("Answers:") => Some(answer.lines().next().unwrap_or_default().to_owned()),
+        None => None,
+    }
 }
 
 /// Auto mode's reply when the chat's last message ends on questions: every question answered
@@ -1134,16 +1277,25 @@ const OUTLINE_ALPHA: f32 = 0.45;
 const RECOMMENDED_DOT: f32 = 6.0;
 
 /// An answer chip: the recommended dot, swatches, then the label; the picked one in the accent.
-fn option_chip(ui: &mut Ui, label: &str, colors: &[Color32], on: bool, recommended: bool) -> egui::Response {
+fn option_chip(ui: &mut Ui, label: &str, colors: &[Color32], on: bool, recommended: bool, key: Option<usize>) -> egui::Response {
     const SWATCH: f32 = 12.0;
     const PAD: f32 = 10.0;
+    const KEY_W: f32 = 18.0;
     let p = theme::pal(ui);
     let ink = if on { theme::accent() } else { p.text };
     let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::semibold(theme::SECONDARY + 1.0), ink);
+    let keyw = if key.is_some() { KEY_W + 6.0 } else { 0.0 };
     let dot = if recommended { RECOMMENDED_DOT + 6.0 } else { 0.0 };
     let sw = if colors.is_empty() { 0.0 } else { colors.len() as f32 * (SWATCH - 3.0) + 3.0 + 6.0 };
-    let (rect, resp) = ui.allocate_exact_size(vec2(2.0 * PAD + dot + sw + galley.size().x, CHIP_TALL), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(2.0 * PAD + keyw + dot + sw + galley.size().x, CHIP_TALL), Sense::click());
     option_frame(ui, rect, 255, on, resp.hovered());
+    // The number key that picks it, in a small cap.
+    if let Some(k) = key {
+        let cap = egui::Rect::from_center_size(egui::pos2(rect.left() + PAD - 2.0 + KEY_W / 2.0, rect.center().y), vec2(KEY_W, KEY_W));
+        ui.painter().rect_filled(cap, theme::radius_md() / 2, p.hover);
+        ui.painter().text(cap.center(), egui::Align2::CENTER_CENTER, k.to_string(), egui::FontId::proportional(theme::SECONDARY - 1.0), p.secondary);
+    }
+    let rect = egui::Rect::from_min_max(rect.min + vec2(keyw, 0.0), rect.max);
     if recommended {
         ui.painter().circle_filled(egui::pos2(rect.left() + PAD + RECOMMENDED_DOT / 2.0, rect.center().y), RECOMMENDED_DOT / 2.0, theme::accent());
     }
@@ -1172,9 +1324,9 @@ fn option_tile(ui: &mut Ui, label: &str, tex: &egui::TextureHandle, on: bool, re
     job.halign = Align::Center;
     let galley = ui.painter().layout_job(job);
     let (rect, resp) = ui.allocate_exact_size(vec2(img_w + 2.0 * PAD, OPTION_IMAGE_H + 3.0 * PAD + galley.size().y), Sense::click());
-    option_frame(ui, rect, theme::RADIUS_MD, on, resp.hovered());
+    option_frame(ui, rect, theme::radius_md(), on, resp.hovered());
     let img = egui::Rect::from_min_size(rect.min + vec2(PAD, PAD), vec2(img_w, OPTION_IMAGE_H));
-    egui::Image::new(tex).corner_radius(theme::RADIUS_MD - 2).paint_at(ui, img);
+    egui::Image::new(tex).corner_radius(theme::radius_md() - 2).paint_at(ui, img);
     ui.painter().galley(egui::pos2(rect.center().x, img.bottom() + PAD), galley, ink);
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("{label}\nDouble-click to view it larger"));
     if recommended { resp.on_hover_text("Recommended") } else { resp }
@@ -1210,7 +1362,8 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
             }
             // Questions close the turn, after the summary the agent writes once the call returns.
             for t in questions {
-                question_card(ui, t, is_last && !v.running, acts);
+                let answer = all.get(n + 1).map(|&(next, _)| msgs[next].text.as_str());
+                question_card(ui, t, is_last && !v.running, answer, acts);
             }
             let text = reply.iter().map(|m| m.text.as_str()).collect::<Vec<_>>().join("\n\n");
             if !text.is_empty() && !(is_last && v.running) {
@@ -1274,7 +1427,7 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
 /// A card with a title, a hint and Retry: the sign-in state of an agent.
 pub fn notice_card(ui: &mut Ui, title: &str, hint: &str, acts: &mut Acts) {
     let p = theme::pal(ui);
-    card(ui).show(ui, |ui| {
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.label(RichText::new(title).font(theme::semibold(theme::BODY)).color(p.warning));
         ui.add(egui::Label::new(RichText::new(hint).size(theme::SECONDARY).color(p.secondary)).wrap());
@@ -1290,7 +1443,7 @@ pub fn error_row(ui: &mut Ui, e: &str, signin: Option<&super::chat::chat_agents:
         return super::chat::chat_agents::signin_card(ui, s, acts);
     }
     let p = theme::pal(ui);
-    card(ui).show(ui, |ui| {
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.add(egui::Label::new(RichText::new(e).color(p.danger)).wrap());
         if kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Restore), "Retry").clicked() {
@@ -1326,7 +1479,7 @@ pub fn empty(ui: &mut Ui, acts: &mut Acts) {
             .response;
         let click = ui.interact(r.rect, Id::new(("chat-suggest", text)), Sense::click());
         if click.hovered() {
-            ui.painter().rect_filled(r.rect, theme::RADIUS_LG, p.hover);
+            ui.painter().rect_filled(r.rect, theme::radius_lg(), p.hover);
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if click.clicked() {
@@ -1496,6 +1649,24 @@ mod tests {
         msgs.push(Message { role: Role::User, text: "hi".into(), ..Default::default() });
         assert_eq!(auto_answers(&msgs), None, "already answered");
         assert_eq!(auto_answers(&[Message { role: Role::Assistant, text: "done".into(), ..Default::default() }]), None);
+    }
+
+    #[test]
+    fn answers_message_marks_picked_options() {
+        let q = serde_json::json!({"question": "Theme?", "options": [{"label": "Dark"}, {"label": "Light"}, {"label": "Both"}]});
+        let msg = "Answers:\n- Theme? Dark, Both";
+        assert_eq!(picked_in(msg, &q), ["Dark", "Both"]);
+        assert_eq!(own_answer(msg, &q), Some("Dark, Both".into()));
+        assert_eq!(picked_in("Answers:\n- Theme? something warmer", &q), Vec::<String>::new());
+        assert_eq!(own_answer("Answers:\n- Theme? your call", &q), None);
+        assert_eq!(own_answer("Go with the option you recommended for each question.", &q).as_deref(), Some("Go with the option you recommended for each question."));
+    }
+
+    #[test]
+    fn issue_body_reads_as_labelled_fields() {
+        let f = issue_fields("**Expected:** a\n**Actual:** b\nmore\n**Repro:** `x`");
+        assert_eq!(f, [("Expected".into(), "a".into()), ("Actual".into(), "b\nmore".into()), ("Repro".into(), "`x`".into())]);
+        assert_eq!(issue_fields("plain"), [(String::new(), "plain".into())]);
     }
 
     #[test]

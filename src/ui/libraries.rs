@@ -1,5 +1,6 @@
 //! The Libraries modal: publish this file, enable libraries from other projects, review updates.
 
+use crate::theme::Surface as _;
 use super::{UiState, confirm, home::relative_time, kit};
 use crate::editor::Editor;
 use crate::libraries::{self, EnabledStatus, LibrarySummary, PublishDiff, Published};
@@ -279,8 +280,9 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
 fn draw(ctx: &egui::Context, ed: &mut Editor, st: &UiState, lib: &mut LibrariesUi, dir: Option<&Path>) {
     let p = theme::pal_from_ctx(ctx);
     let mut act = None;
-    let frame = egui::Frame::new().fill(p.sidebar).corner_radius(24.0).inner_margin(24);
+    let frame = egui::Frame::new().fill(p.sidebar).corner_radius(crate::theme::r(24.0)).inner_margin(24);
     let modal = egui::Modal::new(egui::Id::new("libraries-modal")).frame(frame).show(ctx, |ui| {
+        theme::modal_backing(ui, theme::pal(ui).sidebar, theme::ru(24));
         ui.set_width(MODAL_W.min(ctx.content_rect().width() - 96.0));
         if lib.tab != Tab::File {
             ui.set_height(MODAL_H.min(ctx.content_rect().height() - 96.0));
@@ -403,7 +405,7 @@ fn file_tab(ui: &mut Ui, st: &UiState, lib: &mut LibrariesUi, full: bool) -> Opt
     let p = theme::pal(ui);
     let mut act = None;
     let next = lib.scan.previous.map_or(1, |(v, _)| v + 1);
-    card(ui).show(ui, |ui| {
+    card(ui).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
@@ -439,13 +441,13 @@ fn file_tab(ui: &mut Ui, st: &UiState, lib: &mut LibrariesUi, full: bool) -> Opt
     if full {
         ui.add_space(4.0);
         kit::section_header(ui, "Description", None);
-        ui.add(
+        crate::theme::lit(ui, |ui| ui.add(
             egui::TextEdit::multiline(&mut lib.description)
                 .hint_text("What this library is for")
                 .desired_rows(3)
                 .desired_width(f32::INFINITY)
                 .margin(theme::INPUT_MARGIN),
-        );
+        ));
         ui.label(
             RichText::new("Hidden variables and components named with a leading _ or . are not published.")
                 .size(theme::SECONDARY)
@@ -463,12 +465,12 @@ fn libraries_tab(ui: &mut Ui, st: &UiState, lib: &mut LibrariesUi) -> Option<Act
     ui.horizontal(|ui| {
         kit::section_header(ui, "Available libraries", None);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(
+            crate::theme::lit(ui, |ui| ui.add(
                 egui::TextEdit::singleline(&mut lib.search)
                     .hint_text("Search libraries")
                     .desired_width(200.0)
                     .margin(theme::INPUT_MARGIN),
-            );
+            ));
         });
     });
     let q = lib.search.to_lowercase();
@@ -477,7 +479,7 @@ fn libraries_tab(ui: &mut Ui, st: &UiState, lib: &mut LibrariesUi) -> Option<Act
         let mut any = false;
         for r in lib.scan.rows.iter().filter(|r| r.name.to_lowercase().contains(&q)) {
             any = true;
-            card(ui).show(ui, |ui| {
+            card(ui).show_surface(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
@@ -546,7 +548,7 @@ fn swatch(ui: &mut Ui, s: &Shown) {
         }
         Shown::Color(c, hex) => {
             let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-            ui.painter().rect_filled(r, 4.0, *c);
+            ui.painter().rect_filled(r, crate::theme::r(4.0), *c);
             ui.label(RichText::new(hex.to_uppercase()).size(theme::BODY));
         }
     }
@@ -578,7 +580,7 @@ fn updates_tab(ui: &mut Ui, lib: &mut LibrariesUi) -> Option<Act> {
             ui.add_space(4.0);
             kit::section_header(ui, &format!("Variables · {} changed", u.vars.len()), None);
             if !u.vars.is_empty() {
-                card(ui).show(ui, |ui| {
+                card(ui).show_surface(ui, |ui| {
                     ui.set_width(ui.available_width());
                     for r in &u.vars {
                         ui.horizontal(|ui| {
@@ -615,7 +617,7 @@ fn updates_tab(ui: &mut Ui, lib: &mut LibrariesUi) -> Option<Act> {
             kit::section_header(ui, &title, None);
             ui.horizontal_wrapped(|ui| {
                 for (name, how) in &u.comps {
-                    card(ui).show(ui, |ui| {
+                    card(ui).show_surface(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(name).font(theme::semibold(theme::SECONDARY)));
                             chip_how(ui, how);

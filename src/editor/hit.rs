@@ -67,13 +67,32 @@ pub fn node_contains(doc: &Document, id: NodeId, p: V2, zoom: f64) -> bool {
 }
 
 /// Topmost visible, unlocked node under `p`, deepest first.
+///
+/// Reverse paint order (children before their parent, later siblings first), descending only
+/// into subtrees that can hold the hit: hidden and locked subtrees are skipped whole, and so
+/// are clipping frames that do not contain `p`.
 pub fn hit_test(doc: &Document, p: V2, zoom: f64) -> Option<NodeId> {
-    doc.paint_order().into_iter().rev().find(|id| {
-        doc.is_effectively_visible(*id)
-            && !doc.is_effectively_locked(*id)
-            && node_contains(doc, *id, p, zoom)
-            && inside_ancestor_clips(doc, *id, p)
-    })
+    fn walk(doc: &Document, ids: &[NodeId], p: V2, zoom: f64) -> Option<NodeId> {
+        for &id in ids.iter().rev() {
+            let Some(n) = doc.get(id) else { continue };
+            if !n.visible || n.locked {
+                continue;
+            }
+            if matches!(n.kind, NodeKind::Frame { clip: true })
+                && !doc.world_rect(id).is_some_and(|r| r.contains(p))
+            {
+                continue;
+            }
+            if let Some(hit) = walk(doc, &n.children, p, zoom) {
+                return Some(hit);
+            }
+            if node_contains(doc, id, p, zoom) {
+                return Some(id);
+            }
+        }
+        None
+    }
+    walk(doc, &doc.root, p, zoom)
 }
 
 /// Screen-space rectangle of a top-level frame's name label.

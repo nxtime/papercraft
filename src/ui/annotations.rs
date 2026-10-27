@@ -5,6 +5,7 @@
 //! All edits go through the `Editor` annotation / template ops, so each one is undoable. Hide
 //! states (`hidden`) are view state only.
 
+use crate::theme::Surface as _;
 use super::{UiState, kit};
 use crate::editor::Editor;
 use crate::editor::shortcuts::Action;
@@ -260,7 +261,7 @@ fn category_select(ui: &mut Ui, current: &str, cats: &[AnnotationCategory]) -> O
     let cur = cats.iter().find(|c| c.id == current);
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), theme::FIELD_H), Sense::click());
     let hover = super::motion::hover(ui.ctx(), resp.id.with("catsel"), &resp);
-    ui.painter().rect_filled(rect, theme::RADIUS_MD, theme::blend(p.field, p.hover.gamma_multiply(hover)));
+    theme::fill_control(ui, rect, theme::radius_md(), theme::blend(p.field, p.hover.gamma_multiply(hover)));
     if let Some(c) = cur {
         ui.painter().circle_filled(egui::pos2(rect.left() + 16.0, rect.center().y), 5.0, super::c32(c.color));
     }
@@ -279,15 +280,16 @@ fn category_select(ui: &mut Ui, current: &str, cats: &[AnnotationCategory]) -> O
     );
     let mut chosen = None;
     egui::Popup::menu(&resp).width(rect.width().max(190.0)).show(|ui| {
+        crate::theme::popup_backing(ui);
         ui.spacing_mut().item_spacing.y = 2.0;
         for c in cats {
             let (row, r) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
             let on = c.id == current;
             let h = super::motion::hover(ui.ctx(), r.id.with("catopt"), &r);
             if on {
-                ui.painter().rect_filled(row, theme::RADIUS_MD, p.field);
+                theme::fill_selected(ui, row, theme::radius_md(), p.field);
             } else if h > 0.0 {
-                ui.painter().rect_filled(row, theme::RADIUS_MD, p.hover.gamma_multiply(h));
+                ui.painter().rect_filled(row, theme::radius_md(), p.hover.gamma_multiply(h));
             }
             let tint = super::c32(c.color);
             ui.painter().circle_filled(egui::pos2(row.left() + 14.0, row.center().y), 4.5, tint);
@@ -366,7 +368,7 @@ fn popover(ctx: &egui::Context, ed: &mut Editor, ann: &mut AnnotationsUi, canvas
         .show(ctx, |ui| {
             theme::figma_fields(ui);
             let p = theme::pal(ui);
-            kit::card_frame(ui).inner_margin(18).show(ui, |ui| {
+            kit::card_frame(ui).inner_margin(18).show_surface(ui, |ui| {
                 ui.set_width(POPOVER_W - 36.0);
                 ui.spacing_mut().item_spacing.y = 8.0;
                 ui.horizontal(|ui| {
@@ -377,7 +379,7 @@ fn popover(ctx: &egui::Context, ed: &mut Editor, ann: &mut AnnotationsUi, canvas
                         }
                     });
                 });
-                egui::Frame::new().fill(p.field).corner_radius(theme::RADIUS_MD).inner_margin(8).show(ui, |ui| {
+                egui::Frame::new().fill(p.field).corner_radius(theme::radius_md()).inner_margin(8).show_surface(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
@@ -398,22 +400,22 @@ fn popover(ctx: &egui::Context, ed: &mut Editor, ann: &mut AnnotationsUi, canvas
                         ui.label(RichText::new(format!("{} / {LABEL_MAX}", pop.label.chars().count())).size(theme::SECONDARY).color(p.tertiary));
                     });
                 });
-                let r = ui.add(egui::TextEdit::singleline(&mut pop.label).char_limit(LABEL_MAX).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
+                let r = crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut pop.label).char_limit(LABEL_MAX).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN)));
                 if std::mem::take(&mut pop.focus) {
                     r.request_focus();
                 }
                 for f in &fields {
                     label(ui, f);
-                    ui.add(egui::TextEdit::singleline(pop.values.entry(f.clone()).or_default()).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(pop.values.entry(f.clone()).or_default()).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN)));
                 }
                 label(ui, "Note");
-                ui.add(
+                crate::theme::lit(ui, |ui| ui.add(
                     egui::TextEdit::multiline(&mut pop.body)
                         .hint_text("Describe the rule, behaviour or data source. Markdown works.")
                         .desired_rows(4)
                         .desired_width(f32::INFINITY)
                         .margin(theme::INPUT_MARGIN),
-                );
+                ));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("⌘ Return to save").size(theme::SECONDARY).color(p.secondary));
@@ -452,6 +454,7 @@ fn canvas_menu(ctx: &egui::Context, ed: &mut Editor, ann: &mut AnnotationsUi, ca
     let mut act = None;
     let area = egui::Area::new("annotation-menu".into()).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
+            crate::theme::popup_backing(ui);
             ui.set_min_width(180.0);
             act = super::actions::menu(ui, ed);
         });
@@ -498,7 +501,7 @@ fn edit_card(ui: &mut Ui, ed: &mut Editor, ann: &mut AnnotationsUi, id: u64, n: 
     let cats = ed.design.categories();
     let p = theme::pal(ui);
     let mut done = false;
-    egui::Frame::new().fill(p.field).corner_radius(theme::RADIUS_LG).inner_margin(10).show(ui, |ui| {
+    egui::Frame::new().fill(p.field).corner_radius(theme::radius_lg()).inner_margin(10).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.horizontal(|ui| {
@@ -517,8 +520,8 @@ fn edit_card(ui: &mut Ui, ed: &mut Editor, ann: &mut AnnotationsUi, id: u64, n: 
             ed.update_annotation(id, |a| a.category = c);
         }
         let Some(d) = ann.editing.as_mut().filter(|d| d.id == id) else { return };
-        let l = ui.add(egui::TextEdit::singleline(&mut d.label).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
-        let b = ui.add(egui::TextEdit::multiline(&mut d.body).desired_rows(3).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
+        let l = crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut d.label).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN)));
+        let b = crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::multiline(&mut d.body).desired_rows(3).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN)));
         let blur = l.lost_focus() || b.lost_focus();
         ui.horizontal(|ui| {
             ui.label(RichText::new("Anchor").size(theme::SECONDARY).color(p.secondary));
@@ -677,7 +680,7 @@ fn note_row(ui: &mut Ui, a: &Annotation, n: u32, cat: Option<&AnnotationCategory
     let mut act = None;
     let tint = cat.map_or(Color32::GRAY, |c| super::c32(c.color));
     let fill = if selected { p.field } else { Color32::TRANSPARENT };
-    egui::Frame::new().fill(fill).corner_radius(theme::RADIUS_LG).inner_margin(8).show(ui, |ui| {
+    egui::Frame::new().fill(fill).corner_radius(theme::radius_lg()).inner_margin(8).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_top(|ui| {
             number_badge(ui, (!a.detached).then_some(n), if a.detached { p.warning } else { tint });
@@ -892,7 +895,7 @@ fn list_view(ui: &mut Ui, ed: &mut Editor, cu: &mut Customize) {
     let over = ed.page_template_id(page).map(String::from);
     let (mut edit, mut dup, mut reset, mut del) = (None, None, None, None);
     for t in &templates {
-        egui::Frame::new().fill(p.field).corner_radius(theme::RADIUS_LG).inner_margin(10).show(ui, |ui| {
+        egui::Frame::new().fill(p.field).corner_radius(theme::radius_lg()).inner_margin(10).show_surface(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&t.name).font(theme::semibold(theme::BODY)));
@@ -905,16 +908,16 @@ fn list_view(ui: &mut Ui, ed: &mut Editor, cu: &mut Customize) {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if is_builtin(&t.id) {
-                        if theme::small_button(ui, "Reset").clicked() {
+                        if theme::small_icon_button(ui, Some(crate::theme::Icon::Restore), "Reset").clicked() {
                             reset = Some(t.id.clone());
                         }
-                    } else if theme::small_button(ui, "Delete").clicked() {
+                    } else if theme::small_icon_button(ui, Some(crate::theme::Icon::Trash), "Delete").clicked() {
                         del = Some(t.id.clone());
                     }
                     if theme::small_button(ui, "Duplicate").clicked() {
                         dup = Some(t.id.clone());
                     }
-                    if theme::small_button(ui, "Edit").clicked() {
+                    if theme::small_icon_button(ui, Some(crate::theme::Icon::Pen), "Edit").clicked() {
                         edit = Some(t.clone());
                     }
                 });
@@ -946,7 +949,7 @@ fn edit_view(ui: &mut Ui, d: &mut TemplateDraft) -> Option<bool> {
     let mut result = None;
     ui.horizontal(|ui| {
         label(ui, "Name");
-        ui.add(egui::TextEdit::singleline(&mut d.tpl.name).desired_width(220.0).margin(theme::INPUT_MARGIN));
+        crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut d.tpl.name).desired_width(220.0).margin(theme::INPUT_MARGIN)));
         label(ui, "Display");
         for (disp, name) in [(Display::Full, "Full"), (Display::Badges, "Badges")] {
             if kit::chip(ui, name, d.tpl.display == disp).clicked() {
@@ -958,7 +961,7 @@ fn edit_view(ui: &mut Ui, d: &mut TemplateDraft) -> Option<bool> {
     let styling = &mut d.styling;
     for tc in &mut d.tpl.categories {
         let Some(ci) = cats.iter().position(|c| c.key() == tc.key) else { continue };
-        egui::Frame::new().fill(p.field).corner_radius(theme::RADIUS_LG).inner_margin(10).show(ui, |ui| {
+        egui::Frame::new().fill(p.field).corner_radius(theme::radius_lg()).inner_margin(10).show_surface(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 6.0;
             ui.horizontal(|ui| {
@@ -977,9 +980,9 @@ fn edit_view(ui: &mut Ui, d: &mut TemplateDraft) -> Option<bool> {
                 let c = &mut cats[ci];
                 let old_key = c.key().to_string();
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut c.name).hint_text("Name").desired_width(130.0).margin(theme::INPUT_MARGIN));
-                    ui.add(egui::TextEdit::singleline(&mut c.key).hint_text("Key").desired_width(70.0).margin(theme::INPUT_MARGIN));
-                    ui.add(egui::TextEdit::singleline(&mut c.icon).hint_text("Icon").desired_width(90.0).margin(theme::INPUT_MARGIN));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut c.name).hint_text("Name").desired_width(130.0).margin(theme::INPUT_MARGIN)));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut c.key).hint_text("Key").desired_width(70.0).margin(theme::INPUT_MARGIN)));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut c.icon).hint_text("Icon").desired_width(90.0).margin(theme::INPUT_MARGIN)));
                     let mut col = super::c32(c.color);
                     if egui::color_picker::color_edit_button_srgba(ui, &mut col, egui::color_picker::Alpha::Opaque).changed() {
                         c.color = super::from32(col);
@@ -990,12 +993,12 @@ fn edit_view(ui: &mut Ui, d: &mut TemplateDraft) -> Option<bool> {
                 }
             }
             label(ui, "Guidance for the note");
-            ui.add(egui::TextEdit::multiline(&mut tc.prompt).desired_rows(2).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
+            crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::multiline(&mut tc.prompt).desired_rows(2).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN)));
             label(ui, "Fields");
             let mut remove = None;
             for (i, f) in tc.fields.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(f).desired_width(200.0).margin(theme::INPUT_MARGIN));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(f).desired_width(200.0).margin(theme::INPUT_MARGIN)));
                     if theme::icon_button(ui, Icon::Minus, 22.0, false).on_hover_text("Remove field").clicked() {
                         remove = Some(i);
                     }
@@ -1004,7 +1007,7 @@ fn edit_view(ui: &mut Ui, d: &mut TemplateDraft) -> Option<bool> {
             if let Some(i) = remove {
                 tc.fields.remove(i);
             }
-            if theme::small_button(ui, "+ Field").clicked() {
+            if theme::small_icon_button(ui, Some(crate::theme::Icon::Plus), "Field").clicked() {
                 tc.fields.push(String::new());
             }
         });
@@ -1049,9 +1052,10 @@ fn customize(ctx: &egui::Context, ed: &mut Editor, ann: &mut AnnotationsUi) {
         return;
     }
     let p = theme::pal_from_ctx(ctx);
-    let frame = egui::Frame::new().fill(p.sidebar).corner_radius(24.0).inner_margin(24);
+    let frame = egui::Frame::new().fill(p.sidebar).corner_radius(crate::theme::r(24.0)).inner_margin(24);
     let mut close = false;
     let modal = egui::Modal::new(egui::Id::new("annotation-customize")).frame(frame).show(ctx, |ui| {
+        theme::modal_backing(ui, theme::pal(ui).sidebar, theme::ru(24));
         theme::figma_fields(ui);
         ui.set_width(MODAL_W.min(ctx.content_rect().width() - 96.0));
         ui.spacing_mut().item_spacing.y = 8.0;

@@ -334,11 +334,16 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
             [0.42, 0.42, 0.46, 1.0]
         };
         let r = r.translate(offset);
-        let mut name = n.name.clone();
+        // The longest prefix that fits, from one layout's char boundaries (one line, no wrap).
         let max_w = r.w;
-        while !name.is_empty() && text::layout(&name, 12.0, None, TextAlign::Left).width > max_w {
-            name.pop();
-        }
+        let full = text::layout(&n.name, 12.0, None, TextAlign::Left);
+        let name = match full.lines.first() {
+            Some(l) if full.width > max_w => {
+                let fit = l.carets.iter().rposition(|x| *x <= max_w).unwrap_or(0);
+                n.name.chars().take(fit).collect()
+            }
+            _ => n.name.clone(),
+        };
         draw_text(
             mb,
             &name,

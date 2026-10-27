@@ -2,6 +2,7 @@
 //! drag to move, click to select, and the view states (global mode, per-category, per-note).
 //! Drawn as an egui overlay only, so exports and Present mode never include it.
 
+use crate::theme::Surface as _;
 use crate::editor::Editor;
 use crate::editor::shortcuts;
 use crate::geom::V2;
@@ -498,7 +499,7 @@ fn pill(ctx: &egui::Context, ed: &Editor, view: &mut AnnotationsView, canvas: Re
                 .fill(p.popover)
                 .corner_radius(egui::CornerRadius::same(255))
                 .inner_margin(egui::Margin::symmetric(14, 6))
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.horizontal(|ui| {
                         let (ir, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                         theme::paint_icon(ui.painter(), ir, Icon::Page, p.secondary);

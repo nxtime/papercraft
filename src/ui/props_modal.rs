@@ -2,6 +2,7 @@
 //! default), and for an options property its options either as a table (option × layer style,
 //! with colour swatches, toggles, icon and image fields) or as highlighted JSON source.
 
+use crate::theme::Surface as _;
 use super::{UiState, kit};
 use crate::editor::Editor;
 use crate::model::{NodeId, PropDef, PropOption};
@@ -172,10 +173,11 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     layers.insert(0, "$root".into());
     let name = ed.doc.get(main).map(|n| n.name.clone()).unwrap_or_default();
     let p = theme::pal_from_ctx(ctx);
-    let frame = egui::Frame::new().fill(p.sidebar).corner_radius(24.0).inner_margin(24);
+    let frame = egui::Frame::new().fill(p.sidebar).corner_radius(crate::theme::r(24.0)).inner_margin(24);
     let (mut close, mut save, mut template) = (false, false, None);
     let m = &mut st.props_modal;
     egui::Modal::new(egui::Id::new("component-props")).frame(frame).show(ctx, |ui| {
+        theme::modal_backing(ui, theme::pal(ui).sidebar, theme::ru(24));
         theme::figma_fields(ui);
         ui.set_width(MODAL_W.min(ctx.content_rect().width() - 96.0));
         ui.spacing_mut().item_spacing.y = 10.0;
@@ -196,6 +198,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
                 }
             }
             ui.menu_button(RichText::new("+ Property").size(theme::SECONDARY), |ui| {
+                crate::theme::popup_backing(ui);
                 for (kind, label) in KINDS {
                     if ui.button(label).clicked() {
                         let layer = (kind != "enum").then(|| layers.get(1).cloned()).flatten();
@@ -222,10 +225,10 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
                 return;
             };
             let src = &mut m.source[m.tab];
-            egui::Frame::new().fill(p.field).corner_radius(12.0).inner_margin(12).show(ui, |ui| {
+            egui::Frame::new().fill(p.field).corner_radius(crate::theme::r(12.0)).inner_margin(12).show_surface(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut d.name).hint_text("Name").desired_width(200.0).margin(theme::INPUT_MARGIN));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut d.name).hint_text("Name").desired_width(200.0).margin(theme::INPUT_MARGIN)));
                     let current = KINDS.iter().position(|(k, _)| *k == d.kind).unwrap_or(0);
                     let items: Vec<(&str, Option<&str>)> = KINDS.iter().map(|(_, l)| (*l, None)).collect();
                     if let Some(i) = kit::segmented(ui, &items, current) {
@@ -253,7 +256,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
                                 def = on.to_string();
                             }
                         } else {
-                            ui.add(egui::TextEdit::singleline(&mut def).hint_text(if d.kind == "icon" { "lucide:check" } else { "Text" }).desired_width(180.0));
+                            crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut def).hint_text(if d.kind == "icon" { "lucide:check" } else { "Text" }).desired_width(180.0)));
                         }
                         d.default = (!def.is_empty()).then_some(def);
                     });
@@ -283,13 +286,13 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
                     let mut gone = None;
                     for (j, (o, s)) in d.options.iter_mut().zip(src.iter_mut()).enumerate() {
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut o.value).hint_text("Option").desired_width(OPTION_W));
+                            crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut o.value).hint_text("Option").desired_width(OPTION_W)));
                             if theme::icon_button(ui, Icon::Trash, 22.0, false).on_hover_text("Delete this option").clicked() {
                                 gone = Some(j);
                             }
                         });
                         let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, w: f32| ui.fonts_mut(|f| f.layout_job(highlight(ui, buf.as_str(), w)));
-                        let r = ui.add(egui::TextEdit::multiline(s).code_editor().desired_rows(3).desired_width(f32::INFINITY).layouter(&mut layouter));
+                        let r = crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::multiline(s).code_editor().desired_rows(3).desired_width(f32::INFINITY).layouter(&mut layouter)));
                         if r.changed() {
                             match serde_json::from_str::<Value>(if s.trim().is_empty() { "{}" } else { s }) {
                                 Ok(v) => o.set = v,
@@ -368,7 +371,7 @@ fn table(ui: &mut egui::Ui, ed: &Editor, d: &mut PropDef, layers: &[String], new
             ui.end_row();
             for (ri, o) in d.options.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut o.value).desired_width(OPTION_W - 30.0));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut o.value).desired_width(OPTION_W - 30.0)));
                     if theme::icon_button(ui, Icon::Trash, 20.0, false).on_hover_text("Delete this option").clicked() {
                         gone_row = Some(ri);
                     }
@@ -391,9 +394,9 @@ fn table(ui: &mut egui::Ui, ed: &Editor, d: &mut PropDef, layers: &[String], new
                                 // that is not one yet still shows, to be swapped for a token.
                                 let (mark, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                                 if let Some(c) = swatch(ed, &v) {
-                                    ui.painter().rect_filled(mark, 4.0, c);
+                                    ui.painter().rect_filled(mark, crate::theme::r(4.0), c);
                                 }
-                                ui.painter().rect_stroke(mark, 4.0, egui::Stroke::new(1.0, p.secondary.gamma_multiply(0.4)), egui::StrokeKind::Inside);
+                                ui.painter().rect_stroke(mark, crate::theme::r(4.0), egui::Stroke::new(1.0, p.secondary.gamma_multiply(0.4)), egui::StrokeKind::Inside);
                                 let vars: Vec<String> = ed.doc.variables.keys().map(|n| format!("var(--{n})")).collect();
                                 let mut opts: Vec<(&str, &str)> = vars.iter().map(|x| (x.as_str(), &x[6..x.len() - 1])).collect();
                                 if !v.is_empty() && !vars.contains(&v) {
@@ -414,11 +417,11 @@ fn table(ui: &mut egui::Ui, ed: &Editor, d: &mut PropDef, layers: &[String], new
                                     "text" => theme::paint_icon(ui.painter(), mark, Icon::Text, p.secondary),
                                     _ => match swatch(ed, &v) {
                                         Some(c) => {
-                                            ui.painter().rect_filled(mark, 4.0, c);
-                                            ui.painter().rect_stroke(mark, 4.0, egui::Stroke::new(1.0, p.secondary.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+                                            ui.painter().rect_filled(mark, crate::theme::r(4.0), c);
+                                            ui.painter().rect_stroke(mark, crate::theme::r(4.0), egui::Stroke::new(1.0, p.secondary.gamma_multiply(0.5)), egui::StrokeKind::Inside);
                                         }
                                         None => {
-                                            ui.painter().rect_stroke(mark, 4.0, egui::Stroke::new(1.0, p.secondary.gamma_multiply(0.3)), egui::StrokeKind::Inside);
+                                            ui.painter().rect_stroke(mark, crate::theme::r(4.0), egui::Stroke::new(1.0, p.secondary.gamma_multiply(0.3)), egui::StrokeKind::Inside);
                                         }
                                     },
                                 }
@@ -428,7 +431,7 @@ fn table(ui: &mut egui::Ui, ed: &Editor, d: &mut PropDef, layers: &[String], new
                                     "text" => "Text",
                                     _ => "var(--primary)",
                                 };
-                                ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(CELL_W - 22.0));
+                                crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(CELL_W - 22.0)));
                             }
                         }
                     });

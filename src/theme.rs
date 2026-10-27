@@ -176,13 +176,88 @@ pub fn rename_field(
     r
 }
 
-/// Inter (Regular/Medium/SemiBold) as the proportional family, egui's fonts as fallbacks.
+/// A typeface the interface can be set in: Regular, Medium and SemiBold (Latin subsets from
+/// Google Fonts, SIL OFL 1.1; Varela Round has one weight).
+pub struct UiFont {
+    pub name: &'static str,
+    faces: [&'static [u8]; 3],
+}
+
+macro_rules! ui_font {
+    ($name:literal, $file:literal) => {
+        UiFont {
+            name: $name,
+            faces: [
+                include_bytes!(concat!("../assets/fonts/", $file, "-Regular.ttf")),
+                include_bytes!(concat!("../assets/fonts/", $file, "-Medium.ttf")),
+                include_bytes!(concat!("../assets/fonts/", $file, "-SemiBold.ttf")),
+            ],
+        }
+    };
+}
+
+/// Neutral sans first, then the rounded ones.
+pub static UI_FONTS: [UiFont; 8] = [
+    UiFont {
+        name: "Inter",
+        faces: [INTER_REGULAR, INTER_MEDIUM, INTER_SEMIBOLD],
+    },
+    ui_font!("Geist", "Geist"),
+    ui_font!("Figtree", "Figtree"),
+    ui_font!("DM Sans", "DMSans"),
+    ui_font!("Nunito", "Nunito"),
+    ui_font!("Quicksand", "Quicksand"),
+    ui_font!("Fredoka", "Fredoka"),
+    UiFont {
+        name: "Varela Round",
+        faces: [VARELA_ROUND; 3],
+    },
+];
+
+static VARELA_ROUND: &[u8] = include_bytes!("../assets/fonts/VarelaRound-Regular.ttf");
+
+static UI_FONT: AtomicU8 = AtomicU8::new(0);
+
+/// Index into [`UI_FONTS`].
+pub fn ui_font() -> usize {
+    UI_FONT.load(Ordering::Relaxed) as usize
+}
+
+/// Sets the interface font; [`apply`] afterwards installs it.
+pub fn set_ui_font(i: usize) {
+    UI_FONT.store(i.min(UI_FONTS.len() - 1) as u8, Ordering::Relaxed);
+}
+
+/// Kept next to the theme choice, by name; a missing or unknown name means Inter.
+fn ui_font_path() -> Option<std::path::PathBuf> {
+    Choice::path().map(|p| p.with_file_name("font"))
+}
+
+pub fn load_ui_font() -> usize {
+    ui_font_path()
+        .and_then(|p| crate::vfs::read_to_string(p).ok())
+        .and_then(|s| UI_FONTS.iter().position(|f| f.name == s.trim()))
+        .unwrap_or(0)
+}
+
+pub fn save_ui_font() {
+    if let Some(p) = ui_font_path() {
+        if let Some(dir) = p.parent() {
+            let _ = crate::vfs::create_dir_all(dir);
+        }
+        let _ = crate::vfs::write(p, UI_FONTS[ui_font()].name);
+    }
+}
+
+/// The chosen [`UiFont`] (Regular/Medium/SemiBold) as the proportional family, egui's fonts as
+/// fallbacks.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
+    let [regular, medium, semibold] = UI_FONTS[ui_font()].faces;
     for (name, bytes) in [
-        ("Inter", INTER_REGULAR),
-        ("Inter-Medium", INTER_MEDIUM),
-        ("Inter-SemiBold", INTER_SEMIBOLD),
+        ("Inter", regular),
+        ("Inter-Medium", medium),
+        ("Inter-SemiBold", semibold),
     ] {
         fonts
             .font_data
@@ -234,7 +309,7 @@ pub fn figma_fields(ui: &mut egui::Ui) {
     let v = ui.visuals_mut();
     v.text_edit_bg_color = Some(rest);
     v.extreme_bg_color = rest;
-    let r5 = CornerRadius::same(RADIUS_MD);
+    let r5 = CornerRadius::same(radius_md());
     let w = &mut v.widgets;
     for (s, fill) in [
         (&mut w.inactive, rest),
@@ -244,7 +319,11 @@ pub fn figma_fields(ui: &mut egui::Ui) {
     ] {
         s.bg_fill = fill;
         s.weak_bg_fill = fill;
-        s.bg_stroke = Stroke::NONE;
+        s.bg_stroke = if is_acrylic() {
+            acrylic_edge(dark)
+        } else {
+            Stroke::NONE
+        };
         s.corner_radius = r5;
     }
 }
@@ -252,15 +331,148 @@ pub fn figma_fields(ui: &mut egui::Ui) {
 /// Height of an inspector field row.
 pub const FIELD_H: f32 = 32.0;
 
-/// Corner radii of the rounded design language (tokens `radius-md`, `radius-lg`, `radius-xl` of the design system).
-pub const RADIUS_MD: u8 = 8;
-pub const RADIUS_LG: u8 = 12;
-pub const RADIUS_PANEL: u8 = 16;
-pub const RADIUS_XL: u8 = 16;
+/// Corner radii of the rounded design language (tokens `radius-md`, `radius-lg`, `radius-xl` of
+/// the design system), at the user's roundness ([`set_roundness`]).
+pub fn radius_md() -> u8 {
+    ru(8)
+}
+pub fn radius_lg() -> u8 {
+    ru(12)
+}
+pub fn radius_panel() -> u8 {
+    ru(16)
+}
+pub fn radius_xl() -> u8 {
+    ru(16)
+}
+
+/// How round the chrome's corners are, as a factor on every radius (pills stay pills).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Roundness(pub f32);
+
+impl Roundness {
+    pub const ALL: [(Roundness, &'static str); 4] = [
+        (Roundness(0.0), "Square"),
+        (Roundness(0.5), "Subtle"),
+        (Roundness(1.0), "Default"),
+        (Roundness(1.5), "Round"),
+    ];
+
+    /// Kept next to the theme choice; a missing or unknown value means the default.
+    fn path() -> Option<std::path::PathBuf> {
+        Choice::path().map(|p| p.with_file_name("roundness"))
+    }
+
+    pub fn load() -> Roundness {
+        Roundness::path()
+            .and_then(|p| crate::vfs::read_to_string(p).ok())
+            .and_then(|s| s.trim().parse::<f32>().ok())
+            .and_then(|v| Roundness::ALL.into_iter().find(|(r, _)| (r.0 - v).abs() < 1e-3))
+            .map_or(Roundness(1.0), |(r, _)| r)
+    }
+
+    pub fn save(self) {
+        if let Some(p) = Roundness::path() {
+            if let Some(dir) = p.parent() {
+                let _ = crate::vfs::create_dir_all(dir);
+            }
+            let _ = crate::vfs::write(p, self.0.to_string());
+        }
+    }
+}
+
+/// The roundness factor, as `f32` bits.
+static ROUNDNESS: AtomicU32 = AtomicU32::new(0x3f80_0000);
+
+pub fn roundness() -> Roundness {
+    Roundness(f32::from_bits(ROUNDNESS.load(Ordering::Relaxed)))
+}
+
+/// Sets the roundness; [`apply`] afterwards restyles egui's own widgets.
+pub fn set_roundness(r: Roundness) {
+    ROUNDNESS.store(r.0.to_bits(), Ordering::Relaxed);
+}
+
+/// A chrome corner radius of `px` points at the user's roundness.
+pub fn r(px: f32) -> f32 {
+    px * roundness().0
+}
+
+/// [`r`] for `u8` radii; 255 (a pill) stays a pill.
+pub fn ru(px: u8) -> u8 {
+    if px == u8::MAX {
+        return px;
+    }
+    (f32::from(px) * roundness().0).round().min(254.0) as u8
+}
 
 /// egui's `small_button` zeroes the padding; this keeps the theme's but stays compact.
-pub fn small_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
-    ui.add(egui::Button::new(text).min_size(vec2(0.0, 24.0)))
+pub fn small_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    small_icon_button(ui, None, text)
+}
+
+/// A compact secondary button, an optional icon before the label (an icon alone when `text`
+/// is empty), painted as a control surface so it takes the acrylic material.
+pub fn small_icon_button(ui: &mut egui::Ui, icon: Option<Icon>, text: &str) -> egui::Response {
+    const H: f32 = 28.0;
+    const PAD: f32 = 10.0;
+    const ICON: f32 = 14.0;
+    let font = FontId::proportional(BODY);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER);
+    let icon_w = match (icon, text.is_empty()) {
+        (None, _) => 0.0,
+        (Some(_), true) => ICON,
+        (Some(_), false) => ICON + 6.0,
+    };
+    let w = if text.is_empty() {
+        H
+    } else {
+        galley.size().x + icon_w + 2.0 * PAD
+    };
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, H), egui::Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return resp;
+    }
+    let p = pal(ui);
+    let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("hover"), &resp);
+    let lift = if resp.is_pointer_button_down_on() {
+        p.pressed
+    } else {
+        p.hover.gamma_multiply(hover)
+    };
+    fill_control(ui, rect, radius_md(), blend(p.field, lift));
+    let ink = if ui.is_enabled() { p.text } else { p.tertiary };
+    let mut x = if text.is_empty() {
+        rect.center().x - ICON / 2.0
+    } else {
+        rect.left() + PAD
+    };
+    if let Some(i) = icon {
+        let r = Rect::from_min_size(pos2(x, rect.center().y - ICON / 2.0), Vec2::splat(ICON));
+        paint_icon(ui.painter(), r, i, ink);
+        x += icon_w;
+    }
+    ui.painter()
+        .galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, ink);
+    resp
+}
+
+/// Adds one egui widget (a button, a field) and, under acrylic, lights its surface from beneath:
+/// egui paints these with a translucent tint, so the gradient shows through it.
+pub fn lit(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> egui::Response) -> egui::Response {
+    if !is_acrylic() {
+        return add(ui);
+    }
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let r = add(ui);
+    let dark = ui.visuals().dark_mode;
+    let radius = f32::from(ui.visuals().widgets.inactive.corner_radius.nw);
+    let (top, bottom) = lit_fill(pal(ui).field, dark);
+    ui.painter()
+        .set(slot, vertical_gradient(r.rect, radius, top, bottom));
+    r
 }
 
 pub fn semibold(size: f32) -> FontId {
@@ -309,9 +521,13 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     };
     v.extreme_bg_color = p.field;
     v.text_edit_bg_color = Some(p.field);
-    v.window_stroke = Stroke::NONE;
-    v.window_corner_radius = CornerRadius::same(RADIUS_XL);
-    v.menu_corner_radius = CornerRadius::same(RADIUS_LG);
+    v.window_stroke = if is_acrylic() {
+        acrylic_edge(dark)
+    } else {
+        Stroke::NONE
+    };
+    v.window_corner_radius = CornerRadius::same(radius_xl());
+    v.menu_corner_radius = CornerRadius::same(radius_lg());
     v.window_shadow = Shadow {
         offset: [0, 8],
         blur: 28,
@@ -324,8 +540,14 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
         spread: 0,
         color: Color32::from_black_alpha(if dark { 90 } else { 30 }),
     };
-    v.selection.bg_fill = acc;
-    v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    // Acrylic selects with a wash of the accent (as `fill_selected`), not a solid block.
+    if is_acrylic() {
+        v.selection.bg_fill = Color32::from_rgba_unmultiplied(acc.r(), acc.g(), acc.b(), 72);
+        v.selection.stroke = Stroke::new(1.0, p.text);
+    } else {
+        v.selection.bg_fill = acc;
+        v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    }
     v.slider_trailing_fill = true;
     v.handle_shape = egui::style::HandleShape::Circle;
     v.indent_has_left_vline = false;
@@ -333,7 +555,7 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     v.interact_cursor = None;
     v.collapsing_header_frame = false;
 
-    let r6 = CornerRadius::same(RADIUS_MD);
+    let r6 = CornerRadius::same(radius_md());
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.inspector;
     w.noninteractive.weak_bg_fill = p.inspector;
@@ -358,6 +580,13 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
     w.active.fg_stroke = Stroke::new(1.0, p.text);
     w.active.corner_radius = r6;
     w.active.expansion = 0.0;
+    if is_acrylic() {
+        // egui's own widgets (text inputs, combo boxes) get the acrylic edge.
+        let edge = acrylic_edge(dark);
+        w.inactive.bg_stroke = edge;
+        w.hovered.bg_stroke = edge;
+        w.active.bg_stroke = edge;
+    }
     w.open = w.active;
 }
 
@@ -554,10 +783,422 @@ pub fn canvas_colors() -> Option<(Color32, Color32)> {
 
 /// The accent follows the chosen flavour (mauve), else the system accent.
 pub fn sync_accent() {
-    set_accent(match choice() {
-        Choice::Catppuccin(f) => f.palette().mauve,
-        _ => system_accent(),
-    });
+    set_accent(accent_option(accent_choice()));
+}
+
+/// Accent colours the user can pick; "Theme" (0) keeps the theme's own (mauve for Catppuccin,
+/// the system accent otherwise).
+pub const ACCENTS: [&str; 9] = [
+    "Theme", "Blue", "Purple", "Pink", "Red", "Orange", "Yellow", "Green", "Teal",
+];
+
+static ACCENT_CHOICE: AtomicU8 = AtomicU8::new(0);
+
+/// Index into [`ACCENTS`].
+pub fn accent_choice() -> usize {
+    ACCENT_CHOICE.load(Ordering::Relaxed) as usize
+}
+
+/// Sets the accent; [`apply`] afterwards restyles with it.
+pub fn set_accent_choice(i: usize) {
+    ACCENT_CHOICE.store(i.min(ACCENTS.len() - 1) as u8, Ordering::Relaxed);
+}
+
+/// Accent `i` under the current theme: Catppuccin's own hues there, Apple's system colours
+/// elsewhere.
+pub fn accent_option(i: usize) -> Color32 {
+    if let Choice::Catppuccin(f) = choice() {
+        let c = f.palette();
+        return [c.mauve, c.blue, c.mauve, c.pink, c.red, c.peach, c.yellow, c.green, c.teal][i];
+    }
+    if i == 0 {
+        return system_accent();
+    }
+    let [r, g, b] = [
+        [0x00, 0x7a, 0xff],
+        [0xaf, 0x52, 0xde],
+        [0xff, 0x2d, 0x55],
+        [0xff, 0x3b, 0x30],
+        [0xff, 0x95, 0x00],
+        [0xff, 0xcc, 0x00],
+        [0x34, 0xc7, 0x59],
+        [0x30, 0xb0, 0xc7],
+    ][i - 1];
+    Color32::from_rgb(r, g, b)
+}
+
+/// Kept next to the theme choice, by name; a missing or unknown name means "Theme".
+fn accent_path() -> Option<std::path::PathBuf> {
+    Choice::path().map(|p| p.with_file_name("accent"))
+}
+
+pub fn load_accent_choice() -> usize {
+    accent_path()
+        .and_then(|p| crate::vfs::read_to_string(p).ok())
+        .and_then(|s| ACCENTS.iter().position(|a| *a == s.trim()))
+        .unwrap_or(0)
+}
+
+pub fn save_accent_choice() {
+    if let Some(p) = accent_path() {
+        if let Some(dir) = p.parent() {
+            let _ = crate::vfs::create_dir_all(dir);
+        }
+        let _ = crate::vfs::write(p, ACCENTS[accent_choice()]);
+    }
+}
+
+/// How the chrome's surfaces are painted, on top of any theme: flat fills, or acrylic (an accent
+/// glow behind the panels, panels lit from above with a fine edge, a glossy primary button).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Material {
+    #[default]
+    Solid,
+    Acrylic,
+}
+
+impl Material {
+    pub const ALL: [Material; 2] = [Material::Solid, Material::Acrylic];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Material::Solid => "Solid",
+            Material::Acrylic => "Acrylic",
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Material::Solid => "solid",
+            Material::Acrylic => "acrylic",
+        }
+    }
+
+    /// Kept next to the theme choice; a missing or unknown file means `Solid`.
+    fn path() -> Option<std::path::PathBuf> {
+        Choice::path().map(|p| p.with_file_name("material"))
+    }
+
+    pub fn load() -> Material {
+        Material::path()
+            .and_then(|p| crate::vfs::read_to_string(p).ok())
+            .and_then(|s| Material::ALL.into_iter().find(|m| m.id() == s.trim()))
+            .unwrap_or_default()
+    }
+
+    pub fn save(self) {
+        if let Some(p) = Material::path() {
+            if let Some(dir) = p.parent() {
+                let _ = crate::vfs::create_dir_all(dir);
+            }
+            let _ = crate::vfs::write(p, self.id());
+        }
+    }
+}
+
+static MATERIAL: AtomicU8 = AtomicU8::new(0);
+
+pub fn material() -> Material {
+    Material::ALL
+        .get(MATERIAL.load(Ordering::Relaxed) as usize)
+        .copied()
+        .unwrap_or_default()
+}
+
+/// Switches the material; [`apply`] afterwards restyles popups and windows.
+pub fn set_material(m: Material) {
+    MATERIAL.store(m as u8, Ordering::Relaxed);
+}
+
+pub fn is_acrylic() -> bool {
+    material() == Material::Acrylic
+}
+
+/// Fill of the gaps around the floating panels: transparent under acrylic, which paints its
+/// glowing backdrop underneath ([`backdrop_mesh`]).
+pub fn backdrop_fill(p: Palette) -> Color32 {
+    if is_acrylic() {
+        Color32::TRANSPARENT
+    } else {
+        p.backdrop
+    }
+}
+
+/// The acrylic backdrop at `pos`: the backdrop colour lit by a soft accent glow that falls off
+/// from the top of the window, a third of the way across.
+pub fn backdrop_at(p: Palette, screen: Rect, pos: Pos2) -> Color32 {
+    const GLOW_ALPHA: f32 = 46.0;
+    const GLOW_REACH: f32 = 0.8;
+    let centre = pos2(screen.left() + screen.width() * 0.3, screen.top());
+    let reach = screen.width().max(screen.height()) * GLOW_REACH;
+    let d = ((pos - centre).length() / reach).min(1.0);
+    let a = accent();
+    let glow = Color32::from_rgba_unmultiplied(
+        a.r(),
+        a.g(),
+        a.b(),
+        (GLOW_ALPHA * (1.0 - d) * (1.0 - d)) as u8,
+    );
+    blend(p.backdrop, glow)
+}
+
+/// `rect` filled with the acrylic backdrop: a grid of vertex colours, so the glow is smooth.
+pub fn backdrop_mesh(p: Palette, screen: Rect, rect: Rect) -> egui::Mesh {
+    const CELLS: u32 = 12;
+    let mut mesh = egui::Mesh::default();
+    for j in 0..=CELLS {
+        for i in 0..=CELLS {
+            let t = vec2(i as f32, j as f32) / CELLS as f32;
+            let pos = rect.min + rect.size() * t;
+            mesh.colored_vertex(pos, backdrop_at(p, screen, pos));
+        }
+    }
+    let row = CELLS + 1;
+    for j in 0..CELLS {
+        for i in 0..CELLS {
+            let k = j * row + i;
+            mesh.add_triangle(k, k + 1, k + row);
+            mesh.add_triangle(k + 1, k + row + 1, k + row);
+        }
+    }
+    mesh
+}
+
+/// A rounded rectangle filled with a vertical gradient. A fan from the centre interpolates a
+/// colour that is linear in y exactly; the caller's edge stroke covers the unsmoothed outline.
+fn vertical_gradient(rect: Rect, radius: f32, top: Color32, bottom: Color32) -> egui::Mesh {
+    let mut outline = Vec::new();
+    egui::epaint::tessellator::path::rounded_rectangle(&mut outline, rect, radius.into());
+    let at = |y: f32| top.lerp_to_gamma(bottom, ((y - rect.top()) / rect.height()).clamp(0.0, 1.0));
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(rect.center(), at(rect.center().y));
+    for q in &outline {
+        mesh.colored_vertex(*q, at(q.y));
+    }
+    let n = outline.len() as u32;
+    for i in 0..n {
+        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+    }
+    mesh
+}
+
+fn paint_vertical_gradient(
+    painter: &egui::Painter,
+    rect: Rect,
+    radius: f32,
+    top: Color32,
+    bottom: Color32,
+) {
+    painter.add(vertical_gradient(rect, radius, top, bottom));
+}
+
+/// The fill of an acrylic surface lit from above: `fill` lightened at the top, shaded at the bottom.
+fn lit_fill(fill: Color32, dark: bool) -> (Color32, Color32) {
+    // A translucent tint (the inspector's fields): brighter at the top, fainter at the bottom.
+    if fill.a() < 255 {
+        let [r, g, b, a] = fill.to_srgba_unmultiplied();
+        let with = |k: f32| Color32::from_rgba_unmultiplied(r, g, b, (f32::from(a) * k).min(255.0) as u8);
+        return (with(1.6), with(0.8));
+    }
+    if dark {
+        (
+            blend(fill, Color32::from_white_alpha(26)),
+            blend(fill, Color32::from_black_alpha(22)),
+        )
+    } else {
+        (
+            blend(fill, Color32::from_white_alpha(140)),
+            blend(fill, Color32::from_black_alpha(4)),
+        )
+    }
+}
+
+/// Under acrylic, lights a modal's own frame (`fill`, `radius`): call first thing in the
+/// modal's content. Paints over the frame's flat fill at the window's rect from the last frame,
+/// so nothing has to run after the content.
+pub fn modal_backing(ui: &egui::Ui, fill: Color32, radius: u8) {
+    if !is_acrylic() {
+        return;
+    }
+    let Some(rect) = ui.ctx().memory(|m| m.area_rect(ui.layer_id().id)) else {
+        return;
+    };
+    let dark = ui.visuals().dark_mode;
+    let painter = ui.painter().with_clip_rect(rect);
+    let (top, bottom) = lit_fill(fill, dark);
+    paint_vertical_gradient(&painter, rect, f32::from(radius), top, bottom);
+    painter.rect_stroke(rect, radius, acrylic_edge(dark), egui::StrokeKind::Inside);
+}
+
+/// [`modal_backing`] for a popup, menu or context menu: called first in its closure, it lights
+/// the popup's frame (its rect from the last frame) under acrylic.
+pub fn popup_backing(ui: &egui::Ui) {
+    let v = ui.visuals();
+    modal_backing(ui, v.window_fill, v.menu_corner_radius.nw);
+}
+
+/// Fill of a recessed well that holds tabs or segments: darker than the panel under acrylic.
+pub fn well_fill(p: Palette, dark: bool) -> Color32 {
+    match (is_acrylic(), dark) {
+        (true, true) => Color32::from_black_alpha(64),
+        (true, false) => Color32::from_black_alpha(14),
+        _ => p.field,
+    }
+}
+
+/// A control's surface (field, chip, select, secondary button, segmented track): lit from above
+/// with a fine edge under acrylic, flat when solid.
+pub fn fill_control(ui: &egui::Ui, rect: Rect, radius: u8, fill: Color32) {
+    if !is_acrylic() {
+        ui.painter().rect_filled(rect, radius, fill);
+        return;
+    }
+    let dark = ui.visuals().dark_mode;
+    let (top, bottom) = lit_fill(fill, dark);
+    paint_vertical_gradient(ui.painter(), rect, f32::from(radius), top, bottom);
+    ui.painter()
+        .rect_stroke(rect, radius, acrylic_edge(dark), egui::StrokeKind::Inside);
+}
+
+/// A selected row or item (nav, menu option, layer): an accent wash with an accent edge under
+/// acrylic, `fill` when solid.
+pub fn fill_selected(ui: &egui::Ui, rect: Rect, radius: u8, fill: Color32) {
+    if !is_acrylic() {
+        ui.painter().rect_filled(rect, radius, fill);
+        return;
+    }
+    let a = accent();
+    let wash = |alpha| Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), alpha);
+    paint_vertical_gradient(
+        ui.painter(),
+        rect,
+        f32::from(radius),
+        blend(fill, wash(56)),
+        blend(fill, wash(20)),
+    );
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1.0, wash(80)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// An accent surface that is not the primary button (toggle on, active segment, checked box):
+/// glossy with a light edge under acrylic, no glow, flat when solid.
+pub fn fill_accent(ui: &egui::Ui, rect: Rect, radius: u8, fill: Color32) {
+    if !is_acrylic() {
+        ui.painter().rect_filled(rect, radius, fill);
+        return;
+    }
+    paint_vertical_gradient(
+        ui.painter(),
+        rect,
+        f32::from(radius),
+        blend(fill, Color32::from_white_alpha(70)),
+        blend(fill, Color32::from_black_alpha(40)),
+    );
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1.0, Color32::from_white_alpha(90)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// `Frame::show` that, under acrylic, paints the frame's fill lit from above with a fine edge.
+/// For the surfaces inside the chrome: cards, fields, popovers, the composer, the tool dock.
+pub trait Surface {
+    fn show_surface<R>(
+        self,
+        ui: &mut egui::Ui,
+        add: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> egui::InnerResponse<R>;
+}
+
+impl Surface for egui::Frame {
+    fn show_surface<R>(
+        self,
+        ui: &mut egui::Ui,
+        add: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> egui::InnerResponse<R> {
+        if !is_acrylic() || self.fill.a() == 0 {
+            return self.show(ui, add);
+        }
+        let dark = ui.visuals().dark_mode;
+        let (fill, radius) = (self.fill, f32::from(self.corner_radius.nw));
+        let slot = ui.painter().add(egui::Shape::Noop);
+        let edge = if self.stroke.width > 0.0 {
+            self.stroke
+        } else {
+            acrylic_edge(dark)
+        };
+        let r = self
+            .fill(Color32::TRANSPARENT)
+            .stroke(edge)
+            .show(ui, add);
+        let (top, bottom) = lit_fill(fill, dark);
+        ui.painter()
+            .set(slot, vertical_gradient(r.response.rect, radius, top, bottom));
+        r
+    }
+}
+
+/// An acrylic panel under its content: a soft shadow, the fill lit from above, a fine edge.
+/// The shadow stays inside the 12px panel gap, which clips it.
+pub fn paint_acrylic_panel(
+    painter: &egui::Painter,
+    rect: Rect,
+    radius: u8,
+    fill: Color32,
+    dark: bool,
+) {
+    let shadow = Shadow {
+        offset: [0, 4],
+        blur: 12,
+        spread: 0,
+        color: Color32::from_black_alpha(if dark { 80 } else { 24 }),
+    };
+    painter.add(shadow.as_shape(rect, CornerRadius::same(radius)));
+    let (top, bottom) = lit_fill(fill, dark);
+    paint_vertical_gradient(painter, rect, f32::from(radius), top, bottom);
+    painter.rect_stroke(rect, radius, acrylic_edge(dark), egui::StrokeKind::Inside);
+}
+
+/// The fine edge of acrylic surfaces.
+pub fn acrylic_edge(dark: bool) -> Stroke {
+    Stroke::new(
+        1.0,
+        if dark {
+            Color32::from_white_alpha(22)
+        } else {
+            Color32::from_black_alpha(22)
+        },
+    )
+}
+
+/// The acrylic primary button: a soft accent glow, a glossy accent gradient and a light edge.
+pub fn paint_gloss(painter: &egui::Painter, rect: Rect, radius: u8, fill: Color32) {
+    let glow = Shadow {
+        offset: [0, 0],
+        blur: 16,
+        spread: 0,
+        color: Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 70),
+    };
+    painter.add(glow.as_shape(rect, CornerRadius::same(radius)));
+    paint_vertical_gradient(
+        painter,
+        rect,
+        f32::from(radius),
+        blend(fill, Color32::from_white_alpha(70)),
+        blend(fill, Color32::from_black_alpha(40)),
+    );
+    painter.rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1.0, Color32::from_white_alpha(90)),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// Fonts plus the light and dark styles. egui picks the one matching the system appearance
@@ -662,6 +1303,15 @@ pub enum Icon {
     Accessibility,
     Code,
     Zap,
+    /// Magnifier (Lucide `search`).
+    Search,
+    /// The PaperCraft mark (Lucide `pen-tool`).
+    PenTool,
+    /// Code targets: simplified marks of React, Tailwind, Angular and Rust.
+    React,
+    Tailwind,
+    Angular,
+    Rust,
 }
 
 /// Every Lucide name [`icon_by_name`] knows.
@@ -1107,6 +1757,68 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         Icon::Zap => {
             closed(&[pt(9.2, 1.5), pt(3.0, 8.8), pt(7.6, 8.8), pt(6.8, 14.5), pt(13.0, 7.2), pt(8.4, 7.2)]);
         }
+        // Lucide's 24-unit geometry scaled to the 16-unit grid.
+        Icon::Search => {
+            painter.circle_stroke(pt(7.3, 7.3), 5.3 * u, st);
+            line(&[pt(11.1, 11.1), pt(14.0, 14.0)]);
+        }
+        Icon::React => {
+            for k in 0..3 {
+                let a = k as f32 * std::f32::consts::PI / 3.0;
+                let (sa, ca) = a.sin_cos();
+                let pts: Vec<Pos2> = (0..32)
+                    .map(|i| {
+                        let t = i as f32 / 32.0 * std::f32::consts::TAU;
+                        let (x, y) = (6.5 * t.cos(), 2.5 * t.sin());
+                        pt(8.0 + x * ca - y * sa, 8.0 + x * sa + y * ca)
+                    })
+                    .collect();
+                closed(&pts);
+            }
+            painter.circle_filled(c, 1.3 * u, color);
+        }
+        Icon::Tailwind => {
+            let wave = |y0: f32, x0: f32| {
+                let pts: Vec<Pos2> = (0..=16)
+                    .map(|i| {
+                        let t = i as f32 / 16.0;
+                        pt(x0 + 9.0 * t, y0 - 1.6 * (t * std::f32::consts::TAU).sin())
+                    })
+                    .collect();
+                line(&pts);
+            };
+            wave(6.0, 4.5);
+            wave(10.5, 2.5);
+        }
+        Icon::Angular => {
+            closed(&[pt(8.0, 1.5), pt(14.0, 3.7), pt(13.0, 11.6), pt(8.0, 14.5), pt(3.0, 11.6), pt(2.0, 3.7)]);
+            line(&[pt(5.4, 11.0), pt(8.0, 4.5), pt(10.6, 11.0)]);
+            line(&[pt(6.4, 8.7), pt(9.6, 8.7)]);
+        }
+        Icon::Rust => {
+            painter.circle_stroke(c, 5.0 * u, st);
+            for i in 0..8 {
+                let t = i as f32 / 8.0 * std::f32::consts::TAU;
+                line(&[pt(8.0 + 5.0 * t.cos(), 8.0 + 5.0 * t.sin()), pt(8.0 + 6.8 * t.cos(), 8.0 + 6.8 * t.sin())]);
+            }
+            line(&[pt(6.0, 10.8), pt(6.0, 5.2), pt(8.8, 5.2), pt(10.0, 6.4), pt(8.8, 7.8), pt(6.0, 7.8)]);
+            line(&[pt(8.6, 7.8), pt(10.4, 10.8)]);
+        }
+        Icon::PenTool => {
+            closed(&[pt(8.3, 12.7), pt(12.2, 8.7), pt(13.9, 10.5), pt(10.0, 14.4)]);
+            line(&[
+                pt(12.0, 8.7),
+                pt(11.1, 4.1),
+                pt(10.6, 3.6),
+                pt(2.1, 1.3),
+                pt(1.3, 2.1),
+                pt(3.6, 10.6),
+                pt(4.1, 11.1),
+                pt(8.7, 12.0),
+            ]);
+            line(&[pt(1.5, 1.5), pt(6.4, 6.4)]);
+            painter.circle_stroke(pt(7.3, 7.3), 1.3 * u, st);
+        }
         Icon::Diamond => {
             closed(&[pt(8.0, 1.8), pt(14.2, 8.0), pt(8.0, 14.2), pt(1.8, 8.0)]);
         }
@@ -1237,9 +1949,15 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, selected: bool) -> 
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter()
-            .rect_filled(rect, (size * 0.3).clamp(6.0, 12.0), fill);
-        let color = if selected {
+        let radius = ru((size * 0.3).clamp(6.0, 12.0) as u8);
+        if selected {
+            fill_accent(ui, rect, radius, fill);
+        } else {
+            ui.painter().rect_filled(rect, radius, fill);
+        }
+        let color = if selected && is_acrylic() {
+            crate::ui::kit::ink_on(fill)
+        } else if selected {
             Color32::WHITE
         } else if !enabled {
             p.tertiary

@@ -223,10 +223,15 @@ fn sorted(stops: &[Stop]) -> Vec<Stop> {
     s
 }
 
-/// A soft shadow as stacked translucent shapes: each layer is a little larger and the layers add up to
-/// the shadow color's alpha under the box, fading to nothing across the blur radius.
+/// A soft shadow as nested translucent shapes, like CSS `box-shadow`: the blur is a Gaussian with
+/// sigma = blur / 2, so it fades from the color's alpha to nothing across ±blur around the edge.
+/// Each layer's alpha is chosen so the composited stack follows that curve. The shadow is cut out
+/// under the box itself, as in CSS and Figma, so translucent fills don't darken.
 fn shadow_ops(n: &Node, wr: Rect, opacity: f64, ops: &mut Vec<DrawOp>) {
-    const LAYERS: usize = 10;
+    // ponytail: rings every ~3px, capped; wide blurs (>100px) step a little coarser.
+    const MIN_LAYERS: usize = 6;
+    const MAX_LAYERS: usize = 32;
+    const RING_STEP: f64 = 3.0;
     let Some(s) = n.style.shadow else { return };
     if s.color.a == 0 || !is_area(n) || wr.w <= 0.0 || wr.h <= 0.0 {
         return;
@@ -238,19 +243,62 @@ fn shadow_ops(n: &Node, wr: Rect, opacity: f64, ops: &mut Vec<DrawOp>) {
         n.style.corner_radii()
     };
     let solid = Color::rgb(s.color.r, s.color.g, s.color.b);
-    let each = opacity * (s.color.a as f64 / 255.0) / LAYERS as f64;
-    for i in 0..LAYERS {
-        let e = s.spread + s.blur * ((i as f64 + 0.5) / LAYERS as f64 - 0.5);
+    let alpha = opacity * (s.color.a as f64 / 255.0);
+    let blur = s.blur.max(0.5);
+    let layers = ((2.0 * blur / RING_STEP).ceil() as usize).clamp(MIN_LAYERS, MAX_LAYERS);
+    let step = 2.0 * blur / layers as f64;
+    // Coverage at distance d outside the edge: alpha * (1 - Φ(d / σ)), Φ by its logistic fit.
+    let coverage = |d: f64| alpha / (1.0 + (1.702 * d / (blur * 0.5)).exp());
+    let hole = (!(s.x == 0.0 && s.y == 0.0 && s.spread >= 0.0))
+        .then(|| contours(&vector::rounded_rect(wr, radii)));
+    // Outermost layer first; `outer` is the coverage the layers outside this one already give.
+    let mut outer = 0.0;
+    for i in (0..layers).rev() {
+        let e = s.spread - blur + step * (i as f64 + 1.0);
+        let target = coverage(e - step * 0.5);
+        let a = 1.0 - (1.0 - target) / (1.0 - outer);
+        outer = target;
         let r = base.inflate(e);
-        if r.w <= 0.0 || r.h <= 0.0 {
+        if r.w <= 0.0 || r.h <= 0.0 || a <= 0.0 {
             continue;
         }
+        let ring = vector::rounded_rect(r, radii.map(|x| (x + e).max(0.0)));
+        let (path, even_odd) = match &hole {
+            // Centered and not shrunk: a layer either lies inside the box (hidden) or contains it,
+            // so even-odd cuts the box out.
+            None if e < 0.0 => continue,
+            None => {
+                let mut p = ring;
+                p.segs.extend(vector::rounded_rect(wr, radii).segs);
+                (p, true)
+            }
+            Some(h) => {
+                use i_overlay::core::fill_rule::FillRule as OvFill;
+                use i_overlay::core::overlay_rule::OverlayRule;
+                use i_overlay::float::single::SingleFloatOverlay;
+                let cut = contours(&ring).overlay(h, OverlayRule::Difference, OvFill::NonZero);
+                let mut p = VPath::new();
+                for c in cut.into_iter().flatten() {
+                    let pts: Vec<V2> = c.iter().map(|q| v2(q[0], q[1])).collect();
+                    p.segs.extend(VPath::polyline(&pts, true).segs);
+                }
+                (p, false)
+            }
+        };
         ops.push(DrawOp::Fill {
-            path: vector::rounded_rect(r, radii.map(|x| (x + e).max(0.0))),
-            paint: PaintSpec::Solid(rgba(solid, each)),
-            even_odd: false,
+            path,
+            paint: PaintSpec::Solid(rgba(solid, a)),
+            even_odd,
         });
     }
+}
+
+fn contours(p: &VPath) -> Vec<Vec<[f64; 2]>> {
+    p.flatten(0.25)
+        .into_iter()
+        .filter(|c| c.pts.len() >= 3)
+        .map(|c| c.pts.iter().map(|q| [q.x, q.y]).collect())
+        .collect()
 }
 
 /// Draw ops for one node (not its children), in world space.
@@ -637,6 +685,9 @@ pub fn draw_bounds(n: &Node, wr: Rect) -> Rect {
     }
     if matches!(n.kind, NodeKind::Sticky { .. }) {
         pad = pad.max(4.0);
+    }
+    if let Some(s) = n.style.shadow {
+        pad = pad.max(s.spread + s.blur + s.x.abs().max(s.y.abs()));
     }
     wr.inflate(pad)
 }

@@ -19,6 +19,7 @@ pub mod library;
 pub mod lottie_icon;
 pub mod motion;
 pub mod pages;
+pub mod perf;
 pub mod palette;
 pub mod panels;
 pub mod libraries;
@@ -27,6 +28,7 @@ pub mod variables;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
 
+use crate::theme::Surface as _;
 use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
 use crate::model::{Color, NodeId, NodeKind};
@@ -174,6 +176,8 @@ pub struct UiState {
     pub selected_annotation: Option<u64>,
     /// Annotations UI state (popover, Customize modal, inline edit), not saved.
     pub ann_ui: annotations::AnnotationsUi,
+    /// Frame times, RAM, CPU and GPU for Settings > Performance and its overlay.
+    pub perf: perf::Perf,
 }
 
 /// Where a dragged layer lands relative to a row.
@@ -519,7 +523,7 @@ fn agent_glow(ctx: &egui::Context, st: &UiState, canvas: egui::Rect) {
     ))
     .rect_stroke(
         canvas.shrink(1.5),
-        f32::from(theme::RADIUS_PANEL),
+        f32::from(theme::radius_panel()),
         egui::Stroke::new(2.0, theme::accent().gamma_multiply(pulse)),
         egui::StrokeKind::Inside,
     );
@@ -660,7 +664,7 @@ fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egu
                 .fill(p.sidebar)
                 .corner_radius(egui::CornerRadius::same(255))
                 .inner_margin(egui::Margin::symmetric(8, 6))
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         if kit::lottie_button(ui, "chevron-left", "Previous frame (←)", 32.0)
@@ -698,7 +702,7 @@ fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egu
                 .fill(p.sidebar)
                 .corner_radius(egui::CornerRadius::same(255))
                 .inner_margin(egui::Margin::symmetric(14, 6))
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.label(
                         RichText::new(format!("Presenting · {}", ed.page_name()))
                             .size(theme::SECONDARY)
@@ -722,9 +726,17 @@ pub(crate) fn is_floating(translucent: bool) -> bool {
 
 /// A rounded panel that floats on the backdrop and fills the space it is given.
 fn floating_panel(ui: &mut Ui, fill: Color32, margin: egui::Margin, add: impl FnOnce(&mut Ui)) {
+    let fill = if theme::is_acrylic() {
+        let dark = ui.visuals().dark_mode;
+        let rect = ui.available_rect_before_wrap();
+        theme::paint_acrylic_panel(ui.painter(), rect, theme::radius_panel(), fill, dark);
+        Color32::TRANSPARENT
+    } else {
+        fill
+    };
     egui::Frame::new()
         .fill(fill)
-        .corner_radius(theme::RADIUS_PANEL)
+        .corner_radius(theme::radius_panel())
         .inner_margin(margin)
         .show(ui, |ui| {
             ui.set_min_height(ui.available_height());
@@ -733,9 +745,39 @@ fn floating_panel(ui: &mut Ui, fill: Color32, margin: egui::Margin, add: impl Fn
         });
 }
 
+/// The acrylic backdrop around the canvas (which the renderer draws underneath the UI, so it
+/// must stay unpainted).
+fn acrylic_backdrop(p: theme::Palette, screen: egui::Rect, canvas: egui::Rect) -> egui::Shape {
+    let bands = [
+        (screen.min, egui::pos2(screen.right(), canvas.top())),
+        (egui::pos2(screen.left(), canvas.bottom()), screen.max),
+        (
+            egui::pos2(screen.left(), canvas.top()),
+            canvas.left_bottom(),
+        ),
+        (
+            canvas.right_top(),
+            egui::pos2(screen.right(), canvas.bottom()),
+        ),
+    ];
+    egui::Shape::Vec(
+        bands
+            .into_iter()
+            .map(|(min, max)| egui::Rect::from_min_max(min, max))
+            .filter(|r| r.is_positive())
+            .map(|r| theme::backdrop_mesh(p, screen, r).into())
+            .collect(),
+    )
+}
+
 /// Paints the four corners of `rect` outside a rounded rectangle of radius `r`, so the canvas
 /// (drawn by the renderer underneath the UI) shows with rounded corners.
-fn round_corners(painter: &egui::Painter, rect: egui::Rect, r: f32, colour: Color32) {
+fn round_corners(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    r: f32,
+    colour_at: impl Fn(egui::Pos2) -> Color32,
+) {
     const SEGMENTS: usize = 10;
     let mut mesh = egui::Mesh::default();
     let corners = [
@@ -746,6 +788,7 @@ fn round_corners(painter: &egui::Painter, rect: egui::Rect, r: f32, colour: Colo
     ];
     for (corner, dir) in corners {
         let centre = corner + dir * r;
+        let colour = colour_at(corner);
         let base = mesh.vertices.len() as u32;
         mesh.colored_vertex(corner, colour);
         for i in 0..=SEGMENTS {
@@ -853,11 +896,13 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     let p = theme::pal(ui);
     let sidebar_fill = theme::sidebar_fill(st.translucent_sidebar, p);
     let floating = is_floating(st.translucent_sidebar);
+    // The acrylic backdrop goes under the panels, but needs the canvas rect from after them.
+    let backdrop_slot = ui.painter().add(egui::Shape::Noop);
     let gap = PANEL_GAP;
     let side_frame = |left: i8, right: i8, top: i8, bottom: i8| {
         if floating {
             egui::Frame::NONE
-                .fill(p.backdrop)
+                .fill(theme::backdrop_fill(p))
                 .inner_margin(egui::Margin {
                     left,
                     right,
@@ -906,7 +951,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
                             .frame(egui::Frame::NONE)
                             .show(ui, |ui| account_footer(ui, st));
                         ui.horizontal(|ui| {
-                            kit::badge(ui, Icon::Pen, theme::accent(), 28.0);
+                            kit::brand_mark(ui, 28.0);
                             ui.label(RichText::new("PaperCraft").font(theme::semibold(16.0)));
                         });
                         ui.add_space(10.0);
@@ -928,11 +973,11 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             } else {
                 egui::Frame::NONE
                     .fill(p.inspector)
-                    .inner_margin(egui::Margin::symmetric(14, 10))
+                    .inner_margin(inspector::MARGIN)
             })
             .show(ui, |ui| {
                 if floating {
-                    floating_panel(ui, p.inspector, egui::Margin::symmetric(14, 12), |ui| {
+                    floating_panel(ui, p.inspector, inspector::MARGIN, |ui| {
                         inspector::panel(ui, ed, st)
                     });
                 } else {
@@ -968,17 +1013,23 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     if floating {
         egui::Panel::bottom("canvas-gap")
             .exact_size(gap)
-            .frame(egui::Frame::NONE.fill(p.backdrop))
+            .frame(egui::Frame::NONE.fill(theme::backdrop_fill(p)))
             .show(ui, |_| {});
     }
     let canvas = ui.available_rect_before_wrap();
     if floating {
-        round_corners(
-            ui.painter(),
-            canvas,
-            f32::from(theme::RADIUS_PANEL),
-            p.backdrop,
-        );
+        let screen = ui.ctx().content_rect();
+        if theme::is_acrylic() {
+            ui.painter()
+                .set(backdrop_slot, acrylic_backdrop(p, screen, canvas));
+        }
+        round_corners(ui.painter(), canvas, f32::from(theme::radius_panel()), |q| {
+            if theme::is_acrylic() {
+                theme::backdrop_at(p, screen, q)
+            } else {
+                p.backdrop
+            }
+        });
     }
     toolbar(ui.ctx(), ed, canvas);
     annotations::overlays(ui.ctx(), ed, st, canvas);
@@ -1001,6 +1052,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     annotations_canvas::draw(ui.ctx(), ed, &mut st.annotations, &mut st.selected_annotation, canvas);
     props_modal::show(ui.ctx(), ed, st);
     run_toast(ui.ctx(), st, canvas);
+    perf::overlay(ui.ctx(), &mut st.perf, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
     if st.show_help {
         help(ui.ctx(), st, canvas);
@@ -1032,7 +1084,10 @@ fn menu_entries(ui: &mut Ui, ed: &mut Editor, entries: &[shortcuts::MenuEntry]) 
                 ui.separator();
             }
             shortcuts::MenuEntry::Submenu(label, items) => {
-                ui.menu_button(*label, |ui| menu_entries(ui, ed, items));
+                ui.menu_button(*label, |ui| {
+            crate::theme::popup_backing(ui);
+            menu_entries(ui, ed, items)
+        });
             }
         }
     }
@@ -1051,7 +1106,10 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 // Not enough room for every menu: they fold into one.
                 ui.scope(|ui| {
                     flat_menus(ui);
-                    let menu = ui.menu_button("Menu", |ui| flat_menu(ui, ed));
+                    let menu = ui.menu_button("Menu", |ui| {
+            crate::theme::popup_backing(ui);
+            flat_menu(ui, ed)
+        });
                     let _ = menu;
                 });
             } else {
@@ -1122,6 +1180,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 if many {
                     let page = page.on_hover_text("Switch page").on_hover_cursor(egui::CursorIcon::PointingHand);
                     egui::Popup::menu(&page).show(|ui| {
+                        crate::theme::popup_backing(ui);
                         ui.set_min_width(180.0);
                         egui::ScrollArea::vertical().max_height(PAGE_MENU_MAX_H).show(ui, |ui| {
                             for i in 0..ed.pages.len() {
@@ -1142,8 +1201,9 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         agent_pill(ui, st, !tight, right_w);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            let share = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::Export), "Share");
+            let share = kit::button_compact(ui, kit::ButtonKind::Primary, Some(Icon::Export), "Share");
             egui::Popup::menu(&share).show(|ui| {
+                crate::theme::popup_backing(ui);
                 ui.set_min_width(190.0);
                 for (icon, label, action) in [
                     (Icon::Image, "Export PNG…", Action::ExportPng),
@@ -1211,11 +1271,13 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 egui::Frame::new()
                     .fill(p.field)
                     .corner_radius(egui::CornerRadius::same(255))
-                    .inner_margin(egui::Margin::symmetric(6, 2))
-                    .show(ui, |ui| {
+                    .inner_margin(egui::Margin::symmetric(4, 2))
+                    .show_surface(ui, |ui| {
+                        // As tall as the Design/Chat switch.
                         ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.spacing_mut().interact_size.y = ZOOM_BTN;
                         ui.horizontal(|ui| {
-                            if theme::icon_button(ui, theme::Icon::Minus, 26.0, false)
+                            if theme::icon_button(ui, theme::Icon::Minus, ZOOM_BTN, false)
                                 .on_hover_text("Zoom out")
                                 .clicked()
                             {
@@ -1227,12 +1289,12 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                                         .font(theme::semibold(theme::SECONDARY + 1.0)),
                                 )
                                 .frame(false)
-                                .min_size(egui::vec2(48.0, 22.0)),
+                                .min_size(egui::vec2(48.0, ZOOM_BTN)),
                             );
                             if z.on_hover_text("Zoom to fit").clicked() {
                                 ed.run(Action::ZoomFit);
                             }
-                            if theme::icon_button(ui, theme::Icon::Plus, 26.0, false)
+                            if theme::icon_button(ui, theme::Icon::Plus, ZOOM_BTN, false)
                                 .on_hover_text("Zoom in")
                                 .clicked()
                             {
@@ -1247,12 +1309,16 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     });
 }
 
+/// Zoom pill buttons: with the pill's 2px margin, as tall as [`kit::SEGMENTED_H`].
+const ZOOM_BTN: f32 = kit::SEGMENTED_H - 4.0;
+
 /// egui menus for platforms without a native menu bar (inline, so the toolbar row keeps
 /// the title and zoom controls).
 fn menu_bar(ui: &mut Ui, ed: &mut Editor, agent: &mut Option<agent::AgentUi>) {
     flat_menus(ui);
     for (title, entries) in shortcuts::menus() {
         ui.menu_button(title, |ui| {
+            crate::theme::popup_backing(ui);
             menu_entries(ui, ed, &entries);
         });
     }
@@ -1272,7 +1338,7 @@ pub(super) fn icon_menu_item(ui: &mut Ui, icon: Icon, label: &str) -> egui::Resp
     let hover = motion::hover(ui.ctx(), resp.id.with("menu-item"), &resp);
     if hover > 0.0 {
         ui.painter()
-            .rect_filled(rect, theme::RADIUS_MD, p.hover.gamma_multiply(hover));
+            .rect_filled(rect, theme::radius_md(), p.hover.gamma_multiply(hover));
     }
     let at = egui::Rect::from_center_size(
         egui::pos2(rect.left() + 18.0, rect.center().y),
@@ -1326,6 +1392,7 @@ fn flat_menus(ui: &mut Ui) {
 fn theme_menu(ui: &mut Ui) {
     flat_menus(ui);
     ui.menu_button("Theme", |ui| {
+        crate::theme::popup_backing(ui);
         for c in theme::Choice::ALL {
             if ui
                 .selectable_label(theme::choice() == c, c.label())
@@ -1436,9 +1503,10 @@ fn side_tabs(ui: &mut Ui, st: &mut UiState) {
     };
     let pad = 3.0;
     let gap = 2.0;
+    let dark = ui.visuals().dark_mode;
     egui::Frame::new()
-        .fill(p.field)
-        .corner_radius(theme::RADIUS_LG)
+        .fill(theme::well_fill(p, dark))
+        .corner_radius(theme::radius_lg())
         .inner_margin(pad as i8)
         .show(ui, |ui| {
             let total = ui.available_width();
@@ -1452,12 +1520,12 @@ fn side_tabs(ui: &mut Ui, st: &mut UiState) {
                         ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
                     let on = current == tab;
                     let hover = motion::hover(ui.ctx(), resp.id.with("side-tab"), &resp);
-                    let fill = if on {
-                        p.sidebar
+                    if on {
+                        theme::fill_selected(ui, rect, crate::theme::ru(9), p.sidebar);
                     } else {
-                        p.hover.gamma_multiply(hover)
-                    };
-                    ui.painter().rect_filled(rect, 9.0, fill);
+                        ui.painter()
+                            .rect_filled(rect, crate::theme::r(9.0), p.hover.gamma_multiply(hover));
+                    }
                     let tint = if on { theme::accent() } else { p.secondary };
                     let hovered = resp.hovered();
                     let icon_box = if wide {
@@ -1586,12 +1654,7 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         }
     }
     if ed.doc.nodes.len() > 12 || !st.layer_filter.is_empty() {
-        ui.add(
-            egui::TextEdit::singleline(&mut st.layer_filter)
-                .hint_text("Search layers")
-                .desired_width(f32::INFINITY)
-                .margin(crate::theme::INPUT_MARGIN),
-        );
+        kit::icon_field(ui, Icon::Search, &mut st.layer_filter, "Search layers");
         ui.add_space(2.0);
     }
     egui::ScrollArea::vertical()
@@ -1661,7 +1724,7 @@ fn layer_drag(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             }
             LayerDrop::Into(_) => {
                 ui.painter()
-                    .rect_stroke(r, 6.0, stroke, egui::StrokeKind::Inside);
+                    .rect_stroke(r, crate::theme::r(6.0), stroke, egui::StrokeKind::Inside);
             }
         }
     }
@@ -1785,8 +1848,10 @@ fn layer_subtree_height(
 /// A layer row and its unfolded children. A page can hold thousands of layers, but only a
 /// screenful is visible: rows far outside the list are not built, their space is just reserved.
 fn layer_item(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: usize) {
-    // A filter builds the whole tree (matches can be anywhere), and so does scrolling to a layer.
-    if st.layer_filter.trim().is_empty() && st.reveal.is_none() {
+    // A filter builds the whole tree (matches can be anywhere). Scrolling to a layer builds only
+    // the subtree that holds it, so the rest stays virtual.
+    let holds_reveal = st.reveal.is_some_and(|t| is_within(&ed.doc, t, id));
+    if st.layer_filter.trim().is_empty() && !holds_reveal {
         let h = layer_subtree_height(&ed.doc, &st.collapsed, id, &mut st.layer_heights);
         let top = ui.cursor().top();
         let view = ui.clip_rect();
@@ -1798,6 +1863,18 @@ fn layer_item(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth:
     let index = st.layer_rows.len();
     let animate = st.layer_animate;
     motion::pop_in_if(ui, ("layer-pop", id), index, animate, |ui| layer_row(ui, ed, st, id, depth));
+}
+
+/// Whether `id` is `root` or below it.
+fn is_within(doc: &crate::model::Document, id: NodeId, root: NodeId) -> bool {
+    let mut cur = Some(id);
+    while let Some(c) = cur {
+        if c == root {
+            return true;
+        }
+        cur = doc.get(c).and_then(|n| n.parent);
+    }
+    false
 }
 
 /// One sidebar row, drawn like an NSOutlineView row: 24pt tall, 6pt radius selection in the
@@ -1836,9 +1913,9 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     }
     let hovered = ui.rect_contains_pointer(row);
     if selected {
-        ui.painter().rect_filled(row, 10.0, p.field);
+        theme::fill_selected(ui, row, crate::theme::ru(10), p.field);
     } else if hovered {
-        ui.painter().rect_filled(row, 10.0, p.hover);
+        ui.painter().rect_filled(row, crate::theme::r(10.0), p.hover);
     }
     let fg = if n.visible { p.text } else { p.secondary };
     let fg2 = p.secondary;
@@ -1897,7 +1974,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
             let t = motion::hover(ui.ctx(), ui.id().with(("trail-hover", tip, id)), &b);
             if t > 0.0 {
                 let tint = p.hover;
-                ui.painter().rect_filled(r, 5.0, tint.gamma_multiply(t));
+                ui.painter().rect_filled(r, crate::theme::r(5.0), tint.gamma_multiply(t));
             }
             paint(ui, r.shrink(3.0));
             b.on_hover_text(tip).clicked()
@@ -1956,6 +2033,15 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
         clip.galley(egui::pos2(x, cy - galley.size().y / 2.0), galley, fg);
     }
 
+    // Right-click acts on the row's layer: it joins the selection first unless already in it.
+    if resp.secondary_clicked() && !selected {
+        ed.end_text_edit();
+        ed.selection = vec![id];
+    }
+    resp.context_menu(|ui| {
+            crate::theme::popup_backing(ui);
+            layer_menu(ui, ed, st, id)
+        });
     if resp.double_clicked() {
         st.renaming = Some((id, n.name.clone()));
     } else if resp.clicked() {
@@ -1978,6 +2064,73 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
             layer_item(ui, ed, st, *c, depth + 1);
         }
     }
+}
+
+/// The layers panel's right-click menu: the common edits on the selection, then its Actions.
+fn layer_menu(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId) {
+    use crate::editor::shortcuts::Action as A;
+    let Some(n) = ed.doc.get(id) else { return };
+    let (name, visible, locked) = (n.name.clone(), n.visible, n.locked);
+    let container = n.is_container() && !n.children.is_empty();
+    let frame_like = n.is_frame() || n.is_group();
+    let mut run = None;
+    let mut item = |ui: &mut Ui, icon: Icon, label: &str, keys: &str, act: A| {
+        if icon_menu_item_keys(ui, icon, label, keys).clicked() {
+            run = Some(act);
+            ui.close();
+        }
+    };
+    item(ui, Icon::Export, "Copy", "⌘C", A::Copy);
+    item(ui, Icon::Page, "Paste", "⌘V", A::Paste);
+    item(ui, Icon::Instance, "Duplicate", "⌘D", A::Duplicate);
+    if icon_menu_item_keys(ui, Icon::Text, "Rename", "⌘R").clicked() {
+        st.renaming = Some((id, name));
+        ui.close();
+    }
+    ui.separator();
+    item(ui, Icon::Group, "Group", "⌘G", A::Group);
+    if container {
+        item(ui, Icon::Group, "Ungroup", "⇧⌘G", A::Ungroup);
+    }
+    item(ui, Icon::Frame, "Wrap in frame", "⌥⌘G", A::WrapInFrame);
+    if frame_like {
+        item(ui, Icon::Component, "Create component", "⌥⌘K", A::CreateComponent);
+    }
+    ui.separator();
+    item(ui, Icon::ChevronUp, "Bring to front", "⇧⌘]", A::ToFront);
+    item(ui, Icon::ChevronDown, "Send to back", "⇧⌘[", A::ToBack);
+    ui.separator();
+    let (eye, eye_label) = if visible { (Icon::EyeSlash, "Hide") } else { (Icon::Eye, "Show") };
+    item(ui, eye, eye_label, "⇧⌘H", A::ToggleVisible);
+    let (lock, lock_label) = if locked { (Icon::LockOpen, "Unlock") } else { (Icon::Lock, "Lock") };
+    item(ui, lock, lock_label, "⇧⌘L", A::ToggleLock);
+    item(ui, Icon::Search, "Zoom to layer", "⇧2", A::ZoomSelection);
+    ui.separator();
+    ui.menu_button("Actions", |ui| {
+        crate::theme::popup_backing(ui);
+        if let Some(a) = actions::menu(ui, ed) {
+            actions::dispatch(ed, st, a);
+            ui.close();
+        }
+    });
+    ui.separator();
+    item(ui, Icon::Trash, "Delete", "⌫", A::Delete);
+    if let Some(a) = run {
+        ed.run(a);
+    }
+}
+
+/// [`icon_menu_item`] with its shortcut on the right.
+fn icon_menu_item_keys(ui: &mut Ui, icon: Icon, label: &str, keys: &str) -> egui::Response {
+    let r = icon_menu_item(ui, icon, label);
+    ui.painter().text(
+        egui::pos2(r.rect.right() - 10.0, r.rect.center().y),
+        Align2::RIGHT_CENTER,
+        keys,
+        egui::FontId::proportional(theme::SECONDARY),
+        theme::pal(ui).tertiary,
+    );
+    r
 }
 
 fn tool_icon(t: Tool) -> Icon {
@@ -2012,10 +2165,10 @@ fn toolbar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
             let p = theme::pal(ui);
             egui::Frame::popup(ui.style())
                 .fill(p.popover)
-                .corner_radius(theme::RADIUS_PANEL)
+                .corner_radius(theme::radius_panel())
                 .inner_margin(4.0)
                 .stroke(egui::Stroke::NONE)
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         for t in Tool::ALL {
@@ -2057,9 +2210,9 @@ fn toast(ctx: &egui::Context, text: &str, error: bool) {
             };
             egui::Frame::popup(ui.style())
                 .fill(fill)
-                .corner_radius(16.0)
+                .corner_radius(crate::theme::r(16.0))
                 .inner_margin(egui::Margin::symmetric(16, 10))
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.set_max_width(520.0);
                     ui.label(RichText::new(text).color(ink));
                 });
@@ -2139,7 +2292,7 @@ fn review_overlay(ctx: &egui::Context, ed: &Editor, st: &UiState, canvas: egui::
                     egui::pos2(fr.right() - size.x, fr.top() - size.y - 6.0),
                     size,
                 );
-                painter.rect_filled(tag, 255, p.warning);
+                painter.rect_filled(tag, crate::theme::r(255.0), p.warning);
                 painter.galley(tag.min + egui::vec2(8.0, 3.0), galley, p.warning);
             }
         });
@@ -2242,7 +2395,7 @@ fn agent_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
                     let ink = kit::ink_on(accent);
                     let galley = painter.layout_no_wrap(format!("{}\u{2026}", agent_verb(&d.name)), theme::semibold(theme::SECONDARY), ink);
                     let tag = egui::Rect::from_min_size(r.left_top() - egui::vec2(0.0, galley.size().y + 8.0), galley.size() + egui::vec2(12.0, 4.0));
-                    painter.rect_filled(tag, 255, accent);
+                    painter.rect_filled(tag, crate::theme::r(255.0), accent);
                     painter.galley(tag.min + egui::vec2(6.0, 2.0), galley, ink);
                 }
             }
@@ -2267,7 +2420,7 @@ fn agent_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
             let galley = painter.layout_no_wrap(text, theme::semibold(theme::SECONDARY), ink.gamma_multiply(a));
             let at = tip + egui::vec2(AGENT_CURSOR * 0.6, AGENT_CURSOR * 0.9);
             let tag = egui::Rect::from_min_size(at, galley.size() + egui::vec2(12.0, 4.0));
-            painter.rect_filled(tag, 255, accent.gamma_multiply(a));
+            painter.rect_filled(tag, crate::theme::r(255.0), accent.gamma_multiply(a));
             painter.galley(tag.min + egui::vec2(6.0, 2.0), galley, ink);
         });
     let Some(m) = st.agent_marks.last().filter(|m| m.page_id != page) else { return };
@@ -2312,9 +2465,9 @@ fn run_toast(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
             egui::Frame::popup(ui.style())
                 .fill(p.popover)
                 .stroke(egui::Stroke::new(1.0, p.hover))
-                .corner_radius(16.0)
+                .corner_radius(crate::theme::r(16.0))
                 .inner_margin(egui::Margin::symmetric(16, 12))
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.horizontal(|ui| {
                         let (r, _) =
                             ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
@@ -2373,7 +2526,7 @@ fn status(ctx: &egui::Context, ed: &Editor, canvas: egui::Rect) {
                 .fill(p.sidebar)
                 .corner_radius(egui::CornerRadius::same(255))
                 .inner_margin(egui::Margin::symmetric(14, 6))
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.label(
                         RichText::new(&ed.status)
                             .color(p.secondary)
@@ -2394,10 +2547,10 @@ fn help(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
             let p = theme::pal(ui);
             egui::Frame::popup(ui.style())
                 .fill(p.sidebar)
-                .corner_radius(24.0)
+                .corner_radius(crate::theme::r(24.0))
                 .inner_margin(24.0)
                 .stroke(egui::Stroke::NONE)
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.set_width(width);
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {

@@ -1,6 +1,7 @@
 //! Pointing at the canvas from chat: Pick mode (click a layer, Shift+drag an area), Option+click
 //! in Chat mode, the crops chips carry, and the on-canvas Ask box (⌘K on a selection).
 
+use crate::theme::Surface as _;
 use super::{SelChip, chip_label, push_chip};
 use crate::editor::{Editor, InputEvent};
 use crate::geom::{Rect, v2};
@@ -220,7 +221,7 @@ pub fn ask_popover(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canva
     let (mut send, mut close) = (false, false);
     egui::Area::new("chat-ask".into()).order(egui::Order::Foreground).constrain_to(canvas).fixed_pos(pos).show(ctx, |ui| {
         let p = theme::pal(ui);
-        kit::card_frame(ui).inner_margin(12).show(ui, |ui| {
+        kit::card_frame(ui).inner_margin(12).show_surface(ui, |ui| {
             ui.set_width(ASK_W - 24.0);
             ui.spacing_mut().item_spacing.y = 8.0;
             ui.horizontal(|ui| {
@@ -228,7 +229,7 @@ pub fn ask_popover(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canva
                 ui.add(egui::Label::new(RichText::new(&name).font(theme::semibold(theme::BODY))).truncate());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| close = kit::close_button(ui).clicked());
             });
-            let r = ui.add(egui::TextEdit::singleline(&mut ask.text).hint_text("Ask about this layer").desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
+            let r = crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut ask.text).hint_text("Ask about this layer").desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN)));
             if std::mem::take(&mut ask.focus) {
                 r.request_focus();
             }

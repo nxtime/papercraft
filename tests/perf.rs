@@ -105,3 +105,27 @@ fn ten_thousand_elements_cache_and_pan_without_rework() {
     drop(draw);
     assert_eq!(r.uploads, 1, "panning reuses the uploaded geometry");
 }
+
+/// Selecting a layer scrolls the layers panel to it without building every row: the panel
+/// stays virtual, so a selection change on a large page costs about one frame.
+#[test]
+fn revealing_a_layer_builds_only_the_rows_on_screen() {
+    let mut e = ten_thousand();
+    let ctx = egui::Context::default();
+    papercraft::ui::setup_style(&ctx);
+    let mut st = papercraft::ui::UiState::default();
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+        ..Default::default()
+    };
+    let mut frame = |e: &mut Editor, st: &mut papercraft::ui::UiState| {
+        papercraft::render::frame::layout(&ctx, input(), e, st).output.textures_delta.clear();
+    };
+    frame(&mut e, &mut st);
+    let target = e.doc.root[9000];
+    e.selection = vec![target];
+    st.reveal = Some(target);
+    frame(&mut e, &mut st);
+    assert!(st.layer_rows.iter().any(|(id, ..)| *id == target), "the target row is built");
+    assert!(st.layer_rows.len() < 500, "{} rows built", st.layer_rows.len());
+}

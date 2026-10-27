@@ -84,7 +84,7 @@ fn segmented(ui: &mut Ui, cells: &[(Cell, bool, &str)], width: f32) -> Option<us
         ui.visuals().widgets.hovered.bg_fill,
         ui.visuals().widgets.active.bg_fill,
     );
-    ui.painter().rect_filled(rect, 5.0, rest);
+    theme::fill_control(ui, rect, theme::radius_md(), rest);
     let cw = width / cells.len() as f32;
     let mut clicked = None;
     for (i, (cell, on, tip)) in cells.iter().enumerate() {
@@ -93,11 +93,20 @@ fn segmented(ui: &mut Ui, cells: &[(Cell, bool, &str)], width: f32) -> Option<us
         let resp = ui
             .allocate_rect(r, egui::Sense::click())
             .on_hover_text(*tip);
-        if *on || resp.hovered() {
+        let acrylic_on = *on && theme::is_acrylic();
+        if acrylic_on {
+            theme::fill_accent(ui, r.shrink(3.0), crate::theme::ru(6), theme::accent());
+        } else if *on || resp.hovered() {
             ui.painter()
-                .rect_filled(r.shrink(2.0), 4.0, if *on { on_fill } else { hover });
+                .rect_filled(r.shrink(2.0), crate::theme::r(4.0), if *on { on_fill } else { hover });
         }
-        let ink = if *on { p.text } else { p.secondary };
+        let ink = if acrylic_on {
+            super::kit::ink_on(theme::accent())
+        } else if *on {
+            p.text
+        } else {
+            p.secondary
+        };
         match cell {
             Cell::Icon(ic) => theme::paint_icon(
                 ui.painter(),
@@ -132,8 +141,7 @@ fn color_field(
     width: f32,
 ) -> Option<Color> {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, theme::FIELD_H), egui::Sense::hover());
-    ui.painter()
-        .rect_filled(rect, 5.0, ui.visuals().widgets.inactive.bg_fill);
+    theme::fill_control(ui, rect, theme::radius_md(), ui.visuals().widgets.inactive.bg_fill);
     let sw = egui::Rect::from_min_size(
         rect.left_top() + egui::vec2(5.0, (theme::FIELD_H - 18.0) / 2.0),
         egui::Vec2::splat(18.0),
@@ -277,13 +285,15 @@ fn field(
     } else {
         egui::Stroke::NONE
     };
-    ui.painter().rect(
-        rect,
-        egui::CornerRadius::same(5),
-        fill,
-        edit_stroke,
-        egui::StrokeKind::Inside,
-    );
+    theme::fill_control(ui, rect, theme::radius_md(), fill);
+    if buf.is_some() {
+        ui.painter().rect_stroke(
+            rect,
+            theme::radius_md(),
+            edit_stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
     let ink = if enabled { p.text } else { p.tertiary };
     if !label.is_empty() {
         ui.painter().text(
@@ -323,13 +333,16 @@ fn field(
             ui.data_mut(|d| d.insert_temp(id, text));
         }
     } else {
-        ui.painter().text(
-            egui::pos2(text_x, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            format!("{}{suffix}", fmt_num(value)),
-            font,
-            ink,
-        );
+        // Clipped to the field: a long value must not run into the next one.
+        ui.painter()
+            .with_clip_rect(rect.shrink2(egui::vec2(inset / 2.0, 0.0)))
+            .text(
+                egui::pos2(text_x, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                format!("{}{suffix}", fmt_num(value)),
+                font,
+                ink,
+            );
     }
     out
 }
@@ -415,10 +428,21 @@ fn icon_btn(ui: &mut Ui, icon: theme::Icon, on: bool, tip: &str) -> bool {
         .clicked()
 }
 
+/// The scroll bar runs in the panel's right margin, close to its edge; [`SCROLL_GUTTER`] keeps
+/// the content clear of it.
+pub const MARGIN: egui::Margin = egui::Margin {
+    left: 14,
+    right: 4,
+    top: 12,
+    bottom: 12,
+};
+const SCROLL_GUTTER: f32 = 10.0;
+
 pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
+            ui.set_max_width(ui.available_width() - SCROLL_GUTTER);
             theme::figma_fields(ui);
             let ids = ed.top_selection();
             ui.horizontal(|ui| {
@@ -589,13 +613,10 @@ fn feedback_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, ids: &[NodeI
     }
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let add = crate::theme::small_button(ui, "Add").clicked();
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut st.feedback_draft)
-                    .hint_text("Note for the agent…")
-                    .desired_width(ui.available_width())
-                    .margin(crate::theme::INPUT_MARGIN),
-            );
+            let add = crate::theme::small_icon_button(ui, Some(theme::Icon::Plus), "")
+                .on_hover_text("Add note")
+                .clicked();
+            let r = super::kit::icon_field(ui, theme::Icon::Note, &mut st.feedback_draft, "Note for the agent…");
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (add || enter) && !st.feedback_draft.trim().is_empty() {
                 let text = std::mem::take(&mut st.feedback_draft).trim().to_string();
@@ -633,7 +654,7 @@ fn swatches(ui: &mut Ui, current: Color) -> Option<Color> {
         ui.spacing_mut().item_spacing.x = 4.0;
         for c in STICKY_COLORS {
             let (r, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
-            ui.painter().rect_filled(r, 5.0, c32(c));
+            ui.painter().rect_filled(r, crate::theme::r(5.0), c32(c));
             if c == current {
                 ui.painter().rect_stroke(
                     r,
@@ -776,7 +797,7 @@ fn sketch_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             });
         }
     });
-    if crate::theme::small_button(ui, "New wobble")
+    if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Sketch), "New wobble")
         .on_hover_text("Re-roll the random seed")
         .clicked()
     {
@@ -821,6 +842,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 st.export = *preset;
             }
             chip.context_menu(|ui| {
+                crate::theme::popup_backing(ui);
                 if super::icon_menu_item(ui, crate::theme::Icon::Trash, "Remove preset").clicked() {
                     remove = Some(i);
                     ui.close();
@@ -877,25 +899,22 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         (Scope::Page, _) => format!("page “{}”", ed.page_name()),
         (Scope::AllPages, _) => format!("{} pages", ed.pages.len()),
     };
-    if ui
-        .add(
+    if theme::lit(ui, |ui| ui.add(
             egui::Button::new(format!("Export {what}…"))
                 .min_size(egui::vec2(ui.available_width(), 24.0)),
-        )
+        ))
         .clicked()
     {
         ed.requests.push(AppRequest::Export(*spec));
     }
     ui.horizontal(|ui| {
         let w = half(ui);
-        if ui
-            .add(egui::Button::new("Copy as PNG").min_size(egui::vec2(w, 24.0)))
+        if theme::lit(ui, |ui| ui.add(egui::Button::new("Copy as PNG").min_size(egui::vec2(w, 24.0))))
             .clicked()
         {
             ed.run(crate::editor::shortcuts::Action::CopyAsPng);
         }
-        if ui
-            .add(egui::Button::new("Copy as SVG").min_size(egui::vec2(w, 24.0)))
+        if theme::lit(ui, |ui| ui.add(egui::Button::new("Copy as SVG").min_size(egui::vec2(w, 24.0))))
             .clicked()
         {
             ed.run(crate::editor::shortcuts::Action::CopyAsSvg);
@@ -924,7 +943,8 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             .find(|(k, _)| *k == st.code_target)
             .map_or("react", |(k, _)| *k);
         row(ui, "Target", |ui| {
-            if let Some(v) = combo(ui, "code-target", cur, &targets, ui.available_width()) {
+            let icons = { use theme::Icon as I; [I::React, I::Tailwind, I::Angular, I::Code, I::Rust] };
+            if let Some(v) = super::kit::select_icons(ui, cur, &targets, &icons, ui.available_width()) {
                 st.code_target = v.into();
             }
         });
@@ -942,8 +962,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         }
         ui.horizontal(|ui| {
             let w = half(ui);
-            if ui
-                .add(egui::Button::new("Copy Code").min_size(egui::vec2(w, 24.0)))
+            if theme::lit(ui, |ui| ui.add(egui::Button::new("Copy Code").min_size(egui::vec2(w, 24.0))))
                 .clicked()
                 && let Ok(code) =
                     crate::mcp::codegen::code_for_target(&ed.doc, root_id, &st.code_target)
@@ -951,8 +970,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 ui.ctx().copy_text(code);
                 ed.status = format!("Copied {} code to clipboard", st.code_target);
             }
-            if ui
-                .add(egui::Button::new("Copy AI Spec").min_size(egui::vec2(w, 24.0)))
+            if theme::lit(ui, |ui| ui.add(egui::Button::new("Copy AI Spec").min_size(egui::vec2(w, 24.0))))
                 .clicked()
                 && let Ok(md) =
                     crate::mcp::codegen::to_ai_spec_markdown(&ed.doc, root_id, &st.code_target)
@@ -1101,7 +1119,7 @@ fn props_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, ids: &[NodeId],
                 }
                 _ => {
                     let mut v = current.clone();
-                    let r = ui.add(egui::TextEdit::singleline(&mut v).margin(crate::theme::INPUT_MARGIN).desired_width(width));
+                    let r = crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut v).margin(crate::theme::INPUT_MARGIN).desired_width(width)));
                     if r.lost_focus() && v != current {
                         set = Some(v);
                     }
@@ -1132,13 +1150,13 @@ fn header(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             }
         });
         ui.horizontal(|ui| {
-            if crate::theme::small_button(ui, "Group").clicked() {
+            if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Group), "Group").clicked() {
                 ed.group_selection();
             }
-            if crate::theme::small_button(ui, "Frame").clicked() {
+            if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Frame), "Frame").clicked() {
                 ed.run(crate::editor::shortcuts::Action::WrapInFrame);
             }
-            if crate::theme::small_button(ui, "Component").clicked() {
+            if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Component), "Component").clicked() {
                 ed.create_component();
             }
         });
@@ -1176,15 +1194,16 @@ fn header(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     };
     ui.horizontal_wrapped(|ui| {
         if first.component {
-            if crate::theme::small_button(ui, "Create instance").clicked() {
+            if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Instance), "Create instance").clicked() {
                 ed.instance_of_selection();
             }
         } else if is_inst_root {
-            if crate::theme::small_button(ui, "Go to main").clicked() {
+            if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Component), "Go to main").clicked() {
                 ed.go_to_main();
             }
             if !other_comps.is_empty() {
                 ui.menu_button("Swap", |ui| {
+                    crate::theme::popup_backing(ui);
                     for (comp_id, cname) in &other_comps {
                         if ui.button(cname).clicked() {
                             ed.swap_instance(first.id, *comp_id);
@@ -1193,14 +1212,14 @@ fn header(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
                     }
                 });
             }
-            if has_subtree_overrides && crate::theme::small_button(ui, "Reset").clicked() {
+            if has_subtree_overrides && crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Restore), "Reset").clicked() {
                 ed.reset_overrides();
             }
             if crate::theme::small_button(ui, "Detach").clicked() {
                 ed.detach_instance();
             }
         } else if (first.is_frame() || first.is_group())
-            && crate::theme::small_button(ui, "Create component").clicked()
+            && crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Component), "Create component").clicked()
         {
             ed.create_component();
         }
@@ -1210,24 +1229,24 @@ fn header(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
                 .instance
                 .as_ref()
                 .is_some_and(|l| !l.overrides.is_empty())
-            && crate::theme::small_button(ui, "Reset overrides").clicked()
+            && crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Restore), "Reset overrides").clicked()
         {
             ed.reset_overrides();
         }
         if first.is_container()
             && !first.children.is_empty()
-            && crate::theme::small_button(ui, "Ungroup").clicked()
+            && crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Group), "Ungroup").clicked()
         {
             ed.ungroup_selection();
         }
         if !first.is_container()
             && !matches!(first.kind, NodeKind::Path { .. })
-            && crate::theme::small_button(ui, "Flatten").clicked()
+            && crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Pen), "Flatten").clicked()
         {
             ed.flatten_selection();
         }
         if matches!(first.kind, NodeKind::Path { .. })
-            && crate::theme::small_button(ui, "Edit points").clicked()
+            && crate::theme::small_icon_button(ui, Some(crate::theme::Icon::PenTool), "Edit points").clicked()
         {
             ed.start_path_edit(first.id);
         }
@@ -1530,7 +1549,7 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             }
         });
     };
-    ui.horizontal(|ui| {
+    row(ui, "Direction", |ui| {
         if icon_btn(
             ui,
             theme::Icon::ArrowRight,
@@ -1550,10 +1569,11 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         if icon_btn(ui, theme::Icon::Wrap, l.wrap, "Wrap") {
             set(ed, &|l| l.wrap = !l.wrap);
         }
-        ui.add_space(6.0);
+    });
+    row(ui, "Gap", |ui| {
+        let room = ui.available_width() - 24.0 - ui.spacing().item_spacing.x;
         ui.add_enabled_ui(!l.gap_auto, |ui| {
-            let room = (ui.available_width() - 34.0).max(60.0);
-            if let Some(v) = bound_field(ui, ed, ids, "gap", "Gap ", "", l.gap, 0.5, -1e4..=1e4, room) {
+            if let Some(v) = bound_field(ui, ed, ids, "gap", "", "", l.gap, 0.5, -1e4..=1e4, room) {
                 set(ed, &|l| l.gap = v);
             }
         });
@@ -1561,15 +1581,19 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             set(ed, &|l| l.gap_auto = !l.gap_auto);
         }
     });
-    ui.horizontal(|ui| {
-        let cw = ((ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / 4.0).max(36.0);
-        for (i, p) in ["T ", "R ", "B ", "L "].iter().enumerate() {
-            let side = ["padding-top", "padding-right", "padding-bottom", "padding-left"][i];
-            if let Some(v) = bound_field(ui, ed, ids, side, p, "", l.padding[i], 0.5, 0.0..=1e4, cw) {
-                set(ed, &|l| l.padding[i] = v);
+    // Two sides per row: four fields with bind buttons do not fit one panel row.
+    for pair in [[0usize, 1], [2, 3]] {
+        row(ui, if pair[0] == 0 { "Padding" } else { "" }, |ui| {
+            let cw = half(ui);
+            for i in pair {
+                let side = ["padding-top", "padding-right", "padding-bottom", "padding-left"][i];
+                let p = ["T ", "R ", "B ", "L "][i];
+                if let Some(v) = bound_field(ui, ed, ids, side, p, "", l.padding[i], 0.5, 0.0..=1e4, cw) {
+                    set(ed, &|l| l.padding[i] = v);
+                }
             }
-        }
-    });
+        });
+    }
     let opts = [
         (Align::Start, "Start"),
         (Align::Center, "Center"),
@@ -1665,7 +1689,9 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             });
         }
         let lh = first.text_style.line_height.unwrap_or(0.0) * 100.0;
-        if let Some(v) = num_field(ui, ed, "LH ", lh, 1.0, 0.0..=1000.0, w) {
+        // Line height and spacing share the three columns the align buttons leave.
+        let w = w * 1.5;
+        if let Some(v) = field(ui, ed, "LH ", "%", lh, 1.0, 0.0..=1000.0, w) {
             apply(ed, "line height", ids, |n| {
                 n.text_style.line_height = (v > 0.0).then_some(v / 100.0)
             });
@@ -1692,12 +1718,12 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             return;
         };
         let mut t = text.clone();
-        let r = ui.add(
+        let r = crate::theme::lit(ui, |ui| ui.add(
             egui::TextEdit::multiline(&mut t)
                 .margin(crate::theme::INPUT_MARGIN)
                 .desired_rows(2)
                 .desired_width(f32::INFINITY),
-        );
+        ));
         if r.changed() {
             apply(ed, "text", ids, |n| {
                 if let NodeKind::Text { text, .. } = &mut n.kind {
@@ -1750,7 +1776,13 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
             Paint::Image { .. } => 3,
         };
         let opts: Vec<(u8, &str)> = kinds.iter().map(|(l, k)| (*k, *l)).collect();
-        if let Some(k) = combo(ui, "kind", cur, &opts, 62.0) {
+        // A gradient's controls sit on rows below, so its type takes the row.
+        let kind_w = if [1, 2].contains(&cur) {
+            ui.available_width() - 24.0 - ui.spacing().item_spacing.x
+        } else {
+            84.0
+        };
+        if let Some(k) = combo(ui, "kind", cur, &opts, kind_w) {
             let c = p.preview_color();
             let np = match k {
                 0 => Paint::solid(c),
@@ -1807,7 +1839,7 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
                         },
                     );
                 }
-                if crate::theme::small_button(ui, "Replace…").clicked() {
+                if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Image), "Replace…").clicked() {
                     ed.requests.push(AppRequest::ImageFill(ids.to_vec(), i));
                 }
             }
@@ -1850,22 +1882,43 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
                 }
             }
         };
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Stops")
+                    .size(theme::SECONDARY + 1.0)
+                    .color(theme::pal(ui).secondary),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::theme::icon_button(ui, crate::theme::Icon::Plus, 24.0, false)
+                    .on_hover_text("Add stop")
+                    .clicked()
+                {
+                    let mut ns = stops.clone();
+                    let c = ns.last().map_or(Color::BLACK, |s| s.color);
+                    ns.push(Stop { pos: 0.5, color: c });
+                    ns.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+                    set(ed, rebuild(ns, *from, *to));
+                }
+            });
+        });
         for (si, s) in stops.iter().enumerate() {
             ui.horizontal(|ui| {
-                ui.add_space(LABEL_W * 0.5);
+                ui.spacing_mut().interact_size = egui::vec2(theme::FIELD_H, theme::FIELD_H);
                 if let Some(c) = color_button(ui, ed, s.color) {
                     let mut ns = stops.clone();
                     ns[si].color = c;
                     set(ed, rebuild(ns, *from, *to));
                 }
-                if let Some(v) = num_field(ui, ed, "", s.pos * 100.0, 0.5, 0.0..=100.0, 56.0) {
+                // Room for the remove button, kept on every row so the fields line up.
+                let w = ui.available_width() - 24.0 - ui.spacing().item_spacing.x;
+                if let Some(v) = field(ui, ed, "", "%", s.pos * 100.0, 0.5, 0.0..=100.0, w) {
                     let mut ns = stops.clone();
                     ns[si].pos = v / 100.0;
                     set(ed, rebuild(ns, *from, *to));
                 }
-                ui.label(RichText::new("%").weak());
                 if stops.len() > 2
                     && crate::theme::icon_button(ui, crate::theme::Icon::Minus, 24.0, false)
+                        .on_hover_text("Remove stop")
                         .clicked()
                 {
                     let mut ns = stops.clone();
@@ -1874,28 +1927,22 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
                 }
             });
         }
-        ui.horizontal(|ui| {
-            ui.add_space(LABEL_W * 0.5);
-            if crate::theme::small_button(ui, "+ stop").clicked() {
-                let mut ns = stops.clone();
-                let c = ns.last().map_or(Color::BLACK, |s| s.color);
-                ns.push(Stop { pos: 0.5, color: c });
-                ns.sort_by(|a, b| a.pos.total_cmp(&b.pos));
-                set(ed, rebuild(ns, *from, *to));
+        if linear {
+            let d = *to - *from;
+            let ang = d.y.atan2(d.x).to_degrees();
+            let w = ui.available_width() - LABEL_W - ui.spacing().item_spacing.x;
+            if let Some(v) = row(ui, "Angle", |ui| field(ui, ed, "", "°", ang, 1.0, -360.0..=360.0, w)) {
+                let a = v.to_radians();
+                let half = v2(a.cos(), a.sin()) * 0.5;
+                let c = v2(0.5, 0.5);
+                set(ed, rebuild(stops.clone(), c - half, c + half));
             }
-            if linear {
-                let d = *to - *from;
-                let ang = d.y.atan2(d.x).to_degrees();
-                if let Some(v) = num_field(ui, ed, "Angle ", ang, 1.0, -360.0..=360.0, 70.0) {
-                    let a = v.to_radians();
-                    let half = v2(a.cos(), a.sin()) * 0.5;
-                    let c = v2(0.5, 0.5);
-                    set(ed, rebuild(stops.clone(), c - half, c + half));
-                }
-            } else if let Some(v) = num_field(ui, ed, "R ", to.x * 100.0, 0.5, 1.0..=400.0, 70.0) {
+        } else {
+            let w = ui.available_width() - LABEL_W - ui.spacing().item_spacing.x;
+            if let Some(v) = row(ui, "Radius", |ui| field(ui, ed, "", "%", to.x * 100.0, 0.5, 1.0..=400.0, w)) {
                 set(ed, rebuild(stops.clone(), *from, v2(v / 100.0, v / 100.0)));
             }
-        });
+        }
     }
 }
 

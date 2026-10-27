@@ -117,7 +117,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 heading(ui, &title);
                 if !issues.is_empty() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::theme::small_button(ui, "Fix all")
+                        if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Zap), "Fix all")
                             .on_hover_text("Auto-fix grid, color variables, text scale, and touch targets")
                             .clicked()
                         {
@@ -168,7 +168,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     }
                     if fixable {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if crate::theme::small_button(ui, "Fix")
+                            if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Zap), "Fix")
                                 .on_hover_text(&issue.fix)
                                 .clicked()
                             {

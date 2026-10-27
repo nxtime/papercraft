@@ -102,7 +102,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Inspect one node | `get_node_info`, `get_computed_styles`, `get_jsx` |
 | Find nodes by text or style | `find_nodes` (text contains the phrase, any case, every page) |
 | Read all copy in a subtree | `get_tree_summary {nodeId, fullText: true}` (depth counts from the node: rows under a "Screens" frame need depth 3) |
-| See it | `get_screenshot` (`nodeId`, `scale` 1 or 2, `annotations: true` to include notes) |
+| See it | `get_screenshot` (`nodeId`, `scale` 1 or 2, `annotations: true` to include notes, `mode` to preview a theme without switching) |
 | Show the user something | `set_viewport` (page switch, fit, zoom) |
 | Document rules on the design | `annotate`, `get_annotation_template`, `get_annotations`, `update_annotation`, `delete_annotations` |
 | New screen | `create_artboard` (`width` and `height` required) |

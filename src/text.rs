@@ -99,7 +99,8 @@ pub struct TextLayout {
     pub font_size: f64,
 }
 
-fn advance_in(face: FaceId, c: char, font_size: f64) -> (u16, f64) {
+/// Glyph id and advance (in ems) of `c`, `?` standing in for a missing glyph.
+fn lookup(face: FaceId, c: char) -> (u16, f64) {
     let f = face_of(face);
     let gid = f
         .glyph_index(c)
@@ -107,7 +108,23 @@ fn advance_in(face: FaceId, c: char, font_size: f64) -> (u16, f64) {
         .map(|g| g.0)
         .unwrap_or(0);
     let adv = f.glyph_hor_advance(ttf_parser::GlyphId(gid)).unwrap_or(0) as f64;
-    (gid, adv / f.units_per_em() as f64 * font_size)
+    (gid, adv / f.units_per_em() as f64)
+}
+
+/// Chars below this are looked up once per face: a cmap lookup re-parses the subtable.
+const CACHED_CHARS: usize = 256;
+
+fn advance_in(face: FaceId, c: char, font_size: f64) -> (u16, f64) {
+    static TABLES: [OnceLock<Vec<(u16, f64)>>; 4] = [const { OnceLock::new() }; 4];
+    let (gid, em) = match (c as usize) < CACHED_CHARS {
+        true => TABLES[(face & 3) as usize].get_or_init(|| {
+            (0..CACHED_CHARS as u32)
+                .map(|i| lookup(face, char::from_u32(i).unwrap_or('?')))
+                .collect()
+        })[c as usize],
+        false => lookup(face, c),
+    };
+    (gid, em * font_size)
 }
 
 #[cfg(test)]

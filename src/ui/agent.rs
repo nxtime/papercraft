@@ -59,6 +59,7 @@ impl AgentUi {
     /// The top-level "Agent" menu.
     pub fn menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Agent", |ui| {
+            crate::theme::popup_backing(ui);
             if super::icon_menu_item(ui, crate::theme::Icon::Export, "Connect…").clicked() {
                 self.open = true;
                 ui.close();
@@ -88,7 +89,10 @@ impl AgentUi {
             .open(&mut open)
             .collapsible(false)
             .default_width(460.0)
-            .show(ctx, |ui| self.contents(ui));
+            .show(ctx, |ui| {
+                theme::modal_backing(ui, ui.visuals().window_fill, ui.visuals().window_corner_radius.nw);
+                self.contents(ui)
+            });
         self.open = open && self.open;
     }
 

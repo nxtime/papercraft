@@ -32,7 +32,7 @@ pub(super) fn dialog(
 ) -> Option<bool> {
     let frame = egui::Frame::new()
         .fill(theme::pal_from_ctx(ctx).sidebar)
-        .corner_radius(24.0)
+        .corner_radius(crate::theme::r(24.0))
         .inner_margin(24.0);
     let response = egui::Modal::new(egui::Id::new(id))
         .frame(frame)
@@ -43,6 +43,7 @@ pub(super) fn dialog(
                 super::motion::MEDIUM,
                 super::motion::ease_out_cubic,
             ));
+            theme::modal_backing(ui, theme::pal(ui).sidebar, theme::ru(24));
             ui.set_width(DIALOG_WIDTH.min(ui.ctx().content_rect().width() - 48.0));
             ui.spacing_mut().item_spacing.y = 10.0;
             super::kit::badge(ui, theme::Icon::Trash, ui.visuals().error_fg_color, 48.0);
@@ -93,7 +94,7 @@ fn paint_ghost(ctx: &egui::Context) {
     ctx.request_repaint();
     let frame = egui::Frame::new()
         .fill(theme::pal_from_ctx(ctx).sidebar)
-        .corner_radius(24.0)
+        .corner_radius(crate::theme::r(24.0))
         .inner_margin(24.0);
     egui::Modal::new(egui::Id::new("editor-removal-ghost"))
         .frame(frame)

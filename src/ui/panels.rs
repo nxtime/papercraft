@@ -1,5 +1,6 @@
 //! Sidebar views beyond layers, library and design: history, comments and the agent log.
 
+use crate::theme::Surface as _;
 use super::{UiState, kit};
 use crate::editor::Editor;
 use crate::model::NodeId;
@@ -48,10 +49,10 @@ fn row(
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
     let hover = super::motion::hover(ui.ctx(), resp.id.with("row"), &resp);
     if active {
-        ui.painter().rect_filled(rect, theme::RADIUS_LG, p.field);
+        theme::fill_selected(ui, rect, theme::radius_lg(), p.field);
     } else if hover > 0.0 {
         ui.painter()
-            .rect_filled(rect, theme::RADIUS_LG, p.hover.gamma_multiply(hover));
+            .rect_filled(rect, theme::radius_lg(), p.hover.gamma_multiply(hover));
     }
     ui.painter()
         .circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 4.0, dot);
@@ -156,12 +157,12 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         st.versions = crate::versions::list(&dir, &page_id);
         st.versions_key = key;
     }
-    ui.add(
+    crate::theme::lit(ui, |ui| ui.add(
         egui::TextEdit::singleline(&mut st.version_draft)
             .hint_text("Name this version")
             .desired_width(f32::INFINITY)
             .margin(theme::INPUT_MARGIN),
-    );
+    ));
     ui.add_space(4.0);
     if kit::button_wide(
         ui,
@@ -210,11 +211,11 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 if let Some((id, draft)) = &mut st.version_renaming
                     && *id == v.id
                 {
-                    let r = ui.add(
+                    let r = crate::theme::lit(ui, |ui| ui.add(
                         egui::TextEdit::singleline(draft)
                             .desired_width(f32::INFINITY)
                             .margin(theme::INPUT_MARGIN),
-                    );
+                    ));
                     // Check before taking focus back (see `home::project_card`).
                     if r.lost_focus() {
                         if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -232,6 +233,7 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     restore = Some(v.id.clone());
                 }
                 resp.context_menu(|ui| {
+                    crate::theme::popup_backing(ui);
                     if super::icon_menu_item(ui, crate::theme::Icon::Restore, "Restore").clicked() {
                         restore = Some(v.id.clone());
                         ui.close();
@@ -360,9 +362,9 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     let mut select = false;
                     egui::Frame::new()
                         .fill(p.field)
-                        .corner_radius(theme::RADIUS_PANEL)
+                        .corner_radius(theme::radius_panel())
                         .inner_margin(12)
-                        .show(ui, |ui| {
+                        .show_surface(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.spacing_mut().item_spacing.y = 6.0;
                             ui.horizontal(|ui| {
@@ -446,7 +448,7 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     ui.add_space(8.0);
     let target = ed.selection.first().copied();
     ui.add_enabled_ui(target.is_some(), |ui| {
-        ui.add(
+        crate::theme::lit(ui, |ui| ui.add(
             egui::TextEdit::singleline(&mut st.feedback_draft)
                 .hint_text(if target.is_some() {
                     "Note for the agent…"
@@ -455,7 +457,7 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 })
                 .desired_width(f32::INFINITY)
                 .margin(theme::INPUT_MARGIN),
-        );
+        ));
         ui.add_space(4.0);
         if kit::button_wide(ui, kit::ButtonKind::Primary, None, "Add note").clicked()
             && !st.feedback_draft.trim().is_empty()
@@ -538,9 +540,9 @@ fn runs_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         egui::Frame::new()
             .fill(p.field)
             .stroke(egui::Stroke::new(1.0, theme::accent()))
-            .corner_radius(theme::RADIUS_LG)
+            .corner_radius(theme::radius_lg())
             .inner_margin(12)
-            .show(ui, |ui| {
+            .show_surface(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     kit::badge(ui, Icon::Pen, theme::accent(), 32.0);
@@ -609,9 +611,9 @@ fn runs_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         let card = egui::Frame::new()
             .fill(p.field)
             .stroke(stroke)
-            .corner_radius(theme::RADIUS_LG)
+            .corner_radius(theme::radius_lg())
             .inner_margin(12)
-            .show(ui, |ui| {
+            .show_surface(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 6.0;
                 let top = egui::vec2(ui.available_width(), 22.0);
@@ -906,13 +908,13 @@ fn diff_row(
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 48.0), egui::Sense::click());
     let hover = super::motion::hover(ui.ctx(), resp.id.with("rv"), &resp);
     ui.painter()
-        .rect_filled(rect, theme::RADIUS_LG, p.hover.gamma_multiply(hover));
+        .rect_filled(rect, theme::radius_lg(), p.hover.gamma_multiply(hover));
     let badge = egui::Rect::from_min_size(
         rect.left_center() - egui::vec2(0.0, 14.0),
         egui::vec2(28.0, 28.0),
     );
     ui.painter()
-        .rect_filled(badge, theme::RADIUS_MD, tint.gamma_multiply(0.18));
+        .rect_filled(badge, theme::radius_md(), tint.gamma_multiply(0.18));
     theme::paint_icon(ui.painter(), badge.shrink(6.0), icon, tint);
     let x = rect.left() + 40.0;
     let clip = ui.painter().with_clip_rect(egui::Rect::from_min_max(
@@ -1144,7 +1146,7 @@ fn variable_row(ui: &mut Ui, n: &crate::mcp::diff::NodeDiff) {
         "removed" => (p.danger, Icon::Minus),
         _ => (p.warning, Icon::Pencil),
     };
-    ui.painter().rect_filled(badge, theme::RADIUS_MD, tint.gamma_multiply(0.18));
+    ui.painter().rect_filled(badge, theme::radius_md(), tint.gamma_multiply(0.18));
     theme::paint_icon(ui.painter(), badge.shrink(6.0), icon, tint);
     let x = rect.left() + 40.0;
     let clip = ui.painter().with_clip_rect(rect);

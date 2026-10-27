@@ -120,6 +120,7 @@ mod tests {
                 }),
                 at: 5,
             }],
+            issues: [("t1".to_owned(), crate::chat::IssueOutcome::Filed { number: 7, url: "u".into(), existing: false })].into(),
         }
     }
 

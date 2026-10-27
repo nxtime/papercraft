@@ -1649,6 +1649,8 @@ fn build_spec_tree(
         "fillVar": fill_var,
         "fills": n.style.fills.iter().map(|f| paint_json(doc, f)).collect::<Vec<_>>(),
         "stroke": stroke.map(|c| c.to_hex()),
+        // A bound stroke (`bind_variable` field `stroke`) is written as its variable, like fills.
+        "strokeVar": stroke.and(n.bindings.get("stroke")).map(|v| format!("--{}", v.trim_start_matches("--"))),
         "strokeWidth": stroke.map(|_| n.style.stroke_width),
         "cornerRadius": n.style.corner_radius,
         "cornerRadiusToken": token_for(doc, n.style.corner_radius, &["radius"]),

@@ -2,6 +2,7 @@
 //! rows, key caps, empty states and banners. They mirror the components of the `PaperCraft` design
 //! file (Button / Primary, Chip / Accent, Setting row, Key cap, Banner / Info ...).
 
+use crate::theme::Surface as _;
 use crate::theme::{self, Icon};
 use egui::{
     Align2, Color32, CornerRadius, FontId, Rect, Response, RichText, Sense, Stroke, Ui, vec2,
@@ -32,12 +33,17 @@ fn galley_width(ui: &Ui, text: &str, font: FontId) -> f32 {
 
 /// A rounded button of the design system. `icon` goes before the label.
 pub fn button(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: &str) -> Response {
-    paint_button(ui, kind, icon, label, false)
+    paint_button(ui, kind, icon, label, false, BUTTON_H)
+}
+
+/// Like [`button`], as tall as a segmented control (for bars).
+pub fn button_compact(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: &str) -> Response {
+    paint_button(ui, kind, icon, label, false, SEGMENTED_H)
 }
 
 /// Like [`button`], stretched over the available width, label centred.
 pub fn button_wide(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: &str) -> Response {
-    paint_button(ui, kind, icon, label, true)
+    paint_button(ui, kind, icon, label, true, BUTTON_H)
 }
 
 fn paint_button(
@@ -46,6 +52,7 @@ fn paint_button(
     icon: Option<Icon>,
     label: &str,
     wide: bool,
+    h: f32,
 ) -> Response {
     let p = theme::pal(ui);
     let font = theme::semibold(theme::BODY);
@@ -56,7 +63,7 @@ fn paint_button(
     } else {
         text_w + icon_w + 32.0
     };
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, BUTTON_H), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
     let enabled = ui.is_enabled();
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("btn"), &resp);
     let (fill, ink) = match kind {
@@ -75,7 +82,13 @@ fn paint_button(
         theme::blend(p.field, Color32::from_white_alpha(0))
     };
     let ink = if enabled { ink } else { p.tertiary };
-    ui.painter().rect_filled(rect, theme::RADIUS_LG, fill);
+    if enabled && kind == ButtonKind::Primary && theme::is_acrylic() {
+        theme::paint_gloss(ui.painter(), rect, theme::radius_lg(), fill);
+    } else if kind == ButtonKind::Secondary {
+        theme::fill_control(ui, rect, theme::radius_lg(), fill);
+    } else {
+        ui.painter().rect_filled(rect, theme::radius_lg(), fill);
+    }
     let mut x = if wide {
         rect.center().x - (text_w + icon_w) / 2.0
     } else {
@@ -121,7 +134,7 @@ pub fn on_accent(p: theme::Palette) -> Color32 {
 
 /// A small pill label. `active` uses the accent text, like Chip / Accent.
 pub fn chip(ui: &mut Ui, label: &str, active: bool) -> Response {
-    chip_ink(ui, label, active.then(theme::accent))
+    chip_painted(ui, label, active.then(theme::accent), active)
 }
 
 /// A chip with its own ink (for example `p.success` for Accepted); None is the idle grey.
@@ -129,19 +142,39 @@ pub fn chip(ui: &mut Ui, label: &str, active: bool) -> Response {
 pub const CHIP_H: f32 = 22.0;
 
 pub fn chip_ink(ui: &mut Ui, label: &str, ink: Option<Color32>) -> Response {
+    chip_painted(ui, label, ink, false)
+}
+
+/// [`chip_ink`] with `lead` points of room before the label, for an icon the caller paints at
+/// `rect.left() + 10`.
+pub fn chip_lead(ui: &mut Ui, label: &str, ink: Option<Color32>, lead: f32) -> Response {
+    chip_painted_lead(ui, label, ink, false, lead)
+}
+
+fn chip_painted(ui: &mut Ui, label: &str, ink: Option<Color32>, selected: bool) -> Response {
+    chip_painted_lead(ui, label, ink, selected, 0.0)
+}
+
+fn chip_painted_lead(ui: &mut Ui, label: &str, ink: Option<Color32>, selected: bool, lead: f32) -> Response {
     let p = theme::pal(ui);
     let font = theme::semibold(theme::SECONDARY);
-    let w = galley_width(ui, label, font.clone()) + 20.0;
+    let w = galley_width(ui, label, font.clone()) + 20.0 + lead;
     let (rect, resp) = ui.allocate_exact_size(vec2(w, CHIP_H), Sense::click());
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("chip"), &resp);
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(PILL),
-        theme::blend(p.field, p.hover.gamma_multiply(hover)),
-    );
+    let fill = theme::blend(p.field, p.hover.gamma_multiply(hover));
+    if selected {
+        theme::fill_selected(ui, rect, PILL, fill);
+    } else {
+        theme::fill_control(ui, rect, PILL, fill);
+    }
     let ink = ink.unwrap_or(p.secondary);
-    ui.painter()
-        .text(rect.center(), Align2::CENTER_CENTER, label, font, ink);
+    ui.painter().text(
+        rect.center() + vec2(lead / 2.0, 0.0),
+        Align2::CENTER_CENTER,
+        label,
+        font,
+        ink,
+    );
     resp
 }
 
@@ -151,7 +184,7 @@ pub fn key_cap(ui: &mut Ui, label: &str) {
     let font = theme::semibold(theme::SECONDARY);
     let w = (galley_width(ui, label, font.clone()) + 14.0).max(24.0);
     let (rect, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
-    ui.painter().rect_filled(rect, theme::RADIUS_MD, p.field);
+    theme::fill_control(ui, rect, theme::radius_md(), p.field);
     ui.painter().text(
         rect.center(),
         Align2::CENTER_CENTER,
@@ -244,11 +277,44 @@ pub fn setting_row<R>(
     .inner
 }
 
+/// The PaperCraft mark: the pen tool on an accent tile, glossy and glowing under acrylic.
+pub fn brand_mark(ui: &mut Ui, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    let fill = theme::accent();
+    let radius = (size * 0.3) as u8;
+    if theme::is_acrylic() {
+        theme::paint_gloss(ui.painter(), rect, radius, fill);
+    } else {
+        ui.painter().rect_filled(rect, radius, fill);
+    }
+    theme::paint_icon(ui.painter(), rect.shrink(size * 0.22), Icon::PenTool, ink_on(fill));
+}
+
+/// A single-line field with `icon` in front of the text (a magnifier for search).
+pub fn icon_field(ui: &mut Ui, icon: Icon, text: &mut String, hint: &str) -> Response {
+    const ICON_ROOM: i8 = 30;
+    let p = theme::pal(ui);
+    let mut margin = theme::INPUT_MARGIN;
+    margin.left = ICON_ROOM;
+    let resp = crate::theme::lit(ui, |ui| ui.add(
+        egui::TextEdit::singleline(text)
+            .hint_text(hint)
+            .desired_width(f32::INFINITY)
+            .margin(margin),
+    ));
+    let at = Rect::from_center_size(
+        egui::pos2(resp.rect.left() + 16.0, resp.rect.center().y),
+        vec2(15.0, 15.0),
+    );
+    theme::paint_icon(ui.painter(), at, icon, p.secondary);
+    resp
+}
+
 /// A rounded icon badge, as at the top of a dialog.
 pub fn badge(ui: &mut Ui, icon: Icon, tint: Color32, size: f32) {
     let p = theme::pal(ui);
     let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
-    ui.painter().rect_filled(rect, theme::RADIUS_PANEL, p.field);
+    theme::fill_control(ui, rect, theme::radius_panel(), p.field);
     theme::paint_icon(ui.painter(), rect.shrink(size * 0.28), icon, tint);
 }
 
@@ -281,9 +347,9 @@ pub fn banner(ui: &mut Ui, icon: Icon, tint: Color32, text: &str, action: Option
     let mut clicked = false;
     egui::Frame::new()
         .fill(p.field)
-        .corner_radius(theme::RADIUS_PANEL)
+        .corner_radius(theme::radius_panel())
         .inner_margin(egui::Margin::symmetric(16, 10))
-        .show(ui, |ui| {
+        .show_surface(ui, |ui| {
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
                 theme::paint_icon(ui.painter(), r, icon, tint);
@@ -303,7 +369,7 @@ pub fn card_frame(ui: &Ui) -> egui::Frame {
     let p = theme::pal(ui);
     egui::Frame::new()
         .fill(p.sidebar)
-        .corner_radius(theme::RADIUS_XL + 8)
+        .corner_radius(theme::radius_xl() + 8)
         .inner_margin(24)
         .stroke(Stroke::NONE)
 }
@@ -314,7 +380,7 @@ pub fn close_button(ui: &mut Ui) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("close"), &resp);
     ui.painter()
-        .rect_filled(rect, theme::RADIUS_LG, p.hover.gamma_multiply(hover));
+        .rect_filled(rect, theme::radius_lg(), p.hover.gamma_multiply(hover));
     crate::ui::lottie_icon::paint_hover(
         ui,
         resp.id,
@@ -342,8 +408,11 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
         crate::ui::motion::ease_out_cubic,
     );
     let fill = theme::blend(p.field, theme::accent().gamma_multiply(t));
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(PILL), fill);
+    if t > 0.5 {
+        theme::fill_accent(ui, rect, PILL, fill);
+    } else {
+        theme::fill_control(ui, rect, PILL, fill);
+    }
     let knob_x = egui::lerp((rect.left() + 12.0)..=(rect.right() - 12.0), t);
     let knob = if t > 0.5 { on_accent(p) } else { p.secondary };
     ui.painter()
@@ -357,10 +426,10 @@ pub fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool) -> bool {
     let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("nav"), &resp);
     if selected {
-        ui.painter().rect_filled(row, theme::RADIUS_LG, p.field);
+        theme::fill_selected(ui, row, theme::radius_lg(), p.field);
     } else if hover > 0.0 {
         ui.painter()
-            .rect_filled(row, theme::RADIUS_LG, p.hover.gamma_multiply(hover));
+            .rect_filled(row, theme::radius_lg(), p.hover.gamma_multiply(hover));
     }
     let ir = Rect::from_center_size(
         egui::pos2(row.left() + 20.0, row.center().y),
@@ -437,7 +506,11 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         theme::blend(p.field, p.hover.gamma_multiply(hover)),
         theme::accent().gamma_multiply(t),
     );
-    ui.painter().rect_filled(bx, 6.0, fill);
+    if t > 0.5 {
+        theme::fill_accent(ui, bx, crate::theme::ru(6), fill);
+    } else {
+        theme::fill_control(ui, bx, crate::theme::ru(6), fill);
+    }
     if t > 0.0 {
         let c = bx.center();
         let ink = on_accent(p).gamma_multiply(t);
@@ -465,7 +538,21 @@ pub fn select<T: PartialEq + Copy>(
     options: &[(T, &str)],
     width: f32,
 ) -> Option<T> {
+    select_icons(ui, current, options, &[], width)
+}
+
+/// [`select`] with `icons[i]` before option `i`, in the trigger and the menu.
+pub fn select_icons<T: PartialEq + Copy>(
+    ui: &mut Ui,
+    current: T,
+    options: &[(T, &str)],
+    icons: &[Icon],
+    width: f32,
+) -> Option<T> {
     let p = theme::pal(ui);
+    let icon_of = |i: usize| icons.get(i).copied();
+    let indent = if icons.is_empty() { 0.0 } else { 22.0 };
+    let cur_i = options.iter().position(|(o, _)| *o == current);
     let label = options
         .iter()
         .find(|(o, _)| *o == current)
@@ -477,13 +564,18 @@ pub fn select<T: PartialEq + Copy>(
     };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, theme::FIELD_H), Sense::click());
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("select"), &resp);
-    ui.painter().rect_filled(
+    theme::fill_control(
+        ui,
         rect,
-        theme::RADIUS_MD,
+        theme::radius_md(),
         theme::blend(p.field, p.hover.gamma_multiply(hover)),
     );
+    if let Some(i) = cur_i.and_then(icon_of) {
+        let r = Rect::from_center_size(egui::pos2(rect.left() + 19.0, rect.center().y), vec2(14.0, 14.0));
+        theme::paint_icon(ui.painter(), r, i, p.secondary);
+    }
     ui.painter().text(
-        egui::pos2(rect.left() + 12.0, rect.center().y),
+        egui::pos2(rect.left() + 12.0 + indent, rect.center().y),
         Align2::LEFT_CENTER,
         label,
         FontId::proportional(theme::BODY),
@@ -498,20 +590,25 @@ pub fn select<T: PartialEq + Copy>(
     egui::Popup::menu(&resp)
         .width(rect.width().max(150.0))
         .show(|ui| {
+            crate::theme::popup_backing(ui);
             ui.spacing_mut().item_spacing.y = 2.0;
-            for (o, l) in options {
+            for (k, (o, l)) in options.iter().enumerate() {
                 let (row, r) =
                     ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
                 let on = *o == current;
                 let h = crate::ui::motion::hover(ui.ctx(), r.id.with("opt"), &r);
                 if on {
-                    ui.painter().rect_filled(row, theme::RADIUS_MD, p.field);
+                    theme::fill_selected(ui, row, theme::radius_md(), p.field);
                 } else if h > 0.0 {
                     ui.painter()
-                        .rect_filled(row, theme::RADIUS_MD, p.hover.gamma_multiply(h));
+                        .rect_filled(row, theme::radius_md(), p.hover.gamma_multiply(h));
+                }
+                if let Some(i) = icon_of(k) {
+                    let ir = Rect::from_center_size(egui::pos2(row.left() + 19.0, row.center().y), vec2(14.0, 14.0));
+                    theme::paint_icon(ui.painter(), ir, i, if on { p.text } else { p.secondary });
                 }
                 ui.painter().text(
-                    egui::pos2(row.left() + 12.0, row.center().y),
+                    egui::pos2(row.left() + 12.0 + indent, row.center().y),
                     Align2::LEFT_CENTER,
                     *l,
                     if on {
@@ -556,11 +653,11 @@ pub fn slider(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>
     }
     let t = (((*value - lo) / (hi - lo).max(f64::EPSILON)).clamp(0.0, 1.0)) as f32;
     let rail = Rect::from_center_size(rect.center(), vec2(rect.width() - 8.0, 6.0));
-    ui.painter().rect_filled(rail, 3.0, p.field);
+    ui.painter().rect_filled(rail, crate::theme::r(3.0), p.field);
     let x = rail.left() + 4.0 + t * (rail.width() - 8.0);
     let mut fill = rail;
     fill.set_right(x);
-    ui.painter().rect_filled(fill, 3.0, theme::accent());
+    ui.painter().rect_filled(fill, crate::theme::r(3.0), theme::accent());
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("slider"), &resp);
     ui.painter()
         .circle_filled(egui::pos2(x, rect.center().y), 7.0 + hover, p.text);
@@ -625,8 +722,7 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, Option<&str>)], selected: usize) -
     let inset = 2.0;
     let total = widths.iter().sum::<f32>() + 2.0 * inset;
     let (outer, _) = ui.allocate_exact_size(vec2(total, SEGMENTED_H), Sense::hover());
-    ui.painter()
-        .rect_filled(outer, CornerRadius::same(PILL), p.field);
+    theme::fill_control(ui, outer, PILL, p.field);
     let mut x = outer.left() + inset;
     let mut picked = None;
     for (i, ((label, off), w)) in items.iter().zip(&widths).enumerate() {
@@ -641,8 +737,7 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, Option<&str>)], selected: usize) -
         let on = i == selected;
         let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("seg"), &resp);
         if on {
-            ui.painter()
-                .rect_filled(rect, CornerRadius::same(PILL), theme::accent());
+            theme::fill_accent(ui, rect, PILL, theme::accent());
         } else if off.is_none() {
             ui.painter().rect_filled(
                 rect,
@@ -679,7 +774,7 @@ pub fn skeleton(painter: &egui::Painter, rect: egui::Rect, t: f32, alpha: f32) {
         return;
     }
     let p = theme::pal_from_ctx(painter.ctx());
-    painter.rect_filled(rect, 6.0, p.field.gamma_multiply(alpha));
+    painter.rect_filled(rect, crate::theme::r(6.0), p.field.gamma_multiply(alpha));
     let band = rect.width() * SHIMMER_BAND;
     let x = rect.left() - band + (t * SHIMMER_SPEED).fract() * (rect.width() + band);
     let (l, r) = (x.max(rect.left()), (x + band).min(rect.right()));

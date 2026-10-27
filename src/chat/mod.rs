@@ -186,4 +186,16 @@ pub struct Chat {
     pub backend: Backend,
     #[serde(default)]
     pub messages: Vec<Message>,
+    /// What became of the issues drafted in this chat, by the drafting tool call's id.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub issues: std::collections::BTreeMap<String, IssueOutcome>,
+}
+
+/// A drafted issue the user sent or dropped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum IssueOutcome {
+    /// Filed as #number; `existing` when an issue with a matching title was there already.
+    Filed { number: u64, url: String, existing: bool },
+    Discarded,
 }

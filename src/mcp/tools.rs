@@ -245,6 +245,7 @@ pub fn definitions() -> Vec<Value> {
                 "scale": {"type": "number", "description": "Render scale: 1 (default) or 2."},
                 "out": {"type": "string", "description": "Optional file path to save the PNG to (also used by papercraft-cli)."},
                 "annotations": {"type": "boolean", "description": "Also draw the note cards, badges and leader lines of notes on the captured layers; the image grows to include the cards."},
+                "mode": {"type": "string", "description": "Render in this variable mode (e.g. \"Light\") without switching the document: preview every theme of one artboard while other agents keep working in the current mode."},
                 "pageId": page_id(),
             }),
             &[],

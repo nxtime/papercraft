@@ -87,12 +87,12 @@ fn picker(ui: &mut Ui, ed: &Editor, kind: Kind, current: Option<&str>) -> Option
     let id = ui.make_persistent_id("bind-search");
     let mut query = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
     ui.set_width(POPUP_W);
-    ui.add(
+    crate::theme::lit(ui, |ui| ui.add(
         egui::TextEdit::singleline(&mut query)
             .hint_text(format!("Search {} variables", kind_label(kind)))
             .desired_width(f32::INFINITY)
             .margin(theme::INPUT_MARGIN),
-    );
+    ));
     ui.data_mut(|d| d.insert_temp(id, query.clone()));
     let list = pick_list(&ed.design, &ed.pages[ed.active_page].modes, kind, &query);
     let count: usize = list.iter().map(|g| g.items.len()).sum();
@@ -124,11 +124,11 @@ fn picker(ui: &mut Ui, ed: &Editor, kind: Kind, current: Option<&str>) -> Option
                 let on = current == Some(it.css.as_str());
                 let hover = crate::ui::motion::hover(ui.ctx(), r.id.with("pick"), &r);
                 let fill = if on { p.field } else { p.hover.gamma_multiply(hover) };
-                ui.painter().rect_filled(rect, theme::RADIUS_MD, fill);
+                ui.painter().rect_filled(rect, theme::radius_md(), fill);
                 let mark = Rect::from_center_size(rect.left_center() + vec2(14.0, 0.0), vec2(14.0, 14.0));
                 match it.color {
                     Some(c) => {
-                        ui.painter().rect_filled(mark, 3.0, super::c32(c));
+                        ui.painter().rect_filled(mark, crate::theme::r(3.0), super::c32(c));
                     }
                     None => {
                         ui.painter().text(mark.center(), Align2::CENTER_CENTER, "#", theme::semibold(theme::BODY), p.secondary);
@@ -165,7 +165,10 @@ fn open_picker(resp: &egui::Response, ed: &Editor, kind: Kind, current: Option<&
     egui::Popup::menu(resp)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .width(POPUP_W)
-        .show(|ui| picker(ui, ed, kind, current))
+        .show(|ui| {
+            crate::theme::popup_backing(ui);
+            picker(ui, ed, kind, current)
+        })
         .and_then(|r| r.inner)
 }
 
@@ -194,7 +197,7 @@ pub type ChipAction = Option<Option<String>>;
 pub fn bound_chip(ui: &mut Ui, ed: &Editor, kind: Kind, css: &str, value: &str, width: f32) -> ChipAction {
     let p = theme::pal(ui);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, theme::FIELD_H), Sense::click());
-    ui.painter().rect_filled(rect, 5.0, ui.visuals().widgets.inactive.bg_fill);
+    theme::fill_control(ui, rect, theme::radius_md(), ui.visuals().widgets.inactive.bg_fill);
     let x = Rect::from_center_size(rect.right_center() - vec2(14.0, 0.0), vec2(16.0, 16.0));
     let detach = cross(ui, x);
     let mut right = x.left() - 4.0;
@@ -209,7 +212,7 @@ pub fn bound_chip(ui: &mut Ui, ed: &Editor, kind: Kind, css: &str, value: &str, 
         rect.left_top() + vec2(4.0, 4.0),
         egui::pos2((rect.left() + 4.0 + g.size().x + 16.0).min(right), rect.bottom() - 4.0),
     );
-    ui.painter().rect_filled(chip, 5.0, theme::accent().gamma_multiply(0.18));
+    ui.painter().rect_filled(chip, crate::theme::r(5.0), theme::accent().gamma_multiply(0.18));
     ui.painter().with_clip_rect(chip.shrink2(vec2(6.0, 0.0))).galley(
         egui::pos2(chip.left() + 8.0, chip.center().y - g.size().y / 2.0),
         g,

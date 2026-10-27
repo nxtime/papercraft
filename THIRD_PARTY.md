@@ -62,3 +62,15 @@ SOFTWARE.
 
 Inter 4.1 by Rasmus Andersson — SIL Open Font License 1.1 (`assets/fonts/OFL.txt`). Regular,
 Medium, SemiBold, Bold, Italic and Bold Italic are bundled unmodified.
+
+Interface fonts, SIL Open Font License 1.1, Latin subsets as served by Google Fonts, unmodified
+(Regular, Medium, SemiBold): Geist (Vercel), Figtree (Erik Kennedy), DM Sans (Colophon Foundry,
+Jonny Pinhorn), Nunito (Vernon Adams, Jacques Le Bailly), Quicksand (Andrew Paglinawan),
+Fredoka (Milena Brandão, Hafontia), and Varela Round (Joe Prince; Regular only).
+
+## Agent logos
+
+`assets/agents/*.svg` are from LobeHub Icons (`@lobehub/icons-static-svg` 1.80.0,
+https://github.com/lobehub/lobe-icons), MIT License, Copyright (c) LobeHub. They are used
+unmodified to identify each coding agent in the agent picker. The marks are trademarks of
+their owners.

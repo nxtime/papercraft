@@ -178,6 +178,24 @@ impl Editor {
         n
     }
 
+    /// A copy of page `page` with its variables resolved in mode `mode` (by name), for a preview
+    /// that leaves the document, its history and the canvas as they are.
+    // ponytail: colours and bindings only; a mode that changes bound sizes previews them without
+    // re-running layout (fit_text/fixup need the editor).
+    pub fn page_doc_in_mode(&mut self, page: usize, mode: &str) -> Result<crate::model::Document, String> {
+        let (cid, mid) = find_mode(&self.design, mode).ok_or(format!("no mode `{mode}`"))?;
+        self.ensure_loaded(page);
+        let mut modes = self.pages[page].modes.clone();
+        modes.insert(cid, mid);
+        let cache = self.design.cache_for(&modes);
+        let mut doc = self.page_doc(page).clone();
+        let mut rec = crate::history::Recording::new("Preview mode", &doc);
+        let mut tx = crate::history::Tx::new(&mut doc, &mut rec);
+        tx.set_cache(&cache, &BTreeMap::new());
+        apply_bindings(&mut tx, &cache, &BTreeMap::new());
+        Ok(doc)
+    }
+
     /// Switch the active page to `mode_id` of `collection_id`: that page's modes, cache and bound
     /// fills only, one undo step. Returns the fills that changed.
     pub fn set_page_mode(&mut self, collection_id: &str, mode_id: &str) -> Result<usize, Error> {

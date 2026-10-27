@@ -151,6 +151,10 @@ impl Web {
             color_space: Default::default(),
         };
         let ctx = egui::Context::default();
+        theme::set_material(theme::Material::load());
+        theme::set_roundness(theme::Roundness::load());
+        theme::set_ui_font(theme::load_ui_font());
+        theme::set_accent_choice(theme::load_accent_choice());
         theme::apply_choice(&ctx, theme::Choice::load());
         let demo = window().location().hash().is_ok_and(|h| h == "#demo");
         let store = Store::open(WEB_ROOT).map_err(|e| format!("open store: {e}"))?;
@@ -453,7 +457,13 @@ impl Web {
 
     /// Render a screenshot offscreen and answer call `id` when the readback lands.
     fn start_screenshot(&mut self, id: u64, req: ShotRequest) {
-        let doc = self.ed.page_doc(req.page).clone();
+        let doc = match req.mode.as_deref() {
+            Some(m) => match self.ed.page_doc_in_mode(req.page, m) {
+                Ok(d) => d,
+                Err(e) => return self.relay.send(&Reply::err(id, e)),
+            },
+            None => self.ed.page_doc(req.page).clone(),
+        };
         let cats = self.ed.design.categories();
         let gpu = self.gpu_handle();
         self.finish(

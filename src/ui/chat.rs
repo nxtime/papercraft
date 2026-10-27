@@ -5,6 +5,7 @@
 //! The mode and the column width are per machine (`chat_ui.json` in the config folder, next to the
 //! theme choice), not in the project folder, so they do not sync to other people.
 
+use crate::theme::Surface as _;
 use super::chat_msgs::{self, Acts, View};
 #[path = "chat_agents.rs"]
 pub mod chat_agents;
@@ -14,7 +15,7 @@ pub use chat_pick::{layer_chip, open_ask};
 use chat_agents::{Act, PanelIn};
 use crate::chat::events::{Event, ImageAttachment};
 use crate::chat::agents::{self, AgentKind, AgentState, AgentStatus};
-use crate::chat::{Backend, BackendKind, Chat, Message, Role, ToolCall, store};
+use crate::chat::{Backend, BackendKind, Chat, IssueOutcome, Message, Role, ToolCall, store};
 use crate::project::format::{new_id, now_ms};
 use crate::theme::{self, Icon};
 use crate::ui::{UiState, kit};
@@ -360,6 +361,8 @@ pub struct ChatState {
     pub chat: Option<Chat>,
     /// Chats of the open project, newest first (refreshed on save).
     pub chats: Vec<Chat>,
+    /// Filter typed in the chat history popup.
+    pub history_query: String,
     pub turn: Option<TurnHandle>,
     pub rx: Option<Receiver<Event>>,
     /// Chat the running turn belongs to: its events go there, whichever chat is open.
@@ -999,21 +1002,55 @@ impl ChatState {
     #[cfg(not(target_arch = "wasm32"))]
     fn poll_issues(&mut self, ctx: &egui::Context) {
         use crate::issues::Filed;
-        let issues = &mut self.issues;
+        let mut done = Vec::new();
         self.issue_rx.retain(|(key, rx)| match rx.try_recv() {
             Ok(r) => {
-                issues.insert(key.clone(), match r {
-                    Ok(Filed::New { number, url }) => IssueState::Filed { number, url, existing: false },
-                    Ok(Filed::Duplicate { number, url, .. }) => IssueState::Filed { number, url, existing: true },
-                    Err(e) => IssueState::Failed(e),
-                });
+                done.push((key.clone(), r));
                 false
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => true,
             Err(_) => false,
         });
+        for (key, r) in done {
+            let state = match r {
+                Ok(Filed::New { number, url }) => IssueState::Filed { number, url, existing: false },
+                Ok(Filed::Duplicate { number, url, .. }) => IssueState::Filed { number, url, existing: true },
+                Err(e) => IssueState::Failed(e),
+            };
+            if let IssueState::Filed { number, url, existing } = &state {
+                self.record_issue(&key, IssueOutcome::Filed { number: *number, url: url.clone(), existing: *existing });
+            }
+            self.issues.insert(key, state);
+        }
         if !self.issue_rx.is_empty() {
             ctx.request_repaint_after(REPAINT);
+        }
+    }
+
+    /// Saves what became of a drafted issue in the chat that drafted it, so reopening the chat
+    /// shows it filed or discarded.
+    pub fn record_issue(&mut self, key: &str, o: IssueOutcome) {
+        let holds = |c: &Chat| c.messages.iter().any(|m| m.tools.iter().any(|t| t.id == key));
+        let Some(dir) = self.project.clone() else { return };
+        let target = match self.chat.as_mut().filter(|c| holds(c)) {
+            Some(c) => Some(c),
+            None => self.chats.iter_mut().find(|c| holds(c)),
+        };
+        let Some(c) = target else { return };
+        c.issues.insert(key.to_owned(), o);
+        if let Err(e) = store::save(&dir, c) {
+            log::warn!("could not save chat: {e}");
+        }
+    }
+
+    /// The open chat's saved issue outcomes, for the cards.
+    fn merge_issue_records(&mut self) {
+        let Some(c) = &self.chat else { return };
+        for (k, o) in &c.issues {
+            self.issues.entry(k.clone()).or_insert_with(|| match o {
+                IssueOutcome::Filed { number, url, existing } => IssueState::Filed { number: *number, url: url.clone(), existing: *existing },
+                IssueOutcome::Discarded => IssueState::Discarded,
+            });
         }
     }
 
@@ -1345,7 +1382,7 @@ fn image_offer(ui: &mut Ui, st: &mut UiState) {
     }
     let p = theme::pal(ui);
     let mut answer = None;
-    egui::Frame::new().fill(p.popover).corner_radius(theme::RADIUS_PANEL).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+    egui::Frame::new().fill(p.popover).corner_radius(theme::radius_panel()).inner_margin(egui::Margin::symmetric(12, 10)).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.label(RichText::new("Generate images with Codex?").font(theme::semibold(theme::BODY)));
@@ -1378,6 +1415,7 @@ fn issue_form(ctx: &egui::Context, st: &mut UiState) {
     let mut send = false;
     let state = st.chat.issues.get(FORM_ISSUE).cloned();
     egui::Modal::new(egui::Id::new("issue-form")).show(ctx, |ui| {
+        theme::modal_backing(ui, ui.visuals().window_fill, theme::radius_xl());
         ui.set_width(ISSUE_FORM_W);
         ui.spacing_mut().item_spacing.y = 8.0;
         ui.label(RichText::new("Report a PaperCraft issue").font(theme::semibold(theme::BODY + 3.0)));
@@ -1386,8 +1424,8 @@ fn issue_form(ctx: &egui::Context, st: &mut UiState) {
         if let Some(k) = kit::segmented(ui, &kinds.map(|(_, l)| (l, None)), kinds.iter().position(|(k, _)| *k == draft.kind).unwrap_or(0)) {
             draft.kind = kinds[k].0.into();
         }
-        ui.add(egui::TextEdit::singleline(&mut draft.title).hint_text("What goes wrong, in a line").desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
-        ui.add(egui::TextEdit::multiline(&mut draft.body).desired_rows(7).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN));
+        crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut draft.title).hint_text("What goes wrong, in a line").desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN)));
+        crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::multiline(&mut draft.body).desired_rows(7).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN)));
         match &state {
             Some(IssueState::Sending) => {
                 ui.label(RichText::new("Sending\u{2026}").color(theme::pal(ui).secondary));
@@ -1611,9 +1649,9 @@ pub fn inspector_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState,
             egui::Frame::new()
                 .fill(p.inspector)
                 .stroke(egui::Stroke::new(1.0, p.separator))
-                .corner_radius(theme::RADIUS_PANEL)
+                .corner_radius(theme::radius_panel())
                 .inner_margin(egui::Margin::symmetric(14, 12))
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.set_min_size(size - egui::vec2(28.0, 24.0));
                     ui.set_max_size(size - egui::vec2(28.0, 24.0));
                     super::inspector::panel(ui, ed, st);
@@ -1639,7 +1677,7 @@ pub fn canvas_pill(ctx: &egui::Context, st: &UiState, canvas: egui::Rect) {
                 .stroke(egui::Stroke::new(1.0, p.warning))
                 .corner_radius(egui::CornerRadius::same(255))
                 .inner_margin(egui::Margin::symmetric(12, 6))
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                         theme::paint_icon(ui.painter(), r, Icon::Lock, p.warning);
@@ -1659,6 +1697,7 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         issue_form(&ctx, st);
     }
     st.chat.ensure_chat();
+    st.chat.merge_issue_records();
     if std::mem::take(&mut st.settings.chat_changed) {
         // Paths, key or Re-scan changed in Settings: what was detected is stale.
         st.chat.rescan(&ctx, &st.settings.chat);
@@ -1760,6 +1799,7 @@ fn apply_acts(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, acts: Acts
         st.chat.file_issue(key, d, repo);
     }
     if let Some(key) = acts.discard_issue {
+        st.chat.record_issue(&key, crate::chat::IssueOutcome::Discarded);
         st.chat.issues.insert(key, IssueState::Discarded);
     }
     if let Some(id) = acts.restore {
@@ -1791,7 +1831,7 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
     ui.horizontal(|ui| {
         let right = 64.0;
         if let Some(mut t) = st.chat.renaming.take() {
-            let r = ui.add(egui::TextEdit::singleline(&mut t).desired_width(ui.available_width() - right));
+            let r = crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut t).desired_width(ui.available_width() - right)));
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -1811,8 +1851,11 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
             if kit::lottie_button(ui, "settings", "Chat settings", 26.0).clicked() {
                 st.settings.open_chat();
             }
-            let list = theme::icon_button(ui, Icon::Page, 26.0, false).on_hover_text("Chats");
+            let list = theme::icon_button(ui, Icon::Restore, 26.0, false).on_hover_text("Chat history");
             chat_menu(&list, st);
+            if theme::icon_button(ui, Icon::Plus, 26.0, false).on_hover_text("New chat").clicked() && !st.chat.is_running() {
+                st.chat.start_new_chat();
+            }
         });
     });
     let label = match (&st.chat.chat, &st.chat.detect) {
@@ -1824,7 +1867,15 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
     let ds_tokens = if st.chat.ds_text().is_empty() { 0 } else { st.chat.ds.tokens() };
     let mut rect = None;
     ui.horizontal(|ui| {
-        let r = kit::chip_ink(ui, &label, st.chat.picker_open.then(theme::accent));
+        const LOGO: f32 = 14.0;
+        let backend = st.chat.chat.as_ref().map(|c| c.backend.clone());
+        let has_logo = backend.as_ref().is_some_and(|b| chat_agents::backend_logo(b, &st.settings.chat).is_some());
+        let ink = st.chat.picker_open.then(theme::accent);
+        let r = kit::chip_lead(ui, &label, ink, if has_logo { LOGO + 4.0 } else { 0.0 });
+        if let Some(b) = backend.filter(|_| has_logo) {
+            let at = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 10.0 + LOGO / 2.0, r.rect.center().y), egui::vec2(LOGO, LOGO));
+            chat_agents::paint_backend_logo(ui, at, &b, &st.settings.chat, ink.unwrap_or(p.secondary));
+        }
         rect = Some(r.rect);
         if r.clicked() {
             st.chat.picker_open = !st.chat.picker_open;
@@ -1856,56 +1907,100 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
                 st.chat.fresh_next = !st.chat.fresh_next;
             }
             let (bar, _) = ui.allocate_exact_size(egui::vec2(36.0, 3.0), egui::Sense::hover());
-            ui.painter().rect_filled(bar, 2.0, p.separator);
+            ui.painter().rect_filled(bar, crate::theme::r(2.0), p.separator);
             let frac = (used as f32 / window as f32).clamp(0.0, 1.0);
             let fill = egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * frac, bar.height()));
-            ui.painter().rect_filled(fill, 2.0, if frac > CONTEXT_WARN || long { p.warning } else { theme::accent() });
+            ui.painter().rect_filled(fill, crate::theme::r(2.0), if frac > CONTEXT_WARN || long { p.warning } else { theme::accent() });
         });
     });
     rect
 }
 
-/// New chat, the other chats of the project (switch), and delete.
+/// Chat history: search, the project's chats grouped by when they were last used (switch,
+/// delete on hover), and a link to report an issue.
 fn chat_menu(anchor: &egui::Response, st: &mut UiState) {
+    const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+    const ROW_H: f32 = 32.0;
+    const LOGO: f32 = 14.0;
+    const LIST_MAX_H: f32 = 360.0;
     let running = st.chat.is_running();
-    egui::Popup::menu(anchor).width(280.0).show(|ui| {
+    egui::Popup::menu(anchor).width(300.0).show(|ui| {
+        crate::theme::popup_backing(ui);
         let p = theme::pal(ui);
         ui.spacing_mut().item_spacing.y = 2.0;
-        if kit::button_wide(ui, kit::ButtonKind::Primary, Some(Icon::Plus), "New chat").clicked() && !running {
-            st.chat.start_new_chat();
-            ui.close();
-        }
-        if ui.add(egui::Button::new(RichText::new("Report a PaperCraft issue\u{2026}").size(theme::SECONDARY + 1.0)).frame(false)).clicked() {
-            st.chat.issues.remove(FORM_ISSUE);
-            st.chat.issue_form = Some(IssueDraft { kind: "bug".into(), title: String::new(), body: ISSUE_TEMPLATE.into() });
-            ui.close();
-        }
+        kit::icon_field(ui, Icon::Search, &mut st.chat.history_query, "Search chats");
         ui.add_space(4.0);
         let current = st.chat.chat.as_ref().map(|c| c.id.clone());
         let now = now_ms();
-        for c in st.chat.chats.clone() {
-            ui.horizontal(|ui| {
+        let needle = st.chat.history_query.trim().to_lowercase();
+        let chats: Vec<Chat> = st.chat.chats.iter().filter(|c| needle.is_empty() || c.title.to_lowercase().contains(&needle)).cloned().collect();
+        let group = |updated: u64| match now.saturating_sub(updated) / DAY_MS {
+            0 => "Today",
+            1 => "Yesterday",
+            2..=6 => "This week",
+            _ => "Older",
+        };
+        egui::ScrollArea::vertical().max_height(LIST_MAX_H).show(ui, |ui| {
+            let mut last = "";
+            for c in &chats {
+                let g = group(c.updated);
+                if g != last {
+                    ui.add_space(if last.is_empty() { 0.0 } else { 6.0 });
+                    ui.label(RichText::new(g.to_uppercase()).size(theme::SECONDARY - 1.0).color(p.tertiary));
+                    last = g;
+                }
                 let on = current.as_deref() == Some(c.id.as_str());
-                ui.add_enabled_ui(!running, |ui| {
-                    let title = RichText::new(&c.title).font(if on { theme::semibold(theme::BODY) } else { egui::FontId::proportional(theme::BODY) });
-                    let w = ui.available_width() - 30.0;
-                    let r = ui.add_sized([w, 24.0], egui::Button::selectable(on, title).frame(false));
-                    if r.on_hover_text(super::home::relative_time(c.updated, now)).clicked() {
-                        st.chat.switch_to(&c.id);
-                        ui.close();
-                    }
-                });
-                // The chat of a running turn cannot be deleted: its events and history still land there.
+                let (row, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), egui::Sense::click());
+                let hover = ui.rect_contains_pointer(row);
+                if on {
+                    theme::fill_selected(ui, row, theme::radius_md(), p.field);
+                } else if hover {
+                    ui.painter().rect_filled(row, theme::radius_md(), p.hover);
+                }
+                let ink = if on { p.text } else { p.secondary };
+                let logo = egui::Rect::from_center_size(egui::pos2(row.left() + 8.0 + LOGO / 2.0, row.center().y), egui::vec2(LOGO, LOGO));
+                if !chat_agents::paint_backend_logo(ui, logo, &c.backend, &st.settings.chat, ink) {
+                    theme::paint_icon(ui.painter(), logo, Icon::Note, ink);
+                }
+                // The trash takes the time's place on hover; a running turn's chat cannot be deleted.
                 let busy = running && st.chat.turn_chat.as_deref() == Some(c.id.as_str());
-                let del = ui.add_enabled_ui(!busy, |ui| theme::icon_button(ui, Icon::Trash, 24.0, false).on_hover_text("Delete chat").clicked()).inner;
-                if del {
-                    st.chat.delete_chat = Some(c.id.clone());
+                let trash = egui::Rect::from_center_size(egui::pos2(row.right() - 16.0, row.center().y), egui::vec2(24.0, 24.0));
+                let right = if hover && !busy {
+                    trash.left()
+                } else {
+                    let t = super::home::relative_time(c.updated, now);
+                    let g = ui.painter().layout_no_wrap(t, egui::FontId::proportional(theme::SECONDARY), p.tertiary);
+                    let x = row.right() - 10.0 - g.size().x;
+                    ui.painter().galley(egui::pos2(x, row.center().y - g.size().y / 2.0), g, p.tertiary);
+                    x
+                };
+                let font = if on { theme::semibold(theme::BODY) } else { egui::FontId::proportional(theme::BODY) };
+                let title_x = logo.right() + 10.0;
+                let clip = egui::Rect::from_min_max(egui::pos2(title_x, row.top()), egui::pos2(right - 8.0, row.bottom()));
+                ui.painter().with_clip_rect(clip).text(egui::pos2(title_x, row.center().y), egui::Align2::LEFT_CENTER, &c.title, font, if on { p.text } else { p.text.gamma_multiply(0.9) });
+                if hover && !busy {
+                    let del = ui.put(trash, |ui: &mut Ui| theme::icon_button(ui, Icon::Trash, 24.0, false)).on_hover_text("Delete chat");
+                    if del.clicked() {
+                        st.chat.delete_chat = Some(c.id.clone());
+                        ui.close();
+                        continue;
+                    }
+                }
+                if r.clicked() && !running {
+                    st.chat.switch_to(&c.id);
                     ui.close();
                 }
-            });
-        }
-        if st.chat.chats.is_empty() {
-            ui.label(RichText::new("No saved chats yet").size(theme::SECONDARY).color(p.tertiary));
+            }
+            if chats.is_empty() {
+                let msg = if st.chat.chats.is_empty() { "No saved chats yet" } else { "No chats match" };
+                ui.label(RichText::new(msg).size(theme::SECONDARY).color(p.tertiary));
+            }
+        });
+        ui.separator();
+        if super::icon_menu_item(ui, Icon::Question, "Report a PaperCraft issue\u{2026}").clicked() {
+            st.chat.issues.remove(FORM_ISSUE);
+            st.chat.issue_form = Some(IssueDraft { kind: "bug".into(), title: String::new(), body: ISSUE_TEMPLATE.into() });
+            ui.close();
         }
     });
 }
@@ -1964,7 +2059,7 @@ fn sel_chip(ui: &mut Ui, label: &str) -> bool {
     let shown = if rest.is_empty() { &parts[..2] } else { &parts[..3] };
     let w = 2.0 * GAP + shown.iter().chain([&parts[3]]).map(|g| g.size().x + GAP).sum::<f32>();
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, kit::CHIP_H), egui::Sense::click());
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(255), theme::blend(p.field, p.hover.gamma_multiply(f32::from(u8::from(resp.hovered())))));
+    theme::fill_control(ui, rect, 255, theme::blend(p.field, p.hover.gamma_multiply(f32::from(u8::from(resp.hovered())))));
     let mut x = rect.left() + GAP + 2.0;
     for g in shown.iter().chain([&parts[3]]) {
         let pos = egui::pos2(x, rect.center().y - g.size().y / 2.0);
@@ -1990,7 +2085,7 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
     let _ = column;
     let enter = focused && ui.input_mut(|i| !i.modifiers.shift && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     let mut submit = false;
-    egui::Frame::new().fill(p.popover).corner_radius(theme::RADIUS_PANEL).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+    egui::Frame::new().fill(p.popover).corner_radius(theme::radius_panel()).inner_margin(egui::Margin::symmetric(12, 10)).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 6.0;
         // Messages added to the running turn: waiting for the agent's next step, or seen.
@@ -2056,7 +2151,9 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
             );
         });
         // Buttons on the right; the chips wrap in what is left instead of running under them.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // Bounded to one button's height: a centred layout given the open height would claim
+        // all of it, stretching the composer over the whole chat column.
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), kit::BUTTON_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if running {
                 let stopping = st.chat.stopping;
                 let label = if stopping { "Stopping\u{2026}" } else { "Stop" };

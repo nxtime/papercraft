@@ -2,6 +2,7 @@
 //! mode in the middle, the selected variable's details on the right. Every edit goes through
 //! `Editor::edit_design` (one undo step per page); a refused edit shows in the footer.
 
+use crate::theme::Surface as _;
 use super::{UiState, kit, motion};
 use crate::editor::Editor;
 use crate::mcp::codegen;
@@ -349,10 +350,10 @@ fn nav_row(
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
     let hover = motion::hover(ui.ctx(), resp.id.with("nav"), &resp);
     if selected {
-        ui.painter().rect_filled(rect, theme::RADIUS_MD, p.sidebar);
+        theme::fill_selected(ui, rect, theme::radius_md(), p.sidebar);
     } else if hover > 0.0 {
         ui.painter()
-            .rect_filled(rect, theme::RADIUS_MD, p.hover.gamma_multiply(hover));
+            .rect_filled(rect, theme::radius_md(), p.hover.gamma_multiply(hover));
     }
     let mut x = rect.left() + 8.0 + indent;
     let mut chev_hit = false;
@@ -406,7 +407,7 @@ fn nav_row(
                 egui::pos2(rx - w, mid - 10.0),
                 egui::pos2(rx, mid + 10.0),
             );
-            ui.painter().rect_filled(chip, 255, p.sidebar);
+            ui.painter().rect_filled(chip, crate::theme::r(255.0), p.sidebar);
             ui.painter()
                 .text(chip.center(), Align2::CENTER_CENTER, right, font, p.secondary);
         } else {
@@ -461,12 +462,13 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     let mut copy: Option<(&str, String)> = None;
     let frame = egui::Frame::new()
         .fill(p.sidebar)
-        .corner_radius(24.0)
+        .corner_radius(crate::theme::r(24.0))
         .inner_margin(MODAL_PAD);
     let modal = egui::Modal::new(egui::Id::new("variables-modal"))
         .frame(frame)
         .show(ctx, |ui| {
             ui.multiply_opacity(t);
+            theme::modal_backing(ui, theme::pal(ui).sidebar, theme::ru(24));
             if !live {
                 ui.disable();
             }
@@ -486,7 +488,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
                 egui::pos2(right.left() - GAP, body.bottom()),
             );
             for r in [left, main, right] {
-                ui.painter().rect_filled(r, theme::RADIUS_PANEL, p.field);
+                theme::fill_control(ui, r, theme::radius_panel(), p.field);
             }
             child(ui, header, |ui| title(ui, st));
             child(ui, left.shrink(12.0), |ui| {
@@ -623,12 +625,12 @@ fn collections_column(
     ui.add_space(4.0);
     match &mut st.variables.new_coll {
         Some(name) => {
-            let r = ui.add(
+            let r = crate::theme::lit(ui, |ui| ui.add(
                 egui::TextEdit::singleline(name)
                     .hint_text("Collection name")
                     .desired_width(f32::INFINITY)
                     .margin(theme::INPUT_MARGIN),
-            );
+            ));
             r.request_focus();
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -644,7 +646,7 @@ fn collections_column(
                 ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
             let hover = motion::hover(ui.ctx(), resp.id.with("newc"), &resp);
             ui.painter()
-                .rect_filled(rect, theme::RADIUS_MD, p.hover.gamma_multiply(hover));
+                .rect_filled(rect, theme::radius_md(), p.hover.gamma_multiply(hover));
             theme::paint_icon(
                 ui.painter(),
                 Rect::from_center_size(egui::pos2(rect.left() + 16.0, rect.center().y), vec2(14.0, 14.0)),
@@ -701,12 +703,12 @@ fn main_column(
     };
     let ro = c.library.is_some();
     ui.horizontal(|ui| {
-        ui.add(
+        crate::theme::lit(ui, |ui| ui.add(
             egui::TextEdit::singleline(&mut st.variables.search)
                 .hint_text("Search variables")
                 .desired_width(220.0)
                 .margin(theme::INPUT_MARGIN),
-        );
+        ));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add_enabled_ui(!ro, |ui| {
                 if kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Plus), "Mode").clicked() {
@@ -714,6 +716,7 @@ fn main_column(
                 }
                 let r = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::Plus), "Variable");
                 egui::Popup::menu(&r).show(|ui| {
+                    crate::theme::popup_backing(ui);
                     for k in [Kind::Color, Kind::Number, Kind::String, Kind::Boolean] {
                         if super::icon_menu_item(ui, kind_icon(k), kind_label(k)).clicked() {
                             let name = unique_name(c, st.variables.group.as_deref(), k);
@@ -800,11 +803,11 @@ fn table_header(ui: &mut Ui, c: &Collection, mode_w: f32, st: &mut UiState, ops:
                     .is_some_and(|(cc, mm, _)| cc == &c.id && mm == &m.id);
                 if editing {
                     let draft = &mut st.variables.mode_edit.as_mut().unwrap().2;
-                    let r = ui.add(
+                    let r = crate::theme::lit(ui, |ui| ui.add(
                         egui::TextEdit::singleline(draft)
                             .desired_width(90.0)
                             .margin(egui::Margin::symmetric(6, 3)),
-                    );
+                    ));
                     r.request_focus();
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -829,6 +832,7 @@ fn table_header(ui: &mut Ui, c: &Collection, mode_w: f32, st: &mut UiState, ops:
                 }
                 let r = theme::icon_button(ui, Icon::More, 22.0, false).on_hover_text("Mode options");
                 egui::Popup::menu(&r).show(|ui| {
+                    crate::theme::popup_backing(ui);
                     if super::icon_menu_item(ui, Icon::Pen, "Rename").clicked() {
                         st.variables.mode_edit = Some((c.id.clone(), m.id.clone(), m.name.clone()));
                         ui.close();
@@ -895,10 +899,10 @@ fn var_row(
     let selected = st.variables.selected.as_deref() == Some(v.id.as_str());
     let hot = ui.rect_contains_pointer(rect);
     if selected {
-        ui.painter().rect_filled(rect, theme::RADIUS_MD, p.sidebar);
+        theme::fill_selected(ui, rect, theme::radius_md(), p.sidebar);
     } else if hot {
         ui.painter()
-            .rect_filled(rect, theme::RADIUS_MD, p.hover);
+            .rect_filled(rect, theme::radius_md(), p.hover);
     }
     if resp.clicked() || (hot && ui.input(|i| i.pointer.primary_pressed())) {
         st.variables.selected = Some(v.id.clone());
@@ -956,7 +960,7 @@ fn value_cell(
             let tw = ui.fonts_mut(|f| f.layout_no_wrap(text.clone(), font.clone(), p.text).size().x);
             let (rect, resp) = ui.allocate_exact_size(vec2((tw + 20.0).min(width), 24.0), Sense::click());
             let a = theme::accent();
-            ui.painter().rect_filled(rect, 255, a.gamma_multiply(0.18));
+            ui.painter().rect_filled(rect, crate::theme::r(255.0), a.gamma_multiply(0.18));
             ui.painter().with_clip_rect(rect).text(
                 egui::pos2(rect.left() + 10.0, rect.center().y),
                 Align2::LEFT_CENTER,
@@ -968,8 +972,8 @@ fn value_cell(
         }
         Value::Color(col) => {
             let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-            ui.painter().rect_filled(r, 4.0, c32(*col));
-            ui.painter().rect_stroke(r, 4.0, egui::Stroke::new(1.0, p.hover), egui::StrokeKind::Inside);
+            ui.painter().rect_filled(r, crate::theme::r(4.0), c32(*col));
+            ui.painter().rect_stroke(r, crate::theme::r(4.0), egui::Stroke::new(1.0, p.hover), egui::StrokeKind::Inside);
             ui.add_enabled_ui(!ro, |ui| {
                 if let Some(t) = commit_text(ui, salt, &col.to_hex().to_uppercase(), 84.0, false, false)
                     && let Some(new) = Color::from_hex(t.trim())
@@ -1020,7 +1024,10 @@ fn value_cell(
     egui::Popup::menu(&anchor)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .width(280.0)
-        .show(|ui| alias_picker(ui, ds, v, mode, &value, ops));
+        .show(|ui| {
+            crate::theme::popup_backing(ui);
+            alias_picker(ui, ds, v, mode, &value, ops)
+        });
 }
 
 fn alias_picker(
@@ -1034,12 +1041,12 @@ fn alias_picker(
     let p = theme::pal(ui);
     let id = ui.make_persistent_id(("alias-filter", &v.id, mode));
     let mut filter = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
-    ui.add(
+    crate::theme::lit(ui, |ui| ui.add(
         egui::TextEdit::singleline(&mut filter)
             .hint_text("Search variables")
             .desired_width(f32::INFINITY)
             .margin(theme::INPUT_MARGIN),
-    );
+    ));
     ui.data_mut(|d| d.insert_temp(id, filter.clone()));
     let needle = filter.trim().to_lowercase();
     ui.add_space(4.0);
@@ -1066,7 +1073,7 @@ fn alias_picker(
                 let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
                 let h = motion::hover(ui.ctx(), r.id.with("alias"), &r);
                 ui.painter()
-                    .rect_filled(rect, theme::RADIUS_MD, p.hover.gamma_multiply(h));
+                    .rect_filled(rect, theme::radius_md(), p.hover.gamma_multiply(h));
                 ui.painter().text(
                     egui::pos2(rect.left() + 10.0, rect.center().y),
                     Align2::LEFT_CENTER,
@@ -1144,7 +1151,7 @@ fn details_column(
     label(ui, "CSS name");
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width() - 64.0, theme::FIELD_H), Sense::hover());
-        ui.painter().rect_filled(rect, theme::RADIUS_MD, p.sidebar.gamma_multiply(0.8));
+        theme::fill_control(ui, rect, theme::radius_md(), p.sidebar.gamma_multiply(0.8));
         ui.painter().text(
             egui::pos2(rect.left() + 10.0, rect.center().y),
             Align2::LEFT_CENTER,
@@ -1180,9 +1187,9 @@ fn details_column(
     let used = *st.variables.used.1.entry(css.clone()).or_insert_with(|| used_count(ed, &css));
     egui::Frame::new()
         .fill(p.sidebar)
-        .corner_radius(theme::RADIUS_LG)
+        .corner_radius(theme::radius_lg())
         .inner_margin(egui::Margin::symmetric(12, 10))
-        .show(ui, |ui| {
+        .show_surface(ui, |ui| {
             ui.set_width(ui.available_width() - 24.0);
             ui.label(
                 RichText::new(format!("Used {used} time{}", if used == 1 { "" } else { "s" }))

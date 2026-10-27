@@ -75,9 +75,10 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let (sel, resp) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
     let hover = super::motion::hover(ui.ctx(), resp.id.with("page-selector"), &resp);
-    ui.painter().rect_filled(
+    theme::fill_control(
+        ui,
         sel,
-        theme::RADIUS_LG,
+        theme::radius_lg(),
         theme::blend(p.field, p.hover.gamma_multiply(hover)),
     );
     theme::paint_icon(
@@ -107,8 +108,13 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         egui::pos2(sel.right() - 44.0 - cw / 2.0 + 14.0, sel.center().y),
         egui::vec2(cw, 20.0),
     );
+    let chip_fill = if theme::is_acrylic() {
+        theme::well_fill(p, ui.visuals().dark_mode)
+    } else {
+        p.sidebar
+    };
     ui.painter()
-        .rect_filled(chip, egui::CornerRadius::same(255), p.sidebar);
+        .rect_filled(chip, egui::CornerRadius::same(255), chip_fill);
     ui.painter().text(
         chip.center(),
         egui::Align2::CENTER_CENTER,
@@ -186,6 +192,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     })
                     .inner;
                 response.context_menu(|ui| {
+                    crate::theme::popup_backing(ui);
                     ui.set_width(MENU_WIDTH);
                     if super::icon_menu_item(ui, crate::theme::Icon::Text, "Rename group").clicked()
                     {
@@ -262,13 +269,14 @@ fn group_dialog(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     };
     let mut done = false;
     let response = egui::Modal::new(egui::Id::new("page-group-name")).show(ctx, |ui| {
+        theme::modal_backing(ui, ui.visuals().window_fill, theme::radius_xl());
         ui.set_width(MENU_WIDTH);
         ui.heading(title);
-        let input = ui.add(
+        let input = crate::theme::lit(ui, |ui| ui.add(
             egui::TextEdit::singleline(&mut draft.name)
                 .hint_text("Group name")
                 .margin(theme::INPUT_MARGIN),
-        );
+        ));
         if input.gained_focus() || !ui.memory(|m| m.focused().is_some()) {
             input.request_focus();
         }
@@ -314,9 +322,9 @@ fn page_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, i: usize) {
         egui::Sense::click_and_drag(),
     );
     if active {
-        ui.painter().rect_filled(row, 10.0, p.field);
+        theme::fill_selected(ui, row, crate::theme::ru(10), p.field);
     } else if resp.hovered() {
-        ui.painter().rect_filled(row, 10.0, p.hover);
+        ui.painter().rect_filled(row, crate::theme::r(10.0), p.hover);
     }
     // Drop indicator while dragging.
     if let Some((from, to)) = &st.pages.drag
@@ -394,6 +402,7 @@ fn page_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, i: usize) {
         *to = page_id.clone();
     }
     resp.context_menu(|ui| {
+        crate::theme::popup_backing(ui);
         ui.set_width(MENU_WIDTH);
         if super::icon_menu_item(ui, crate::theme::Icon::Text, "Rename").clicked() {
             st.pages.renaming = Some((i, ed.pages[i].name.clone()));
@@ -404,6 +413,7 @@ fn page_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, i: usize) {
             ui.close();
         }
         ui.menu_button("Move to group", |ui| {
+            crate::theme::popup_backing(ui);
             ui.set_width(MENU_WIDTH);
             if ui
                 .selectable_label(ed.page_group(&page_id).is_none(), "Ungrouped")

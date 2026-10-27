@@ -135,9 +135,14 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, _native_chrome: bool, translucent: b
     let p = theme::pal(ui);
     let floating = super::is_floating(translucent);
     let gap = super::PANEL_GAP;
+    if floating && theme::is_acrylic() {
+        // No canvas under the home screen: the glow covers the whole window.
+        let screen = ui.ctx().content_rect();
+        ui.painter().add(theme::backdrop_mesh(p, screen, screen));
+    }
     let backdrop = |l: i8, r: i8, t: i8, b: i8| {
         egui::Frame::NONE
-            .fill(p.backdrop)
+            .fill(theme::backdrop_fill(p))
             .inner_margin(egui::Margin {
                 left: l,
                 right: r,
@@ -158,7 +163,7 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, _native_chrome: bool, translucent: b
         .show(ui, |ui| {
             let body = |ui: &mut Ui| {
                 ui.horizontal(|ui| {
-                    super::kit::badge(ui, Icon::Pen, theme::accent(), 30.0);
+                    super::kit::brand_mark(ui, 30.0);
                     ui.label(RichText::new("PaperCraft").font(theme::semibold(17.0)));
                 });
                 ui.add_space(14.0);
@@ -366,21 +371,22 @@ fn share_dialog(ui: &mut Ui, hv: &mut HomeView) {
     };
     let frame = egui::Frame::new()
         .fill(theme::pal_from_ctx(ui.ctx()).sidebar)
-        .corner_radius(24.0)
+        .corner_radius(crate::theme::r(24.0))
         .inner_margin(24.0);
     let response = egui::Modal::new(egui::Id::new("share-dialog"))
         .frame(frame)
         .show(ui.ctx(), |ui| {
+            theme::modal_backing(ui, theme::pal(ui).sidebar, theme::ru(24));
             ui.set_width(SHARE_DIALOG_W.min(ui.ctx().content_rect().width() - 48.0));
             ui.spacing_mut().item_spacing.y = 10.0;
             super::kit::badge(ui, Icon::Export, theme::accent(), 48.0);
             ui.label(RichText::new(title).font(theme::semibold(18.0)));
-            let r = ui.add(
+            let r = crate::theme::lit(ui, |ui| ui.add(
                 egui::TextEdit::singleline(&mut d.text)
                     .hint_text(hint)
                     .desired_width(f32::INFINITY)
                     .margin(theme::INPUT_MARGIN),
-            );
+            ));
             if d.dir.is_some() {
                 ui.label(
                     RichText::new("Anyone with the link can open and edit the project.")
@@ -429,10 +435,10 @@ fn sidebar_item(
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
     let hover = super::motion::hover(ui.ctx(), resp.id.with("nav"), &resp);
     if selected {
-        ui.painter().rect_filled(row, theme::RADIUS_LG, p.field);
+        theme::fill_selected(ui, row, theme::radius_lg(), p.field);
     } else if hover > 0.0 {
         ui.painter()
-            .rect_filled(row, theme::RADIUS_LG, p.hover.gamma_multiply(hover));
+            .rect_filled(row, theme::radius_lg(), p.hover.gamma_multiply(hover));
     }
     let ir = egui::Rect::from_center_size(
         egui::pos2(row.left() + 20.0, row.center().y),
@@ -530,7 +536,7 @@ fn card_frame(
     let hover = super::motion::hover(ui.ctx(), resp.id.with("card"), &resp);
     ui.painter().rect_filled(
         rect,
-        theme::RADIUS_PANEL,
+        theme::radius_panel(),
         theme::blend(p.field, theme::accent().gamma_multiply(0.12 * hover)),
     );
     if let Some(t) = thumb.and_then(|t| hv.thumb(ui.ctx(), t)) {
@@ -569,16 +575,19 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
         if resp.double_clicked() {
             hv.actions.push(HomeAction::Open(e.dir.clone()));
         }
-        resp.context_menu(|ui| card_menu(ui, hv, e));
+        resp.context_menu(|ui| {
+            crate::theme::popup_backing(ui);
+            card_menu(ui, hv, e)
+        });
         ui.add_space(6.0);
         let renaming = hv.renaming.as_ref().is_some_and(|(d, _)| *d == e.dir);
         if renaming {
             let (_, name) = hv.renaming.as_mut().unwrap();
-            let r = ui.add(
+            let r = crate::theme::lit(ui, |ui| ui.add(
                 egui::TextEdit::singleline(name)
                     .margin(crate::theme::INPUT_MARGIN)
                     .desired_width(CARD_W),
-            );
+            ));
             // Check before taking focus back: `lost_focus` reads the focus as it is now, so
             // requesting it first would hide Enter, Escape and a click elsewhere.
             if r.lost_focus() {
@@ -605,7 +614,10 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let more =
                         theme::icon_button(ui, Icon::More, 20.0, false).on_hover_text("More");
-                    egui::Popup::menu(&more).show(|ui| card_menu(ui, hv, e));
+                    egui::Popup::menu(&more).show(|ui| {
+            crate::theme::popup_backing(ui);
+            card_menu(ui, hv, e)
+        });
                 });
             });
         }
@@ -702,6 +714,7 @@ fn trash_grid(ui: &mut Ui, hv: &mut HomeView) {
                     let thumb = crate::vfs::is_file(&thumb).then_some(thumb);
                     let resp = card_frame(ui, hv, thumb.as_deref(), egui::Id::new(&e.dir));
                     resp.context_menu(|ui| {
+                        crate::theme::popup_backing(ui);
                         if super::icon_menu_item(ui, crate::theme::Icon::Restore, "Restore")
                             .clicked()
                         {

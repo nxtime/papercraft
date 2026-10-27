@@ -1,5 +1,6 @@
 //! ⌘K command palette: fuzzy search over every action, tool, page, layer and library item.
 
+use crate::theme::Surface as _;
 use super::UiState;
 use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
@@ -388,16 +389,16 @@ pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui
             let p = theme::pal(ui);
             egui::Frame::popup(ui.style())
                 .fill(p.sidebar)
-                .corner_radius(24.0)
+                .corner_radius(crate::theme::r(24.0))
                 .inner_margin(16.0)
                 .stroke(egui::Stroke::NONE)
-                .show(ui, |ui| {
+                .show_surface(ui, |ui| {
                     ui.set_width(width);
                     let r = egui::Frame::new()
                         .fill(p.field)
-                        .corner_radius(16.0)
+                        .corner_radius(crate::theme::r(16.0))
                         .inner_margin(egui::Margin::symmetric(14, 6))
-                        .show(ui, |ui| {
+                        .show_surface(ui, |ui| {
                             ui.horizontal(|ui| {
                                 let (ir, _) = ui.allocate_exact_size(
                                     egui::vec2(18.0, 18.0),
@@ -441,10 +442,10 @@ pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui
                                     egui::Sense::click(),
                                 );
                                 if sel {
-                                    ui.painter().rect_filled(row, 12.0, p.field);
+                                    theme::fill_selected(ui, row, crate::theme::ru(12), p.field);
                                     ui.scroll_to_rect(row, None);
                                 } else if resp.hovered() {
-                                    ui.painter().rect_filled(row, 12.0, p.hover);
+                                    ui.painter().rect_filled(row, crate::theme::r(12.0), p.hover);
                                 }
                                 ui.painter().text(
                                     egui::pos2(row.left() + 14.0, row.center().y),

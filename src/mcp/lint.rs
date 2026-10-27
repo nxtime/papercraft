@@ -71,16 +71,34 @@ fn solid(n: &Node) -> Option<(Color, Option<&str>)> {
     }
 }
 
+/// What a node's top fill looks like behind its children: a solid's color, a gradient's stops
+/// averaged; `Some(None)` for an image, whose color is unknown.
+fn fill_color(n: &Node) -> Option<Option<Color>> {
+    match n.style.fills.last()? {
+        Paint::Solid { color, .. } => (color.a > 0).then_some(Some(*color)),
+        Paint::Linear { stops, .. } | Paint::Radial { stops, .. } if !stops.is_empty() => {
+            let avg = |f: fn(&Color) -> u8| {
+                (stops.iter().map(|s| f(&s.color) as f64).sum::<f64>() / stops.len() as f64).round() as u8
+            };
+            let c = Color::rgba(avg(|c| c.r), avg(|c| c.g), avg(|c| c.b), avg(|c| c.a));
+            (c.a > 0).then_some(Some(c))
+        }
+        Paint::Image { .. } => Some(None),
+        _ => None,
+    }
+}
+
 /// The color text sits on: the nearest opaque fill up the tree (translucent ones blend over
-/// what is behind them); white when nothing is filled.
-fn backdrop(doc: &Document, id: NodeId) -> Color {
+/// what is behind them); white when nothing is filled; `None` over an image.
+fn backdrop(doc: &Document, id: NodeId) -> Option<Color> {
     let mut layers: Vec<Color> = Vec::new();
     let mut cur = doc.get(id).and_then(|n| n.parent);
     while let Some(p) = cur {
         let Some(n) = doc.get(p) else { break };
         if n.visible
-            && let Some((c, _)) = solid(n)
+            && let Some(c) = fill_color(n)
         {
+            let c = c?;
             layers.push(c);
             if c.a == 255 {
                 break;
@@ -88,10 +106,12 @@ fn backdrop(doc: &Document, id: NodeId) -> Color {
         }
         cur = n.parent;
     }
-    layers
-        .into_iter()
-        .rev()
-        .fold(Color::rgb(255, 255, 255), blend)
+    Some(
+        layers
+            .into_iter()
+            .rev()
+            .fold(Color::rgb(255, 255, 255), blend),
+    )
 }
 
 pub(crate) fn is_default_name(name: &str) -> bool {
@@ -128,6 +148,9 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
         ids.extend(doc.subtree(*r));
     }
     let vars: BTreeMap<String, Color> = doc.variables.clone();
+    // With two or more modes a raw colour cannot follow a theme switch: an error, not a hint.
+    let themed = doc.modes.len() >= 2;
+    let (hard, literal_sev) = if themed { ("error", "error") } else { ("warning", "info") };
     // Colors used literally, with the first node using each, for the variables report.
     let mut literal: BTreeMap<String, (usize, NodeId)> = BTreeMap::new();
     for id in ids {
@@ -146,8 +169,9 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
         };
         // ---- text
         if let (Some(size), Some(_)) = (n.kind.font_size(), n.kind.text()) {
-            if let Some((fg, _)) = solid(n) {
-                let bg = backdrop(doc, id);
+            if let Some((fg, _)) = solid(n)
+                && let Some(bg) = backdrop(doc, id)
+            {
                 let fg = blend(bg, fg);
                 let ratio = contrast(fg, bg);
                 let large = size >= 24.0 || (size >= 18.66 && n.text_style.bold);
@@ -245,7 +269,7 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
             if let Some((name, _)) = vars.iter().find(|(_, v)| **v == c) {
                 add(
                     "hard-coded-color",
-                    "warning",
+                    hard,
                     format!("{} is the value of --{name}", c.to_hex()),
                     format!("write var(--{name}) so a theme change reaches it"),
                 );
@@ -258,7 +282,7 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
         if let Some(name) = hard_stroke(n, &vars) {
             add(
                 "hard-coded-color",
-                "warning",
+                hard,
                 format!("border {} is the value of --{name}", n.style.stroke.unwrap().to_hex()),
                 format!("bind_variable {{field:\"stroke\", variable:\"{name}\"}} so a theme change reaches it"),
             );
@@ -267,11 +291,82 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
     for (hex, (count, first)) in literal {
         out.push(Issue {
             rule: "hard-coded-color",
-            severity: "info",
+            severity: literal_sev,
             node: first,
             message: format!("{hex} is used {count}× and is not a variable"),
             fix: "add it with set_variables, or use an existing variable".into(),
         });
+    }
+    out.extend(theme_copies(doc, roots));
+    out
+}
+
+/// Words that name a theme in an artboard name (the project's mode names count too).
+const THEME_WORDS: &[&str] = &[
+    "light", "dark", "claro", "escuro", "day", "night", "dia", "noite", "modo", "mode", "theme",
+    "tema",
+];
+
+/// Top-level artboards in `roots` that copy a sibling for another theme: names that differ
+/// only by a theme word, or the same layers and text in different colours.
+fn theme_copies(doc: &Document, roots: &[NodeId]) -> Vec<Issue> {
+    let modes: Vec<String> = doc.modes.keys().map(|m| m.to_lowercase()).collect();
+    let base = |name: &str| -> String {
+        name.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty() && !THEME_WORDS.contains(w) && !modes.iter().any(|m| m == w))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    // Kinds, child counts and text, colours left out.
+    fn shape(doc: &Document, id: NodeId, out: &mut String) {
+        let Some(n) = doc.get(id) else { return };
+        out.push_str(n.kind.type_name());
+        out.push_str(n.kind.text().map_or("", |t| t.as_str()));
+        out.push_str(&n.children.len().to_string());
+        for c in &n.children {
+            shape(doc, *c, out);
+        }
+    }
+    fn colours(doc: &Document, id: NodeId, out: &mut Vec<Option<Color>>) {
+        let Some(n) = doc.get(id) else { return };
+        out.push(n.style.fills.last().map(|p| p.preview_color()));
+        out.push(n.style.stroke);
+        for c in &n.children {
+            colours(doc, *c, out);
+        }
+    }
+    let boards: Vec<&Node> = doc.root.iter().filter_map(|id| doc.get(*id)).filter(|n| n.is_frame()).collect();
+    let mut out = Vec::new();
+    for n in boards.iter().filter(|n| roots.contains(&n.id)) {
+        let other = boards.iter().find(|o| {
+            if o.id == n.id || o.name == n.name {
+                return false;
+            }
+            let (bn, bo) = (base(&n.name), base(&o.name));
+            if !bn.is_empty() && bn == bo {
+                return true;
+            }
+            let (mut sn, mut so) = (String::new(), String::new());
+            shape(doc, n.id, &mut sn);
+            shape(doc, o.id, &mut so);
+            if sn != so || n.children.is_empty() {
+                return false;
+            }
+            let (mut cn, mut co) = (Vec::new(), Vec::new());
+            colours(doc, n.id, &mut cn);
+            colours(doc, o.id, &mut co);
+            cn != co
+        });
+        if let Some(o) = other {
+            out.push(Issue {
+                rule: "theme-copy",
+                severity: "warning",
+                node: n.id,
+                message: format!("`{}` looks like a theme copy of `{}`", n.name, o.name),
+                fix: "use one artboard bound to variables with a value per mode, switch with set_variable_mode, preview with get_screenshot {mode}; show theme-only ornaments with bind_variable {field:\"visible\"} to a boolean".into(),
+            });
+        }
     }
     out
 }
@@ -516,6 +611,31 @@ mod tests {
         assert_eq!(hard(&doc), 1);
         doc.nodes.get_mut(&id).unwrap().bindings.insert("text-color".into(), "tag-text".into());
         assert_eq!(hard(&doc), 0);
+    }
+
+    #[test]
+    fn light_text_on_a_dark_gradient_passes_contrast() {
+        let mut doc = Document::default();
+        let bg = doc.alloc_id();
+        let mut frame = Node::new(bg, crate::model::NodeKind::Frame { clip: false }, crate::geom::Rect::new(0.0, 0.0, 400.0, 200.0));
+        frame.style.fills = vec![Paint::radial(Color::rgb(0x2a, 0x21, 0x40), Color::rgb(0x0d, 0x0d, 0x14))];
+        let id = doc.alloc_id();
+        let mut n = Node::new(
+            id,
+            crate::model::NodeKind::Text { text: "Hello".into(), font_size: 14.0, auto_width: true, align: Default::default() },
+            crate::geom::Rect::new(24.0, 24.0, 40.0, 20.0),
+        );
+        n.style.fills = vec![Paint::solid(Color::rgb(0xcd, 0xd6, 0xf4))];
+        n.parent = Some(bg);
+        frame.children.push(id);
+        doc.nodes.insert(bg, frame);
+        doc.nodes.insert(id, n);
+        doc.root.push(bg);
+        let low = |d: &Document| lint(d, &[bg], &DEFAULT_SCALE).iter().filter(|i| i.rule == "contrast").count();
+        assert_eq!(low(&doc), 0);
+        // Dark text on the same gradient still fails.
+        doc.nodes.get_mut(&id).unwrap().style.fills = vec![Paint::solid(Color::rgb(0x30, 0x30, 0x40))];
+        assert_eq!(low(&doc), 1);
     }
 
     #[test]

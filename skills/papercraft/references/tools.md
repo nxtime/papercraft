@@ -207,6 +207,7 @@ Render a node (or the whole page when nodeId is omitted or "root") to a PNG and 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `annotations` | boolean |  | Also draw the note cards, badges and leader lines of notes on the captured layers; the image grows to include the cards. |
+| `mode` | string |  | Render in this variable mode (e.g. "Light") without switching the document: preview every theme of one artboard while other agents keep working in the current mode. |
 | `nodeId` | string |  | The node to capture; omit for the whole page. |
 | `out` | string |  | Optional file path to save the PNG to (also used by papercraft-cli). |
 | `scale` | number |  | Render scale: 1 (default) or 2. |

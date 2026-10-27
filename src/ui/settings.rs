@@ -1,5 +1,6 @@
 //! Settings dialog: appearance, canvas, chat agents and keys, updates.
 
+use crate::theme::Surface as _;
 use super::{UiState, kit, motion};
 use crate::chat::BackendKind;
 use crate::chat::endpoint::{self, Endpoint};
@@ -16,6 +17,7 @@ pub enum Page {
     Canvas,
     Chat,
     Plugins,
+    Performance,
     Updates,
 }
 
@@ -292,11 +294,12 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
     }
     let live = st.settings.open;
     let p = theme::pal_from_ctx(ctx);
-    let frame = egui::Frame::new().fill(p.sidebar).corner_radius(24.0);
+    let frame = egui::Frame::new().fill(p.sidebar).corner_radius(crate::theme::r(24.0));
     let modal = egui::Modal::new(egui::Id::new("settings-modal"))
         .frame(frame)
         .show(ctx, |ui| {
             ui.multiply_opacity(t);
+            theme::modal_backing(ui, theme::pal(ui).sidebar, theme::ru(24));
             if !live {
                 ui.disable();
             }
@@ -305,12 +308,13 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
             ui.horizontal_top(|ui| {
                 egui::Frame::new()
                     .fill(p.backdrop)
-                    .corner_radius(24.0)
+                    .corner_radius(crate::theme::r(24.0))
                     .inner_margin(egui::Margin::symmetric(16, 24))
-                    .show(ui, |ui| {
+                    .show_surface(ui, |ui| {
                         ui.set_min_width(180.0);
                         ui.set_max_width(180.0);
-                        ui.set_min_height(ui.available_height());
+                        // The modal's full height, less this frame's vertical margin.
+                        ui.set_min_height(modal_height(ctx) - 48.0);
                         ui.vertical(|ui| {
                             ui.label(RichText::new("Settings").font(theme::semibold(20.0)));
                             ui.add_space(12.0);
@@ -319,6 +323,7 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
                                 (Page::Canvas, Icon::Grid, "Canvas"),
                                 (Page::Chat, Icon::Component, "Chat"),
                                 (Page::Plugins, Icon::Library, "Plugins"),
+                                (Page::Performance, Icon::Zap, "Performance"),
                                 (Page::Updates, Icon::Restore, "Updates"),
                             ] {
                                 if kit::nav_item(ui, icon, label, st.settings.page == page) {
@@ -334,7 +339,10 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
                         ui.add_space(24.0);
                         ui.vertical(|ui| {
                             ui.set_width(ui.available_width() - 8.0);
-                            content(ui, ctx, st);
+                            // A long page (Appearance) scrolls inside the modal.
+                            egui::ScrollArea::vertical()
+                                .max_height(modal_height(ctx) - 24.0)
+                                .show(ui, |ui| content(ui, ctx, st));
                         });
                     });
                 });
@@ -357,7 +365,7 @@ fn plugins_page(ui: &mut Ui, prefs: &mut ChatPrefs) {
             for plugin in row {
                 let mut on = prefs.plugins.iter().any(|id| id == plugin.id);
                 ui.allocate_ui_with_layout(egui::vec2(w, PLUGIN_CARD_H), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    egui::Frame::new().fill(p.backdrop).corner_radius(theme::RADIUS_PANEL).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+                    egui::Frame::new().fill(p.backdrop).corner_radius(theme::radius_panel()).inner_margin(egui::Margin::same(14)).show_surface(ui, |ui| {
                         ui.set_width(w - 28.0);
                         ui.set_height(PLUGIN_CARD_H - 28.0);
                         ui.spacing_mut().item_spacing.y = 4.0;
@@ -408,10 +416,11 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
         let (title, sub) = match st.settings.page {
-            Page::Appearance => ("Appearance", "Theme, scale and motion."),
+            Page::Appearance => ("Appearance", "Theme, accent, material, corners, font, scale and motion."),
             Page::Canvas => ("Canvas", "How the canvas looks."),
             Page::Chat => ("Chat", "Agents, API endpoints and defaults for design by conversation."),
             Page::Plugins => ("Plugins", "Assets the agent can place in a design. Fetched from each service once, then cached."),
+            Page::Performance => ("Performance", "Frame rate, memory, CPU and GPU, and a warning when frames get slow."),
             Page::Updates => ("Updates", "Keep PaperCraft current."),
         };
         ui.vertical(|ui| {
@@ -436,6 +445,61 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
                     if kit::chip(ui, c.label(), theme::choice() == c).clicked() {
                         theme::apply_choice(ctx, c);
                         c.save();
+                    }
+                }
+            });
+            ui.add_space(12.0);
+            kit::section_header(ui, "Accent", None);
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                for (i, name) in theme::ACCENTS.iter().enumerate() {
+                    if accent_swatch(ui, theme::accent_option(i), theme::accent_choice() == i)
+                        .on_hover_text(*name)
+                        .clicked()
+                    {
+                        theme::set_accent_choice(i);
+                        theme::apply(ctx);
+                        theme::save_accent_choice();
+                    }
+                }
+            });
+            ui.add_space(12.0);
+            kit::section_header(ui, "Material", None);
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
+                for m in theme::Material::ALL {
+                    if kit::chip(ui, m.label(), theme::material() == m).clicked() {
+                        theme::set_material(m);
+                        theme::apply(ctx);
+                        m.save();
+                    }
+                }
+            });
+            ui.add_space(12.0);
+            kit::section_header(ui, "Corner radius", None);
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
+                for (r, label) in theme::Roundness::ALL {
+                    if kit::chip(ui, label, theme::roundness() == r).clicked() {
+                        theme::set_roundness(r);
+                        theme::apply(ctx);
+                        r.save();
+                    }
+                }
+            });
+            ui.add_space(12.0);
+            kit::section_header(ui, "Font", None);
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
+                for (i, f) in theme::UI_FONTS.iter().enumerate() {
+                    if kit::chip(ui, f.name, theme::ui_font() == i).clicked() {
+                        theme::set_ui_font(i);
+                        theme::apply(ctx);
+                        theme::save_ui_font();
                     }
                 }
             });
@@ -498,6 +562,7 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
             #[cfg(not(target_arch = "wasm32"))]
             plugins_page(ui, &mut st.settings.chat);
         }
+        Page::Performance => super::perf::settings_page(ui, &mut st.perf),
         Page::Updates => {
             kit::setting_row(
                 ui,
@@ -523,14 +588,14 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
                 ui.add_space(6.0);
                 let s = &mut st.settings;
                 kit::setting_row(ui, "Repository", "Gitea or GitHub repository URL.", |ui| {
-                    if ui.add(egui::TextEdit::singleline(&mut s.chat.issue_repo).desired_width(320.0).margin(theme::INPUT_MARGIN)).lost_focus() {
+                    if crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut s.chat.issue_repo).desired_width(320.0).margin(theme::INPUT_MARGIN))).lost_focus() {
                         s.chat.save();
                     }
                 });
                 let saved = crate::issues::token().is_some();
                 let desc = if saved { "Saved in the keychain." } else { "Optional: without one, your tea login for this server is used." };
                 kit::setting_row(ui, "Access token", desc, |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut s.issue_token).password(true).hint_text(if saved { "•••• saved" } else { "token" }).desired_width(200.0).margin(theme::INPUT_MARGIN));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut s.issue_token).password(true).hint_text(if saved { "•••• saved" } else { "token" }).desired_width(200.0).margin(theme::INPUT_MARGIN)));
                     if kit::button(ui, kit::ButtonKind::Secondary, None, if s.issue_token.is_empty() && saved { "Remove" } else { "Save" }).clicked() {
                         s.issue_note = Some(match crate::issues::set_token(&s.issue_token) {
                             Ok(()) => if s.issue_token.is_empty() { "Token removed".into() } else { "Token saved".into() },
@@ -807,7 +872,7 @@ mod native {
     /// The raised surface of a section, 16 px inside.
     fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
         let p = theme::pal(ui);
-        egui::Frame::new().fill(p.backdrop).corner_radius(theme::RADIUS_PANEL).inner_margin(CARD_PAD).show(ui, |ui| {
+        egui::Frame::new().fill(p.backdrop).corner_radius(theme::radius_panel()).inner_margin(CARD_PAD).show_surface(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 4.0;
             add(ui);
@@ -818,7 +883,7 @@ mod native {
     fn row_frame(ui: &mut Ui, open: bool, add: impl FnOnce(&mut Ui)) {
         let p = theme::pal(ui);
         let fill = if open { theme::blend(p.backdrop, p.hover) } else { egui::Color32::TRANSPARENT };
-        egui::Frame::new().fill(fill).corner_radius(theme::RADIUS_LG).inner_margin(ROW_PAD).show(ui, |ui| {
+        egui::Frame::new().fill(fill).corner_radius(theme::radius_lg()).inner_margin(ROW_PAD).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 8.0;
             add(ui);
@@ -873,7 +938,7 @@ mod native {
     }
 
     fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> egui::Response {
-        ui.add(egui::TextEdit::singleline(text).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(ui.available_width()))
+        crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(text).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(ui.available_width())))
     }
 
     /// A text field for an optional string: edits show at once, `Enter` or leaving the field
@@ -1145,7 +1210,7 @@ mod native {
         };
         let draft = page.key_drafts.entry(ep.id.clone()).or_default();
         field_row(ui, "API key", |ui| {
-            ui.add(egui::TextEdit::singleline(draft).password(true).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(ui.available_width()));
+            crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(draft).password(true).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(ui.available_width())));
             note(ui, &format!("Stored in the {}. Never written to the project or logs.", keychain_name()));
         });
         let mut save_clicked = false;
@@ -1287,6 +1352,21 @@ use native::chat_page;
 fn chat_page(ui: &mut Ui, _ctx: &egui::Context, _settings: &mut SettingsUi) {
     let p = theme::pal(ui);
     ui.label(RichText::new("Chat needs the PaperCraft desktop app.").color(p.secondary));
+}
+
+/// A round colour swatch, ringed when chosen.
+fn accent_swatch(ui: &mut egui::Ui, c: egui::Color32, on: bool) -> egui::Response {
+    const D: f32 = 24.0;
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(D, D), egui::Sense::click());
+    let center = rect.center();
+    ui.painter().circle_filled(center, D / 2.0 - 3.0, c);
+    if on {
+        let ring = theme::pal(ui).text;
+        ui.painter().circle_stroke(center, D / 2.0 - 0.75, egui::Stroke::new(1.5, ring));
+    } else if r.hovered() {
+        ui.painter().circle_stroke(center, D / 2.0 - 0.75, egui::Stroke::new(1.0, theme::pal(ui).secondary));
+    }
+    r
 }
 
 #[cfg(test)]
@@ -1436,3 +1516,4 @@ mod tests {
         assert!(!st.settings.chat_changed, "drawing alone changes nothing");
     }
 }
+

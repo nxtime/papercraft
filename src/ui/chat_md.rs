@@ -2,6 +2,7 @@
 //! fenced code blocks (with a copy button), bold, italic, inline code and links. Unclosed markers
 //! stay literal, so half-streamed text never flickers into a different shape.
 
+use crate::theme::Surface as _;
 use crate::theme;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align, FontFamily, FontId, Id, RichText, Ui};
@@ -195,7 +196,7 @@ fn spans(ui: &mut Ui, spans: &[Span], size: f32, heading: bool) {
 
 fn code_block(ui: &mut Ui, lang: &str, text: &str) {
     let p = theme::pal(ui);
-    egui::Frame::new().fill(p.field).corner_radius(theme::RADIUS_LG).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+    egui::Frame::new().fill(p.field).corner_radius(theme::radius_lg()).inner_margin(egui::Margin::symmetric(12, 10)).show_surface(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             let label = if lang.is_empty() { "code" } else { lang };

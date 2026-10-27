@@ -2,6 +2,7 @@
 //! each enabled library, and the personal shape library ("My shapes"). Click a tile to place it;
 //! tiles do not drag onto the canvas (neither did the shape library).
 
+use crate::theme::Surface as _;
 use super::{UiState, kit};
 use crate::editor::Editor;
 use crate::geom::{Rect, V2, v2};
@@ -400,7 +401,7 @@ fn tile(ui: &mut Ui, w: f32, tex: Option<&egui::TextureHandle>) -> egui::Respons
     let p = theme::pal(ui);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, (w * TILE_RATIO).round()), egui::Sense::click());
     let bg = if resp.hovered() { p.hover } else { p.control };
-    ui.painter().rect_filled(rect, 12.0, bg);
+    ui.painter().rect_filled(rect, crate::theme::r(12.0), bg);
     if let Some(t) = tex {
         ui.painter().image(
             t.id(),
@@ -447,11 +448,11 @@ fn subtree_fingerprint(doc: &Document, id: NodeId) -> u64 {
 fn name_label(ui: &mut Ui, lib: &mut LibraryUi, key: &str, name: &str, w: f32) -> Option<String> {
     if lib.renaming.as_ref().is_some_and(|(k, _)| k == key) {
         let (_, draft) = lib.renaming.as_mut().unwrap();
-        let r = ui.add(
+        let r = crate::theme::lit(ui, |ui| ui.add(
             egui::TextEdit::singleline(draft)
                 .margin(theme::INPUT_MARGIN)
                 .desired_width(w),
-        );
+        ));
         // Check before taking focus back (see `home::project_card`).
         if r.lost_focus() {
             return lib.renaming.take().map(|r| r.1);
@@ -502,6 +503,7 @@ fn asset_grid(
                         acts.push(Act::Place(a.clone()));
                     }
                     resp.on_hover_text("Click to place an instance").context_menu(|ui| {
+                        crate::theme::popup_backing(ui);
                         if let Origin::Page(_) = a.origin {
                             if super::icon_menu_item(ui, Icon::Component, "Go to main").clicked() {
                                 acts.push(Act::Go(a.clone()));
@@ -545,6 +547,7 @@ fn shape_grid(ui: &mut Ui, lib: &mut LibraryUi, acts: &mut Vec<Act>) {
                         acts.push(Act::InsertShape(it.clone()));
                     }
                     resp.on_hover_text("Click to insert").context_menu(|ui| {
+                        crate::theme::popup_backing(ui);
                         if super::icon_menu_item(ui, Icon::Plus, "Insert").clicked() {
                             acts.push(Act::InsertShape(it.clone()));
                             ui.close();
@@ -601,12 +604,12 @@ fn header(ui: &mut Ui, st: &mut UiState, acts: &mut Vec<Act>) {
         });
     });
     ui.add_space(6.0);
-    ui.add(
+    crate::theme::lit(ui, |ui| ui.add(
         egui::TextEdit::singleline(&mut st.library.filter)
             .hint_text("Search assets")
             .desired_width(f32::INFINITY)
             .margin(theme::INPUT_MARGIN),
-    );
+    ));
     ui.add_space(6.0);
 }
 
@@ -617,9 +620,9 @@ fn missing_rows(ui: &mut Ui, ed: &Editor, missing: &[NodeId], acts: &mut Vec<Act
         let target = find_named(ed, &name);
         egui::Frame::new()
             .fill(p.field)
-            .corner_radius(theme::RADIUS_PANEL)
+            .corner_radius(theme::radius_panel())
             .inner_margin(egui::Margin::symmetric(12, 8))
-            .show(ui, |ui| {
+            .show_surface(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("!").font(theme::semibold(16.0)).color(p.warning));
                     ui.vertical(|ui| {
