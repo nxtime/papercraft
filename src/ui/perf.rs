@@ -49,7 +49,7 @@ impl PerfPrefs {
     }
 
     fn path() -> Option<std::path::PathBuf> {
-        Some(dirs::config_dir()?.join("papercraft").join("performance"))
+        Some(crate::project::config_dir()?.join("performance"))
     }
 
     /// `"<overlay 0|1> <min fps>"`.
