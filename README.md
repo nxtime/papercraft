@@ -118,7 +118,7 @@ Projects live in `~/Documents/papercraft/<name>/` (`project.json`, one JSON file
 
 ## Agents
 
-PaperCraft exposes **70 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
+PaperCraft exposes **86 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
 
 | Way | Notes |
 |---|---|
@@ -190,12 +190,13 @@ Releases are at [git.marcospaulo.dev.br/masi/papercraft/releases](https://git.ma
 
 | Build | File |
 |---|---|
+| Windows (x86_64) | `papercraft-<version>-windows-x86_64.zip`: `papercraft.exe`, `papercraft-cli.exe`, `papercraft-mcp.exe` and `papercraft-relay.exe` |
 | macOS app (Apple silicon) | `papercraft-<version>-macos-aarch64.dmg`, containing PaperCraft.app |
 | Linux (x86_64) | `papercraft-<version>-linux-x86_64.tar.gz` |
 | CLI tools, macOS | `papercraft-cli-<version>-macos-aarch64.zip` (`papercraft-cli` and `papercraft-mcp`) |
 | CLI tools, Linux | `papercraft-cli-<version>-linux-x86_64.tar.gz` |
 
-macOS builds are ad-hoc signed and not notarized: on another Mac, open the app with right-click, Open the first time. Other platforms: build from source.
+The Windows zip is unsigned: SmartScreen may ask you to confirm the first run. macOS builds are ad-hoc signed and not notarized: on another Mac, open the app with right-click, Open the first time. Other platforms: build from source.
 
 ### Build from source
 
@@ -207,9 +208,10 @@ cargo build --release
 ./target/release/papercraft ~/Documents/papercraft/Plan    # open a project folder
 ./target/release/papercraft --demo                         # sample board, not saved
 packaging/macos/package.sh                                 # PaperCraft.app on a DMG, plus the CLI zip
+pwsh packaging/windows/package.ps1 -Arch x64               # Windows MSI, portable zip and CLI zip
 ```
 
-**macOS:** `xcode-select --install` for the linker. It renders with Metal through wgpu. **Linux:** install the runtime libraries (`sudo apt install libxkbcommon-x11-0 libxcb-xkb1 libvulkan1 mesa-vulkan-drivers` on Debian or Ubuntu); it runs on X11 and Wayland through Vulkan, with GL as a fallback, and file dialogs use the XDG desktop portal.
+**Windows:** the MSVC build tools (Visual Studio Build Tools with the C++ workload); it renders through wgpu on Direct3D 12 or Vulkan. **macOS:** `xcode-select --install` for the linker. It renders with Metal through wgpu. **Linux:** install the runtime libraries (`sudo apt install libxkbcommon-x11-0 libxcb-xkb1 libvulkan1 mesa-vulkan-drivers` on Debian or Ubuntu); it runs on X11 and Wayland through Vulkan, with GL as a fallback, and file dialogs use the XDG desktop portal.
 
 To run a test copy next to your own PaperCraft, give it its own folder and port: `PAPERCRAFT_HOME=/tmp/pc PAPERCRAFT_MCP_PORT=29998 ./target/release/papercraft`.
 
@@ -263,18 +265,25 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 ## Status and known limits
 
 > [!IMPORTANT]
-> PaperCraft is an alpha. [ROADMAP.md](ROADMAP.md) lists what is missing, in priority order; [PROGRESS.md](PROGRESS.md) is the milestone history.
+> PaperCraft is an alpha (0.8.x). It is used daily on Windows, macOS and Linux, and its project format migrates forward, but expect rough edges. [ROADMAP.md](ROADMAP.md) lists what is missing, in priority order; [PROGRESS.md](PROGRESS.md) is the milestone history.
+
+**What works today:** local projects with pages and an infinite canvas; vector, text, auto layout, constraints, components with properties and variants, variables with modes, shared libraries and screens; annotations, lint and Present mode with prototype links; PNG, SVG and PDF export, Figma, Excalidraw and SVG import; the MCP server, CLI (online and offline) and in-app Chat mode; versions, agent runs with review and revert; optional relay sync.
+
+**Known limits:**
 
 * **No rotation.** Nodes are axis-aligned boxes; rotated imports are baked into paths.
 * **Text** is Inter only, with no shaping (no ligatures, complex scripts or RTL) and no font picker. IME preedit is not displayed.
 * **Rendering approximations.** Frame clipping is a rectangle, so rounded frames do not clip their corners. Overlay, dodge, burn, light, difference, exclusion and the HSL blend modes draw as Normal on the canvas (they are exact in SVG and PDF export). There is no layer or background blur yet.
-* **Variables:** gradients keep fixed colors; there are no text styles and no component variants or properties.
+* **Variables:** gradients keep fixed colors, and there are no text styles (named type styles that update every text layer).
+* **Components:** properties (text, bool, icon, enum) and `merge_variants` cover variants, but there are no variant sets with several axes, and no responsive per-breakpoint variants or breakpoint preview.
+* **Prototyping:** links and flows work in Present mode; smart transitions and hover states do not exist yet.
 * **Booleans are destructive:** the result is a new vector path with flattened curves.
 * **`write_html`** ignores margin, tables and transforms (it reports them as `ignoredStyles`) and does not fetch remote images; pass a local path or a `data:` URI.
 * **Agents:** one project is open at a time in the app, and `move_nodes` stays on one page. The in-app Chat mode runs Claude Code, Codex, ACP agents or your own Anthropic key. Agents that are not in Chat connect over MCP or the CLI.
 * **Sharing** has no live presence (cursors, selections) yet.
+* **Scale:** cached frames take about 3 ms at 10k visible nodes; it is not tuned for 100k.
 * **Pen pressure** is simulated from stroke velocity on macOS tablets, because winit 0.30 does not expose it for mouse-like pen events.
-* **Releases** cover macOS (Apple silicon) and Linux x86_64. Windows packaging scripts exist but are not part of releases.
+* **Releases:** the Gitea releases ship Windows x86_64. macOS (Apple silicon) and Linux x86_64 builds come from the packaging scripts or from source; the Linux build is not part of the current releases.
 * **PDF** text is outlined, not selectable.
 
 ## Project layout

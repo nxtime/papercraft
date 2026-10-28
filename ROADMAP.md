@@ -22,7 +22,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 7 | Number variables (spacing, radius, font size) | **done** | Typed number, string and boolean variables in collections with groups and aliases; fields bind (size, gap, padding, radius, font size, line height, opacity, visible) in the inspector and `bind_variable`. |
 | 8 | Stroke and gradient variables | partial | Strokes and text color bind to variables. Gradients keep fixed colors. |
 | 9 | Text styles | todo | Named type styles (Heading / L, Body / M) that update every text layer using them. |
-| 10 | Component variants and properties | todo | Variants are separate components named `Button / Primary`. No variant sets, boolean or text properties. |
+| 10 | Component variants and properties | partial | Main components carry text, bool, icon and enum properties; `merge_variants` folds per-state components into one. Multi-axis variant sets todo. |
 | 11 | Swap instance, detach by tool | **done** | `swap_instance` and `detach_instance` MCP tools + UI controls in Design tab and Inspector. |
 | 12 | Cross-page and shared libraries | **done** | Instances of a main on any page; publish a project as a library, enable, update and disable it in other projects (Libraries modal, `*_library` tools). |
 | 13 | Export design tokens | **done** | `get_variables` with `format: "css"`, `"json"` (W3C DTCG + modes), or `"tailwind"` (`@theme`), plus Copy CSS / Copy JSON in Design tab. |
@@ -32,7 +32,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 15 | MCP and CLI tool surface | **done** | 67 tools, one undo step per call, `papercraft-cli list / schema / call`. |
+| 15 | MCP and CLI tool surface | **done** | 86 tools, one undo step per call, `papercraft-cli list / schema / call`. |
 | 16 | Agent skills | **done** | `skills/papercraft` and `skills/papercraft-design`. |
 | 17 | Accessibility annotations | todo | Reading order, roles and alt text on layers, checked by the linter. |
 | 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |
@@ -63,7 +63,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 32 | Version history | **done** | Named and automatic saved versions per page: rename, restore, delete (`src/versions.rs`). Restore now includes variables and tokens; compare todo. |
 | 33 | Figma import | **done** | `.fig` binary (Kiwi wire decoder + zip container) and Figma REST API JSON import in `src/io/fig.rs`. |
 | 34 | Multiplayer and cloud sync | partial | Optional shared projects through the relay, with merge of concurrent edits to one page. Presence (cursors, selections) todo. Stays optional. |
-| 35 | Release builds for Windows and Linux | todo | The code targets them (wgpu, winit); packaging today is the macOS DMG and the `papercraft-cli` zip. |
+| 35 | Release builds for Windows and Linux | partial | Windows x86_64 zips are released and `packaging/windows` builds an MSI; Linux x86_64 is not in the current releases. |
 
 ## 5. Quality
 
