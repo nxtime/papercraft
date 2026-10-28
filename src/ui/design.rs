@@ -3,9 +3,64 @@
 
 use super::UiState;
 use crate::editor::Editor;
+use crate::mcp::lint::Issue;
 use crate::model::NodeId;
 use crate::theme;
 use egui::{RichText, Ui};
+
+/// Issues listed in the tab; the rest are only counted.
+const MAX_ISSUES_SHOWN: usize = 30;
+/// How often the open-feedback count of the other pages is refreshed, in seconds.
+const ELSEWHERE_REFRESH_SECS: f64 = 1.0;
+
+/// What the tab derives from the page. The lint and the comment scan visit every node, far too
+/// much to redo each frame, so they are kept until the document changes.
+#[derive(Default)]
+pub struct Cache {
+    key: Option<(u64, usize)>,
+    issues: Vec<Issue>,
+    open: Vec<(NodeId, String, String)>,
+    elsewhere: Option<(f64, usize)>,
+}
+
+impl Cache {
+    /// Bring the cache up to date at time `now` (seconds). True when the page was walked again.
+    fn refresh(&mut self, ed: &Editor, now: f64) -> bool {
+        let key = (ed.doc_stamp, ed.active_page);
+        let walked = self.key != Some(key);
+        if walked {
+            self.issues = crate::mcp::lint::lint(&ed.doc, &ed.doc.root, &crate::mcp::lint::DEFAULT_SCALE);
+            let mut open: Vec<(NodeId, String, String)> = ed
+                .doc
+                .nodes
+                .values()
+                .filter(|n| n.open_comments() > 0)
+                .flat_map(|n| {
+                    n.comments
+                        .iter()
+                        .filter(|c| !c.resolved)
+                        .map(|c| (n.id, n.name.clone(), c.text.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            open.sort_by_key(|o| o.0);
+            self.open = open;
+            self.key = Some(key);
+        }
+        if self.elsewhere.is_none_or(|(t, _)| now - t >= ELSEWHERE_REFRESH_SECS) {
+            let count: usize = (0..ed.pages.len())
+                .filter(|i| *i != ed.active_page)
+                .map(|i| ed.page_doc(i).nodes.values().map(|n| n.open_comments()).sum::<usize>())
+                .sum();
+            self.elsewhere = Some((now, count));
+        }
+        walked
+    }
+
+    fn elsewhere(&self) -> usize {
+        self.elsewhere.map_or(0, |(_, n)| n)
+    }
+}
 
 pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
@@ -24,30 +79,10 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         .show(ui, |ui| {
             crate::theme::figma_fields(ui);
             // ---- open feedback on this page (and a pointer to other pages)
-            let mut open: Vec<(NodeId, String, String)> = ed
-                .doc
-                .nodes
-                .values()
-                .filter(|n| n.open_comments() > 0)
-                .flat_map(|n| {
-                    n.comments
-                        .iter()
-                        .filter(|c| !c.resolved)
-                        .map(|c| (n.id, n.name.clone(), c.text.clone()))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            open.sort_by_key(|o| o.0);
-            let elsewhere: usize = (0..ed.pages.len())
-                .filter(|i| *i != ed.active_page)
-                .map(|i| {
-                    ed.page_doc(i)
-                        .nodes
-                        .values()
-                        .map(|n| n.open_comments())
-                        .sum::<usize>()
-                })
-                .sum();
+            let now = ui.input(|i| i.time);
+            st.design_cache.refresh(ed, now);
+            let open = st.design_cache.open.clone();
+            let elsewhere = st.design_cache.elsewhere();
             if !open.is_empty() || elsewhere > 0 {
                 heading(ui, &format!("Feedback · {} open", open.len() + elsewhere));
                 for (id, name, note) in open {
@@ -103,19 +138,16 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 st.variables.open = true;
             }
             // ---- design lint
-            let issues = crate::mcp::lint::lint(
-                &ed.doc,
-                &ed.doc.root,
-                &crate::mcp::lint::DEFAULT_SCALE,
-            );
+            let total = st.design_cache.issues.len();
+            let shown: Vec<Issue> = st.design_cache.issues.iter().take(MAX_ISSUES_SHOWN).cloned().collect();
             ui.horizontal(|ui| {
-                let title = if issues.is_empty() {
+                let title = if total == 0 {
                     "Lint · Clean".to_string()
                 } else {
-                    format!("Lint · {} issues", issues.len())
+                    format!("Lint · {total} issues")
                 };
                 heading(ui, &title);
-                if !issues.is_empty() {
+                if total > 0 {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Zap), "Fix all")
                             .on_hover_text("Auto-fix grid, color variables, text scale, and touch targets")
@@ -133,7 +165,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     });
                 }
             });
-            for issue in issues.iter().take(30) {
+            for issue in &shown {
                 let node_name = ed
                     .doc
                     .get(issue.node)
@@ -186,4 +218,43 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 });
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geom::Rect;
+    use crate::model::{Node, NodeKind};
+
+    fn add_rect(ed: &mut Editor) {
+        ed.edit("Add", |tx| {
+            let mut n = Node::new(NodeId(0), NodeKind::Rect, Rect::new(0.0, 0.0, 10.0, 10.0));
+            n.id = tx.alloc_id();
+            tx.insert(n, None, None);
+        });
+    }
+
+    #[test]
+    fn walks_the_page_only_when_the_document_changes() {
+        let mut ed = Editor::default();
+        let mut c = Cache::default();
+        assert!(c.refresh(&ed, 0.0), "first frame walks");
+        assert!(!c.refresh(&ed, 0.1), "an unchanged page is not walked again");
+        assert!(!c.refresh(&ed, 5.0), "time alone does not walk it");
+        add_rect(&mut ed);
+        assert!(c.refresh(&ed, 5.1), "an edit walks it once");
+        assert!(!c.refresh(&ed, 5.2));
+    }
+
+    #[test]
+    fn other_pages_are_recounted_on_a_timer_not_a_change() {
+        let ed = Editor::default();
+        let mut c = Cache::default();
+        c.refresh(&ed, 0.0);
+        let first = c.elsewhere.map(|e| e.0);
+        c.refresh(&ed, ELSEWHERE_REFRESH_SECS / 2.0);
+        assert_eq!(c.elsewhere.map(|e| e.0), first, "too soon to recount");
+        c.refresh(&ed, ELSEWHERE_REFRESH_SECS);
+        assert_ne!(c.elsewhere.map(|e| e.0), first, "recounted after the interval");
+    }
 }

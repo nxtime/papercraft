@@ -182,6 +182,8 @@ pub struct UiState {
     pub ann_ui: annotations::AnnotationsUi,
     /// Frame times, RAM, CPU and GPU for Settings > Performance and its overlay.
     pub perf: perf::Perf,
+    /// The Design tab's lint and feedback, kept until the document changes.
+    pub design_cache: design::Cache,
 }
 
 /// Where a dragged layer lands relative to a row.
