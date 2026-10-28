@@ -17,7 +17,7 @@
 ## Checklist
 
 - [ ] Tests first; new code is covered, error paths included
-- [ ] `cargo fmt --all`, `cargo clippy --all-targets` and `cargo test` pass
+- [ ] `cargo fmt --all`, `cargo clippy --all-targets` and the affected `cargo test --test` targets pass
 - [ ] Follows [RULES.md](../RULES.md) (no overflow, data safety, one undo step per tool call)
 - [ ] Docs, tool descriptions and `PROGRESS.md` updated where needed
 - [ ] Conventional commit messages

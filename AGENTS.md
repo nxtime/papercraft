@@ -11,11 +11,19 @@ you is accountable for.
 cargo build --release
 cargo fmt --all
 cargo clippy --all-targets
-cargo test --no-fail-fast                       # prefer one test: cargo test --test mcp name
+cargo test --test incremental                   # only the targets your change touches
+cargo test --lib editor::changes                # unit tests of one module
 cargo check --lib --target wasm32-unknown-unknown
 ```
 
-`tests/update.rs` cannot run on Windows (it needs elevation); that failure is known.
+Do not run the full suite locally: it builds dozens of test binaries. It runs on GitHub before
+each release (`.github/workflows/test.yml`). `tests/update.rs` cannot run on Windows outside CI
+(it needs elevation); that failure is known.
+
+Builds run on the person's own machine, so mind its resources (RULES.md, "The machine you build
+on"): check free memory and running builds first, cap jobs at no more than half the cores
+(`cargo test -j 8 -- --test-threads=8` on 16 cores), run at low priority, run one heavy job at a
+time, and stop at once if they say it is slow.
 
 ## Running the app safely
 

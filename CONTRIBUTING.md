@@ -69,9 +69,13 @@ fetches from a public git repository at the revision pinned in `Cargo.toml`.
 ```sh
 cargo fmt --all
 cargo clippy --all-targets
-cargo test --no-fail-fast
+cargo test --test <target>                            # the targets your change touches
 cargo check --lib --target wasm32-unknown-unknown     # the web build
 ```
+
+Each file in `tests/` is its own binary linking the whole app, so the full suite is slow and heavy
+on a desktop. It runs on GitHub instead: before every release (`.github/workflows/test.yml`), or
+on demand with `gh workflow run test.yml -f ref=<branch>`.
 
 Keep the tree free of the third-party branding patterns listed in `.debrand`.
 

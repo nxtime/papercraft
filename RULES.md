@@ -40,6 +40,28 @@ PaperCraft stores people's work. Treat that as the top priority.
   says so.
 * Destructive operations are undoable or confirmed.
 
+## The machine you build on
+
+A full build links dozens of test binaries and can take every core and most of the memory of a
+desktop. The person is still using that machine, often with PaperCraft open.
+
+* **Look before you start a heavy job.** Check free memory, CPU load and what is already running
+  (the person's app, another build, other agents) before a build, a test run or clippy. If memory
+  is short or another build is running, wait or ask.
+* **Leave room.** Cap Cargo at no more than half the logical cores (`-j 8` on a 16-core machine,
+  or `CARGO_BUILD_JOBS`) and the test harness too (`-- --test-threads=8`); go lower when memory is
+  tight, since linking is the peak. Run heavy jobs at low priority (`nice` on Unix, Below Normal
+  on Windows).
+* **One heavy job at a time.** Never run two builds side by side; each target folder is a full
+  build's worth of compiling and linking. Parallel agents share one build slot.
+* **Run only what your change touches**: `cargo check` before `cargo build`, and the test
+  targets that cover the change (`cargo test --test incremental`). The full suite runs on GitHub
+  before a release (`.github/workflows/test.yml`), not on a desktop.
+* **Stop at once when the person says the machine is slow**, then check that no compiler, linker
+  or test process of yours is left over.
+* **Clean up.** Delete scratch target folders and worktrees when the work is merged; they grow to
+  tens of gigabytes.
+
 ## UI
 
 * **Use the shared kit.** Controls, spacing, radii and colours come from `craft-ui`,
