@@ -33,6 +33,7 @@
   <a href="#keyboard-shortcuts">Shortcuts</a> ·
   <a href="#status-and-known-limits">Status</a> ·
   <a href="#project-layout">Layout</a> ·
+  <a href="#contributing">Contributing</a> ·
   <a href="#license-and-credits">License</a>
 </p>
 
@@ -317,6 +318,10 @@ specs/               feature specs (agent runs, design libraries, offline CLI, .
 analysis/            behaviour studies and design notes
 docs/                guides and screenshots
 ```
+
+## Contributing
+
+Bug reports, ideas, docs and code are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) (setup, checks, commits, pull requests) and [RULES.md](RULES.md) (the standards a change is reviewed against). Security problems go through [SECURITY.md](SECURITY.md), and everyone follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License and credits
 
