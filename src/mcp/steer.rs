@@ -46,7 +46,7 @@ mod tests {
         add("steer-a", "make it blue");
         let other = attach(&Client::chat("steer-b"), Ok(vec![])).unwrap();
         assert!(other.is_empty());
-        let mcp = Client { name: "Claude Code".into(), session: "steer-a".into() };
+        let mcp = Client { name: "Claude Code".into(), session: "steer-a".into(), parent: None };
         assert!(attach(&mcp, Ok(vec![])).unwrap().is_empty(), "only chat turns");
         let outs = attach(&Client::chat("steer-a"), Ok(vec![])).unwrap();
         assert!(matches!(&outs[..], [Out::Text(t)] if t.ends_with("make it blue")));

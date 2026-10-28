@@ -306,8 +306,26 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Who this CLI is to other agents (`--as`, `--parent`, else `$PAPERCRAFT_AGENT`,
+/// `$PAPERCRAFT_PARENT`): a named agent keeps one session across its calls and claims.
+static AGENT: std::sync::OnceLock<(Option<String>, Option<String>)> = std::sync::OnceLock::new();
+
+/// Percent-encoding for a query value.
+fn encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"._-".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
 fn connect(rt: &tokio::runtime::Runtime) -> Result<Client, String> {
-    let url = mcp::url(mcp::port());
+    let mut url = mcp::url(mcp::port());
+    let (name, parent) = AGENT.get().cloned().unwrap_or_default();
+    if let Some(name) = name {
+        url = format!("{url}?agent={}", encode(&name));
+        if let Some(p) = parent {
+            url = format!("{url}&parent={}", encode(&p));
+        }
+    }
     rt.block_on(async { ().serve(StreamableHttpClientTransport::from_uri(url.clone())).await })
         .map_err(|e| format!("cannot reach papercraft at {url}: {e}. Is the app running?"))
 }
@@ -742,6 +760,10 @@ fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let out = take_flag(&mut args, "--out", Some("-o"));
     let project = take_flag(&mut args, "--project", None);
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+    let agent = take_flag(&mut args, "--as", None).or_else(|| env("PAPERCRAFT_AGENT"));
+    let parent = take_flag(&mut args, "--parent", None).or_else(|| env("PAPERCRAFT_PARENT"));
+    AGENT.get_or_init(|| (agent, parent));
     let offline = args.iter().any(|a| a == "--offline");
     ONLINE_ONLY.store(args.iter().any(|a| a == "--online"), Ordering::Relaxed);
     args.retain(|a| a != "--offline" && a != "--online");

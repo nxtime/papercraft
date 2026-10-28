@@ -34,7 +34,9 @@ pub fn stop(chat: &str) {
 
 /// Runs the helper `command` (`{prompt}` is passed as `$PAPERCRAFT_PROMPT`) for one task.
 /// `chat`: the chat that asked, so its Stop button ends the helper too.
-pub fn run(command: &str, chat: Option<&str>, args: &serde_json::Value) -> ToolResult {
+/// `agent`: the helper's name and the session of the agent that delegated it, passed to its
+/// `papercraft-cli` calls so they are attributed to it and its claims.
+pub fn run(command: &str, chat: Option<&str>, agent: (&str, &str), args: &serde_json::Value) -> ToolResult {
     if command.trim().is_empty() {
         return Err("No helper agent is set up. The user can choose one in Settings, Chat, Helper; do the work yourself.".into());
     }
@@ -56,6 +58,8 @@ pub fn run(command: &str, chat: Option<&str>, args: &serde_json::Value) -> ToolR
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = cmd
         .env("PAPERCRAFT_PROMPT", &prompt)
+        .env("PAPERCRAFT_AGENT", agent.0)
+        .env("PAPERCRAFT_PARENT", agent.1)
         // An app opened from Finder has a bare PATH: give the helper the user's shell PATH.
         .env("PATH", crate::chat::path::resolved_path())
         .current_dir(std::env::temp_dir())
@@ -147,16 +151,19 @@ mod tests {
         }
         // The task tries to run a command; it must arrive as plain text.
         let task = "check Home\"; touch pwned; echo \"";
-        let out = run("printf '%s' {prompt} | tail -c 40", None, &json!({"role": "qa", "task": task})).unwrap();
+        let out = run("printf '%s' {prompt} | tail -c 40", None, ("Helper", ""), &json!({"role": "qa", "task": task})).unwrap();
         let Out::Text(t) = &out[0] else { panic!() };
         assert!(t.ends_with(task), "{t}");
         assert!(!std::env::temp_dir().join("pwned").exists());
-        assert!(run("", None, &json!({"role": "qa", "task": "x"})).unwrap_err().contains("Settings"));
-        assert!(run("echo", None, &json!({"role": "design", "task": "x"})).is_err());
-        assert!(run("exit 3", None, &json!({"role": "read", "task": "x"})).is_err());
+        assert!(run("", None, ("Helper", ""), &json!({"role": "qa", "task": "x"})).unwrap_err().contains("Settings"));
+        assert!(run("echo", None, ("Helper", ""), &json!({"role": "design", "task": "x"})).is_err());
+        assert!(run("exit 3", None, ("Helper", ""), &json!({"role": "read", "task": "x"})).is_err());
+        let who = run("printf '%s|%s' \"$PAPERCRAFT_AGENT\" \"$PAPERCRAFT_PARENT\"", None, ("Chat / build 1", "s1"), &json!({"role": "qa", "task": "x"})).unwrap();
+        let Out::Text(t) = &who[0] else { panic!() };
+        assert_eq!(t, "Chat / build 1|s1", "the helper's CLI calls carry its identity");
         assert_eq!(tail("héllo", 4), "llo");
         // Stop ends a running helper, and the process it started, at once.
-        let t = std::thread::spawn(|| run("sleep 30", Some("chat-stop-test"), &json!({"role": "qa", "task": "x"})));
+        let t = std::thread::spawn(|| run("sleep 30", Some("chat-stop-test"), ("Helper", ""), &json!({"role": "qa", "task": "x"})));
         std::thread::sleep(Duration::from_millis(500));
         let begun = Instant::now();
         stop("chat-stop-test");

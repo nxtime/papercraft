@@ -529,7 +529,7 @@ impl Tracker {
         now: u64,
     ) -> ToolResult {
         let who = crate::editor::changes::Who {
-            key: format!("{}#{}", client.name, client.session),
+            key: client.key(),
             label: self.label(client),
         };
         host.editor().changes.client = Some(std::sync::Arc::new(who));
@@ -1649,7 +1649,7 @@ mod tests {
     }
 
     fn who(name: &str, session: &str) -> Client {
-        Client { name: name.into(), session: session.into() }
+        Client { name: name.into(), session: session.into(), parent: None }
     }
 
     fn frame_as(t: &mut Tracker, h: &mut SessionHost, c: &Client, now: u64) -> NodeId {

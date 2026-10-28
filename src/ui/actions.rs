@@ -123,7 +123,7 @@ pub fn dispatch(ed: &mut Editor, st: &mut UiState, act: Act) {
 /// The run's title is the summary the toast shows; nothing changed (or an error) goes to the
 /// status line.
 pub fn run(host: &mut dyn Host, runs: &mut Tracker, act: Act, keys: &[String], now: u64) {
-    let client = Client { name: ACTIONS_CLIENT.into(), session: String::new() };
+    let client = Client { name: ACTIONS_CLIENT.into(), session: String::new(), parent: None };
     let undo_from = host.editor().history.undo_len();
     let mut tool = |host: &mut dyn Host, name: &str, args: Value| -> Result<Value, String> {
         let out = runs.call(host, &client, name, &args, now)?;

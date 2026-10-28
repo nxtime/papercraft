@@ -111,8 +111,12 @@ impl ServerHandler for PaperServer {
 /// backends connect that way), else the MCP client's title or name and its session id.
 fn client_of(context: &RequestContext<RoleServer>) -> Client {
     let parts = context.extensions.get::<axum::http::request::Parts>();
-    if let Some(id) = parts.and_then(|p| p.uri.query()).and_then(chat_of) {
+    let query = parts.and_then(|p| p.uri.query());
+    if let Some(id) = query.and_then(chat_of) {
         return Client::chat(id);
+    }
+    if let Some((name, parent)) = query.and_then(agent_of) {
+        return Client::agent(&name, parent);
     }
     let name = context
         .client_info()
@@ -122,12 +126,53 @@ fn client_of(context: &RequestContext<RoleServer>) -> Client {
         .and_then(|p| p.headers.get("mcp-session-id"))
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
-    Client { name, session: session.into() }
+    Client { name, session: session.into(), parent: None }
 }
 
 /// The chat id in an MCP URL query (`chat=<id>`).
 pub fn chat_of(query: &str) -> Option<&str> {
     query.split('&').find_map(|kv| kv.strip_prefix("chat="))
+}
+
+/// Names a person or the app itself uses, which an agent cannot take.
+const RESERVED: [&str; 3] = ["You", super::CHAT_CLIENT, super::ACTIONS_CLIENT];
+/// Longest agent name (`--as`).
+const MAX_AGENT_NAME: usize = 40;
+
+/// The agent name and parent session in an MCP URL query (`agent=<name>&parent=<session>`, from
+/// `papercraft-cli --as`). A name outside `[A-Za-z0-9 ._/-]{1,40}` or a reserved one is ignored.
+pub fn agent_of(query: &str) -> Option<(String, Option<String>)> {
+    let get = |k: &str| query.split('&').find_map(|kv| kv.strip_prefix(k)).map(decode);
+    let name = get("agent=")?;
+    let ok = (1..=MAX_AGENT_NAME).contains(&name.chars().count())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || " ._/-".contains(c))
+        && !RESERVED.iter().any(|r| r.eq_ignore_ascii_case(name.trim()));
+    ok.then(|| (name, get("parent=").filter(|p| !p.is_empty())))
+}
+
+/// Percent-decoding of a query value (`+` is a space).
+fn decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = b.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (b[i], hex) {
+            (b'%', Some(v)) => {
+                out.push(v);
+                i += 3;
+            }
+            (b'+', _) => {
+                out.push(b' ');
+                i += 1;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Add the `Accept` header the streamable HTTP transport requires when a client omits it.
@@ -259,6 +304,15 @@ pub fn spawn(port: u16, dispatch: Dispatch) -> Result<Running, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_cli_agent_is_read_from_the_query() {
+        assert_eq!(agent_of("agent=Codex%20B&parent=s1"), Some(("Codex B".into(), Some("s1".into()))));
+        assert_eq!(agent_of("agent=Chat+%2F+build+1"), Some(("Chat / build 1".into(), None)));
+        assert_eq!(agent_of("agent=You"), None, "a reserved name");
+        assert_eq!(agent_of("agent=a%3Bb"), None, "a character outside the set");
+        assert_eq!(agent_of("chat=7"), None);
+    }
 
     #[test]
     fn tools_deserialize_and_names_are_unique() {

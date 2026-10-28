@@ -168,7 +168,7 @@ impl Editor {
         }
         match self.take_rec() {
             Some((rec, key)) if keep => {
-                if self.log_touched(&rec) && self.history.commit(&self.doc, rec, key) {
+                if self.log_touched(&rec) && self.history.commit_by(&self.doc, rec, key, self.changes.client.as_ref().map(|w| w.key.clone())) {
                     self.revision += 1;
                 }
             }

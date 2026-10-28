@@ -33,6 +33,8 @@ pub struct Change {
     annotations: Option<(Vec<Annotation>, Vec<Annotation>)>,
     next_id: (u64, u64),
     coalesce_key: Option<String>,
+    /// The agent that made it (its client key); None for the person.
+    author: Option<String>,
 }
 
 /// Project-level state a step carries besides the page document; the editor puts it back.
@@ -538,6 +540,11 @@ pub struct History {
 impl History {
     /// Finalize a recording into a change. Returns false when nothing changed.
     pub fn commit(&mut self, doc: &Document, rec: Recording, coalesce_key: Option<String>) -> bool {
+        self.commit_by(doc, rec, coalesce_key, None)
+    }
+
+    /// [`History::commit`] for a change made by `author` (an agent's client key).
+    pub fn commit_by(&mut self, doc: &Document, rec: Recording, coalesce_key: Option<String>, author: Option<String>) -> bool {
         let entries: Vec<Entry> = rec
             .order
             .iter()
@@ -584,11 +591,13 @@ impl History {
             annotations,
             next_id: (rec.next_id_before, doc.next_id),
             coalesce_key,
+            author,
         };
         self.generation += 1;
         if let (Some(key), Some(top)) = (&change.coalesce_key, self.undo.last_mut())
             && self.redo.is_empty()
             && top.coalesce_key.as_ref() == Some(key)
+            && top.author == change.author
         {
             merge(top, change);
             return true;
@@ -617,6 +626,34 @@ impl History {
         let u = c.undone(true);
         self.undo.push(c);
         Some(u)
+    }
+
+    /// Undoes `author`'s newest step only, leaving later steps by others in place, when none
+    /// of them touched what it touched (the same layers, the top-level order, variables, the
+    /// design system, modes or notes). Blocked: the labels of the later steps in the way.
+    pub fn undo_by(&mut self, doc: &mut Document, author: &str) -> Result<Option<Undone>, Vec<String>> {
+        let Some(i) = self.undo.iter().rposition(|c| c.author.as_deref() == Some(author)) else {
+            return Ok(None);
+        };
+        let mine = &self.undo[i];
+        let blocked: Vec<String> = self.undo[i + 1..].iter().filter(|l| overlaps(mine, l)).map(|l| l.label.clone()).collect();
+        if !blocked.is_empty() {
+            return Err(blocked);
+        }
+        let c = self.undo.remove(i);
+        // Later steps may have made layers since: new ids keep counting up from there.
+        let next = doc.next_id;
+        c.apply(doc, false);
+        doc.next_id = doc.next_id.max(next);
+        self.generation += 1;
+        let u = c.undone(false);
+        self.redo.push(c);
+        Ok(Some(u))
+    }
+
+    /// Who made the step `redo` would bring back (None: the person, or nothing to redo).
+    pub fn redo_author(&self) -> Option<&str> {
+        self.redo.last().and_then(|c| c.author.as_deref())
     }
 
     pub fn generation(&self) -> u64 {
@@ -664,6 +701,16 @@ impl History {
             top.coalesce_key = None;
         }
     }
+}
+
+/// Two steps touched something in common, so one cannot be undone under the other.
+fn overlaps(a: &Change, b: &Change) -> bool {
+    a.entries.iter().any(|e| b.entries.iter().any(|x| x.id == e.id))
+        || (a.root.is_some() && b.root.is_some())
+        || (a.variables.is_some() && b.variables.is_some())
+        || (a.design.is_some() && b.design.is_some())
+        || (a.page_modes.is_some() && b.page_modes.is_some())
+        || (a.annotations.is_some() && b.annotations.is_some())
 }
 
 /// Fold `newer` into `older`, keeping the oldest before-state of each node.
