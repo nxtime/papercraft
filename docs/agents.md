@@ -108,6 +108,18 @@ write_html {
 EOF
 ```
 
+## Checking only what changed
+
+On a big page a full `lint_design` after every edit repeats the same output, and a `get_node_info` call per layer is slow (about 53 s for 397 layers). Check the change, then check everything once.
+
+* Every write tool result includes `rev`, the document revision after the call. `get_basic_info` reports the current `rev`. Reads never change it.
+* `get_changes {since, page?}` returns `{rev, since, truncated, changes: [{page, ids}]}`: what the edits since `since` touched. `truncated: true` means the log no longer reaches that far back, so do a full pass.
+* `lint_design {changedOnly: true}` lints since this client's last lint; `{since: rev}` lints since a revision you name. A scoped lint checks the touched layers plus their ancestors, descendants, siblings and every layer bound to a changed variable, and reports its coverage, for example `{checked: 12, total: 397, since: 40, partial: true}`. Plain `lint_design` is a full pass (`partial: false`). The `overflow` rule flags a layer that extends past its parent or clipping artboard (scroll frames are excluded).
+* `get_bounds {nodeIds?, pageId?, depth?}` returns `[{id, parent, x, y, w, h, absX, absY, clip}]` for a subtree in one call (capped, with `truncated`). Use it instead of looping `get_node_info`.
+* Always finish with one full `lint_design` (no arguments) and a screenshot per artboard in each theme mode before reporting. A partial lint speeds up the loop; it does not replace that pass.
+
+In the app, read-only calls no longer draw per-layer outlines or keep the "Working" pill lit for long. The agent workflow, with an example, is in [incremental-checks.md](../skills/papercraft/references/incremental-checks.md).
+
 ## Design-system tools
 
 * Variables: `get_variables` and `set_variables` take collections, groups (`color/brand/primary`), types (`color`, `number`, `string`, `boolean`), `mode`, `alias`, `description` and `hidden`; the old `{"name":"#hex"}` call still works and lands in the first collection. `create_collection` makes a collection with modes, `delete_variables` removes by name (refuses aliased ones unless `force`), `bind_variable` binds or detaches a field of layers (`stroke`, `text-color`, `width`, `height`, `gap`, `padding`, `radius`, `font-size`, `line-height`, `opacity`, `visible`).

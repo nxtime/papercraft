@@ -105,7 +105,7 @@ Run it before `finish_working_on_nodes`:
 1. Direction written down; the screen has one memorable idea and one primary action.
 2. Every color is a variable; both modes checked if there are two.
 3. Spacing only 4, 8, 12, 16, 24, 32, 48, 64, 96; type only from the scale; radii from one family.
-4. `lint_design` has zero errors and zero warnings, and the `info` items were considered.
+4. A full `lint_design` (no arguments) has zero errors and zero warnings, and the `info` items were considered. Between edits, lint only what changed: see `papercraft/references/incremental-checks.md`.
 5. Screenshot at scale 2 looked at: hierarchy, alignment, wrapping, clipping, empty areas, contrast by eye.
 6. Interactive things at least 44px on touch and named `Button…` / `Tab /…`.
 7. Repeated parts are components; states exist for every interactive component and for empty, loading and error screens.
