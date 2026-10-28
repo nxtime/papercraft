@@ -53,7 +53,7 @@ pub fn flow_children(doc: &Document, id: NodeId) -> Vec<NodeId> {
 }
 
 /// Intrinsic (hug) size of a node along an axis, without changing anything.
-fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
+pub(crate) fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
     let n = doc.get(id).unwrap();
     let (_, cur) = get(&n.rect, axis);
     let Some(l) = n.layout else {
@@ -74,7 +74,7 @@ fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
                 // A growing child still brings its content (CSS flex-basis auto); its current
                 // size is what it grew to, so it is not used.
                 Sizing::Fill if kn.layout.is_some() => clamp_size(&kn.layout_child, axis, hug_size(doc, *k, axis)),
-                Sizing::Fill => clamp_size(&kn.layout_child, axis, 0.0),
+                Sizing::Fill => clamp_size(&kn.layout_child, axis, text_content(kn, axis)),
                 Sizing::Fixed => clamp_size(&kn.layout_child, axis, get(&kn.rect, axis).1),
             }
         })
@@ -110,6 +110,19 @@ fn hug_size(doc: &Document, id: NodeId, axis: usize) -> f64 {
         pad + sizes.iter().cloned().fold(0.0, f64::max)
     };
     clamp_size(&n.layout_child, axis, result)
+}
+
+/// What a growing text brings to a parent that hugs it: its one-line width and its height, as
+/// a browser sizes a fit-content box by its content. Without it, a text that fills a hugging
+/// row gets no width and wraps a letter per line. Other leaves bring nothing.
+fn text_content(n: &crate::model::Node, axis: usize) -> f64 {
+    let NodeKind::Text { text, font_size, align, .. } = &n.kind else {
+        return 0.0;
+    };
+    if axis == 1 {
+        return n.rect.h;
+    }
+    crate::text::layout_rich(text, *font_size, crate::model::Color::INK, &n.text_style, None, *align).width
 }
 
 fn wrap_lines(
@@ -709,6 +722,27 @@ mod tests {
     }
 
     const FX: [Sizing; 2] = [Sizing::Fixed, Sizing::Fixed];
+
+    #[test]
+    fn a_growing_text_in_a_hugging_row_keeps_its_width() {
+        let mut doc = Document::default();
+        let mut rec = Recording::new("t", &doc);
+        let mut tx = Tx::new(&mut doc, &mut rec);
+        let row = tx.alloc_id();
+        let mut f = Node::new(row, NodeKind::Frame { clip: true }, Rect::new(0.0, 0.0, 10.0, 10.0));
+        f.layout = Some(AutoLayout::default());
+        f.layout_child.sizing = [Sizing::Hug; 2];
+        tx.insert(f, None, None);
+        let id = tx.alloc_id();
+        let kind = NodeKind::Text { text: "Two Sum".into(), font_size: 14.0, auto_width: false, align: crate::model::TextAlign::Left };
+        let mut t = Node::new(id, kind, Rect::new(0.0, 0.0, 0.0, 17.0));
+        t.layout_child.sizing = [Sizing::Fill, Sizing::Hug];
+        tx.insert(t, Some(row), None);
+        layout_frame(&mut tx, row);
+        let w = doc.get(id).unwrap().rect.w;
+        assert!(w > 40.0, "one line wide, not 0: {w}");
+        assert!(doc.get(id).unwrap().rect.h < 20.0, "one line tall");
+    }
 
     #[test]
     fn horizontal_hug_with_gap_and_padding() {

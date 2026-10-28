@@ -189,6 +189,18 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
                     );
                 }
             }
+            if let Some(l) = crate::text::layout_node(n)
+                && let Some(t) = n.kind.text()
+                // More lines than words and line breaks: some word is split over lines.
+                && l.lines.len() > t.split_whitespace().count().max(1) + t.matches('\n').count()
+            {
+                add(
+                    "text-collapsed",
+                    "error",
+                    format!("`{}` is {:.0}px wide, so it breaks inside words ({} lines)", n.name, n.rect.w, l.lines.len()),
+                    "give it room: width fit-content, or flex-grow in a parent with a set width".into(),
+                );
+            }
             if size < 12.0 {
                 add(
                     "text-size",
@@ -592,6 +604,19 @@ mod tests {
         );
         assert!(off_grid(13.0) && !off_grid(12.0) && !off_grid(0.0));
         assert!(is_default_name("Frame 12") && !is_default_name("Task Row"));
+    }
+
+    #[test]
+    fn a_text_too_narrow_for_its_words_is_an_error() {
+        let mut doc = Document::default();
+        let id = doc.alloc_id();
+        let kind = crate::model::NodeKind::Text { text: "Two Sum".into(), font_size: 14.0, auto_width: false, align: Default::default() };
+        doc.nodes.insert(id, Node::new(id, kind, crate::geom::Rect::new(0.0, 0.0, 0.0, 116.0)));
+        doc.root.push(id);
+        let collapsed = |d: &Document| lint(d, &[id], &[]).iter().any(|i| i.rule == "text-collapsed");
+        assert!(collapsed(&doc));
+        doc.nodes.get_mut(&id).unwrap().rect.w = 32.0; // one word a line is wrapping, not collapsing
+        assert!(!collapsed(&doc));
     }
 
     #[test]

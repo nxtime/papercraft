@@ -57,7 +57,7 @@ For the next screens, create each artboard at 390x844, reuse the components by `
 
 ## 2. Landing page (1440 wide, height grows with content)
 
-Create the artboard with `height:"fit-content"` so it never clips, then add one section per call.
+Create the artboard with `height:"fit-content", overflow:"visible"` so it grows with its sections instead of keeping the 900px screen height, then add one section per call.
 
 ```sh
 AB=$(papercraft-cli call create_artboard '{"name":"Landing","styles":{"width":"1440px","height":"fit-content","backgroundColor":"var(--bg)","display":"flex","flexDirection":"column","paddingBottom":"96px"}}' | jq -r .id)

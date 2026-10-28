@@ -533,7 +533,7 @@ fn set_text_flag(n: &mut Node, f: impl Fn(&mut crate::model::TextSpan)) {
 
 fn set_size(n: &mut Node, axis: usize, v: &str, ctx: &Context, a: &mut Applied, key: &str) {
     let fs = n.kind.font_size().unwrap_or(16.0);
-    let v = v.trim();
+    let v = if full_viewport(v) { "100%" } else { v.trim() };
     let is_text = matches!(n.kind, NodeKind::Text { .. });
     match v {
         "fit-content" | "auto" | "max-content" | "min-content" => {
@@ -572,6 +572,11 @@ fn set_size(n: &mut Node, axis: usize, v: &str, ctx: &Context, a: &mut Applied, 
             }
         }
     }
+}
+
+/// `100vh` and its kin: the whole screen, which is the frame a page is drawn in.
+fn full_viewport(v: &str) -> bool {
+    matches!(v.trim(), "100vh" | "100dvh" | "100svh" | "100lvh" | "100vw" | "100dvw" | "100svw" | "100lvw")
 }
 
 fn resize_axis(n: &mut Node, axis: usize, size: f64) {
@@ -1090,7 +1095,8 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 None => false,
             },
             "flexGrow" | "flex" => {
-                let grow = split_ws(v)
+                let parts = split_ws(v);
+                let grow = parts
                     .first()
                     .and_then(|g| g.parse::<f64>().ok())
                     .unwrap_or(0.0);
@@ -1101,6 +1107,12 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                         } else {
                             1
                         };
+                        // `flex: 0 0 120px`: a fixed 120 on the main axis.
+                        if grow == 0.0
+                            && let Some(basis) = parts.get(2).filter(|b| length(b, fs).is_some())
+                        {
+                            set_size(n, ma, basis, ctx, &mut a, k);
+                        }
                         if grow > 0.0 {
                             axis_set(n, ma, Sizing::Fill);
                             if ma == 0
@@ -1188,7 +1200,11 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
             },
             "minWidth" | "minHeight" => {
                 let axis = usize::from(k == "minHeight");
-                if matches!(lower.as_str(), "none" | "auto" | "0") {
+                if full_viewport(&lower) && ctx.parent_layout.is_some() {
+                    // `min-height: 100vh` on a page shell: fill the screen.
+                    axis_set(n, axis, Sizing::Fill);
+                    true
+                } else if matches!(lower.as_str(), "none" | "auto" | "0") {
                     n.layout_child.min_size[axis] = None;
                     true
                 } else if let Some(px) = length(v, fs) {
@@ -1219,6 +1235,12 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 } else {
                     false
                 }
+            }
+            // A length basis is the size on the parent's main axis (`auto`, `0%` change nothing).
+            "flexBasis" if ctx.parent_layout.is_some() && length(v, fs).is_some() => {
+                let horizontal = ctx.parent_layout.is_some_and(|pl| pl.direction == Direction::Horizontal);
+                set_size(n, if horizontal { 0 } else { 1 }, v, ctx, &mut a, k);
+                true
             }
             "flexShrink" | "flexBasis" | "boxSizing" | "zIndex" | "cursor" | "whiteSpace"
             | "fontFamily" | "wordBreak" | "overflowWrap" => {

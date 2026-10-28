@@ -28,14 +28,16 @@
 
 Supported: `display:flex` (and `inline-flex`), `flex-direction`, `flex-wrap`, `gap`, `row-gap`, `column-gap`, `padding` (shorthand, per side, `padding-inline`, `padding-block`), `align-items`, `justify-content` (including `space-between`), `align-self` (`start`, `center`, `end`, `stretch`), `flex-grow` / `flex: 1`, `width`, `height` (px, %, `fit-content`), `min-width`, `max-width`, `min-height`, `max-height`, `overflow:hidden` (clips), `position:absolute` with `left`/`top`/`right`/`bottom`, `display:none`, `visibility`.
 
-Not supported (check `ignoredStyles` to be sure): `margin` (use `gap` and `padding`), `display:grid`, tables, `float`, `calc()`, viewport units, `transform` and rotation.
+Rewritten before layers are made, each reported in `warnings`: `margin` becomes the parent's `gap` (when uniform) or spacer layers, `margin-*:auto` a growing spacer and `margin:0 auto` centring; `display:grid` becomes rows of cells (`fr` tracks grow, px tracks keep their width, `repeat(auto-fill, minmax())` counts columns from the width); inline boxes (chips, badges) become boxes in a wrapping row; `<input>` and `<textarea>` become a box showing their placeholder or value. Prefer `gap` and `padding` anyway: the result is the same and shorter.
+
+Not supported (check `ignoredStyles` to be sure): tables, `float`, `calc()`, viewport units, `transform` and rotation.
 
 Tips:
 
 * Artboards are `display:flex; flex-direction:column`. Children of a column stretch to the full width unless they have a width or `align-items` / `align-self` says otherwise.
 * To center something, put it in a flex parent with `align-items:center; justify-content:center`.
 * To make a row fill the remaining space, give the child `flex-grow:1`.
-* Use `height:"fit-content"` on artboards that should grow with content; fixed heights clip.
+* A screen keeps its device's size; at a device width (390, 1440...) `height:"fit-content"` becomes the device height. Content taller than the screen scrolls by itself: the main column under a fixed sidebar and header, else the screen (write_html says which). Pass `overflow:"visible"` to let a board grow (a landing page drawn in full).
 
 ## Text
 
