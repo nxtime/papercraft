@@ -119,7 +119,7 @@ Projects live in `~/Documents/papercraft/<name>/` (`project.json`, one JSON file
 
 ## Agents
 
-PaperCraft exposes **86 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
+PaperCraft exposes **87 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
 
 | Way | Notes |
 |---|---|

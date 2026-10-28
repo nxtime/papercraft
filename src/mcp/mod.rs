@@ -12,6 +12,7 @@
 //! * [`relay_proto`]: JSON frames between the relay and a browser tab; [`relay`]: the
 //!   relay server itself (native only).
 
+pub mod bounds;
 pub mod codegen;
 pub mod css;
 pub mod diff;
@@ -19,6 +20,7 @@ pub mod enforcer;
 pub mod exec;
 pub mod html;
 pub mod lint;
+pub mod lint_overflow;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod imagegen;
 #[cfg(not(target_arch = "wasm32"))]

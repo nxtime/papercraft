@@ -79,6 +79,17 @@ Details of one node: type, name, size, visibility, lock state, parent, children 
 | `nodeId` | string | yes | The node to inspect. |
 
 
+### `get_bounds` (read-only)
+
+Rects of a whole subtree in one read, instead of one get_node_info per layer. Returns `columns` [id, parent, x, y, w, h, absX, absY, clip] and `rows` (one array per layer, parents before children): x/y/w/h are relative to the parent, absX/absY are page coordinates, clip is true when the layer clips its content (clipping or scrolling frame), parent is null for a top-level layer. At most 2000 rows per call: then `truncated` is true and `continueWith` lists the node ids to pass as nodeIds. Use it to verify nothing leaves its artboard, and `lint_design`'s `overflow` rule to list the offenders.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `depth` | number |  | Levels returned, counting each given node as 1 (default: all). |
+| `nodeIds` | string[] |  | Subtrees to measure; omit for all artboards on the page. |
+| `pageId` | string |  | Page to use (default: the active page). |
+
+
 ### `get_children` (read-only)
 
 Direct children of a node (or of the page root when nodeId is "root"), with ids, names, types, child counts and positions.

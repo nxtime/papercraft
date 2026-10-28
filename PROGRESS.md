@@ -76,6 +76,11 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-28: overflow lint rule and `get_bounds`
+
+* `lint_design` has an `overflow` rule (`src/mcp/lint_overflow.rs`): layers past their artboard or clipping parent, and text taller than its box. Scrolling frames and what is pinned in them are exempt; it is never auto-fixed. It is a pure function over a node set, so a scope filter can pass any subset.
+* New tool `get_bounds {nodeIds?, pageId?, depth?}` (`src/mcp/bounds.rs`): every layer's rect in one read (about 2000 rows per call, then `continueWith`). Tool count is now 87 (one more than before; if another branch also adds a tool, recount). Tests: `tests/mcp_bounds.rs`.
+
 ### 2026-10-28: 0.8.4 (demo video, fresh screenshots)
 
 * README opens with a time-lapse of designing a habit-tracker app (`docs/demo.gif`, full video `docs/demo.mp4`), and every screenshot is retaken from that design.
