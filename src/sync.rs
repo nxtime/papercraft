@@ -148,15 +148,21 @@ fn remember_base(dir: &Path, path: &str, bytes: &[u8]) {
 }
 
 /// The merge of this folder's and the server's copy of a page, both edited from the last synced
-/// one; None when that copy or any of the three is not JSON (the folder's version then wins).
+/// one; None when that copy or any of the three is not JSON or packed JSON (the folder's
+/// version then wins).
 fn merged_copy(dir: &Path, path: &str, local: &[u8], remote: &[u8]) -> Option<Vec<u8>> {
-    if !path.ends_with(".json") {
+    use crate::project::packed;
+    let is_packed = path.ends_with(&format!(".{}", packed::EXT));
+    if !is_packed && !path.ends_with(".json") {
         return None;
     }
-    let parse = |b: &[u8]| serde_json::from_slice::<serde_json::Value>(b).ok();
+    let parse = |b: &[u8]| match is_packed {
+        true => serde_json::from_slice::<serde_json::Value>(&packed::unpack(b).ok()?).ok(),
+        false => serde_json::from_slice::<serde_json::Value>(b).ok(),
+    };
     let base = parse(&vfs::read(base_file(dir, path)).ok()?)?;
-    let merged = crate::merge::merge(&base, &parse(local)?, &parse(remote)?);
-    serde_json::to_vec(&merged).ok()
+    let merged = serde_json::to_vec(&crate::merge::merge(&base, &parse(local)?, &parse(remote)?)).ok()?;
+    Some(if is_packed { packed::pack(&merged) } else { merged })
 }
 
 /// Every file under `dir` that syncs, as relative `/` paths with their fingerprints.

@@ -535,9 +535,9 @@ fn prototype_tab(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId]) {
     let first = &first;
     section(ui, "Interaction");
     let frames: Vec<(Option<NodeId>, String)> = std::iter::once((None, "None".to_string()))
-        .chain(ed.doc.root.iter().filter_map(|id| {
-            let n = ed.doc.get(*id)?;
-            (n.is_frame() && !n.component && *id != first.id).then(|| (Some(*id), n.name.clone()))
+        .chain(ed.screens().into_iter().filter_map(|id| {
+            let n = ed.doc.get(id)?;
+            (n.is_frame() && !n.component && id != first.id).then(|| (Some(id), n.name.clone()))
         }))
         .collect();
     let opts: Vec<(Option<NodeId>, &str)> = frames.iter().map(|(i, n)| (*i, n.as_str())).collect();
@@ -1043,6 +1043,19 @@ fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
         .size(theme::SECONDARY)
         .color(theme::pal(ui).secondary),
     );
+    // Frames that look like screens, declared in one step (`screens::candidates`).
+    let found = crate::editor::screens::candidates(&ed.doc);
+    if !found.is_empty() {
+        let names: Vec<&str> = found.iter().take(12).filter_map(|id| ed.doc.get(*id)).map(|n| n.name.as_str()).collect();
+        let more = found.len().saturating_sub(names.len());
+        let tip = format!("{}{}", names.join("\n"), if more > 0 { format!("\n+ {more} more") } else { String::new() });
+        let label = format!("Declare {} screen{}", found.len(), if found.len() == 1 { "" } else { "s" });
+        if super::kit::button_wide(ui, super::kit::ButtonKind::Secondary, None, &label).on_hover_text(tip).clicked()
+            && let Err(e) = ed.set_role(&found, crate::editor::screens::Role::Screen)
+        {
+            ed.status = e;
+        }
+    }
     // Every screen on the page at once: fixed size, overflow scrolls.
     let screens = ed.screens();
     if !screens.is_empty() {
@@ -1420,6 +1433,34 @@ fn geometry(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         if super::kit::checkbox(ui, &mut s, "Scroll overflow").on_hover_text("Fixed height; the content past it scrolls with the wheel over the frame").changed() {
             ed.set_scroll(ids, s);
         }
+        role_toggles(ui, ed, ids, first);
+    }
+}
+
+/// Screen and overlay roles of the selected frames: shown only where the role is allowed
+/// (or already set), so a section never offers "Screen".
+fn role_toggles(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
+    use crate::editor::screens::{Role, refusal};
+    let allowed = |role| ids.iter().all(|id| refusal(&ed.doc, *id, role).is_none());
+    let mut set = None;
+    if first.screen || allowed(Role::Screen) {
+        let mut on = first.screen;
+        let tip = "A screen of the product (one device viewport), not a section or container. Agents don't edit layers hidden behind its drawers and modals.";
+        if super::kit::checkbox(ui, &mut on, "Screen").on_hover_text(tip).changed() {
+            set = Some(if on { Role::Screen } else { Role::None });
+        }
+    }
+    if first.overlay || allowed(Role::Overlay) {
+        let mut on = first.overlay;
+        let tip = "A drawer, modal or sheet: what it covers counts as hidden, even where it is translucent";
+        if super::kit::checkbox(ui, &mut on, "Overlay").on_hover_text(tip).changed() {
+            set = Some(if on { Role::Overlay } else { Role::None });
+        }
+    }
+    if let Some(role) = set
+        && let Err(e) = ed.set_role(ids, role)
+    {
+        ed.status = e;
     }
 }
 

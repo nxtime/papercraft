@@ -31,6 +31,33 @@ struct Gfx {
     adapter_info: wgpu::AdapterInfo,
 }
 
+/// Repaint delays this short are drawn on the next vsync instead of a timer: about one frame
+/// at 60 Hz, so animations follow the display's refresh rate.
+const FRAME_SLACK: Duration = Duration::from_millis(16);
+/// Layers re-tessellated in one frame past which the freed memory is handed back when idle.
+const RELIEF_MISSES: usize = 1000;
+
+/// Hands memory freed by a large rebuild back to the system: the allocator otherwise keeps the
+/// freed pages in the process (counted in its footprint) for reuse.
+fn release_freed_memory() {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+        }
+        // SAFETY: a null zone means every zone, and a goal of 0 as much as can be released.
+        unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) };
+    }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim has no preconditions.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+/// Shortest gap between frames drawn for an agent's edits alone (20 FPS).
+const AGENT_FRAME: Duration = Duration::from_millis(50);
+
 pub struct App {
     gfx: Option<Gfx>,
     pub ed: Editor,
@@ -45,6 +72,10 @@ pub struct App {
     title: String,
     /// When egui asked for a delayed repaint (tooltips, caret blink, animations).
     next_repaint: Option<Instant>,
+    /// When the last frame was drawn (paces redraws for agent edits).
+    last_redraw: Option<Instant>,
+    /// A large rebuild freed memory: hand it back to the system once the app is idle.
+    relief_due: bool,
     #[cfg(target_os = "macos")]
     menu: Option<crate::macos::NativeMenu>,
     /// Tool calls from the MCP server, and the server itself (stops when dropped).
@@ -98,6 +129,8 @@ impl App {
             close_requested: false,
             title: String::new(),
             next_repaint: None,
+            last_redraw: None,
+            relief_due: false,
             #[cfg(target_os = "macos")]
             menu: None,
             mcp: None,
@@ -262,6 +295,7 @@ impl App {
             self.save_project(true);
         }
         let counts = self.runs.counts(&self.ed);
+        self.relief_due = true;
         match self.session.open(&mut self.ed, dir) {
             Ok(()) => {
                 self.runs.end_counted(crate::project::format::now_ms(), counts, None);
@@ -731,13 +765,14 @@ impl App {
             // A chat turn that edited is over: close its run now, not after the 30 s idle timeout.
             self.runs.finish(crate::project::format::now_ms(), &self.ed);
         }
-        self.st.sync_runs(&mut self.runs, &self.ed);
+        self.st.sync_runs(&self.ctx, &mut self.runs, &self.ed);
         self.st.chat.tools = self.tool_dispatch().map(crate::chat::events::ToolDispatch);
         if self.st.chat.gpu.is_none() {
             self.st.chat.gpu = self.offscreen();
         }
         let Some(g) = self.gfx.as_mut() else { return };
         let work = Instant::now();
+        self.last_redraw = Some(work);
         let input = g.egui.take_egui_input(&g.window);
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
         self.canvas = l.canvas;
@@ -749,6 +784,8 @@ impl App {
         let platform = std::mem::take(&mut l.output.platform_output);
         g.egui.handle_platform_output(&g.window, platform);
 
+        // The wait for a drawable (vsync back-pressure) is not work: leave it out of the timing.
+        let layout_ms = work.elapsed().as_secs_f32() * 1000.0;
         let frame = match g.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
@@ -776,6 +813,7 @@ impl App {
         {
             crate::macos::hide_traffic_lights(&g.window);
         }
+        let work = Instant::now();
         let view = frame.texture.create_view(&Default::default());
         let size = [g.config.width, g.config.height];
         g.painter.paint(
@@ -788,7 +826,8 @@ impl App {
             &self.ed,
             !self.st.show_grid_off,
         );
-        self.st.perf.record(self.start.elapsed().as_secs_f64(), work.elapsed().as_secs_f32() * 1000.0);
+        self.st.perf.record(self.start.elapsed().as_secs_f64(), layout_ms + work.elapsed().as_secs_f32() * 1000.0);
+        self.relief_due |= g.painter.cache.last_misses > RELIEF_MISSES;
         g.window.pre_present_notify();
         g.queue.present(frame);
 
@@ -841,13 +880,16 @@ impl App {
         } else {
             repaint_delay
         };
-        if repaint_delay.is_zero() || pending || animating || !self.ed.requests.is_empty() {
+        // A repaint due within a frame is drawn now and paced by vsync: a timer that short wakes
+        // late and off the display's beat (84 FPS on a 120 Hz screen).
+        if repaint_delay <= FRAME_SLACK || pending || animating || !self.ed.requests.is_empty() {
             g.window.request_redraw();
             self.next_repaint = None;
-        } else if repaint_delay < Duration::from_secs(3600) {
-            self.next_repaint = Some(Instant::now() + repaint_delay);
         } else {
-            self.next_repaint = None;
+            let timer = (repaint_delay < Duration::from_secs(3600)).then(|| Instant::now() + repaint_delay);
+            // The zoom stopped between buckets: one more frame re-tessellates for it.
+            let refine = g.painter.cache.refine_at();
+            self.next_repaint = timer.into_iter().chain(refine).min();
         }
     }
 
@@ -1128,12 +1170,19 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let p = v2(position.x / scale, position.y / scale);
                 if self.captured || self.over_canvas(p) {
+                    let before = (self.ed.hover, self.ed.measures.len());
                     self.ed.handle(InputEvent::PointerMove {
                         pos: self.to_canvas(p),
                         pressure: None,
                         time_ms: now,
                     });
-                    redraw = true;
+                    // Hovering with the select or hand tool changes the screen only when the
+                    // layer under the pointer (or the Alt measures) changes: skip the frame
+                    // otherwise. egui keeps the move and gets it with the next frame.
+                    let idle = !self.captured
+                        && [crate::editor::Tool::Select, crate::editor::Tool::Hand].contains(&self.ed.tool)
+                        && !self.ed.is_busy();
+                    redraw = !idle || before != (self.ed.hover, self.ed.measures.len());
                 } else if self.ed.hover.take().is_some() {
                     redraw = true;
                 }
@@ -1397,7 +1446,12 @@ impl ApplicationHandler<UserEvent> for App {
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
             Some(t) => event_loop.set_control_flow(ControlFlow::WaitUntil(t)),
-            None => event_loop.set_control_flow(ControlFlow::Wait),
+            None => {
+                if std::mem::take(&mut self.relief_due) {
+                    release_freed_memory();
+                }
+                event_loop.set_control_flow(ControlFlow::Wait)
+            }
         }
     }
 }
@@ -1528,8 +1582,16 @@ impl App {
         self.st.project_name = self.session.project_name();
         self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
         self.ed.revision += 1;
-        if let Some(g) = &self.gfx {
-            g.window.request_redraw();
+        // An agent's edits are drawn at most every AGENT_FRAME: its calls can come faster than
+        // the eye follows, and each redraw of a large page costs milliseconds.
+        let due = self.last_redraw.map(|t| t + AGENT_FRAME).filter(|t| *t > Instant::now());
+        match due {
+            Some(t) => self.next_repaint = Some(self.next_repaint.map_or(t, |r| r.min(t))),
+            None => {
+                if let Some(g) = &self.gfx {
+                    g.window.request_redraw();
+                }
+            }
         }
     }
 }

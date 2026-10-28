@@ -318,6 +318,18 @@ pub fn paint_backend_logo(ui: &Ui, rect: Rect, b: &Backend, prefs: &ChatPrefs, i
     true
 }
 
+/// Paints agent `id`'s logo into `rect` tinted `ink`, or the first letter of `name` when it has
+/// none.
+pub fn paint_agent_mark(ui: &Ui, rect: Rect, id: &str, name: &str, ink: Color32) {
+    if let Some(t) = logo(id).and_then(|(n, svg)| logo_texture(ui.ctx(), n, svg)) {
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        ui.painter().image(t.id(), rect, uv, ink);
+        return;
+    }
+    let letter = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, letter, theme::semibold(theme::BODY + 2.0), ink);
+}
+
 /// Pixels a logo is rasterised at (white, so the tint gives its colour).
 const LOGO_PX: u32 = 64;
 

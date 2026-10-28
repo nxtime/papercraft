@@ -113,8 +113,10 @@ pub struct UiState {
     /// Scroll offset of the layers list at the last frame, and whether rows may pop in now.
     pub layer_offset: f32,
     pub layer_animate: bool,
-    /// `layer_subtree_height` of the rows seen this frame, so each subtree is measured once.
+    /// `layer_subtree_height` of the rows, so each subtree is measured once; kept while the
+    /// document and the folded rows stay the same (`layer_heights_key`).
     pub layer_heights: HashMap<NodeId, f32>,
+    pub layer_heights_key: (u64, usize),
     /// Selection seen by the last layers-panel frame, to notice changes made on the canvas.
     pub last_selection: Vec<NodeId>,
     /// A layer the layers panel should scroll into view (and unfold its parents for).
@@ -140,6 +142,8 @@ pub struct UiState {
     pub run_open: Vec<crate::runs::Run>,
     /// (active page, history generation) when the review runs were last recounted.
     pub runs_gen: Option<(usize, u64)>,
+    /// A recount running on another thread: (run id, counts) per run when done.
+    pub recount: Option<std::sync::mpsc::Receiver<Vec<(String, crate::runs::Counts)>>>,
     /// The run that just ended with changes: the Agent view's "Agent finished" banner.
     pub run_banner: Option<crate::runs::Run>,
     /// Canvas toast for the same run: (run id, text, shown at).
@@ -340,7 +344,7 @@ impl UiState {
 
     /// Per frame, after `Tracker::tick`: mirrors the open runs and picks up a finished one.
     /// Returns true when a run just ended with changes.
-    pub fn sync_runs(&mut self, t: &mut crate::runs::Tracker, ed: &Editor) -> bool {
+    pub fn sync_runs(&mut self, ctx: &egui::Context, t: &mut crate::runs::Tracker, ed: &Editor) -> bool {
         self.run_open = t.open_runs().cloned().collect();
         let finished = t.take_finished();
         if let Some(run) = &finished {
@@ -355,7 +359,7 @@ impl UiState {
             self.runs = crate::runs::list(&dir);
             self.runs_key = Some(dir);
         }
-        self.recount_runs(ed);
+        self.recount_runs(ctx, ed);
         let Some(run) = finished else {
             return false;
         };
@@ -373,21 +377,78 @@ impl UiState {
     }
 
     /// After undo, redo or an edit on the page, the review runs on it get their counts again, so
-    /// their cards do not keep showing changes that are gone. Saved, so a reload agrees.
-    fn recount_runs(&mut self, ed: &Editor) {
+    /// their cards do not keep showing changes that are gone. Saved, so a reload agrees. The
+    /// count reads each run's snapshot and diffs whole pages (~100 ms each on a large page), so it
+    /// runs on another thread against copies of the pages, one recount at a time.
+    fn recount_runs(&mut self, ctx: &egui::Context, ed: &Editor) {
+        if let Some(rx) = &self.recount {
+            match rx.try_recv() {
+                Ok(counts) => {
+                    self.recount = None;
+                    self.apply_counts(counts);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.recount = None,
+            }
+        }
         let key = (ed.active_page, ed.history.generation());
         if !self.run_open.is_empty() || self.runs_gen == Some(key) {
             return;
         }
         self.runs_gen = Some(key);
-        let Some(dir) = &self.project_dir else { return };
+        let Some(dir) = self.project_dir.clone() else { return };
         let page = ed.active_page_id();
-        let review = self.runs.iter_mut().filter(|r| {
-            r.state == crate::runs::RunState::Review && r.pages.iter().any(|p| p.page_id == page)
-        });
         // ponytail: newest few only, each recount reads its snapshots from disk.
-        for r in review.take(RECOUNT_MAX) {
-            let (added, changed, removed, _) = crate::runs::count(dir, ed, r);
+        let review: Vec<crate::runs::Run> = self
+            .runs
+            .iter()
+            .filter(|r| r.state == crate::runs::RunState::Review && r.pages.iter().any(|p| p.page_id == page))
+            .take(RECOUNT_MAX)
+            .cloned()
+            .collect();
+        if review.is_empty() {
+            return;
+        }
+        // ponytail: copies the pages the runs touched; shared documents would avoid the copy.
+        let pages: Vec<(String, String, crate::model::Document)> = ed
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| review.iter().any(|r| r.pages.iter().any(|p| p.page_id == s.id)))
+            .map(|(i, s)| (s.id.clone(), s.name.clone(), ed.page_doc(i).clone()))
+            .collect();
+        let work = move || -> Vec<(String, crate::runs::Counts)> {
+            review
+                .iter()
+                .map(|r| {
+                    let c = crate::runs::count_in(&dir, r, |id| {
+                        pages.iter().find(|p| p.0 == id).map(|p| (&p.2, p.1.as_str()))
+                    });
+                    (r.id.clone(), c)
+                })
+                .collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            self.apply_counts(work());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(work());
+                ctx.request_repaint();
+            });
+            self.recount = Some(rx);
+        }
+    }
+
+    fn apply_counts(&mut self, counts: Vec<(String, crate::runs::Counts)>) {
+        let Some(dir) = &self.project_dir else { return };
+        for (id, (added, changed, removed, _)) in counts {
+            let Some(r) = self.runs.iter_mut().find(|r| r.id == id) else { continue };
             if (added, changed, removed) != (r.added, r.changed, r.removed) {
                 (r.added, r.changed, r.removed) = (added, changed, removed);
                 let _ = crate::runs::save(dir, r);
@@ -412,8 +473,9 @@ impl UiState {
 
 /// How long after its last tool call an agent still counts as working.
 const AGENT_WORKING_SECS: u64 = 6;
-/// Repaint interval of the activity pill's dots.
-const AGENT_PILL_FRAME_MS: u64 = 33;
+/// Repaint interval of the activity pill's dots and the canvas glow while an agent works. Each
+/// tick redraws the whole window, so 15 FPS: the pulse still reads smooth.
+const AGENT_PILL_FRAME_MS: u64 = 66;
 
 /// What an agent's tool call means in plain words, for the activity pill.
 pub(crate) fn agent_verb(tool: &str) -> &'static str {
@@ -1670,7 +1732,10 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 );
             }
             st.layer_rows.clear();
-            st.layer_heights.clear();
+            if st.layer_heights_key != (ed.doc_stamp, st.collapsed.len()) {
+                st.layer_heights.clear();
+                st.layer_heights_key = (ed.doc_stamp, st.collapsed.len());
+            }
             // Rows that come into view by scrolling just appear; the pop-in is for a list that
             // was not on screen, or rows that were unfolded.
             let offset = ui.clip_rect().top() - ui.min_rect().top();

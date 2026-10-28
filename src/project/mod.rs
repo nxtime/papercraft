@@ -6,7 +6,7 @@
 //! <root>/<Project name>/
 //!     project.json        manifest: id, name, timestamps, ordered page list
 //!     design.json         the project's design system (collections of variables)
-//!     pages/<page-id>.json one infinite canvas per page
+//!     pages/<page-id>.json.zst one infinite canvas per page (zstd JSON, see [`packed`])
 //!     assets/<hash>.<ext> images used by image fills
 //!     thumbnail.png       preview for the home screen (written by the app)
 //! <root>/.trash/<Project name>~<timestamp>/   deleted projects, restorable
@@ -16,6 +16,7 @@
 
 pub mod format;
 pub mod loader;
+pub mod packed;
 
 use crate::io::atomic;
 pub use format::{FormatError, Manifest, PageData, PageRef, new_id, now_ms};
@@ -379,8 +380,19 @@ fn placeholder_page(r: &PageRef) -> PageData {
 
 /// Read the page file `path` of manifest entry `r`; the manifest owns the name, and a missing
 /// file is an empty page.
+/// The file of page `id` in project folder `dir`.
+pub fn page_file(dir: &Path, id: &str) -> PathBuf {
+    packed::path(&dir.join(PAGES_DIR), id)
+}
+
+/// Page `id` is still a plain `.json` from an older build; saving it packs it.
+pub fn is_legacy_page(dir: &Path, id: &str) -> bool {
+    let f = page_file(dir, id);
+    !crate::vfs::exists(&f) && crate::vfs::exists(&packed::legacy(&f))
+}
+
 pub fn read_page_file(path: &Path, r: &PageRef) -> Result<(PageData, PageModes), FormatError> {
-    let (mut p, m) = match crate::vfs::read_to_string(path)
+    let (mut p, m) = match packed::read(path)
         .map_err(FormatError::from)
         .and_then(|s| format::page_from_json_modes(&s))
     {
@@ -456,11 +468,11 @@ impl Project {
     }
 
     pub fn page_path(&self, id: &str) -> PathBuf {
-        self.dir.join(PAGES_DIR).join(format!("{id}.json"))
+        page_file(&self.dir, id)
     }
 
     pub fn load_page(&self, id: &str) -> Result<PageData, FormatError> {
-        let mut p = format::page_from_json(&crate::vfs::read_to_string(self.page_path(id))?)?;
+        let mut p = format::page_from_json(&packed::read(&self.page_path(id))?)?;
         if let Some(r) = self.manifest.pages.iter().find(|r| r.id == id) {
             // The manifest owns page names (renames touch only the manifest).
             p.name = r.name.clone();
@@ -583,15 +595,12 @@ impl Project {
 
     pub fn save_page_modes(&self, page: &PageData, modes: &PageModes) -> Result<(), FormatError> {
         crate::vfs::create_dir_all(self.dir.join(PAGES_DIR))?;
-        atomic::write(
-            &self.page_path(&page.id),
-            format::page_to_json_modes(page, modes).as_bytes(),
-        )?;
+        packed::write(&self.page_path(&page.id), &format::page_to_json_modes(page, modes))?;
         Ok(())
     }
 
     pub fn delete_page_file(&self, id: &str) {
-        let _ = crate::vfs::remove_file(self.page_path(id));
+        packed::remove(&self.page_path(id));
     }
 
     pub fn write_manifest(&self) -> Result<(), FormatError> {

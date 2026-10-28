@@ -131,7 +131,7 @@ fn variables_survive_a_save() {
     assert_eq!(back.doc.variables, h.ed.doc.variables);
     assert_eq!(back.doc, h.ed.doc);
     assert!(
-        page_to_json(&page).contains("\"var\": \"accent\""),
+        page_to_json(&page).contains("\"var\":\"accent\""),
         "{}",
         ab["id"]
     );

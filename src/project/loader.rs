@@ -39,7 +39,7 @@ impl PageLoader {
                         let Some(r) = queue.lock().ok().and_then(|mut q| q.pop_front()) else {
                             return;
                         };
-                        let path = dir.join(super::PAGES_DIR).join(format!("{}.json", r.id));
+                        let path = super::page_file(&dir, &r.id);
                         // The editor is gone (closed or another project opened): stop reading.
                         if tx.send((r.id.clone(), super::read_page_file(&path, &r))).is_err() {
                             return;

@@ -5,7 +5,7 @@ use super::mesh::{Batch, MeshBuilder};
 use super::tess::{Piece, Tess};
 use crate::editor::{Editor, hit, snap::Guide};
 use crate::geom::{Camera, Rect, V2, v2};
-use crate::model::{BlendMode, Node};
+use crate::model::BlendMode;
 use crate::model::{Color, Document, NodeId, NodeKind, TextAlign};
 use crate::text;
 use lyon::tessellation::{FillRule, LineCap};
@@ -94,7 +94,6 @@ pub struct Item {
 }
 
 struct Entry {
-    node: Node,
     wr: Rect,
     opacity: f64,
     bucket: i32,
@@ -104,6 +103,8 @@ struct Entry {
 
 /// Per-node tessellation cache. A node is re-tessellated only when it (or its world position,
 /// inherited opacity or the zoom bucket) changes, so panning and idle frames do no work.
+/// Changed layers come from the editor's change log (`forget_changes`), not from comparing
+/// nodes, so the cache holds no copy of the document.
 #[derive(Default)]
 pub struct SceneCache {
     entries: HashMap<NodeId, Entry>,
@@ -114,7 +115,22 @@ pub struct SceneCache {
     last: Option<(u64, i32, Rect, Vec<Item>)>,
     /// Tessellations performed during the last `items` call (for tests and profiling).
     pub last_misses: usize,
+    /// Zoom bucket the canvas is drawn at, the zoom of the last frame and when it last changed:
+    /// while the zoom moves the bucket holds and the GPU scales the meshes.
+    view: Option<(i32, f64, web_time::Instant)>,
+    /// `Editor::doc_stamp` the entries are up to date with.
+    stamp: u64,
 }
+
+/// How long the zoom must hold still before the canvas is re-tessellated for it (the pinch
+/// zoom settle of browsers and design tools).
+const ZOOM_SETTLE: std::time::Duration = std::time::Duration::from_millis(150);
+/// Buckets the held geometry may lag the zoom by: past it, curves would look faceted (or
+/// tessellate far finer than shown) even mid-gesture.
+const ZOOM_LAG: i32 = 2;
+
+/// Screen size (px at the bucket's zoom) under which a layer is not drawn.
+const MIN_SCREEN_PX: f64 = 0.5;
 
 /// Zoom buckets are powers of two: geometry built for 2^b is accurate up to 2^(b+1).
 pub fn zoom_bucket(zoom: f64) -> i32 {
@@ -126,6 +142,45 @@ impl SceneCache {
         self.entries.clear();
         self.borders.clear();
         self.last = None;
+    }
+
+    /// Drops the entries of layers `ed` changed since the cache last caught up (all of them
+    /// when that is unknown).
+    fn forget_changes(&mut self, ed: &Editor) {
+        if self.stamp == ed.doc_stamp {
+            return;
+        }
+        match ed.changes_since(self.stamp) {
+            Some(ids) => {
+                for id in ids {
+                    self.entries.remove(&id);
+                    self.borders.remove(&id);
+                }
+            }
+            None => {
+                self.entries.clear();
+                self.borders.clear();
+            }
+        }
+        self.stamp = ed.doc_stamp;
+    }
+
+    /// The bucket to draw `zoom` at: the held one while the zoom keeps moving (within
+    /// [`ZOOM_LAG`]), the zoom's own once it held still for [`ZOOM_SETTLE`].
+    fn view_bucket(&mut self, zoom: f64, now: web_time::Instant) -> i32 {
+        let want = zoom_bucket(zoom);
+        let (held, last_zoom, changed) = self.view.unwrap_or((want, zoom, now));
+        let changed = if zoom == last_zoom { changed } else { now };
+        let settled = now.duration_since(changed) >= ZOOM_SETTLE;
+        let bucket = if settled || (want - held).abs() > ZOOM_LAG { want } else { held };
+        self.view = Some((bucket, zoom, changed));
+        bucket
+    }
+
+    /// When the canvas needs another frame to re-tessellate for a zoom that stopped moving.
+    pub fn refine_at(&self) -> Option<web_time::Instant> {
+        let (bucket, zoom, changed) = self.view?;
+        (bucket != zoom_bucket(zoom)).then(|| changed + ZOOM_SETTLE)
     }
 
     /// Items for `roots` (or the whole page) in paint order. `cull` skips subtrees outside a
@@ -184,9 +239,12 @@ impl SceneCache {
         let bounds = draw::draw_bounds(n, wr);
         let visible = cull.is_none_or(|c| c.intersects(&bounds))
             && clip.is_none_or(|c| c.intersects(&bounds));
-        if visible && !n.is_group() {
+        // Level of detail: a layer under half a pixel at this bucket shows as nothing, so it
+        // is not tessellated (its children are looked at on their own).
+        let tiny = bounds.w.max(bounds.h) * 2f64.powi(bucket) < MIN_SCREEN_PX;
+        if visible && !tiny && !n.is_group() {
             let hit = self.entries.get(&id).is_some_and(|e| {
-                e.bucket == bucket && e.wr == wr && e.opacity == opacity && e.node == *n
+                e.bucket == bucket && e.wr == wr && e.opacity == opacity
             });
             if !hit {
                 self.last_misses += 1;
@@ -195,7 +253,6 @@ impl SceneCache {
                 self.entries.insert(
                     id,
                     Entry {
-                        node: n.clone(),
                         wr,
                         opacity,
                         bucket,
@@ -240,12 +297,12 @@ impl SceneCache {
             self.walk(doc, *c, co, child_clip, opacity, bucket, tess, cull, out);
         }
         if visible && draw::border_on_top(n) {
-            let hit = self.borders.get(&id).is_some_and(|e| e.bucket == bucket && e.wr == wr && e.opacity == opacity && e.node == *n);
+            let hit = self.borders.get(&id).is_some_and(|e| e.bucket == bucket && e.wr == wr && e.opacity == opacity);
             if !hit {
                 self.last_misses += 1;
                 let d = draw::border_draw(n, wr, opacity);
                 let pieces = Arc::new(tess.ops(&d.ops));
-                self.borders.insert(id, Entry { node: n.clone(), wr, opacity, bucket, pieces, used: true });
+                self.borders.insert(id, Entry { wr, opacity, bucket, pieces, used: true });
             }
             let e = &self.borders[&id];
             if !e.pieces.is_empty() {
@@ -339,8 +396,9 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
         let full = text::layout(&n.name, 12.0, None, TextAlign::Left);
         let name = match full.lines.first() {
             Some(l) if full.width > max_w => {
-                let fit = l.carets.iter().rposition(|x| *x <= max_w).unwrap_or(0);
-                n.name.chars().take(fit).collect()
+                let ellipsis = text::layout("\u{2026}", 12.0, None, TextAlign::Left).width;
+                let fit = l.carets.iter().rposition(|x| *x <= max_w - ellipsis).unwrap_or(0);
+                format!("{}\u{2026}", n.name.chars().take(fit).collect::<String>().trim_end())
             }
             _ => n.name.clone(),
         };
@@ -651,7 +709,8 @@ pub fn canvas(ed: &Editor, cache: &mut SceneCache, offset: V2, show_grid: bool) 
         grid(&mut under, &v);
     }
     let vis = ed.camera.visible_world(ed.viewport);
-    let bucket = zoom_bucket(ed.camera.zoom);
+    let bucket = cache.view_bucket(ed.camera.zoom, web_time::Instant::now());
+    cache.forget_changes(ed);
     let items = match &cache.last {
         Some((stamp, b, cull, items))
             if *stamp == ed.doc_stamp && *b == bucket && cull.contains_rect(&vis) =>
@@ -661,7 +720,7 @@ pub fn canvas(ed: &Editor, cache: &mut SceneCache, offset: V2, show_grid: bool) 
         }
         _ => {
             let cull = vis.inflate(vis.w.max(vis.h) * 0.5);
-            let items = cache.items(&ed.doc, None, ed.camera.zoom, Some(cull));
+            let items = cache.items(&ed.doc, None, 2f64.powi(bucket), Some(cull));
             cache.last = Some((ed.doc_stamp, bucket, cull, items.clone()));
             items
         }

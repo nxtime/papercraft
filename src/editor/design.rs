@@ -166,7 +166,7 @@ impl Editor {
         if geometry {
             self.fixup();
         }
-        match self.rec.take() {
+        match self.take_rec() {
             Some((rec, key)) if keep => {
                 if self.log_touched(&rec) && self.history.commit(&self.doc, rec, key) {
                     self.revision += 1;

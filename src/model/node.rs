@@ -437,6 +437,13 @@ pub struct Node {
     /// wheel over it on the canvas and in Present scrolls it instead of the canvas.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scroll: bool,
+    /// A declared screen: one device viewport of the product, not a container (`editor::screens`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub screen: bool,
+    /// A drawer, modal or sheet inside a screen: what it covers counts as hidden, even where
+    /// it is translucent (a scrim).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overlay: bool,
     /// How far a [`Node::scroll`] frame is scrolled, in world units. A view state: not saved.
     #[serde(skip)]
     pub scroll_y: f64,
@@ -592,6 +599,8 @@ impl Node {
             component_key: None,
             code: None,
             scroll: false,
+            screen: false,
+            overlay: false,
             scroll_y: 0.0,
             props: Vec::new(),
             prop_values: BTreeMap::new(),

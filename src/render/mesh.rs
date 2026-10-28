@@ -13,13 +13,19 @@ use lyon::tessellation::{
 #[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
 pub struct Vertex {
     pub pos: [f32; 2],
-    /// Straight-alpha color; for gradient and image paints only alpha (opacity) is used.
-    pub color: [f32; 4],
+    /// Straight-alpha color, 8 bits per channel (24-byte vertices: meshes are the bulk of the
+    /// canvas's memory, on the CPU and the GPU); for gradient and image paints only alpha
+    /// (opacity) is used.
+    pub color: [u8; 4],
     /// Paint coordinates: gradient space or image texture coordinates.
     pub uv: [f32; 2],
     /// Paint kind in the low byte (see `PAINT_*`), gradient atlas row above it.
     pub kind: u32,
-    pub _pad: u32,
+}
+
+/// `0..=1` color channels as the vertex's 8-bit ones.
+pub fn unorm(c: [f32; 4]) -> [u8; 4] {
+    c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
 pub const PAINT_SOLID: u32 = 0;
@@ -32,10 +38,9 @@ impl Vertex {
     pub fn solid(pos: [f32; 2], color: [f32; 4]) -> Vertex {
         Vertex {
             pos,
-            color,
+            color: unorm(color),
             uv: [0.0; 2],
             kind: PAINT_SOLID,
-            _pad: 0,
         }
     }
 }

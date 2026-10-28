@@ -97,6 +97,8 @@ reqwest = { version = "0.13", default-features = false, features = ["native-tls"
 # libc: SIGINT to the spawned chat CLIs.
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 libc = "0.2"
+# Pages and versions on disk are zstd-compressed JSON (`project::packed`).
+zstd = "0.13"
 
 # Browser build (`src/web.rs`): canvas + WebGPU/WebGL surface, DOM events instead of winit.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -106,4 +108,6 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 console_log = "1"
+# zstd without C, for the browser: reads the packed files native builds write.
+ruzstd = "0.8"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "KeyboardEvent", "PointerEvent", "WheelEvent", "ClipboardEvent", "DataTransfer", "MediaQueryList", "Location", "Performance", "Navigator", "Clipboard", "CssStyleDeclaration", "console", "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "Storage", "Crypto", "DragEvent", "FileList", "File", "Blob", "Request", "RequestInit", "Response"] }

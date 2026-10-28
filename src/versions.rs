@@ -2,6 +2,7 @@
 //! `versions/` so it survives restarts and travels with the project.
 
 use crate::model::Document;
+use crate::project::packed;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -33,7 +34,7 @@ fn dir(project: &Path) -> PathBuf {
 }
 
 fn file_of(project: &Path, id: &str) -> PathBuf {
-    dir(project).join(format!("{id}.json"))
+    packed::path(&dir(project), id)
 }
 
 fn now_ms() -> u64 {
@@ -51,7 +52,11 @@ pub fn save(
     crate::vfs::create_dir_all(dir(project))?;
     let mut saved = now_ms();
     // Two runs (parallel agents) may snapshot a page in the same millisecond: never share a file.
-    while crate::vfs::exists(&file_of(project, &format!("{page_id}__{saved}"))) {
+    let taken = |saved: u64| {
+        let f = file_of(project, &format!("{page_id}__{saved}"));
+        crate::vfs::exists(&f) || crate::vfs::exists(&packed::legacy(&f))
+    };
+    while taken(saved) {
         saved += 1;
     }
     let id = format!("{page_id}__{saved}");
@@ -67,8 +72,8 @@ pub fn save(
         saved,
         doc: doc.clone(),
     };
-    let bytes = serde_json::to_vec(&file).map_err(std::io::Error::other)?;
-    crate::vfs::write(file_of(project, &id), bytes)?;
+    let json = serde_json::to_string(&file).map_err(std::io::Error::other)?;
+    packed::write(&file_of(project, &id), &json)?;
     Ok(Version {
         id,
         name,
@@ -86,12 +91,11 @@ pub fn list(project: &Path, page_id: &str) -> Vec<Version> {
     let mut out: Vec<Version> = entries
         .flatten()
         .filter_map(|e| {
-            let path = e.path();
-            let id = path.file_stem()?.to_str()?.to_owned();
-            if !id.starts_with(&prefix) || path.extension()? != "json" {
+            let id = packed::stem(e.file_name().to_str()?)?.to_owned();
+            if !id.starts_with(&prefix) {
                 return None;
             }
-            let f: File = serde_json::from_slice(&crate::vfs::read(&path).ok()?).ok()?;
+            let f: File = serde_json::from_str(&packed::read(&file_of(project, &id)).ok()?).ok()?;
             Some(Version {
                 id,
                 name: f.name,
@@ -106,24 +110,20 @@ pub fn list(project: &Path, page_id: &str) -> Vec<Version> {
 
 /// The document of a saved version.
 pub fn load(project: &Path, id: &str) -> Option<Document> {
-    let f: File = serde_json::from_slice(&crate::vfs::read(file_of(project, id)).ok()?).ok()?;
+    let f: File = serde_json::from_str(&packed::read(&file_of(project, id)).ok()?).ok()?;
     Some(f.doc)
 }
 
 /// Renames a saved version in place.
 pub fn rename(project: &Path, id: &str, name: &str) -> std::io::Result<()> {
     let path = file_of(project, id);
-    let mut f: File =
-        serde_json::from_slice(&crate::vfs::read(&path)?).map_err(std::io::Error::other)?;
+    let mut f: File = serde_json::from_str(&packed::read(&path)?).map_err(std::io::Error::other)?;
     f.name = name.trim().to_string();
-    crate::vfs::write(
-        &path,
-        serde_json::to_vec(&f).map_err(std::io::Error::other)?,
-    )
+    packed::write(&path, &serde_json::to_string(&f).map_err(std::io::Error::other)?)
 }
 
 pub fn delete(project: &Path, id: &str) {
-    let _ = crate::vfs::remove_file(file_of(project, id));
+    packed::remove(&file_of(project, id));
 }
 
 #[cfg(test)]

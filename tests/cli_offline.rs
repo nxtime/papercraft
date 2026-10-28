@@ -233,7 +233,7 @@ fn offline_matches_app_placement_and_saves_no_camera() {
     let cams = |d: &std::path::Path| {
         std::fs::read_dir(d.join("pages"))
             .unwrap()
-            .filter(|e| std::fs::read_to_string(e.as_ref().unwrap().path()).unwrap().contains("\"camera\""))
+            .filter(|e| papercraft::project::packed::read(&e.as_ref().unwrap().path()).unwrap().contains("\"camera\""))
             .count()
     };
     assert_eq!(cams(&dir_a), 0, "headless camera must not be saved");

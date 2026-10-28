@@ -8,6 +8,7 @@ pub mod design;
 pub mod hit;
 pub mod input;
 pub mod pages;
+pub mod screens;
 pub mod shortcuts;
 pub mod snap;
 pub mod structure;
@@ -24,6 +25,7 @@ pub use input::{Button, InputEvent, Key, Modifiers};
 pub use pages::{PageSlot, PageStash};
 use snap::Guide;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -252,6 +254,11 @@ pub struct Editor {
     /// Process-unique stamp of the document content: changes whenever the document may
     /// have changed (edits, undo, page switch, load). Renderers reuse work while it holds.
     pub doc_stamp: u64,
+    /// What changed in `doc` at each recent `doc_stamp`, oldest first, so renderers redo only
+    /// those layers (`changes_since`).
+    change_log: std::collections::VecDeque<(u64, Changed)>,
+    /// Stamps before this one are no longer covered by `change_log`.
+    change_base: u64,
     pub project_stamp: u64,
     /// Fit the camera to the content once the real viewport size is known.
     pub pending_fit: bool,
@@ -355,6 +362,8 @@ impl Editor {
             last_click: None,
             revision: 0,
             doc_stamp: next_stamp(),
+            change_log: Default::default(),
+            change_base: 0,
             project_stamp: next_stamp(),
             pending_fit: false,
             headless: false,
@@ -407,7 +416,7 @@ impl Editor {
             self.rec = Some((Recording::new("Edit", &self.doc), None));
         }
         self.revision += 1;
-        self.doc_stamp = next_stamp();
+        self.mark(Changed::Open);
         let (rec, _) = self.rec.as_mut().unwrap();
         Tx::new(&mut self.doc, rec)
     }
@@ -415,7 +424,7 @@ impl Editor {
     pub fn commit(&mut self) {
         self.fixup();
         let mains = std::mem::take(&mut self.touched_mains);
-        if let Some((rec, key)) = self.rec.take()
+        if let Some((rec, key)) = self.take_rec()
             && self.log_touched(&rec)
             && self.history.commit(&self.doc, rec, key)
         {
@@ -457,7 +466,7 @@ impl Editor {
     pub fn edit_variables<R>(&mut self, label: &str, f: impl FnOnce(&mut Tx) -> R) -> R {
         self.begin(label);
         let result = f(&mut self.tx());
-        if let Some((rec, key)) = self.rec.take()
+        if let Some((rec, key)) = self.take_rec()
             && self.log_touched(&rec)
             && self.history.commit(&self.doc, rec, key)
         {
@@ -482,27 +491,31 @@ impl Editor {
         self.cancel_gesture();
         self.end_text_edit();
         self.commit();
-        if let Some(u) = self.history.undo(&mut self.doc) {
+        let mut changed = Changed::Nodes(Arc::new([]));
+        if let Some(mut u) = self.history.undo(&mut self.doc) {
             self.status = format!("Undo {}", u.label);
+            changed = Changed::Nodes(std::mem::take(&mut u.nodes).into());
             self.restore_project_state(u);
         }
-        self.after_history();
+        self.after_history(changed);
     }
 
     pub fn redo(&mut self) {
         self.cancel_gesture();
         self.end_text_edit();
         self.commit();
-        if let Some(u) = self.history.redo(&mut self.doc) {
+        let mut changed = Changed::Nodes(Arc::new([]));
+        if let Some(mut u) = self.history.redo(&mut self.doc) {
             self.status = format!("Redo {}", u.label);
+            changed = Changed::Nodes(std::mem::take(&mut u.nodes).into());
             self.restore_project_state(u);
         }
-        self.after_history();
+        self.after_history(changed);
     }
 
-    fn after_history(&mut self) {
+    fn after_history(&mut self, changed: Changed) {
         self.revision += 1;
-        self.doc_stamp = next_stamp();
+        self.mark(changed);
         self.selection.retain(|id| self.doc.nodes.contains_key(id));
     }
 
@@ -581,8 +594,12 @@ impl Editor {
         });
     }
 
-    /// The page's screens: its top-level frames.
+    /// The page's screens: the declared ones, or else its top-level frames.
     pub fn screens(&self) -> Vec<NodeId> {
+        let declared = screens::declared(&self.doc);
+        if !declared.is_empty() {
+            return declared;
+        }
         self.doc.root.iter().copied().filter(|id| self.doc.get(*id).is_some_and(|n| n.is_frame())).collect()
     }
 
@@ -604,7 +621,7 @@ impl Editor {
             .max_by_key(|(depth, ..)| *depth);
         let Some((_, id, next)) = hit else { return false };
         self.doc.nodes.get_mut(&id).unwrap().scroll_y = next;
-        self.doc_stamp = next_stamp();
+        self.mark(Changed::Nodes(Arc::new([id])));
         true
     }
 
@@ -709,21 +726,65 @@ impl Editor {
         })
     }
 
-    /// Screen-space frame label rectangles for top-level frames (also used by the renderer).
+    /// Screen-space frame label rectangles for top-level frames and declared screens (also
+    /// used by the renderer).
+    /// A frame too narrow on screen for a readable name gets none, and a label that would
+    /// overlap one already placed is dropped (selected frames first, then larger ones), so a
+    /// zoomed-out page shows a few clean names instead of a pile.
     pub fn frame_labels(&self) -> Vec<(NodeId, Rect)> {
-        self.doc
+        let screen = Rect::new(0.0, 0.0, self.viewport.x, self.viewport.y);
+        // Top-level frames, then declared screens nested in sections.
+        let nested = screens::declared(&self.doc).into_iter().filter(|id| self.doc.get(*id).is_some_and(|n| n.parent.is_some()));
+        let bodies: Vec<(usize, NodeId, Rect)> = self
+            .doc
             .root
             .iter()
-            .filter_map(|id| {
-                let n = self.doc.get(*id)?;
-                if !n.is_frame() || !n.visible {
+            .copied()
+            .chain(nested)
+            .enumerate()
+            .filter_map(|(i, id)| {
+                let n = self.doc.get(id)?;
+                if !n.is_frame() || !n.visible || (n.parent.is_some() && !self.doc.ancestors(id).iter().all(|a| self.doc.get(*a).is_some_and(|a| a.visible))) {
                     return None;
                 }
-                let sr = self.camera.world_rect_to_screen(&self.doc.world_rect(*id)?);
-                let w = text::layout(&n.name, 12.0, None, TextAlign::Left).width;
-                Some((*id, hit::frame_label_rect(&sr, w.min(sr.w.max(24.0)))))
+                Some((i, id, self.camera.world_rect_to_screen(&self.doc.world_rect(id)?)))
             })
-            .collect()
+            .collect();
+        let mut candidates: Vec<(usize, NodeId, Rect)> = bodies
+            .iter()
+            .copied()
+            .filter_map(|(i, id, sr)| {
+                let id = &id;
+                let selected = self.selection.contains(id);
+                if sr.w < MIN_LABELED_FRAME_PX && !selected {
+                    return None;
+                }
+                // Off-screen labels are neither drawn nor clickable: skip their text layout.
+                if !hit::frame_label_rect(&sr, sr.w).intersects(&screen) {
+                    return None;
+                }
+                Some((i, *id, sr))
+            })
+            .collect();
+        let selected = |id: &NodeId| self.selection.contains(id);
+        candidates.sort_by(|a, b| {
+            let key = |(_, id, r): &(usize, NodeId, Rect)| (!self.selection.contains(id), -(r.w * r.h));
+            key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        // ponytail: pairwise overlap check, fine for the few hundred frames a page shows.
+        let mut placed: Vec<(usize, NodeId, Rect)> = Vec::new();
+        for (i, id, sr) in candidates {
+            let w = text::layout(&self.doc.get(id).unwrap().name, 12.0, None, TextAlign::Left).width;
+            let r = hit::frame_label_rect(&sr, w.min(sr.w));
+            // A label over another frame's content (or another label) would hide both.
+            let covers_frame = !selected(&id)
+                && bodies.iter().any(|(_, b, br)| *b != id && !self.doc.is_ancestor(*b, id) && br.intersects(&r));
+            if !covers_frame && !placed.iter().any(|(_, _, p)| p.intersects(&r)) {
+                placed.push((i, id, r));
+            }
+        }
+        placed.sort_by_key(|(i, ..)| *i);
+        placed.into_iter().map(|(_, id, r)| (id, r)).collect()
     }
 
     fn label_at(&self, p: V2) -> Option<NodeId> {
@@ -2160,12 +2221,15 @@ impl Editor {
             | Gesture::ConnectorMid { .. }
             | Gesture::Erase => {
                 // Roll back the open transaction.
-                if let Some((rec, key)) = self.rec.take() {
+                if let Some((rec, key)) = self.take_rec() {
                     let mut h = History::default();
-                    if h.commit(&self.doc, rec, key) {
-                        h.undo(&mut self.doc);
+                    let mut changed = Changed::Nodes(Arc::new([]));
+                    if h.commit(&self.doc, rec, key)
+                        && let Some(u) = h.undo(&mut self.doc)
+                    {
+                        changed = Changed::Nodes(u.nodes.into());
                     }
-                    self.after_history();
+                    self.after_history(changed);
                 }
             }
             _ => {}
@@ -2561,6 +2625,67 @@ pub fn insert_subtrees_tx(
 }
 
 /// A fresh process-wide document stamp.
+/// What a `doc_stamp` change did to the document.
+#[derive(Clone)]
+pub(crate) enum Changed {
+    /// Whatever the open transaction touches (resolved when it closes).
+    Open,
+    Nodes(Arc<[NodeId]>),
+    All,
+}
+
+/// Frames narrower than this on screen (px) show no name label.
+const MIN_LABELED_FRAME_PX: f64 = 48.0;
+
+/// Changes kept for `Editor::changes_since`; a renderer further behind redoes everything.
+const CHANGE_LOG_LEN: usize = 64;
+
+impl Editor {
+    /// Bumps `doc_stamp` and logs what changed with it.
+    pub(crate) fn mark(&mut self, changed: Changed) {
+        self.doc_stamp = next_stamp();
+        if let (Changed::Open, Some((s, Changed::Open))) = (&changed, self.change_log.back_mut()) {
+            *s = self.doc_stamp;
+            return;
+        }
+        if self.change_log.len() == CHANGE_LOG_LEN
+            && let Some((s, _)) = self.change_log.pop_front()
+        {
+            self.change_base = s;
+        }
+        self.change_log.push_back((self.doc_stamp, changed));
+    }
+
+    /// Closes the open transaction, logging the layers it touched.
+    pub(crate) fn take_rec(&mut self) -> Option<(Recording, Option<String>)> {
+        let rec = self.rec.take();
+        let touched = rec.as_ref().map(|(r, _)| Changed::Nodes(r.touched().into()));
+        for (_, c) in &mut self.change_log {
+            if matches!(c, Changed::Open) {
+                *c = touched.clone().unwrap_or(Changed::All);
+            }
+        }
+        rec
+    }
+
+    /// The layers whose content changed after `doc_stamp` was `stamp`, or None when that is
+    /// unknown (too long ago, another editor, a page switch): then everything may have.
+    pub fn changes_since(&self, stamp: u64) -> Option<std::collections::HashSet<NodeId>> {
+        if stamp < self.change_base || stamp > self.doc_stamp {
+            return None;
+        }
+        let mut out = std::collections::HashSet::new();
+        for (_, c) in self.change_log.iter().rev().take_while(|(s, _)| *s > stamp) {
+            match c {
+                Changed::Open => out.extend(self.rec.as_ref()?.0.touched()),
+                Changed::Nodes(ids) => out.extend(ids.iter()),
+                Changed::All => return None,
+            }
+        }
+        Some(out)
+    }
+}
+
 pub fn next_stamp() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)

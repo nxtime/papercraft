@@ -132,7 +132,7 @@ fn saving_while_pages_load_keeps_the_unread_pages_as_they_are() {
     assert_eq!(sess.save(&mut ed).unwrap(), 1, "only the edited page is written");
     let after = page_files(&dir);
     for (b, a) in before.iter().zip(&after) {
-        if b.0 != "p0.json" {
+        if b.0 != "p0.json.zst" {
             assert_eq!(b, a, "{} was rewritten", b.0);
         }
     }
@@ -226,7 +226,7 @@ fn an_mcp_call_on_an_unread_page_waits_for_it() {
 #[test]
 fn a_page_that_cannot_be_read_is_never_written_over() {
     let (s, dir) = project(2);
-    let bad = dir.join("pages/p2.json");
+    let bad = papercraft::project::page_file(&dir, "p2");
     std::fs::write(&bad, "{ not a page").unwrap();
     let (mut sess, mut ed) = open(&s, &dir);
     ed.finish_loading();

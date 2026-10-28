@@ -146,7 +146,7 @@ impl Editor {
         }
         self.meta_dirty = true; // the active page is remembered in the manifest
         self.revision += 1;
-        self.doc_stamp = super::next_stamp();
+        self.mark(super::Changed::All);
     }
 
     fn unique_page_name(&self, base: &str) -> String {
@@ -296,7 +296,7 @@ impl Editor {
         self.pages[i].name = name.to_string();
         if i == self.active_page {
             self.doc.name = name.to_string();
-            self.doc_stamp = super::next_stamp();
+            self.mark(super::Changed::Nodes(std::sync::Arc::new([])));
         } else if let Some(s) = &mut self.pages[i].stash {
             s.doc.name = name.to_string();
         }
@@ -477,7 +477,8 @@ impl Editor {
         self.saved_marker = saved_marker;
         self.pages[i].stash = Some(s);
         self.revision += 1;
-        self.doc_stamp = super::next_stamp();
+        // The active page's document is the one it was before `f`.
+        self.mark(super::Changed::Nodes(std::sync::Arc::new([])));
         self.flush_cross_pages();
         r
     }
@@ -602,7 +603,7 @@ impl Editor {
             id: self.pages[i].id.clone(),
             name: self.pages[i].name.clone(),
         };
-        let path = dir.join(crate::project::PAGES_DIR).join(format!("{}.json", r.id));
+        let path = crate::project::page_file(&dir, &r.id);
         let read = crate::project::read_page_file(&path, &r);
         self.install_page(&r.id, read);
     }
@@ -624,7 +625,8 @@ impl Editor {
                 return;
             }
         };
-        let changed = crate::project::finalize_page(&self.design, &mut p, &mut modes);
+        let legacy = self.loader.as_ref().is_some_and(|l| crate::project::is_legacy_page(&l.dir, id));
+        let changed = crate::project::finalize_page(&self.design, &mut p, &mut modes) || legacy;
         let slot = &mut self.pages[i];
         let Some(stash) = slot.stash.as_mut() else { return };
         // The manifest owns the name, and it may have been renamed meanwhile.

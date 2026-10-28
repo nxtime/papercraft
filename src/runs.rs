@@ -95,10 +95,20 @@ pub type Counts = (usize, usize, usize, bool);
 /// What `run` changed, against its snapshots. On a page where the run recorded its nodes, rows of
 /// nodes it did not change (another agent's, the user's) do not count.
 pub fn count(project: &Path, ed: &Editor, run: &Run) -> Counts {
+    count_in(project, run, |id| {
+        let i = ed.pages.iter().position(|s| s.id == id)?;
+        Some((ed.page_doc(i), ed.pages[i].name.as_str()))
+    })
+}
+
+/// [`count`] against pages looked up by id, with their names: the editor's, or copies on
+/// another thread. A page the lookup does not find was deleted.
+pub fn count_in<'a>(project: &Path, run: &Run, page_of: impl Fn(&str) -> Option<(&'a Document, &'a str)>) -> Counts {
     let (mut added, mut changed, mut removed, mut empty) = (0, 0, 0, true);
     for p in &run.pages {
-        let page = ed.pages.iter().position(|s| s.id == p.page_id);
-        let after = page.map(|i| ed.page_doc(i)).cloned().unwrap_or_default();
+        let page = page_of(&p.page_id);
+        let none = Document::default();
+        let after = page.map_or(&none, |(d, _)| d);
         let Some(v) = &p.version else {
             if page.is_some() {
                 added += after.root.len().max(1);
@@ -110,10 +120,10 @@ pub fn count(project: &Path, ed: &Editor, run: &Run) -> Counts {
             empty = false;
             continue;
         };
-        let mut d = diff_pages(&before, &after);
+        let mut d = diff_pages(&before, after);
         keep_own(&mut d, p);
         let (a, m, r) = (d.added, d.modified, d.removed);
-        let renamed = page.is_some_and(|i| ed.pages[i].name != before.name);
+        let renamed = page.is_some_and(|(_, name)| name != before.name);
         let deleted = page.is_none();
         added += a;
         changed += m + usize::from(renamed);
@@ -1430,7 +1440,7 @@ mod tests {
             let remaining = t.open_runs().next().unwrap().pages[1].version.clone().unwrap();
             if corrupt {
                 std::fs::write(
-                    dir.join("versions").join(format!("{missing}.json")),
+                    crate::project::packed::path(&dir.join("versions"), &missing),
                     "broken",
                 )
                 .unwrap();

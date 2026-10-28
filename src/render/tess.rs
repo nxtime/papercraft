@@ -2,7 +2,7 @@
 
 use super::draw::{DrawOp, PaintSpec};
 use super::mesh::{
-    Mesh, PAINT_IMAGE, PAINT_IMAGE_TILE, PAINT_LINEAR, PAINT_RADIAL, PAINT_SOLID, Vertex,
+    Mesh, PAINT_IMAGE, PAINT_IMAGE_TILE, PAINT_LINEAR, PAINT_RADIAL, PAINT_SOLID, Vertex, unorm,
 };
 use crate::geom::{Rect, V2, v2};
 use crate::model::{Cap, Join, Stop, sample_stops};
@@ -269,10 +269,9 @@ fn paint_fn(paint: &PaintSpec) -> (Option<String>, Box<dyn Fn(V2) -> Vertex>) {
                 None,
                 Box::new(move |p| Vertex {
                     pos: pos(p),
-                    color: [1.0, 1.0, 1.0, opacity],
+                    color: unorm([1.0, 1.0, 1.0, opacity]),
                     uv: [((p - p0).dot(d) / l2) as f32, 0.0],
                     kind: PAINT_LINEAR | row << 8,
-                    _pad: 0,
                 }),
             )
         }
@@ -295,10 +294,9 @@ fn paint_fn(paint: &PaintSpec) -> (Option<String>, Box<dyn Fn(V2) -> Vertex>) {
                     let v = (rx.x * q.y - rx.y * q.x) / det;
                     Vertex {
                         pos: pos(p),
-                        color: [1.0, 1.0, 1.0, opacity],
+                        color: unorm([1.0, 1.0, 1.0, opacity]),
                         uv: [u as f32, v as f32],
                         kind: PAINT_RADIAL | row << 8,
-                        _pad: 0,
                     }
                 }),
             )
@@ -312,13 +310,12 @@ fn paint_fn(paint: &PaintSpec) -> (Option<String>, Box<dyn Fn(V2) -> Vertex>) {
             Some(asset),
             Box::new(move |p| Vertex {
                 pos: pos(p),
-                color: [1.0, 1.0, 1.0, opacity],
+                color: unorm([1.0, 1.0, 1.0, opacity]),
                 uv: [
                     ((p.x - place.x) / place.w.max(1e-9)) as f32,
                     ((p.y - place.y) / place.h.max(1e-9)) as f32,
                 ],
                 kind: if tile { PAINT_IMAGE_TILE } else { PAINT_IMAGE },
-                _pad: 0,
             }),
         ),
     }

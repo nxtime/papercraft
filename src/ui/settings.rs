@@ -339,10 +339,17 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
                         ui.add_space(24.0);
                         ui.vertical(|ui| {
                             ui.set_width(ui.available_width() - 8.0);
-                            // A long page (Appearance) scrolls inside the modal.
-                            egui::ScrollArea::vertical()
-                                .max_height(modal_height(ctx) - 24.0)
-                                .show(ui, |ui| content(ui, ctx, st));
+                            // A long page (Appearance) scrolls inside the modal, each page with
+                            // its own offset. Chat scrolls its columns itself: nested, its fixed
+                            // height collapsed.
+                            if st.settings.page == Page::Chat {
+                                content(ui, ctx, st);
+                            } else {
+                                egui::ScrollArea::vertical()
+                                    .id_salt(("settings-page", st.settings.page as u8))
+                                    .max_height(modal_height(ctx) - 24.0)
+                                    .show(ui, |ui| content(ui, ctx, st));
+                            }
                         });
                     });
                 });
@@ -891,7 +898,8 @@ mod native {
     }
 
     /// Icon, name (with version), a muted line, and `right` laid out from the right edge.
-    fn row_header(ui: &mut Ui, icon: Icon, title: &str, version: &str, sub: &str, right: impl FnOnce(&mut Ui)) {
+    /// `agent` (id) shows that agent's logo, or its initial, in place of `icon`.
+    fn row_header(ui: &mut Ui, icon: Icon, agent: Option<&str>, title: &str, version: &str, sub: &str, right: impl FnOnce(&mut Ui)) {
         let p = theme::pal(ui);
         ui.allocate_ui_with_layout(vec2(ui.available_width(), ROW_H), Layout::left_to_right(Align::Center), |ui| {
             ui.set_min_height(ROW_H);
@@ -899,7 +907,14 @@ mod native {
             let left_w = (ui.available_width() - RIGHT_W).max(0.0);
             ui.allocate_ui_with_layout(vec2(left_w, ROW_H), Layout::left_to_right(Align::Center), |ui| {
                 ui.set_width(left_w);
-                kit::badge(ui, icon, p.secondary, ICON_BADGE);
+                match agent {
+                    Some(id) => {
+                        let (rect, _) = ui.allocate_exact_size(vec2(ICON_BADGE, ICON_BADGE), egui::Sense::hover());
+                        theme::fill_control(ui, rect, theme::radius_panel(), p.field);
+                        crate::ui::chat::chat_agents::paint_agent_mark(ui, rect.shrink(ICON_BADGE * 0.28), id, title, p.text);
+                    }
+                    None => kit::badge(ui, icon, p.secondary, ICON_BADGE),
+                }
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     ui.horizontal(|ui| {
@@ -1048,7 +1063,7 @@ mod native {
         let ready = matches!(row.state, AgentState::Ready { .. });
         let mut clicked = false;
         row_frame(ui, open, |ui| {
-            row_header(ui, Icon::Component, &row.name, &version, &sub, |ui| {
+            row_header(ui, Icon::Component, Some(&row.id), &row.name, &version, &sub, |ui| {
                 clicked = chevron(ui, open);
                 if npx && enabled {
                     let mut on = true;
@@ -1146,7 +1161,7 @@ mod native {
             let sub = format!("{format_label} · {host}");
             let mut clicked = false;
             row_frame(ui, open, |ui| {
-                row_header(ui, Icon::Library, &ep.name, "", &sub, |ui| {
+                row_header(ui, Icon::Library, None, &ep.name, "", &sub, |ui| {
                     clicked = chevron(ui, open);
                     kit::chip_ink(ui, label, ink);
                     if is_default {

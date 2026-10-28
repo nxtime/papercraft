@@ -334,7 +334,7 @@ fn old_page_bytes_unchanged_and_override_roundtrips() {
     let mut m = PageModes::new();
     m.insert(PAGE_TEMPLATE_KEY.into(), "minimal".into());
     let s = page_to_json_modes(&page, &m);
-    assert!(s.contains("\"annotationTemplate\": \"minimal\""));
+    assert!(s.contains("\"annotationTemplate\":\"minimal\""));
     assert!(!s.contains("collectionModes"));
     let (p, modes) = page_from_json_modes(&s).unwrap();
     assert_eq!(modes, m);

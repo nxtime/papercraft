@@ -70,6 +70,11 @@ fn tool(name: &str, desc: &str, props: Value, required: &[&str], read_only: bool
     } else {
         json!({"destructiveHint": false, "readOnlyHint": false})
     };
+    if crate::mcp::exec::GUARDED.contains(&name)
+        && let Some(m) = props.as_object_mut()
+    {
+        m.insert("allowHidden".into(), json!({"type": "boolean", "description": "Edit layers that are hidden behind an overlay or opaque layer in their screen (refused otherwise)."}));
+    }
     json!({
         "name": name,
         "description": desc,
@@ -925,6 +930,22 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "set_screens",
+            "Declare frames as screens (one device viewport of the product, not a section, slot or \
+             component) or as overlays (a drawer, modal or sheet inside a screen), or clear the role \
+             with `none`. One undo step. Inside a screen, edits to layers fully hidden behind an \
+             overlay or opaque layer are refused (pass allowHidden:true to edit them on purpose), \
+             and partly covered ones are reported. get_basic_info lists screens; get_node_info tells \
+             a layer's visibility in its screen.",
+            json!({
+                "nodeIds": ids("Frames to declare."),
+                "role": {"type": "string", "enum": ["screen", "overlay", "none"], "description": "Default screen."},
+                "pageId": page_id(),
+            }),
+            &["nodeIds"],
+            false,
+        ),
+        tool(
             "merge_variants",
             "Turn per-state components (`Tab bar / Hoje`, `Tab bar / Lojas`, `Status / Sucesso`...) \
              into one component with an enum property: each variant's differences from the base \
@@ -1203,7 +1224,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
         | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "apply_ui_kit" | "set_code_link"
-        | "set_component_props" | "set_instance_props" | "merge_variants" | "set_prototype_links"
+        | "set_component_props" | "set_instance_props" | "merge_variants" | "set_prototype_links" | "set_screens"
         | "duplicate_nodes" | "move_nodes" | "undo" | "redo" => true,
         _ => return None,
     })

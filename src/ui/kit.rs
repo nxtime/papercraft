@@ -574,65 +574,104 @@ pub fn select_icons<T: PartialEq + Copy>(
         let r = Rect::from_center_size(egui::pos2(rect.left() + 19.0, rect.center().y), vec2(14.0, 14.0));
         theme::paint_icon(ui.painter(), r, i, p.secondary);
     }
-    ui.painter().text(
-        egui::pos2(rect.left() + 12.0 + indent, rect.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(theme::BODY),
-        p.text,
-    );
+    let g = option_label(ui, label, FontId::proportional(theme::BODY), p.text, rect.width() - 12.0 - indent - 28.0);
+    ui.painter().galley(egui::pos2(rect.left() + 12.0 + indent, rect.center().y - g.size().y / 2.0), g, p.text);
     let ch = Rect::from_center_size(
         egui::pos2(rect.right() - 14.0, rect.center().y),
         vec2(14.0, 14.0),
     );
     theme::paint_icon(ui.painter(), ch, Icon::ChevronDown, p.secondary);
     let mut chosen = None;
+    // The menu grows to fit its longest option, up to a cap; longer ones are shortened.
+    let min_w = rect.width().max(150.0);
+    let menu_w = if egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp)) {
+        let font = theme::semibold(theme::BODY);
+        let widest = options
+            .iter()
+            .map(|(_, l)| ui.painter().layout_no_wrap((*l).to_owned(), font.clone(), p.text).size().x)
+            .fold(0.0, f32::max);
+        (widest + 12.0 + indent + 40.0).clamp(min_w, SELECT_MENU_MAX_W)
+    } else {
+        min_w
+    };
     egui::Popup::menu(&resp)
-        .width(rect.width().max(150.0))
+        .width(menu_w)
         .show(|ui| {
             crate::theme::popup_backing(ui);
             ui.spacing_mut().item_spacing.y = 2.0;
-            for (k, (o, l)) in options.iter().enumerate() {
-                let (row, r) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-                let on = *o == current;
-                let h = crate::ui::motion::hover(ui.ctx(), r.id.with("opt"), &r);
-                if on {
-                    theme::fill_selected(ui, row, theme::radius_md(), p.field);
-                } else if h > 0.0 {
-                    ui.painter()
-                        .rect_filled(row, theme::radius_md(), p.hover.gamma_multiply(h));
-                }
-                if let Some(i) = icon_of(k) {
-                    let ir = Rect::from_center_size(egui::pos2(row.left() + 19.0, row.center().y), vec2(14.0, 14.0));
-                    theme::paint_icon(ui.painter(), ir, i, if on { p.text } else { p.secondary });
-                }
-                ui.painter().text(
-                    egui::pos2(row.left() + 12.0 + indent, row.center().y),
-                    Align2::LEFT_CENTER,
-                    *l,
+            egui::ScrollArea::vertical().max_height(SELECT_MENU_MAX_H).show(ui, |ui| {
+                for (k, (o, l)) in options.iter().enumerate() {
+                    let (row, r) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                    let on = *o == current;
+                    let h = crate::ui::motion::hover(ui.ctx(), r.id.with("opt"), &r);
                     if on {
-                        theme::semibold(theme::BODY)
-                    } else {
-                        FontId::proportional(theme::BODY)
-                    },
-                    p.text,
-                );
-                if on {
-                    let c = egui::pos2(row.right() - 16.0, row.center().y);
-                    let s = Stroke::new(2.0, theme::accent());
-                    ui.painter()
-                        .line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.0, 3.5)], s);
-                    ui.painter()
-                        .line_segment([c + vec2(-1.0, 3.5), c + vec2(4.5, -3.0)], s);
+                        theme::fill_selected(ui, row, theme::radius_md(), p.field);
+                    } else if h > 0.0 {
+                        ui.painter()
+                            .rect_filled(row, theme::radius_md(), p.hover.gamma_multiply(h));
+                    }
+                    if let Some(i) = icon_of(k) {
+                        let ir = Rect::from_center_size(egui::pos2(row.left() + 19.0, row.center().y), vec2(14.0, 14.0));
+                        theme::paint_icon(ui.painter(), ir, i, if on { p.text } else { p.secondary });
+                    }
+                    let font = if on { theme::semibold(theme::BODY) } else { FontId::proportional(theme::BODY) };
+                    let g = option_label(ui, l, font, p.text, row.width() - 12.0 - indent - 32.0);
+                    let cut = g.text() != *l;
+                    ui.painter().galley(egui::pos2(row.left() + 12.0 + indent, row.center().y - g.size().y / 2.0), g, p.text);
+                    let r = if cut { r.on_hover_text(*l) } else { r };
+                    if on {
+                        let c = egui::pos2(row.right() - 16.0, row.center().y);
+                        let s = Stroke::new(2.0, theme::accent());
+                        ui.painter()
+                            .line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.0, 3.5)], s);
+                        ui.painter()
+                            .line_segment([c + vec2(-1.0, 3.5), c + vec2(4.5, -3.0)], s);
+                    }
+                    if r.clicked() {
+                        chosen = Some(*o);
+                        ui.close();
+                    }
                 }
-                if r.clicked() {
-                    chosen = Some(*o);
-                    ui.close();
-                }
-            }
+            });
         });
     chosen.filter(|c| *c != current)
+}
+
+const SELECT_MENU_MAX_W: f32 = 320.0;
+const SELECT_MENU_MAX_H: f32 = 420.0;
+
+/// One line of `text` in `max_w`. A `Group / Sub / Name` path keeps its last parts and drops
+/// leading ones (`… / Name`), since the end tells options apart; the path before the name is
+/// dimmed. Anything still too long ends in "…".
+fn option_label(ui: &Ui, text: &str, font: FontId, ink: Color32, max_w: f32) -> std::sync::Arc<egui::Galley> {
+    let dim = theme::pal(ui).secondary;
+    let parts: Vec<&str> = text.split(" / ").collect();
+    let job = |skip: usize, cut: bool| {
+        let mut job = egui::text::LayoutJob::default();
+        let (prefix, name) = parts.split_at(parts.len() - 1);
+        let mut head = prefix[skip..].join(" / ");
+        if skip > 0 {
+            head = if head.is_empty() { "\u{2026}".into() } else { format!("\u{2026} / {head}") };
+        }
+        if !head.is_empty() {
+            job.append(&format!("{head} / "), 0.0, egui::TextFormat::simple(font.clone(), dim));
+        }
+        job.append(name[0], 0.0, egui::TextFormat::simple(font.clone(), ink));
+        if cut {
+            job.wrap.max_width = max_w;
+            job.wrap.max_rows = 1;
+            job.wrap.overflow_character = Some('\u{2026}');
+        }
+        job
+    };
+    for skip in 0..parts.len() {
+        let g = ui.painter().layout_job(job(skip, false));
+        if g.size().x <= max_w {
+            return g;
+        }
+    }
+    ui.painter().layout_job(job(parts.len() - 1, true))
 }
 
 /// A rounded slider: rail, accent fill, round knob. Returns whether the value changed.

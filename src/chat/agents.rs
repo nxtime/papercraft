@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn path_override_wins_and_hung_program_times_out() {
-        let (dir, path) = fake_dir(&[("opencode", "echo opencode"), ("hang", "sleep 30")]);
+        let (dir, path) = fake_dir(&[("opencode", "echo opencode"), ("hang", "/bin/sleep 30")]);
         let mut prefs = ChatPrefs::default();
         prefs.agents.insert("opencode".into(), AgentPrefs { path: Some("/nonexistent/opencode".into()), ..Default::default() });
         assert_eq!(state(&detect_all_in(&prefs, &path), "opencode"), AgentState::NotFound);

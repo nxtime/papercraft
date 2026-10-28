@@ -77,6 +77,21 @@ fn ten_thousand_elements_cache_and_pan_without_rework() {
     scene::canvas(&e, &mut cache, V2::ZERO, true);
     assert_eq!(cache.last_misses, 1);
 
+    // A change that keeps the position (a fill), its undo and a scroll come from the
+    // editor's change log, not from comparing nodes.
+    e.edit("Fill", |tx| tx.node_mut(id).unwrap().style.fills = vec![papercraft::model::Paint::solid(Color::rgb(1, 2, 3))]);
+    scene::canvas(&e, &mut cache, V2::ZERO, true);
+    assert_eq!(cache.last_misses, 1, "fill change");
+    e.undo();
+    scene::canvas(&e, &mut cache, V2::ZERO, true);
+    assert_eq!(cache.last_misses, 1, "undo");
+    // A cache further behind than the log redoes everything.
+    for _ in 0..70 {
+        e.edit("Move", |tx| tx.node_mut(id).unwrap().rect.x += 1.0);
+    }
+    scene::canvas(&e, &mut cache, V2::ZERO, true);
+    assert_eq!(cache.last_misses, 10_000, "log overflow");
+
     // Panning: same items, so the GPU world buffers are reused (no upload).
     let Some(g) = gpu() else { return };
     let mut r = CanvasRenderer::new(&g.device, OFFSCREEN_FORMAT);

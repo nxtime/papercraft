@@ -287,6 +287,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
             css::set_variables_in_scope(&ed.page_doc(scope).variables, &ed.page_doc(scope).tokens);
             // The first content on the page the user is looking at is brought into view.
             let was_empty = ed.doc.root.is_empty();
+            let covered = if GUARDED.contains(&name) { screen_guard(ed, &a)? } else { None };
             let r = match name {
                 "create_page" => create_page(ed, &a),
                 "rename_pages" => rename_pages(ed, &a),
@@ -330,6 +331,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "set_instance_props" => set_instance_props(ed, &a),
                 "merge_variants" => merge_variants(ed, &a),
                 "set_prototype_links" => set_prototype_links(ed, &a),
+                "set_screens" => set_screens(ed, &a),
                 "export" => export(host, &a),
                 "export_combined_pdf" => export_pdf(host, &a),
                 "create_artboard" => create_artboard(ed, &a),
@@ -377,7 +379,12 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
             if r.is_ok() && was_empty && !ed.doc.root.is_empty() && name != "set_viewport" {
                 ed.zoom_to_fit();
             }
-            r
+            r.map(|mut out| {
+                if let Some(v) = covered {
+                    out.push(Out::Text(serde_json::to_string_pretty(&v).unwrap_or_default()));
+                }
+                out
+            })
         }
     }
 }
@@ -433,6 +440,106 @@ fn check_file(host: &mut dyn Host, a: &Args) -> Result<(), String> {
 
 fn same_dir(a: &Path, b: &Path) -> bool {
     a == b || a.canonicalize().ok() == b.canonicalize().ok()
+}
+
+// ------------------------------------------------------------------------------ screens
+
+/// Tools that change the layers they name: refused on layers hidden inside a screen.
+pub(crate) const GUARDED: &[&str] = &[
+    "update_styles", "set_text_content", "delete_nodes", "move_nodes", "write_html", "bind_variable",
+    "swap_instance", "detach_instance", "set_instance_props", "create_instance", "create_shape",
+];
+
+/// Layers an edit names (`nodeId`, `nodeIds`, `parentId`, `targetNodeId` at any depth) that sit in a screen
+/// behind a drawer, modal or opaque layer: an error unless `allowHidden`, since nobody can see
+/// the result. Partly covered ones pass with a note (returned for the tool's output).
+fn screen_guard(ed: &Editor, a: &Args) -> Result<Option<Value>, String> {
+    fn keys(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                for (k, v) in m {
+                    match (k.as_str(), v) {
+                        ("nodeId" | "parentId" | "targetNodeId", Value::String(s)) => out.push(s.clone()),
+                        ("nodeIds", Value::Array(l)) => out.extend(l.iter().filter_map(|x| x.as_str().map(String::from))),
+                        _ => keys(v, out),
+                    }
+                }
+            }
+            Value::Array(l) => l.iter().for_each(|x| keys(x, out)),
+            _ => {}
+        }
+    }
+    let mut ks = Vec::new();
+    keys(&Value::Object(a.0.clone()), &mut ks);
+    let def = page_arg(ed, a)?;
+    let (mut hidden, mut partial) = (Vec::new(), Vec::new());
+    for k in ks.iter().filter(|k| k.as_str() != ROOT) {
+        // Unknown ids are the tool's to report.
+        let Ok((page, id)) = resolve(ed, k, def) else { continue };
+        let doc = ed.page_doc(page);
+        let Some(c) = crate::editor::screens::coverage(doc, id) else { continue };
+        let name = |i: NodeId| doc.get(i).map_or(String::new(), |n| n.name.clone());
+        let row = json!({
+            "nodeId": k, "name": name(id), "screen": name(c.screen),
+            "visible": format!("{:.0}%", c.visible * 100.0),
+            "coveredBy": c.covers.iter().map(|i| json!({"nodeId": node_key(ed, page, *i), "name": name(*i)})).collect::<Vec<_>>(),
+        });
+        if c.is_hidden() {
+            hidden.push(row);
+        } else if c.is_partial() {
+            partial.push(row);
+        }
+    }
+    let allow = a.bool("allowHidden").unwrap_or(false);
+    if !hidden.is_empty() && !allow {
+        return Err(format!(
+            "refused: these layers are hidden behind other layers in their screen, so the user can't see \
+             the edit: {}. Hide or move the cover first (an overlay drawer or modal: update_styles \
+             visible:false), or pass allowHidden:true to edit the state underneath on purpose.",
+            serde_json::to_string(&hidden).unwrap_or_default()
+        ));
+    }
+    let mut v = json!({});
+    if !partial.is_empty() {
+        v["partlyCovered"] = json!(partial);
+    }
+    if !hidden.is_empty() {
+        v["editedWhileHidden"] = json!(hidden);
+    }
+    Ok((!partial.is_empty() || !hidden.is_empty()).then_some(v))
+}
+
+/// Declare frames as screens or overlays (drawer, modal, sheet inside a screen), or clear it.
+fn set_screens(ed: &mut Editor, a: &Args) -> ToolResult {
+    use crate::editor::screens::Role;
+    let role = match a.str("role").unwrap_or("screen") {
+        "screen" => Role::Screen,
+        "overlay" => Role::Overlay,
+        "none" => Role::None,
+        r => return Err(format!("role `{r}` is not screen, overlay or none")),
+    };
+    let (page, ids) = resolve_all(ed, &a.strs("nodeIds")?, page_arg(ed, a)?)?;
+    ed.with_page(page, |ed| ed.set_role(&ids, role))?;
+    text(json!({"updated": ids.len(), "screens": ed.page_doc(page).nodes.values().filter(|n| n.screen).count()}))
+}
+
+/// A layer's place among screens: the screen it is in and how much of it is in view, or
+/// that it is a screen itself.
+fn screen_json(ed: &Editor, page: usize, id: NodeId) -> Option<Value> {
+    let doc = ed.page_doc(page);
+    let n = doc.get(id)?;
+    if n.screen {
+        return Some(json!({"isScreen": true, "device": crate::editor::screens::device_of(n.rect.w).unwrap_or("Custom")}));
+    }
+    let c = crate::editor::screens::coverage(doc, id)?;
+    let mut v = json!({"screenId": node_key(ed, page, c.screen), "state": c.state(), "visible": format!("{:.0}%", c.visible * 100.0)});
+    if n.overlay {
+        v["overlay"] = json!(true);
+    }
+    if !c.covers.is_empty() {
+        v["coveredBy"] = json!(c.covers.iter().map(|i| node_key(ed, page, *i)).collect::<Vec<_>>());
+    }
+    Some(v)
 }
 
 // ------------------------------------------------------------------------------ projects
@@ -639,6 +746,12 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
         "pages": pages,
         "nodeCount": doc.nodes.len(),
         "artboards": artboards,
+        "screens": crate::editor::screens::declared(doc).iter().map(|id| {
+            let n = doc.get(*id).unwrap();
+            let section = doc.ancestors(*id).last().and_then(|s| doc.get(*s)).map(|s| s.name.clone());
+            json!({"id": node_key(ed, page, *id), "name": n.name, "device": crate::editor::screens::device_of(n.rect.w).unwrap_or("Custom"),
+                   "width": n.rect.w, "height": n.rect.h, "section": section})
+        }).collect::<Vec<_>>(),
         "otherTopLevelLayers": others,
         "fontFamilies": ["Inter"],
         "selectionCount": if page == ed.active_page { ed.selection.len() } else { 0 },
@@ -949,6 +1062,9 @@ fn node_info(ed: &mut Editor, a: &Args) -> ToolResult {
         v["instance"] = json!(true);
     }
     v["autoLayout"] = json!(n.layout.is_some());
+    if let Some(s) = screen_json(ed, page, id) {
+        v["screen"] = s;
+    }
     text(v)
 }
 
@@ -4908,6 +5024,10 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
     let doc = ed.page_doc(page);
     let mut issues = super::lint::lint(doc, &roots, &scale);
     issues.extend(super::lint::not_an_instance(doc, &roots, &super::lint::component_mains(ed)));
+    // Layers hidden behind a drawer or modal in their screen are not fix-me findings: nobody sees them.
+    let before = issues.len();
+    issues.retain(|i| !crate::editor::screens::coverage(doc, i.node).is_some_and(|c| c.is_hidden()));
+    let skipped_hidden = before - issues.len();
     let count = |sev: &str| issues.iter().filter(|i| i.severity == sev).count();
     let mut by_rule: Map<String, Value> = Map::new();
     for i in &issues {
@@ -4927,6 +5047,7 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
         "fixedNodes": fixed,
         "byRule": by_rule, "issues": list,
         "truncated": issues.len() > 200,
+        "skippedHidden": skipped_hidden,
     }))
 }
 

@@ -44,12 +44,15 @@ pub struct Undone {
     pub design: Option<DesignSystem>,
     pub design_from: Option<DesignSystem>,
     pub page_modes: Option<PageModes>,
+    /// The layers the step changed.
+    pub nodes: Vec<NodeId>,
 }
 
 impl Change {
     fn undone(&self, forward: bool) -> Undone {
         Undone {
             label: self.label.clone(),
+            nodes: self.entries.iter().map(|e| e.id).collect(),
             design: self
                 .design
                 .as_ref()

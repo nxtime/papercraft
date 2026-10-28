@@ -73,9 +73,15 @@ impl Session {
         for i in 0..ed.pages.len() {
             ed.mark_page_saved(i);
         }
-        // Pages migrated on load (cache rebuilt, component keys) are written by the next save.
+        // Pages migrated on load (cache rebuilt, component keys, still plain JSON) are written
+        // by the next save.
         for &i in &loaded.changed {
             ed.pages[i].saved_gen = u64::MAX;
+        }
+        for i in 0..ed.pages.len() {
+            if !loaded.pending.contains(&i) && crate::project::is_legacy_page(dir, &ed.pages[i].id) {
+                ed.pages[i].saved_gen = u64::MAX;
+            }
         }
         // The other pages are read in the background; the editor installs them as they arrive.
         ed.load_pages_in_background(dir, &loaded.pending);
@@ -225,6 +231,11 @@ impl Session {
             }
             p.save_design(&ed.design)?;
             self.design_disk = Some(ed.design.clone());
+        }
+        // The manifest's version goes first too: an app older than packed pages must refuse the
+        // project before it can find a page missing and save it empty.
+        if !dirty.is_empty() {
+            p.write_manifest()?;
         }
         for &i in &dirty {
             let data = ed.page_data(i);
@@ -523,12 +534,12 @@ mod tests {
         assert_eq!(ed2.doc.mode, orig.mode);
         assert!(!ed2.project_dirty());
         let raw = crate::vfs::read_to_string(dir.join("project.json")).unwrap();
-        // The manifest is rewritten at version 2 so 0.4.0 refuses the project instead of
-        // writing pages without bindings and never updating design.json.
-        assert!(raw.contains("\"version\": 2"));
-        // An older app reads the page files directly and still sees the cache fields.
+        // The manifest is rewritten at the current version so older apps refuse the project
+        // instead of writing pages without bindings or missing the packed page files.
+        assert!(raw.contains("\"version\": 3"));
+        // The page file itself still carries the cache fields.
         let old = crate::project::format::page_from_json(
-            &crate::vfs::read_to_string(dir.join("pages/pg1.json")).unwrap(),
+            &crate::project::packed::read(&crate::project::page_file(&dir, "pg1")).unwrap(),
         )
         .unwrap();
         assert_eq!(old.doc.variables, orig.variables);
@@ -557,7 +568,7 @@ mod tests {
         assert!(on_disk.find_by_css("brand").is_some(), "design saved before the page failed");
         // The manifest turned v2 with it.
         let raw = crate::vfs::read_to_string(dir.join("project.json")).unwrap();
-        assert!(raw.contains("\"version\": 2"));
+        assert!(raw.contains("\"version\": 3"));
         crate::vfs::remove_dir_all(&s.root).ok();
     }
 
@@ -572,9 +583,11 @@ mod tests {
         let mut ed = Editor::default();
         sess.open(&mut ed, &dir).unwrap();
         assert!(ed.design.collections.is_empty());
-        assert!(!ed.project_dirty());
+        // Dirty only to pack the plain page file.
+        assert!(ed.project_dirty());
         sess.save(&mut ed).unwrap();
         assert!(dir.join("design.json").is_file());
+        assert!(!crate::project::is_legacy_page(&dir, "pg1"));
         crate::vfs::remove_dir_all(&s.root).ok();
     }
 

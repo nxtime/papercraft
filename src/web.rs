@@ -738,7 +738,7 @@ impl Web {
             dir.map(|p| p.dir.as_path()),
             &self.ed,
         );
-        self.dirty |= self.st.sync_runs(&mut self.runs, &self.ed);
+        self.dirty |= self.st.sync_runs(&self.ctx, &mut self.runs, &self.ed);
         if self.relay.tick(now) {
             self.dirty = true;
         }

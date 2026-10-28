@@ -21,10 +21,13 @@ pub const LEGACY_FORMAT: &str = "paper-rs";
 /// v1: pages only. v2: `design.json` is the source of truth for variables and pages carry
 /// bindings, component keys and sources. An older app would write pages without those and never
 /// update `design.json`, so it must refuse a v2 project (`TooNew`) instead of losing data.
-pub const PROJECT_VERSION: u32 = 2;
+/// v3: pages and versions are zstd-compressed (`pages/<id>.json.zst`); an older app would see
+/// no page files and save empty pages over them.
+pub const PROJECT_VERSION: u32 = 3;
 /// Project migrations, indexed by source version: `PROJECT_STEPS[0]` turns v1 into v2. The
-/// manifest itself does not change; the design system is built on load from the pages.
-const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v];
+/// manifest itself does not change; the design system is built on load from the pages, and
+/// pages are packed as they are saved.
+const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v, |v| v];
 /// v1: legacy single file. v2: page file inside a project. v3: fill layers (`fills`).
 pub const PAGE_VERSION: u32 = 3;
 
@@ -216,7 +219,7 @@ pub fn page_to_json_modes(p: &PageData, modes: &PageModes) -> String {
         annotations: p.doc.annotations.clone(),
         annotation_template: modes.get(PAGE_TEMPLATE_KEY).cloned(),
     };
-    serde_json::to_string_pretty(&f).expect("page serializes")
+    serde_json::to_string(&f).expect("page serializes")
 }
 
 /// Parse a page file (or a legacy `.paper-rs` document) of any supported version.
@@ -435,7 +438,7 @@ mod tests {
         assert_eq!(r.style.fill(), Some(crate::model::Color::rgb(255, 0, 0)));
         assert_eq!(r.style.corner_radius, 2.0);
         assert!(p.doc.get(NodeId(2)).unwrap().style.fills.is_empty());
-        assert!(page_to_json(&p).contains("\"version\": 3"));
+        assert!(page_to_json(&p).contains("\"version\":3"));
     }
 
     #[test]
@@ -443,10 +446,10 @@ mod tests {
         let v1 = r#"{"format":"paper-rs-project","version":1,"id":"a","name":"N","created":1,
             "modified":2,"pages":[{"id":"p","name":"Page 1"}]}"#;
         assert_eq!(Manifest::from_json(v1).unwrap().version, PROJECT_VERSION);
-        assert_eq!(PROJECT_VERSION, 2);
-        // What the old 0.4.0 reader (supports 1) does with a v2 file: TooNew.
-        let err = Manifest::from_json(&v1.replace("\"version\":1", "\"version\":3")).unwrap_err();
-        assert!(matches!(err, FormatError::TooNew { version: 3, supported: 2 }));
+        assert_eq!(PROJECT_VERSION, 3);
+        // What an older reader does with a newer file: TooNew.
+        let err = Manifest::from_json(&v1.replace("\"version\":1", "\"version\":4")).unwrap_err();
+        assert!(matches!(err, FormatError::TooNew { version: 4, supported: 3 }));
         assert!(err.to_string().contains("made by a newer PaperCraft"));
     }
 
