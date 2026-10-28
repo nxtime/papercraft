@@ -1,0 +1,34 @@
+# The full test suite. Local runs cover only the targets a change touches (RULES.md, "The machine
+# you build on"); this is where everything runs, before a release can publish. Run it alone with
+# `gh workflow run test.yml -f ref=<branch or tag>`. Gitea reads .github/workflows too, so the job
+# is gated on the server URL.
+name: test
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or tag to test (default the one you run from)
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    if: github.server_url == 'https://github.com'
+    # Windows: the platform the app is developed on, and its runners render with a software GPU.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ inputs.ref || github.ref }}" }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --no-fail-fast
+      - run: cargo check --locked --lib --target wasm32-unknown-unknown

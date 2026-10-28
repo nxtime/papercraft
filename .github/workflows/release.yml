@@ -1,5 +1,5 @@
 # Builds Windows, macOS and Linux on GitHub's runners when a v* tag is pushed, then publishes a
-# GitHub release with the files. Gitea reads .github/workflows too, so every job is gated on the
+# GitHub release with the files once the full test suite (test.yml) passes. Gitea reads .github/workflows too, so every job is gated on the
 # server URL: this pipeline only ever runs on github.com.
 name: release
 
@@ -20,6 +20,10 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+    with: { ref: "${{ inputs.tag || github.ref }}" }
+
   windows:
     if: github.server_url == 'https://github.com'
     runs-on: windows-latest
@@ -78,7 +82,7 @@ jobs:
 
   publish:
     if: github.server_url == 'https://github.com'
-    needs: [windows, macos, linux]
+    needs: [test, windows, macos, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
