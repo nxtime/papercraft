@@ -1,7 +1,8 @@
 //! Image assets, registered process-wide by content hash.
 //!
 //! Image fills reference an asset id (a hash of the encoded bytes). The registry keeps the
-//! decoded pixels for rendering and the original bytes for saving and export. Projects store
+//! original bytes and the size; pixels are decoded only when an image is uploaded to the GPU or
+//! exported, since decoded images are several times their file size and are never dropped. Projects store
 //! their assets as `assets/<id>.<ext>`; copy/paste between projects carries only the id, and
 //! the destination project writes the file on its next save.
 
@@ -13,7 +14,6 @@ pub struct ImageAsset {
     pub id: String,
     pub width: u32,
     pub height: u32,
-    pub rgba: image::RgbaImage,
     /// The original encoded file.
     pub bytes: Vec<u8>,
     /// "png", "jpg", ...
@@ -21,6 +21,11 @@ pub struct ImageAsset {
 }
 
 impl ImageAsset {
+    /// The decoded pixels. Decodes every call: the callers keep the result as long as they need.
+    pub fn rgba(&self) -> Option<image::RgbaImage> {
+        image::load_from_memory(&self.bytes).ok().map(|i| i.to_rgba8())
+    }
+
     pub fn mime(&self) -> &'static str {
         match self.ext {
             "jpg" => "image/jpeg",
@@ -61,14 +66,15 @@ pub fn register(bytes: &[u8]) -> Result<String, String> {
     if registry().lock().unwrap().contains_key(&id) {
         return Ok(id);
     }
-    let img = image::load_from_memory(bytes)
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
         .map_err(|e| format!("unsupported image: {e}"))?
-        .to_rgba8();
+        .into_dimensions()
+        .map_err(|e| format!("unsupported image: {e}"))?;
     let a = ImageAsset {
         id: id.clone(),
-        width: img.width(),
-        height: img.height(),
-        rgba: img,
+        width,
+        height,
         bytes: bytes.to_vec(),
         ext: ext_of(bytes),
     };
@@ -208,5 +214,6 @@ mod tests {
         let asset = get(&a).unwrap();
         assert_eq!((asset.width, asset.height), (3, 2));
         assert!(register(b"not an image").is_err());
+        assert_eq!(asset.rgba().map(|p| p.get_pixel(2, 1).0), Some([255, 0, 0, 255]), "decoded on demand");
     }
 }

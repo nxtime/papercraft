@@ -32,10 +32,13 @@ const IMAGE_MAX_EDGE: f64 = ZOOM_MAX_EDGE as f64;
 const IMAGE_MAX_PIXELS: f64 = 1_150_000.0;
 /// Only used when a JPEG had to be scaled down: high enough that re-encoding is invisible.
 const IMAGE_JPEG_QUALITY: u8 = 95;
+/// An opaque PNG (a screenshot, a photo) is also tried as a JPEG this good; text stays legible.
+const IMAGE_LOSSY_QUALITY: u8 = 82;
 
 /// Scales an image down to the send cap, then re-encodes it: PNG at the best lossless
-/// compression, JPEG stays JPEG (a PNG of a photo is often bigger than the original). Keeps the
-/// original bytes when they are already smaller. The third value is the original when scaled.
+/// compression, JPEG stays JPEG (a PNG of a photo is often bigger than the original), and an
+/// opaque PNG becomes a JPEG when that is smaller. Keeps the original bytes when they are
+/// already smaller. The third value is the original when scaled.
 pub fn shrink_image(name: String, img: events::ImageAttachment) -> (String, events::ImageAttachment, Option<Vec<u8>>) {
     use image::codecs::{jpeg::JpegEncoder, png};
     let Ok(decoded) = image::load_from_memory(&img.data) else { return (name, img, None) };
@@ -45,13 +48,20 @@ pub fn shrink_image(name: String, img: events::ImageAttachment) -> (String, even
         return (name, img, None); // re-encoding a JPEG loses detail for little gain
     }
     let decoded = if k < 1.0 { decoded.resize((w * k) as u32, (h * k) as u32, image::imageops::FilterType::Lanczos3) } else { decoded };
-    let jpeg = img.mime == "image/jpeg";
+    let mut jpeg = img.mime == "image/jpeg";
     let mut out = Vec::new();
-    let encoded = if jpeg {
+    let mut encoded = if jpeg {
         decoded.to_rgb8().write_with_encoder(JpegEncoder::new_with_quality(&mut out, IMAGE_JPEG_QUALITY))
     } else {
         decoded.write_with_encoder(png::PngEncoder::new_with_quality(&mut out, png::CompressionType::Best, png::FilterType::Adaptive))
     };
+    let opaque = || !decoded.color().has_alpha() || decoded.to_rgba8().pixels().all(|px| px[3] == u8::MAX);
+    if !jpeg && opaque() {
+        let mut lossy = Vec::new();
+        if decoded.to_rgb8().write_with_encoder(JpegEncoder::new_with_quality(&mut lossy, IMAGE_LOSSY_QUALITY)).is_ok() && (encoded.is_err() || lossy.len() < out.len()) {
+            (out, encoded, jpeg) = (lossy, Ok(()), true);
+        }
+    }
     if encoded.is_err() || (k >= 1.0 && out.len() >= img.data.len()) {
         return (name, img, None);
     }
@@ -189,6 +199,26 @@ pub struct Chat {
     /// What became of the issues drafted in this chat, by the drafting tool call's id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub issues: std::collections::BTreeMap<String, IssueOutcome>,
+}
+
+/// A chat as the history list shows it, without its messages: a long chat's screenshots run to
+/// hundreds of MB, and the list must not hold a copy of every chat.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+pub struct ChatSummary {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub updated: u64,
+    #[serde(default)]
+    pub backend: Backend,
+}
+
+impl ChatSummary {
+    pub fn of(c: &Chat) -> Self {
+        Self { id: c.id.clone(), title: c.title.clone(), updated: c.updated, backend: c.backend.clone() }
+    }
 }
 
 /// A drafted issue the user sent or dropped.

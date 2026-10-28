@@ -15,7 +15,7 @@ pub use chat_pick::{layer_chip, open_ask};
 use chat_agents::{Act, PanelIn};
 use crate::chat::events::{Event, ImageAttachment};
 use crate::chat::agents::{self, AgentKind, AgentState, AgentStatus};
-use crate::chat::{Backend, BackendKind, Chat, IssueOutcome, Message, Role, ToolCall, store};
+use crate::chat::{Backend, BackendKind, Chat, ChatSummary, IssueOutcome, Message, Role, ToolCall, store};
 use crate::project::format::{new_id, now_ms};
 use crate::theme::{self, Icon};
 use crate::ui::{UiState, kit};
@@ -360,7 +360,7 @@ pub struct ChatState {
     /// The open chat.
     pub chat: Option<Chat>,
     /// Chats of the open project, newest first (refreshed on save).
-    pub chats: Vec<Chat>,
+    pub chats: Vec<ChatSummary>,
     /// Filter typed in the chat history popup.
     pub history_query: String,
     pub turn: Option<TurnHandle>,
@@ -549,6 +549,9 @@ impl ChatState {
     /// project was last left in Chat mode.
     pub fn switch_project(&mut self, dir: Option<PathBuf>) -> bool {
         self.stop();
+        if let Some(d) = &dir {
+            store::prune_result_images(d, store::RESULT_IMAGES_KEEP);
+        }
         let prefs = Prefs::load();
         #[cfg(not(target_arch = "wasm32"))]
         let tools = self.tools.take();
@@ -632,7 +635,7 @@ impl ChatState {
         }
         let Some(dir) = &self.project else { return };
         self.chats = store::list(dir);
-        self.chat = Some(self.chats.first().cloned().unwrap_or_else(new_chat));
+        self.chat = Some(self.chats.first().and_then(|c| store::load(dir, &c.id)).unwrap_or_else(new_chat));
     }
 
     fn save(&mut self) {
@@ -641,7 +644,9 @@ impl ChatState {
         if let Err(e) = store::save(dir, chat) {
             log::warn!("could not save chat: {e}");
         }
-        self.chats = store::list(dir);
+        // Just updated, so it is the newest; the other files are not read again.
+        self.chats.retain(|c| c.id != chat.id);
+        self.chats.insert(0, ChatSummary::of(chat));
     }
 
     /// Fold one backend event into the open chat. Returns true when the turn is over.
@@ -696,6 +701,9 @@ impl ChatState {
                 let call = chat.messages.iter_mut().rev().flat_map(|m| m.tools.iter_mut()).find(|t| t.id == id);
                 if let Some(t) = call {
                     (t.result, t.error, t.ms) = (result, error, ms);
+                    if let (Some(dir), Some(r)) = (&self.project, &mut t.result) {
+                        store::offload_images(dir, &chat.id, &t.id, r);
+                    }
                 }
                 self.approvals.retain(|a| a.id != id);
             }
@@ -758,7 +766,8 @@ impl ChatState {
         let alive = self.turn.as_ref().is_some_and(TurnHandle::is_running);
         let events: Vec<Event> = rx.try_iter().collect();
         // The events belong to the turn's chat, not to whichever chat is open now.
-        let parked = self.chat.as_ref().filter(|_| self.turn_chat.is_some()).is_some_and(|c| Some(&c.id) != self.turn_chat.as_ref()).then(|| {
+        // Read from disk only when there is something to fold in, not every frame.
+        let parked = self.chat.as_ref().filter(|_| self.turn_chat.is_some() && (!events.is_empty() || !alive)).is_some_and(|c| Some(&c.id) != self.turn_chat.as_ref()).then(|| {
             let turn = self.turn_chat.as_deref().zip(self.project.as_deref()).and_then(|(id, dir)| store::load(dir, id));
             std::mem::replace(&mut self.chat, turn)
         });
@@ -1032,9 +1041,13 @@ impl ChatState {
     pub fn record_issue(&mut self, key: &str, o: IssueOutcome) {
         let holds = |c: &Chat| c.messages.iter().any(|m| m.tools.iter().any(|t| t.id == key));
         let Some(dir) = self.project.clone() else { return };
+        let mut other;
         let target = match self.chat.as_mut().filter(|c| holds(c)) {
             Some(c) => Some(c),
-            None => self.chats.iter_mut().find(|c| holds(c)),
+            None => {
+                other = self.chats.iter().filter_map(|c| store::load(&dir, &c.id)).find(|c| holds(c));
+                other.as_mut()
+            }
         };
         let Some(c) = target else { return };
         c.issues.insert(key.to_owned(), o);
@@ -1187,8 +1200,8 @@ impl ChatState {
             return;
         }
         self.fresh_next = false;
-        if let Some(c) = self.chats.iter().find(|c| c.id == id) {
-            self.chat = Some(c.clone());
+        if let Some(c) = self.project.as_deref().and_then(|dir| store::load(dir, id)) {
+            self.chat = Some(c);
             self.reset_view();
         }
     }
@@ -1938,7 +1951,7 @@ fn chat_menu(anchor: &egui::Response, st: &mut UiState) {
         let current = st.chat.chat.as_ref().map(|c| c.id.clone());
         let now = now_ms();
         let needle = st.chat.history_query.trim().to_lowercase();
-        let chats: Vec<Chat> = st.chat.chats.iter().filter(|c| needle.is_empty() || c.title.to_lowercase().contains(&needle)).cloned().collect();
+        let chats: Vec<ChatSummary> = st.chat.chats.iter().filter(|c| needle.is_empty() || c.title.to_lowercase().contains(&needle)).cloned().collect();
         let group = |updated: u64| match now.saturating_sub(updated) / DAY_MS {
             0 => "Today",
             1 => "Yesterday",
@@ -2700,5 +2713,21 @@ mod tests {
         assert!(kept.data.len() <= small.len() && full.is_none(), "never bigger than the original, nothing to zoom");
         let jpeg = ImageAttachment { mime: "image/jpeg".into(), data: vec![0xff, 0xd8] };
         assert_eq!(crate::chat::shrink_image("p.jpg".into(), jpeg.clone()).1, jpeg, "unreadable or small JPEGs pass through");
+    }
+
+    #[test]
+    fn opaque_pasted_images_go_lossy_and_transparent_ones_stay_png() {
+        // Noise compresses badly as PNG, as a photo or a busy screenshot does.
+        let noisy = |alpha: u8| {
+            let mut rng = fastrand::Rng::with_seed(7);
+            image::RgbaImage::from_fn(600, 400, |x, y| image::Rgba([(x / 3) as u8 ^ rng.u8(..32), (y / 2) as u8, rng.u8(..), alpha]))
+        };
+        let opaque = crate::io::export::encode_png(&noisy(255)).unwrap();
+        let (name, img, _) = crate::chat::shrink_image("pasted.png".into(), ImageAttachment { mime: "image/png".into(), data: opaque.clone() });
+        assert_eq!((name.as_str(), img.mime.as_str()), ("pasted.jpg", "image/jpeg"));
+        assert!(img.data.len() * 2 < opaque.len(), "{} vs {}", img.data.len(), opaque.len());
+        let clear = crate::io::export::encode_png(&noisy(120)).unwrap();
+        let (_, img, _) = crate::chat::shrink_image("cut.png".into(), ImageAttachment { mime: "image/png".into(), data: clear });
+        assert_eq!(img.mime, "image/png", "transparency survives");
     }
 }

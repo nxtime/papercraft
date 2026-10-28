@@ -7,6 +7,11 @@ use crate::assets;
 use crate::geom::Rect;
 use crate::model::BlendMode;
 use std::collections::HashMap;
+use std::time::Duration;
+use web_time::Instant;
+
+/// An image not drawn for this long leaves the GPU; drawing it again uploads it again.
+const IMAGE_IDLE: Duration = Duration::from_secs(60);
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -167,7 +172,8 @@ pub struct CanvasRenderer {
     img_layout: wgpu::BindGroupLayout,
     img_sampler: wgpu::Sampler,
     blank_img: wgpu::BindGroup,
-    images: HashMap<String, wgpu::BindGroup>,
+    /// Uploaded images and when each was last drawn.
+    images: HashMap<String, (wgpu::BindGroup, Instant)>,
     world: Option<WorldBuffers>,
     msaa: Option<(wgpu::TextureView, [u32; 2])>,
     format: wgpu::TextureFormat,
@@ -426,12 +432,14 @@ impl CanvasRenderer {
     }
 
     fn image_bg(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: &str) {
-        if self.images.contains_key(id) {
+        if let Some((_, used)) = self.images.get_mut(id) {
+            *used = Instant::now();
             return;
         }
-        let Some(a) = assets::get(id) else { return };
+        let Some(rgba) = assets::get(id).and_then(|a| a.rgba()) else { return };
+        let (width, height) = rgba.dimensions();
         // Mip chain so minified images stay smooth.
-        let mut levels = vec![a.rgba.clone()];
+        let mut levels = vec![rgba];
         while levels.last().unwrap().width() > 1 || levels.last().unwrap().height() > 1 {
             let l = levels.last().unwrap();
             let (w, h) = ((l.width() / 2).max(1), (l.height() / 2).max(1));
@@ -445,7 +453,7 @@ impl CanvasRenderer {
                 break;
             }
         }
-        let tex = texture_2d(device, "image", a.width, a.height, levels.len() as u32);
+        let tex = texture_2d(device, "image", width, height, levels.len() as u32);
         for (i, l) in levels.iter().enumerate() {
             write_texture(queue, &tex, i as u32, l);
         }
@@ -465,7 +473,7 @@ impl CanvasRenderer {
                 },
             ],
         });
-        self.images.insert(id.to_string(), bg);
+        self.images.insert(id.to_string(), (bg, Instant::now()));
     }
 
     /// Rebuild the world vertex/index buffers when the item list changed.
@@ -575,6 +583,7 @@ impl CanvasRenderer {
                 }
             }
         }
+        self.images.retain(|_, (_, used)| used.elapsed() < IMAGE_IDLE);
         self.sync_world(device, &frame.items);
 
         // Screen-space batches (underlay + overlay) are small: rebuilt every frame.
@@ -715,7 +724,7 @@ impl CanvasRenderer {
                 .image
                 .as_ref()
                 .and_then(|i| self.images.get(i))
-                .unwrap_or(&self.blank_img);
+                .map_or(&self.blank_img, |(bg, _)| bg);
             pass.set_bind_group(2, img, &[]);
             pass.set_vertex_buffer(0, vb.slice(..));
             pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);

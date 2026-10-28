@@ -334,17 +334,23 @@ pub fn paint_agent_mark(ui: &Ui, rect: Rect, id: &str, name: &str, ink: Color32)
 const LOGO_PX: u32 = 64;
 
 fn logo_texture(ctx: &egui::Context, name: &str, svg: &[u8]) -> Option<egui::TextureHandle> {
-    let id = Id::new(("agent-logo", name));
+    svg_texture(ctx, &format!("agent-logo-{name}"), svg)
+}
+
+/// A monochrome SVG as a white texture (its shape in alpha), so a tint gives its colour.
+/// Cached per `key` for the context's life.
+pub(crate) fn svg_texture(ctx: &egui::Context, key: &str, svg: &[u8]) -> Option<egui::TextureHandle> {
+    let id = Id::new(("svg-texture", key));
     if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return Some(t);
     }
-    let svg = std::str::from_utf8(svg).ok()?.replace("currentColor", "#fff");
-    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
+    let tree = usvg::Tree::from_data(svg, &usvg::Options::default()).ok()?;
     let scale = LOGO_PX as f32 / tree.size().width().max(tree.size().height());
     let mut pixmap = resvg::tiny_skia::Pixmap::new(LOGO_PX, LOGO_PX)?;
     resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
-    let img = egui::ColorImage::from_rgba_premultiplied([LOGO_PX as usize; 2], pixmap.data());
-    let t = ctx.load_texture(format!("agent-logo-{name}"), img, egui::TextureOptions::LINEAR);
+    let pixels: Vec<egui::Color32> = pixmap.pixels().iter().map(|p| egui::Color32::from_white_alpha(p.alpha())).collect();
+    let img = egui::ColorImage { size: [LOGO_PX as usize; 2], source_size: egui::vec2(LOGO_PX as f32, LOGO_PX as f32), pixels };
+    let t = ctx.load_texture(key, img, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, t.clone()));
     Some(t)
 }

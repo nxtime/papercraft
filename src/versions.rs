@@ -18,6 +18,15 @@ struct File {
     doc: Document,
 }
 
+/// A version file without its document: listing must not build every saved page.
+#[derive(Deserialize)]
+struct Header {
+    name: String,
+    #[serde(default)]
+    auto: bool,
+    saved: u64,
+}
+
 /// One saved version, without its document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
@@ -95,7 +104,7 @@ pub fn list(project: &Path, page_id: &str) -> Vec<Version> {
             if !id.starts_with(&prefix) {
                 return None;
             }
-            let f: File = serde_json::from_str(&packed::read(&file_of(project, &id)).ok()?).ok()?;
+            let f: Header = serde_json::from_str(&packed::read(&file_of(project, &id)).ok()?).ok()?;
             Some(Version {
                 id,
                 name: f.name,

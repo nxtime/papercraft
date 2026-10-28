@@ -6,7 +6,7 @@ use crate::theme::Surface as _;
 use super::chat::Approval;
 use super::chat_md;
 use super::kit;
-use crate::chat::{Chat, Message, Role, ToolCall, Usage};
+use crate::chat::{Chat, Message, Role, ToolCall, Usage, store};
 use crate::runs::{Run, RunState};
 use crate::theme::{self, Icon};
 use egui::{Align, Color32, Id, Layout, RichText, Sense, Ui, vec2};
@@ -16,6 +16,8 @@ const ARGS_LIMIT: usize = 600;
 const TARGET_CHARS: usize = 40;
 const THUMB_MAX: u32 = 320;
 const THUMB_H: f32 = 52.0;
+/// Widest a result screenshot's thumbnail is shown.
+const SHOT_THUMB_W_MAX: u32 = 120;
 const LIGHTBOX_MAX: u32 = 2048;
 /// The tool whose calls are drawn as a question card instead of a tool card.
 const ASK_TOOL: &str = "ask_user";
@@ -332,13 +334,14 @@ fn result_text(v: &Value) -> Value {
     serde_json::from_str(&joined).unwrap_or(Value::String(joined))
 }
 
-/// The first image block of a result: (mime, base64 data).
-pub fn image_of(result: &Value) -> Option<(String, String)> {
-    result.as_array()?.iter().find(|b| b["type"] == "image").and_then(|b| {
-        let data = b["source"]["data"].as_str().or_else(|| b["data"].as_str())?;
-        let mime = b["source"]["media_type"].as_str().or_else(|| b["mimeType"].as_str()).unwrap_or("image/png");
-        Some((mime.to_owned(), data.to_owned()))
-    })
+/// The first image block of a result.
+fn image_block(result: &Value) -> Option<&Value> {
+    result.as_array()?.iter().find(|b| store::image_data(b).is_some())
+}
+
+/// The bytes of a result's first image (inline, or the file it was moved to).
+fn image_bytes(result: &Value) -> Option<Vec<u8>> {
+    store::image_data(image_block(result)?)?.1.bytes()
 }
 
 /// Title and detail line of an approval card.
@@ -494,12 +497,12 @@ fn thumb(ui: &Ui, tool_id: &str, result: &Value) -> Option<Thumb> {
         return t;
     }
     let made = (|| {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-        let (_, data) = image_of(result)?;
-        let bytes = STANDARD.decode(data.as_bytes()).ok()?;
+        let bytes = image_bytes(result)?;
         let img = image::load_from_memory(&bytes).ok()?;
         let size = [img.width(), img.height()];
-        let small = img.thumbnail(THUMB_MAX, THUMB_MAX).to_rgba8();
+        // Twice the size it is shown at (Retina); the lightbox decodes the full image.
+        let px = (2.0 * THUMB_H) as u32;
+        let small = img.thumbnail(SHOT_THUMB_W_MAX * 2, px).to_rgba8();
         let ci = egui::ColorImage::from_rgba_unmultiplied([small.width() as usize, small.height() as usize], small.as_raw());
         let tex = ui.ctx().load_texture(format!("chat-shot-{tool_id}"), ci, egui::TextureOptions::LINEAR);
         Some(Thumb { tex, size, bytes: bytes.len() })
@@ -510,7 +513,8 @@ fn thumb(ui: &Ui, tool_id: &str, result: &Value) -> Option<Thumb> {
 
 // ---------------------------------------------------------------------------------- attached images
 
-/// An attached image as a texture (at most `LIGHTBOX_MAX` px a side), decoded once per `key`.
+/// An attached image as a thumbnail texture (fits 3 x `THUMB_MAX` by `THUMB_MAX`), decoded once
+/// per `key`; the full image is decoded only for the lightbox.
 fn image_tex(ui: &Ui, key: &str, bytes: impl FnOnce() -> Option<Vec<u8>>) -> Option<egui::TextureHandle> {
     let id = Id::new(("chat-image", key));
     if let Some(t) = ui.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
@@ -518,10 +522,7 @@ fn image_tex(ui: &Ui, key: &str, bytes: impl FnOnce() -> Option<Vec<u8>>) -> Opt
     }
     let made = (|| {
         let img = image::load_from_memory(&bytes()?).ok()?;
-        let img = if img.width().max(img.height()) > LIGHTBOX_MAX { img.thumbnail(LIGHTBOX_MAX, LIGHTBOX_MAX) } else { img };
-        let rgba = img.to_rgba8();
-        let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
-        Some(ui.ctx().load_texture(format!("chat-image-{key}"), ci, egui::TextureOptions::LINEAR))
+        Some(texture(ui.ctx(), &format!("chat-image-{key}"), img, 3 * THUMB_MAX, THUMB_MAX))
     })();
     ui.data_mut(|d| d.insert_temp(id, made.clone()));
     made
@@ -529,17 +530,32 @@ fn image_tex(ui: &Ui, key: &str, bytes: impl FnOnce() -> Option<Vec<u8>>) -> Opt
 
 /// A thumbnail of an attached image, `h` tall; a click opens it in the lightbox. None when the
 /// image cannot be read.
-pub fn image_thumb(ui: &mut Ui, key: &str, h: f32, bytes: impl FnOnce() -> Option<Vec<u8>>) -> Option<egui::Response> {
-    let tex = image_tex(ui, key, bytes)?;
+pub fn image_thumb(ui: &mut Ui, key: &str, h: f32, bytes: impl Fn() -> Option<Vec<u8>>) -> Option<egui::Response> {
+    let tex = image_tex(ui, key, &bytes)?;
     let [w, th] = tex.size();
     let w = (h * w as f32 / th.max(1) as f32).clamp(h * 0.5, h * 3.0);
     let resp = ui
         .add(egui::Image::new(&tex).fit_to_exact_size(vec2(w, h)).corner_radius(theme::radius_md()).sense(Sense::click()))
         .on_hover_cursor(egui::CursorIcon::ZoomIn);
     if resp.clicked() {
-        ui.data_mut(|d| d.insert_temp(Id::new("chat-lightbox"), Some(tex)));
+        open_lightbox(ui.ctx(), key, bytes());
     }
     Some(resp)
+}
+
+/// `img` as a texture that fits `w` by `h` px.
+fn texture(ctx: &egui::Context, name: &str, img: image::DynamicImage, w: u32, h: u32) -> egui::TextureHandle {
+    let img = if img.width() > w || img.height() > h { img.thumbnail(w, h) } else { img };
+    let rgba = img.to_rgba8();
+    let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+    ctx.load_texture(name, ci, egui::TextureOptions::LINEAR)
+}
+
+/// Shows the full image in the lightbox; its texture goes when the lightbox closes.
+fn open_lightbox(ctx: &egui::Context, key: &str, bytes: Option<Vec<u8>>) {
+    let Some(img) = bytes.and_then(|b| image::load_from_memory(&b).ok()) else { return };
+    let tex = texture(ctx, &format!("chat-full-{key}"), img, LIGHTBOX_MAX, LIGHTBOX_MAX);
+    ctx.data_mut(|d| d.insert_temp(Id::new("chat-lightbox"), Some(tex)));
 }
 
 /// The image the user clicked, full size over the window. Esc or a click closes it.
@@ -596,7 +612,10 @@ fn tool_card(ui: &mut Ui, t: &ToolCall, state: ToolState, acts: &mut Acts) {
             ui.horizontal(|ui| {
                 let h = THUMB_H;
                 let w = h * s.size[0] as f32 / s.size[1].max(1) as f32;
-                ui.add(egui::Image::new(&s.tex).fit_to_exact_size(vec2(w.clamp(24.0, 120.0), h)).corner_radius(theme::radius_md()));
+                let img = ui.add(egui::Image::new(&s.tex).fit_to_exact_size(vec2(w.clamp(24.0, SHOT_THUMB_W_MAX as f32), h)).corner_radius(theme::radius_md()).sense(Sense::click()));
+                if img.on_hover_cursor(egui::CursorIcon::ZoomIn).clicked() {
+                    open_lightbox(ui.ctx(), &t.id, t.result.as_ref().and_then(image_bytes));
+                }
                 ui.vertical(|ui| {
                     muted(ui, format!("{} x {}", s.size[0], s.size[1]));
                     muted(ui, format!("Result image, {} KB", (s.bytes / KB).max(1)));
@@ -670,7 +689,7 @@ fn tool_group(ui: &mut Ui, calls: &[&ToolCall], v: &View, acts: &mut Acts) {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             for (t, s) in calls.iter().zip(&states) {
-                if *s == ToolState::Error || t.result.as_ref().and_then(image_of).is_some() {
+                if *s == ToolState::Error || t.result.as_ref().and_then(image_block).is_some() {
                     tool_card(ui, t, *s, acts);
                 } else {
                     step_row(ui, t, *s);
@@ -1125,19 +1144,19 @@ fn question_card(ui: &mut Ui, t: &ToolCall, open: bool, answer: Option<&str>, ac
                     let hint = (open && qs.len() == 1 && oi < 9).then_some(oi + 1);
                     // A reference option shows its image; a double click opens it in the lightbox.
                     let tex = o["image"].as_str().and_then(|path| image_tex(ui, path, || crate::vfs::read(path).ok()));
-                    let mut r = ui
-                        .scope(|ui| {
-                            if dim {
-                                ui.multiply_opacity(ANSWER_DIM);
-                            }
-                            match &tex {
-                                Some(tex) => option_tile(ui, label, tex, on, oi == 0),
-                                None => option_chip(ui, label, &colors, on, oi == 0, hint),
-                            }
-                        })
-                        .inner;
-                    if let Some(tex) = tex.filter(|_| r.double_clicked()) {
-                        ui.data_mut(|d| d.insert_temp(Id::new("chat-lightbox"), Some(tex)));
+                    // Dimmed in this row, not in a scope: a child ui in a wrapping row starts its
+                    // own line, so the options would never wrap and would widen the whole list.
+                    let opacity = ui.opacity();
+                    if dim {
+                        ui.multiply_opacity(ANSWER_DIM);
+                    }
+                    let mut r = match &tex {
+                        Some(tex) => option_tile(ui, label, tex, on, oi == 0),
+                        None => option_chip(ui, label, &colors, on, oi == 0, hint),
+                    };
+                    ui.set_opacity(opacity);
+                    if let Some(path) = o["image"].as_str().filter(|_| tex.is_some() && r.double_clicked()) {
+                        open_lightbox(ui.ctx(), path, crate::vfs::read(path).ok());
                     }
                     if let Some(d) = o["detail"].as_str() {
                         r = r.on_hover_text(d);
@@ -1283,12 +1302,17 @@ fn option_chip(ui: &mut Ui, label: &str, colors: &[Color32], on: bool, recommend
     const KEY_W: f32 = 18.0;
     let p = theme::pal(ui);
     let ink = if on { theme::accent() } else { p.text };
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::semibold(theme::SECONDARY + 1.0), ink);
     let keyw = if key.is_some() { KEY_W + 6.0 } else { 0.0 };
     let dot = if recommended { RECOMMENDED_DOT + 6.0 } else { 0.0 };
     let sw = if colors.is_empty() { 0.0 } else { colors.len() as f32 * (SWATCH - 3.0) + 3.0 + 6.0 };
-    let (rect, resp) = ui.allocate_exact_size(vec2(2.0 * PAD + keyw + dot + sw + galley.size().x, CHIP_TALL), Sense::click());
-    option_frame(ui, rect, 255, on, resp.hovered());
+    let chrome = 2.0 * PAD + keyw + dot + sw;
+    // A label longer than the row wraps (the chip grows taller): one chip wider than the column
+    // would widen the whole message list.
+    let wrap = (ui.max_rect().width() - chrome).max(PAD);
+    let galley = ui.painter().layout(label.to_owned(), theme::semibold(theme::SECONDARY + 1.0), ink, wrap);
+    let tall = (galley.size().y + PAD).max(CHIP_TALL);
+    let (rect, resp) = ui.allocate_exact_size(vec2(chrome + galley.size().x, tall), Sense::click());
+    option_frame(ui, rect, if tall > CHIP_TALL { theme::radius_lg() } else { 255 }, on, resp.hovered());
     // The number key that picks it, in a small cap.
     if let Some(k) = key {
         let cap = egui::Rect::from_center_size(egui::pos2(rect.left() + PAD - 2.0 + KEY_W / 2.0, rect.center().y), vec2(KEY_W, KEY_W));
@@ -1334,6 +1358,15 @@ fn option_tile(ui: &mut Ui, label: &str, tex: &egui::TextureHandle, on: bool, re
 
 /// The scrolling message list of `chat`.
 pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
+    // Thumbnails are cached per image while a chat is open; another chat frees them all.
+    let shown = Id::new("chat-thumbs-of");
+    if ui.data(|d| d.get_temp::<String>(shown)).as_deref() != Some(chat.id.as_str()) {
+        ui.data_mut(|d| {
+            d.remove_by_type::<Option<Thumb>>();
+            d.remove_by_type::<Option<egui::TextureHandle>>();
+            d.insert_temp(shown, chat.id.clone());
+        });
+    }
     let jump_id = Id::new("chat-jump");
     let jump = ui.data_mut(|d| d.remove_temp::<bool>(jump_id)).unwrap_or(false);
     let out = egui::ScrollArea::vertical().id_salt(("chat-list", &chat.id)).auto_shrink(false).stick_to_bottom(true).show(ui, |ui| {
@@ -1497,6 +1530,38 @@ mod tests {
         ToolCall { id: id.into(), name: name.into(), args, ..Default::default() }
     }
 
+    /// How wide `f` draws in a 400 px column.
+    fn drawn_width(f: impl Fn(&mut Ui)) -> f32 {
+        let ctx = egui::Context::default();
+        super::super::setup_style(&ctx);
+        let mut w = 0.0;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            w = ui.allocate_ui(vec2(400.0, 2000.0), |ui| f(ui)).response.rect.width();
+        })
+        .textures_delta
+        .clear();
+        w
+    }
+
+    #[test]
+    fn question_options_wrap_inside_the_column() {
+        let options: Vec<Value> = ["Sending in progress state", "Make the queue row a component", "Make the sheet a component", "Darken the overlay"]
+            .iter()
+            .map(|l| json!({"label": l}))
+            .collect();
+        let q = call("q", "AskUserQuestion", json!({"questions": [{"question": "Next step?", "options": options}]}));
+        assert!(drawn_width(|ui| question_card(ui, &q, true, None, &mut Acts::default())) <= 400.0, "open");
+        let answer = "Answers:\n- Next step? Make the sheet a component";
+        assert!(drawn_width(|ui| question_card(ui, &q, false, Some(answer), &mut Acts::default())) <= 400.0, "answered, the rest dimmed");
+    }
+
+    #[test]
+    fn an_option_longer_than_the_column_wraps() {
+        let long = "Motorista: permissions (location, camera, notifications), vehicle, 3-card tour, and a long tail";
+        let q = call("q", "ask_user", json!({"questions": [{"question": "What goes into each first-access wizard?", "options": [{"label": long}, {"label": "No"}]}]}));
+        assert!(drawn_width(|ui| question_card(ui, &q, true, None, &mut Acts::default())) <= 400.0);
+    }
+
     #[test]
     fn usage_line_matches_the_mockup() {
         let u = Usage { input: 12_400, output: 1_100, cache_read: 9_800, cache_write: 0, cost_usd: Some(0.06) };
@@ -1619,8 +1684,8 @@ mod tests {
         assert!(!pretty(&json!({"a": 1}), ARGS_LIMIT).1);
         let img = json!([{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "A".repeat(4000)}}]);
         assert!(elide(&img).to_string().contains("<base64, 2 KB>"));
-        assert_eq!(image_of(&img).map(|i| i.0).as_deref(), Some("image/png"));
-        assert_eq!(image_of(&json!([{"type": "text", "text": "x"}])), None);
+        assert_eq!(image_block(&img).and_then(store::image_data).map(|i| i.0), Some("image/png"));
+        assert_eq!(image_block(&json!([{"type": "text", "text": "x"}])), None);
     }
 
     #[test]
@@ -1698,3 +1763,6 @@ mod tests {
         assert_eq!(chat_cost(&Chat::default()), None);
     }
 }
+
+
+
