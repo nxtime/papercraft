@@ -42,7 +42,7 @@ One round is: **evidence → repair → judge → score**.
 
 1. **Snapshot.** Note the `pageId` and the artboard `nodeId` under review and keep them for the whole gate. A page switch between rounds invalidates the evidence.
 2. **Evidence.** `lint_design` (`nodeId`, `pageId`, no `fix` yet) for the raw findings — the payload counts `errors`, `warnings` and `info`, groups them in `byRule`, and lists each issue with its `rule`, `severity`, `node`, `message` and `fix`; `get_screenshot` of the same node (`scale: 2` to read small text); `get_variables` for the token set and the active mode; `get_design_spec` (`nodeId`, `target`) when the design is headed for code. If there is code to check, `verify_code` (`nodeId`, `target`, `code`).
-3. **Repair the hard evidence.** Fix every `lint_design` error and warning and re-run the lint until it is clean; fix every `verify_code` violation until `passed` is true. A panel cannot be scored on a design that still carries a lint error.
+3. **Repair the hard evidence.** Fix every `lint_design` error and warning and re-run the lint until it is clean (`lint_design {changedOnly: true}` between fixes, one full pass at the end; see `papercraft/references/incremental-checks.md`); fix every `verify_code` violation until `passed` is true. A panel cannot be scored on a design that still carries a lint error.
 4. **Judge the five panels** on the evidence from steps 2–3 plus the screenshot. Every finding cites the tool result or the screenshot region behind it.
 5. **Score.** Five scores 0–10, then the composite (section 5). Composite ≥ 8.0 → status `Shipped`, stop, `finish_working_on_nodes`.
 6. **Otherwise fix and go again.** Take the findings in composite-impact order, fix them, run round N+1. Maximum 3 rounds.
