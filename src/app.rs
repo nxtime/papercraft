@@ -1595,7 +1595,7 @@ impl App {
                 self.st.mark_agent(&self.ed, who, &c.name, &c.args, &touched);
             }
             self.runs = runs;
-            self.st.log_agent(&c.name, r.as_ref().err().cloned());
+            self.st.log_agent(&c.name, &c.args, r.as_ref().err().cloned());
             if let Err(e) = &r {
                 log::info!("mcp {}: {e}", c.name);
             }

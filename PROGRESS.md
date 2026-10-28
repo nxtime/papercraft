@@ -81,6 +81,11 @@ are credited in `THIRD_PARTY.md`.
 * `lint_design` has an `overflow` rule (`src/mcp/lint_overflow.rs`): layers past their artboard or clipping parent, and text taller than its box. Scrolling frames and what is pinned in them are exempt; it is never auto-fixed. It is a pure function over a node set, so a scope filter can pass any subset.
 * New tool `get_bounds {nodeIds?, pageId?, depth?}` (`src/mcp/bounds.rs`): every layer's rect in one read (about 2000 rows per call, then `continueWith`). Tool count is now 87 (one more than before; if another branch also adds a tool, recount). Tests: `tests/mcp_bounds.rs`.
 
+### 2026-10-28: agent reads no longer look like edits
+
+* Read-only tool calls (`get_node_info`, `get_children`, ...) have honest verbs ("Looking at the design") and light the "Working" pill for 1.5 s instead of 6 s, so it goes out right after a sweep ends.
+* A sweep of reads draws at most one layer outline (a read outlines only when no other read ran in the last 2 s) and no longer pans the follow-agent camera; edits behave as before. "Is this a read" comes from `mcp::tools::edits_doc`.
+
 ### 2026-10-28: 0.8.4 (demo video, fresh screenshots)
 
 * README opens with a time-lapse of designing a habit-tracker app (`docs/demo.gif`, full video `docs/demo.mp4`), and every screenshot is retaken from that design.

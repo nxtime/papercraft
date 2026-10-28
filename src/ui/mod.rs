@@ -141,6 +141,11 @@ pub struct UiState {
     pub libraries_open: bool,
     /// The last tool an agent ran and when, for the toolbar's activity hint.
     pub agent: Option<(String, web_time::Instant)>,
+    /// When the pill stops counting the agent as working: the latest call's window, never
+    /// shortened by a later, shorter one.
+    pub agent_until: Option<web_time::Instant>,
+    /// The last read-only call that reached the canvas, to tell a lone lookup from a sweep.
+    pub last_read: Option<web_time::Instant>,
     /// Recent agent tool calls, oldest first (the Agent view).
     pub agent_log: Vec<AgentCall>,
     /// Layers agents touched in the last [`AGENT_MARK_SECS`], oldest first: the live outlines and
@@ -313,6 +318,8 @@ const AGENT_MARK_SECS: f32 = 3.0;
 /// Outlines kept from one call (its topmost changed layers) and in all.
 const AGENT_MARKS_PER_CALL: usize = 12;
 const AGENT_MARKS_MAX: usize = 48;
+/// Reads closer together than this are one sweep and draw no outline after the first.
+const AGENT_READ_GAP_SECS: f32 = 2.0;
 
 impl UiState {
     /// Records the layers a successful agent call pointed at (`follow_node`) or changed
@@ -337,6 +344,15 @@ impl UiState {
             parent.is_none_or(|par| !touched.iter().any(|(pg, t)| pg == page && *t == par))
         });
         let at = web_time::Instant::now();
+        // A sweep of reads (get_node_info over every layer) must not flash an outline on each:
+        // only a lookup with no other read just before it shows one.
+        if !crate::mcp::tools::edits_doc(name, args) {
+            let sweeping = self.last_read.is_some_and(|t| t.elapsed().as_secs_f32() < AGENT_READ_GAP_SECS);
+            self.last_read = Some(at);
+            if sweeping {
+                return;
+            }
+        }
         let verb = agent_verb(name);
         for (page_id, node) in key.into_iter().chain(roots.cloned()).take(AGENT_MARKS_PER_CALL) {
             self.agent_marks.retain(|m| (&m.page_id, m.node) != (&page_id, node));
@@ -471,9 +487,12 @@ impl UiState {
     }
 
     /// Records an agent's tool call for the toolbar hint and the Agent view.
-    pub fn log_agent(&mut self, name: &str, error: Option<String>) {
+    pub fn log_agent(&mut self, name: &str, args: &serde_json::Value, error: Option<String>) {
         let at = web_time::Instant::now();
         self.agent = Some((name.to_owned(), at));
+        let window = if crate::mcp::tools::edits_doc(name, args) { AGENT_WORKING_SECS as f32 } else { AGENT_READ_WORKING_SECS };
+        let until = at + std::time::Duration::from_secs_f32(window);
+        self.agent_until = Some(self.agent_until.map_or(until, |u| u.max(until)));
         self.agent_log.push(AgentCall {
             name: name.to_owned(),
             at,
@@ -487,6 +506,8 @@ impl UiState {
 
 /// How long after its last tool call an agent still counts as working.
 const AGENT_WORKING_SECS: u64 = 6;
+/// The same for a read-only call: a sweep of lookups lights the pill only while it runs.
+const AGENT_READ_WORKING_SECS: f32 = 1.5;
 /// Repaint interval of the activity pill's dots and the canvas glow while an agent works. Each
 /// tick redraws the whole window, so 15 FPS: the pulse still reads smooth.
 const AGENT_PILL_FRAME_MS: u64 = 66;
@@ -496,9 +517,11 @@ pub(crate) fn agent_verb(tool: &str) -> &'static str {
     match tool {
         "write_html" | "create_artboard" | "create_shape" => "Drawing layout",
         "update_styles" | "set_text_content" | "rename_nodes" => "Styling",
-        "get_screenshot" | "get_jsx" | "get_design_spec" | "get_computed_styles" => {
-            "Looking at the design"
-        }
+        "get_screenshot" | "get_jsx" | "get_design_spec" | "get_computed_styles" | "get_node_info"
+        | "get_children" | "get_tree_summary" | "get_bounds" | "get_selection" | "get_basic_info"
+        | "get_inventory" | "get_variables" | "get_components" | "find_nodes" | "get_annotations"
+        | "get_annotation_template" | "get_font_family_info" | "get_fill_image" | "search_icons"
+        | "list_resources" | "list_libraries" => "Looking at the design",
         "lint_design" | "verify_code" | "diff_frames" => "Checking the design",
         "set_variables" | "set_tokens" | "set_variable_mode" | "import_design_system" => {
             "Setting up tokens"
@@ -513,12 +536,11 @@ pub(crate) fn agent_verb(tool: &str) -> &'static str {
 }
 
 impl UiState {
-    /// What the agent is doing right now, if it called a tool within [`AGENT_WORKING_SECS`].
+    /// What the agent is doing right now, while its latest call's window
+    /// ([`AGENT_WORKING_SECS`] for an edit, [`AGENT_READ_WORKING_SECS`] for a read) is open.
     pub fn agent_working(&self) -> Option<&'static str> {
-        self.agent
-            .as_ref()
-            .filter(|(_, at)| at.elapsed().as_secs() < AGENT_WORKING_SECS)
-            .map(|(tool, _)| agent_verb(tool))
+        let open = self.agent_until.is_some_and(|u| web_time::Instant::now() < u);
+        self.agent.as_ref().filter(|_| open).map(|(tool, _)| agent_verb(tool))
     }
 }
 
@@ -2848,7 +2870,7 @@ mod layer_tests {
         setup_style(&ctx);
         let mut ed = many_roots(300);
         let mut st = UiState::default();
-        st.log_agent("get_basic_info", None);
+        st.log_agent("get_basic_info", &serde_json::json!({}), None);
         for i in 0..180 {
             frame(&ctx, &mut ed, &mut st, i, 800.0);
         }
@@ -2889,6 +2911,77 @@ mod layer_tests {
         assert!(st.agent_marks.is_empty());
         assert!(!shown(&ctx, "agent-overlay"));
         assert!(last > quiet, "faded outlines keep repainting: {last:?}");
+    }
+
+    #[test]
+    fn a_read_sweep_outlines_one_layer_and_follows_nothing_more() {
+        let mut ed = many_roots(0);
+        let ids: Vec<_> = (0..5).map(|_| rect(&mut ed, None, true)).collect();
+        let mut st = UiState::default();
+        for id in &ids {
+            let key = crate::mcp::exec::node_key(&ed, 0, *id);
+            st.mark_agent(&ed, String::new(), "get_node_info", &serde_json::json!({ "nodeId": key }), &[]);
+            if *id == ids[0] {
+                assert!(st.chat.follow.is_some(), "a lone lookup should still be followed");
+            }
+            st.chat.follow = None;
+        }
+        assert_eq!(st.agent_marks.len(), 1);
+        assert_eq!(st.agent_marks[0].node, ids[0]);
+        assert!(st.chat.follow.is_none(), "a swept read panned the camera");
+        // An edit in the middle of a sweep still marks and follows.
+        let page = ed.active_page_id().to_string();
+        st.mark_agent(&ed, String::new(), "update_styles", &serde_json::json!({}), &[(page, ids[3])]);
+        assert_eq!(st.agent_marks.last().map(|m| m.node), Some(ids[3]));
+        assert!(st.chat.follow.is_some());
+    }
+
+    #[test]
+    fn a_lone_read_outlines_again_once_the_sweep_is_over() {
+        let mut ed = many_roots(0);
+        let id = rect(&mut ed, None, true);
+        let key = crate::mcp::exec::node_key(&ed, 0, id);
+        let args = serde_json::json!({ "nodeId": key });
+        let mut st = UiState::default();
+        st.mark_agent(&ed, String::new(), "get_node_info", &args, &[]);
+        st.agent_marks.clear();
+        st.last_read = Some(web_time::Instant::now() - std::time::Duration::from_secs_f32(AGENT_READ_GAP_SECS + 0.1));
+        st.mark_agent(&ed, String::new(), "get_node_info", &args, &[]);
+        assert_eq!(st.agent_marks.len(), 1);
+    }
+
+    #[test]
+    fn the_pill_lapses_sooner_after_reads_than_after_edits() {
+        let none = serde_json::json!({});
+        let mut st = UiState::default();
+        st.log_agent("get_node_info", &none, None);
+        assert_eq!(st.agent_working(), Some("Looking at the design"));
+        let past = web_time::Instant::now() - std::time::Duration::from_millis(100);
+        st.agent_until = Some(past);
+        assert!(st.agent_working().is_none());
+        let mut st = UiState::default();
+        st.log_agent("update_styles", &none, None);
+        let until = st.agent_until.unwrap();
+        assert!(until > web_time::Instant::now() + std::time::Duration::from_secs(AGENT_WORKING_SECS - 1));
+        // A read after an edit never shortens the edit's window.
+        st.log_agent("get_node_info", &none, None);
+        assert_eq!(st.agent_until, Some(until));
+    }
+
+    #[test]
+    fn reads_have_honest_verbs_and_unknown_tools_just_work() {
+        for t in [
+            "get_node_info", "get_children", "get_tree_summary", "get_bounds", "get_selection", "get_basic_info",
+            "get_inventory", "get_variables", "get_components", "find_nodes", "get_annotations", "search_icons",
+        ] {
+            assert_eq!(agent_verb(t), "Looking at the design", "{t}");
+        }
+        assert_eq!(agent_verb("get_feedback"), "Reading notes");
+        for t in ["lint_design", "verify_code", "diff_frames"] {
+            assert_eq!(agent_verb(t), "Checking the design", "{t}");
+        }
+        assert_eq!(agent_verb("write_html"), "Drawing layout");
+        assert_eq!(agent_verb("no_such_tool"), "Working");
     }
 
     #[test]
