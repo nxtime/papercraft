@@ -86,6 +86,16 @@ are credited in `THIRD_PARTY.md`.
 * Read-only tool calls (`get_node_info`, `get_children`, ...) have honest verbs ("Looking at the design") and light the "Working" pill for 1.5 s instead of 6 s, so it goes out right after a sweep ends.
 * A sweep of reads draws at most one layer outline (a read outlines only when no other read ran in the last 2 s) and no longer pans the follow-agent camera; edits behave as before. "Is this a read" comes from `mcp::tools::edits_doc`.
 
+### 2026-10-28: 0.9.0 (presentations, critique, several agents, lighter chats)
+
+* Export the screens as a presentation PDF: cover, contents and a slide per screen (File menu, palette, `--format presentation`, `export_presentation`).
+* `critique_design` reviews finished work through personas (vision, UX, flow, QA, visual, accessibility, copy, end-user); `design_lessons` keeps the findings the person approved for every later design.
+* Several agents on one project: named CLI agents (`--as`), conflict reports and `ifRev` on writes, `claim_nodes` / `release_claims` / `list_claims`, scoped delegate builds and per-agent undo. 94 tools.
+* Screens keep their device height and scroll what does not fit; sections group screens on the canvas; pages can carry icons.
+* UI kits for shadcn, MUI, Mantine, Bootstrap and Chakra; `write_html` follows the browser more closely.
+* Memory: chat screenshots move to files (kept 14 days), thumbnails stay small, canvas images decode only for the GPU. A long chat dropped from about 1 GB to about 400 MB.
+* Fix: long answer options in a question card wrap instead of widening the whole chat.
+
 ### 2026-10-28: 0.8.4 (demo video, fresh screenshots)
 
 * README opens with a time-lapse of designing a habit-tracker app (`docs/demo.gif`, full video `docs/demo.mp4`), and every screenshot is retaken from that design.
