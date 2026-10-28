@@ -444,6 +444,10 @@ pub struct Node {
     /// it is translucent (a scrim).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub overlay: bool,
+    /// A section: a frame that groups screens on the canvas. Drawn without a fill, with a faint
+    /// outline and its name (`editor::screens`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub section: bool,
     /// How far a [`Node::scroll`] frame is scrolled, in world units. A view state: not saved.
     #[serde(skip)]
     pub scroll_y: f64,
@@ -601,6 +605,7 @@ impl Node {
             scroll: false,
             screen: false,
             overlay: false,
+            section: false,
             scroll_y: 0.0,
             props: Vec::new(),
             prop_values: BTreeMap::new(),

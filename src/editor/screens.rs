@@ -25,6 +25,7 @@ const OPAQUE: f64 = 0.95;
 pub enum Role {
     Screen,
     Overlay,
+    Section,
     None,
 }
 
@@ -58,7 +59,27 @@ pub fn refusal(doc: &Document, id: NodeId, role: Role) -> Option<&'static str> {
         Role::Screen => None,
         Role::Overlay if screen_of(doc, id).is_none() => Some("an overlay (drawer, modal, sheet) must be inside a screen"),
         Role::Overlay => None,
+        Role::Section if !n.is_frame() => Some("only a frame can be a section"),
+        Role::Section if in_component() => Some("a component main, an instance or a layer inside a main can't be a section"),
+        Role::Section if screen_of(doc, id).is_some() => Some("it is inside a screen"),
+        Role::Section => None,
     }
+}
+
+/// Frames that look like sections: top-level frames named `Section / ...` or holding declared
+/// screens, not declared yet.
+pub fn section_candidates(doc: &Document) -> Vec<NodeId> {
+    doc.root
+        .iter()
+        .copied()
+        .filter(|id| {
+            doc.get(*id).is_some_and(|n| {
+                !n.section
+                    && !n.screen
+                    && (n.name.starts_with("Section /") || doc.subtree(*id).iter().skip(1).any(|d| doc.get(*d).is_some_and(|c| c.screen)))
+            }) && refusal(doc, *id, Role::Section).is_none()
+        })
+        .collect()
 }
 
 /// Frames that look like screens: named `Screen / ...`, the frame shown in a `Slot / ...`
@@ -191,11 +212,17 @@ impl Editor {
     pub fn set_role(&mut self, ids: &[NodeId], role: Role) -> Result<(), String> {
         if let Some((id, why)) = ids.iter().find_map(|id| refusal(&self.doc, *id, role).map(|w| (*id, w))) {
             let name = self.doc.get(id).map_or("?", |n| n.name.as_str());
-            return Err(format!("`{name}` can't be a {}: {why}", if role == Role::Overlay { "overlay" } else { "screen" }));
+            let what = match role {
+                Role::Overlay => "overlay",
+                Role::Section => "section",
+                _ => "screen",
+            };
+            return Err(format!("`{name}` can't be a {what}: {why}"));
         }
         let label = match role {
             Role::Screen => "Declare screens",
             Role::Overlay => "Mark overlays",
+            Role::Section => "Declare sections",
             Role::None => "Clear screen roles",
         };
         self.edit(label, |tx| {
@@ -203,6 +230,11 @@ impl Editor {
                 if let Some(n) = tx.node_mut(*id) {
                     n.screen = role == Role::Screen;
                     n.overlay = role == Role::Overlay;
+                    // A section is drawn by the canvas (outline and name), not by its own fill.
+                    if role == Role::Section && !n.section {
+                        n.style.fills.clear();
+                    }
+                    n.section = role == Role::Section;
                 }
             }
         });
@@ -274,5 +306,23 @@ mod tests {
         let a = Rect::new(0.0, 0.0, 10.0, 10.0);
         let b = Rect::new(5.0, 5.0, 10.0, 10.0);
         assert!((union_area(&[a, b]) - 175.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sections_lose_their_fill_and_stay_out_of_screens() {
+        let mut ed = Editor::default();
+        let white = Some(Color { r: 255, g: 255, b: 255, a: 255 });
+        let section = frame(&mut ed, None, Rect::new(0.0, 0.0, 3000.0, 3000.0), white);
+        let screen = frame(&mut ed, Some(section), Rect::new(0.0, 0.0, 1440.0, 900.0), None);
+        let inner = frame(&mut ed, Some(screen), Rect::new(0.0, 0.0, 100.0, 100.0), None);
+        ed.set_role(&[screen], Role::Screen).unwrap();
+        assert_eq!(section_candidates(&ed.doc), vec![section], "holds a screen");
+        ed.set_role(&[section], Role::Section).unwrap();
+        let n = ed.doc.get(section).unwrap();
+        assert!(n.section && n.style.fills.is_empty());
+        assert!(section_candidates(&ed.doc).is_empty());
+        assert!(ed.set_role(&[inner], Role::Section).is_err(), "inside a screen");
+        ed.undo();
+        assert_eq!(ed.doc.get(section).unwrap().style.fills.len(), 1, "one undo step");
     }
 }

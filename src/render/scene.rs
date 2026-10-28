@@ -369,6 +369,9 @@ pub fn draw_text(
     }
 }
 
+/// A section's outline: neutral grey, readable on light and dark canvases.
+const SECTION_OUTLINE: [f32; 4] = [0.5, 0.5, 0.55, 0.35];
+
 /// Interactive overlay: hover, selection, handles, marquee, guides, labels, caret.
 pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
     let v = View {
@@ -380,6 +383,17 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
     let accent = rgba(ACCENT);
     let z = ed.camera.zoom;
     mb.set_clip(Some(v.canvas_rect()));
+
+    // Sections have no fill: a faint outline shows where each one is.
+    let canvas = v.canvas_rect();
+    for n in ed.doc.nodes.values().filter(|n| n.section && n.visible) {
+        if let Some(wr) = ed.doc.world_rect(n.id) {
+            let sr = v.rect_to_screen(&wr);
+            if sr.intersects(&canvas) {
+                mb.rect_outline(sr, 1.0, SECTION_OUTLINE);
+            }
+        }
+    }
 
     // Frame name labels.
     for (id, r) in ed.frame_labels() {
