@@ -518,8 +518,27 @@ impl Tracker {
         }
     }
 
-    /// Runs `exec::call`, recording it in `client`'s open run when it edits the document.
+    /// Runs `exec::call`, recording it in `client`'s open run when it edits the document. The
+    /// change log attributes what the call changes to `client`.
     pub fn call(
+        &mut self,
+        host: &mut dyn Host,
+        client: &Client,
+        name: &str,
+        args: &Value,
+        now: u64,
+    ) -> ToolResult {
+        let who = crate::editor::changes::Who {
+            key: format!("{}#{}", client.name, client.session),
+            label: self.label(client),
+        };
+        host.editor().changes.client = Some(std::sync::Arc::new(who));
+        let r = self.call_attributed(host, client, name, args, now);
+        host.editor().changes.client = None;
+        r
+    }
+
+    fn call_attributed(
         &mut self,
         host: &mut dyn Host,
         client: &Client,

@@ -231,6 +231,17 @@ are credited in `THIRD_PARTY.md`.
 * Agent view lists runs and supports review, whole-run revert, per-change undo and accept all. Review adds canvas outlines and a finish toast; palette commands review or revert the last run.
 * Id-paired page diffs power review; History version compare UI remains todo. Completed with full restore (including variables, modes and tokens), tool edit classification, and wasm support.
 
+### 2026-10-28: Incremental lint
+
+Agents re-linted whole pages after every edit. A bounded change log (`src/editor/changes.rs`, the
+last 10000 layer changes, each with the client that made it) now records which layers every
+commit, undo and redo touched; variable edits count as touching the layers bound to them. Write
+tools return `rev`, `get_basic_info` reports it, `get_changes {since, page?, exclude?, by?}` lists
+the changes, and `lint_design {since | changedOnly}` checks only those layers plus their
+ancestors, descendants and siblings (`src/mcp/incremental.rs`), with `covered` saying what ran.
+Tests: `tests/incremental.rs`, unit tests next to the code, the attribution check in
+`tests/mcp.rs::parallel_sessions_get_their_own_runs`.
+
 ### 2026-10-21: Design libraries and offline CLI
 
 * Variables are now collections with modes, slash groups, four types and aliases, stored in `design.json` (project version 2; 0.4.0 refuses migrated projects). Each page keeps a derived cache; every edit is one undo step per page, and the page-only removals are gone. Per-page active mode per collection.

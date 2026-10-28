@@ -685,14 +685,41 @@ pub fn definitions() -> Vec<Value> {
              names (Frame, Rectangle), and hard-coded colors that equal a variable. Run it before \
              finish_working_on_nodes and fix errors and warnings; `info` items are suggestions. \
              Pass `fix: true` to automatically snap spacing/padding to 4px, relink matching color \
-             variables, snap text sizes, and enlarge small touch targets.",
+             variables, snap text sizes, and enlarge small touch targets. After the first full pass, \
+             lint only what you changed: `changedOnly: true` checks the layers changed since this \
+             client's last whole-page lint, `since: <rev>` since that revision (every write tool \
+             returns `rev`); both add what a change can affect (ancestors, descendants, siblings, \
+             layers bound to an edited variable), work with `fix`, and fall back to a full pass \
+             when the log does not reach back or this client has not linted yet. The result's \
+             `covered` says what was checked: {checked, total, since, partial, fullPassBecause}.",
             json!({"nodeId": {"type": "string", "description": "Subtree to check; omit for the whole page."},
+                   "since": {"type": "number", "description": "Check only layers changed after this revision (`rev` from a write tool, get_basic_info or get_changes), plus the layers a change affects."},
+                   "changedOnly": {"type": "boolean", "description": "Same as `since`, with the revision of this client's last whole-page lint of the page."},
                    "scale": {"type": "array", "items": {"type": "number"},
                        "description": "Allowed font sizes. Default 12, 14, 16, 20, 24, 32, 40, 48, 64."},
                    "fix": {"type": "boolean", "description": "Apply safe automatic fixes before reporting remaining issues."},
                    "pageId": page_id()}),
             &[],
             false,
+        ),
+        tool(
+            "get_changes",
+            "Which layers changed after revision `since`. Every write tool returns `rev`, the \
+             revision after the call (get_basic_info reports the current one); each edit, undo and \
+             redo adds layers to the log, and editing a variable counts as changing every layer \
+             bound to it. Returns {rev, since, truncated, changes: [{page, ids, by, rev}]}: ids use \
+             the same \"<page>:<n>\" form as the other tools, `by` is the client that made them \
+             (null for the person using the app), `rev` the latest revision in the group. Reads \
+             change nothing. `truncated: true` means the log (the last 10000 layer changes) no \
+             longer reaches back to `since`, or `since` is newer than `rev`: do a full pass instead. \
+             `exclude: \"self\"` leaves out your own changes, to see what others changed; `by` keeps \
+             one client's. Layers deleted since are listed too. Use it with lint_design `since`.",
+            json!({"since": {"type": "number", "description": "A revision you have seen; 0 for everything on record."},
+                   "page": {"type": "string", "description": "Only changes on this page (id)."},
+                   "exclude": {"type": "string", "enum": ["self"], "description": "\"self\": leave out changes made by this client."},
+                   "by": {"type": "string", "description": "Only changes made by this client (its `by` label)."}}),
+            &["since"],
+            true,
         ),
         tool(
             "get_variables",
@@ -1213,7 +1240,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
         | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "delegate" | "find_nodes" | "get_font_family_info"
         | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
-        | "diff_frames" | "publish_library" | "list_libraries" => false,
+        | "diff_frames" | "publish_library" | "list_libraries" | "get_changes" => false,
         "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"
         | "create_file" | "rename_file" | "finish_working_on_nodes" => false,
         "lint_design" => args["fix"] == true,

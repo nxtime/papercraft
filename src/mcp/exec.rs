@@ -261,6 +261,11 @@ fn resolve_all(
 
 /// Run one tool. Errors are returned as messages for the agent.
 pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
+    let r = dispatch(host, name, args);
+    super::incremental::after_call(host.editor(), name, args, r)
+}
+
+fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
     let empty = Map::new();
     let a = Args(args.as_object().unwrap_or(&empty));
     match name {
@@ -341,6 +346,7 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "set_text_content" => set_text_content(ed, &a),
                 "get_variables" => get_variables(ed, &a),
                 "lint_design" => lint_design(ed, &a),
+                "get_changes" => super::incremental::get_changes(ed, a.0),
                 "get_feedback" => get_feedback(ed, &a),
                 "add_feedback" => add_feedback(ed, &a),
                 "resolve_feedback" => resolve_feedback(ed, &a),
@@ -745,6 +751,7 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
         "page": {"id": ed.pages[page].id, "name": ed.pages[page].name, "isActive": page == ed.active_page},
         "pages": pages,
         "nodeCount": doc.nodes.len(),
+        "rev": ed.changes.rev(),
         "artboards": artboards,
         "screens": crate::editor::screens::declared(doc).iter().map(|id| {
             let n = doc.get(*id).unwrap();
@@ -5012,18 +5019,35 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
         Some(v) => v.iter().filter_map(Value::as_f64).collect(),
         None => super::lint::DEFAULT_SCALE.to_vec(),
     };
+    let whole_page = a.str("nodeId").is_none_or(|n| n.is_empty() || n == "root");
+    let since = a.num("since").filter(|s| *s >= 0.0).map(|s| s as u64);
+    let scope = super::incremental::lint_scope(ed, page, &roots, since, a.bool("changedOnly").unwrap_or(false));
+    let total: usize = roots.iter().map(|r| ed.page_doc(page).subtree(*r).len()).sum();
     let fixed = if a.bool("fix").unwrap_or(false) {
         ed.with_page(page, |ed| {
-            ed.edit("Auto-fix design lint", |tx| {
-                super::lint::autofix(tx, &roots, &scale)
+            ed.edit("Auto-fix design lint", |tx| match &scope.ids {
+                None => super::lint::autofix(tx, &roots, &scale),
+                Some(ids) => {
+                    let mut ids: Vec<_> = ids.iter().copied().collect();
+                    ids.sort();
+                    ids.into_iter().filter(|id| super::lint::autofix_node(tx, *id, &scale)).count()
+                }
             })
         })
     } else {
         0
     };
+    // The next `changedOnly` lint starts from here. A subtree lint leaves the rest unchecked.
+    if whole_page {
+        let page_id = ed.pages[page].id.clone();
+        ed.changes.note_lint(&page_id);
+    }
     let doc = ed.page_doc(page);
     let mut issues = super::lint::lint(doc, &roots, &scale);
     issues.extend(super::lint::not_an_instance(doc, &roots, &super::lint::component_mains(ed)));
+    if let Some(ids) = &scope.ids {
+        issues.retain(|i| ids.contains(&i.node));
+    }
     // Layers hidden behind a drawer or modal in their screen are not fix-me findings: nobody sees them.
     let before = issues.len();
     issues.retain(|i| !crate::editor::screens::coverage(doc, i.node).is_some_and(|c| c.is_hidden()));
@@ -5042,9 +5066,13 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
                    "name": doc.get(i.node).map(|n| n.name.clone()), "message": i.message, "fix": i.fix})
         })
         .collect();
+    let checked = scope.ids.as_ref().map_or(total, |ids| ids.len());
     text(json!({
         "errors": count("error"), "warnings": count("warning"), "info": count("info"),
         "fixedNodes": fixed,
+        "rev": ed.changes.rev(),
+        "covered": {"checked": checked, "total": total, "since": scope.since,
+                    "partial": scope.ids.is_some(), "fullPassBecause": scope.fallback},
         "byRule": by_rule, "issues": list,
         "truncated": issues.len() > 200,
         "skippedHidden": skipped_hidden,

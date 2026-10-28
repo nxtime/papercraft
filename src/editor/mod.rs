@@ -3,6 +3,7 @@
 //! It consumes platform-agnostic [`InputEvent`]s, so every interaction can be scripted in tests.
 
 pub mod annotations;
+pub mod changes;
 pub mod commands;
 pub mod design;
 pub mod hit;
@@ -317,6 +318,8 @@ pub struct Editor {
     /// While set, every committed change appends the (page id, node) pairs it changed: the agent
     /// run tracker attributes nodes to the run that made the call.
     pub touch_log: Option<Vec<(String, NodeId)>>,
+    /// Which layers changed at which revision (`get_changes`, incremental lint).
+    pub changes: changes::ChangeLog,
 }
 
 impl Default for Editor {
@@ -393,6 +396,7 @@ impl Editor {
             clipboard_style: None,
             cam_moved: None,
             touch_log: None,
+            changes: changes::ChangeLog::default(),
             clipboard_io: None,
             clipboard_written: None,
         }
@@ -436,22 +440,38 @@ impl Editor {
         self.flush_cross_pages();
     }
 
-    /// Appends the nodes `rec` changed to `touch_log`. Always true, so it chains before a commit.
+    /// Appends the nodes `rec` changed to `touch_log` and the change log. Always true, so it
+    /// chains before a commit.
     pub(crate) fn log_touched(&mut self, rec: &Recording) -> bool {
-        let Some(page) = self.touch_log.as_ref().and_then(|_| self.pages.get(self.edit_page_index())) else {
+        let Some(page) = self.pages.get(self.edit_page_index()).map(|p| p.id.clone()) else {
             return true;
         };
-        let page = page.id.clone();
-        let changed: Vec<_> = rec
+        let changed: Vec<NodeId> = rec
             .touched()
             .iter()
             .filter(|id| rec.before(**id).map(Option::as_ref) != Some(self.doc.nodes.get(id)))
-            .map(|id| (page.clone(), *id))
+            .copied()
             .collect();
+        self.changes.record(&page, changed.iter().copied());
         if let Some(log) = &mut self.touch_log {
-            log.extend(changed);
+            log.extend(changed.into_iter().map(|id| (page.clone(), id)));
         }
         true
+    }
+
+    /// A restored design system moves variables under their layers, which the step's own
+    /// layers do not list.
+    fn log_history_design(&mut self, design_restored: bool) {
+        if design_restored {
+            self.log_variable_users(None);
+        }
+    }
+
+    /// Logs the layers an undo or redo restored.
+    fn log_history(&mut self, nodes: &[NodeId]) {
+        if let Some(page) = self.pages.get(self.edit_page_index()).map(|p| p.id.clone()) {
+            self.changes.record(&page, nodes.iter().copied());
+        }
     }
 
     /// Run one edit as a complete transaction.
@@ -494,8 +514,11 @@ impl Editor {
         let mut changed = Changed::Nodes(Arc::new([]));
         if let Some(mut u) = self.history.undo(&mut self.doc) {
             self.status = format!("Undo {}", u.label);
+            self.log_history(&u.nodes);
+            let design = u.design.is_some();
             changed = Changed::Nodes(std::mem::take(&mut u.nodes).into());
             self.restore_project_state(u);
+            self.log_history_design(design);
         }
         self.after_history(changed);
     }
@@ -507,8 +530,11 @@ impl Editor {
         let mut changed = Changed::Nodes(Arc::new([]));
         if let Some(mut u) = self.history.redo(&mut self.doc) {
             self.status = format!("Redo {}", u.label);
+            self.log_history(&u.nodes);
+            let design = u.design.is_some();
             changed = Changed::Nodes(std::mem::take(&mut u.nodes).into());
             self.restore_project_state(u);
+            self.log_history_design(design);
         }
         self.after_history(changed);
     }
