@@ -307,7 +307,21 @@ fn opening_another_project_resets_the_log() {
     let mut h = host();
     design(&mut h);
     let rev = call(&mut h, "get_basic_info", json!({}))["rev"].as_u64().unwrap();
-    call(&mut h, "create_file", json!({"name": "Second"}));
+    let id = call(&mut h, "create_file", json!({"name": "Second"}))["fileId"].clone();
+    call(&mut h, "open_file", json!({"fileId": id}));
+    let r = call(&mut h, "get_changes", json!({"since": rev}));
+    assert_eq!(r["truncated"], true, "{r}");
+}
+
+/// The app opens projects through the session, not a tool call. Once the new project's edits
+/// bring rev back up to an agent's old `since`, that agent must still be told to start over.
+#[test]
+fn a_project_opened_outside_a_tool_call_resets_the_log() {
+    let mut h = host();
+    design(&mut h);
+    let rev = call(&mut h, "get_basic_info", json!({}))["rev"].as_u64().unwrap();
+    h.session.create(&mut h.ed, "Second").unwrap();
+    design(&mut h);
     let r = call(&mut h, "get_changes", json!({"since": rev}));
     assert_eq!(r["truncated"], true, "{r}");
 }

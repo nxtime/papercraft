@@ -584,8 +584,11 @@ impl Editor {
             sticky_color: self.sticky_color,
             clipboard_io: self.clipboard_io.take(),
             clipboard_written: self.clipboard_written.take(),
+            changes: std::mem::take(&mut self.changes),
             ..Editor::new(doc)
         };
+        // A fresh log would restart rev at 0 and agents' old `since` values would look current.
+        self.changes.reset();
         self.file_path = path;
         match camera {
             Some(c) => self.camera = c,

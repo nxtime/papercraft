@@ -86,12 +86,9 @@ fn variable_names(name: &str, args: &Value) -> Option<Option<BTreeSet<String>>> 
 }
 
 /// Post-processing of every tool call: variable edits count as touching the layers bound to
-/// them, a new project starts a new log, and write tools report the revision they left.
+/// them, and write tools report the revision they left.
 pub fn after_call(ed: &mut Editor, name: &str, args: &Value, r: ToolResult) -> ToolResult {
     let mut out = r?;
-    if matches!(name, "open_file" | "create_file") {
-        ed.changes.reset();
-    }
     if let Some(names) = variable_names(name, args) {
         ed.log_variable_users(names.as_ref());
     }

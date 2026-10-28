@@ -826,12 +826,13 @@ async fn parallel_sessions_get_their_own_runs() {
     let b = connect("Agent B", running.url()).await;
     let chat = connect("Claude Code", format!("{}?chat=c1", running.url())).await;
     let frame = |name: &str| tool("create_artboard", json!({"name": name, "styles": {"width": "100px", "height": "100px"}}));
+    let start = text_of(&a.call_tool(tool("get_basic_info", json!({}))).await.unwrap())["rev"].clone();
     // Interleaved: A, B, A, chat.
     for (client, name) in [(&a, "A1"), (&b, "B1"), (&a, "A2"), (&chat, "C1")] {
         text_of(&client.call_tool(frame(name)).await.unwrap());
     }
     // The change log tells the sessions apart: A sees only what B and the chat changed.
-    let others = text_of(&a.call_tool(tool("get_changes", json!({"since": 0, "exclude": "self"}))).await.unwrap());
+    let others = text_of(&a.call_tool(tool("get_changes", json!({"since": start, "exclude": "self"}))).await.unwrap());
     let mut by: Vec<&str> = others["changes"].as_array().unwrap().iter().map(|g| g["by"].as_str().unwrap()).collect();
     by.sort();
     assert_eq!(by, ["Agent B", "Chat"], "{others}");
