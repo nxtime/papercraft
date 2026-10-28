@@ -315,6 +315,4 @@ Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your 
 
 Bundled fonts, icons and other assets keep their own licenses, listed in [ATTRIBUTION.md](ATTRIBUTION.md); Inter is © The Inter Project Authors under the SIL Open Font License 1.1. Some algorithms are ported from MIT-licensed projects (rough.js, hachure-fill, Excalidraw), with their notices in [THIRD_PARTY.md](THIRD_PARTY.md).
 
-PaperCraft started as a fork of [storytold/paper-rs](https://git.marcospaulo.dev.br/storytold/paper-rs); thanks to its contributors.
-
 PaperCraft is not affiliated with Paper or Figma. Only the behavior of other tools was studied (see `analysis/`); no code, shaders, icons, fonts or assets from them are used.

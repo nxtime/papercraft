@@ -1,4 +1,4 @@
-# Upstream (michaelshimeles/paper-rs) carries no ArtCraft/Discord branding; keep it that way. Run: perl tools/craft-skills/skills/debrand/debrand.pl --check .
+# The tree carries no ArtCraft/Discord branding; keep it that way. Run: perl tools/craft-skills/skills/debrand/debrand.pl --check .
 keep ^(LICENSE-(MIT|APACHE)|\.debrand)$
 forbid (?i)artcraft
 forbid (?i)discord
