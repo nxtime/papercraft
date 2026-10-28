@@ -321,7 +321,7 @@ docs/                guides and screenshots
 
 ## Contributing
 
-Bug reports, ideas, docs and code are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) (setup, checks, commits, pull requests) and [RULES.md](RULES.md) (the standards a change is reviewed against). Security problems go through [SECURITY.md](SECURITY.md), and everyone follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+Bug reports, ideas, docs and code are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) (setup, checks, commits, pull requests) and [RULES.md](RULES.md) (the standards a change is reviewed against). AI tools are welcome under the [AI usage policy](AI_POLICY.md), and coding agents should read [AGENTS.md](AGENTS.md). Security problems go through [SECURITY.md](SECURITY.md), and everyone follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License and credits
 

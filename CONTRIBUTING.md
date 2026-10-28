@@ -5,7 +5,9 @@ first contribution is low: a typo fix, a clearer error message, a missing test o
 fix are all welcome.
 
 Please read [RULES.md](RULES.md) before writing code: it holds the standards a change is judged by.
-By taking part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+By taking part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). Using an AI tool is fine;
+the [AI usage policy](AI_POLICY.md) says what you stay responsible for, and coding agents should read
+[AGENTS.md](AGENTS.md).
 
 ## Ways to help
 
