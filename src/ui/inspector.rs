@@ -835,6 +835,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 Format::Png => format!("PNG {}x", preset.scale),
                 Format::Svg => "SVG".into(),
                 Format::Pdf => "PDF".into(),
+                Format::Presentation => "Presentation".into(),
             };
             let chip = super::kit::chip(ui, &label, *preset == st.export)
                 .on_hover_text(format!("{} · right-click to remove", preset.scope.label()));
@@ -865,6 +866,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         Format::Png => "PNG",
                         Format::Svg => "SVG",
                         Format::Pdf => "PDF",
+                        Format::Presentation => "Presentation",
                     },
                 )
             })
@@ -885,7 +887,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             spec.scope = v;
         }
     });
-    if spec.format != Format::Svg || spec.transparent {
+    if ![Format::Svg, Format::Presentation].contains(&spec.format) || spec.transparent {
         super::kit::checkbox(ui, &mut spec.transparent, "Transparent background");
     }
     let what = match (spec.scope, ed.top_selection().len()) {
@@ -1053,6 +1055,18 @@ fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
         let label = format!("Declare {} screen{}", found.len(), if found.len() == 1 { "" } else { "s" });
         if super::kit::button_wide(ui, super::kit::ButtonKind::Secondary, None, &label).on_hover_text(tip).clicked()
             && let Err(e) = ed.set_role(&found, crate::editor::screens::Role::Screen)
+        {
+            ed.status = e;
+        }
+    }
+    let found = crate::editor::screens::section_candidates(&ed.doc);
+    if !found.is_empty() {
+        let names: Vec<&str> = found.iter().take(12).filter_map(|id| ed.doc.get(*id)).map(|n| n.name.as_str()).collect();
+        let more = found.len().saturating_sub(names.len());
+        let tip = format!("{}{}", names.join("\n"), if more > 0 { format!("\n+ {more} more") } else { String::new() });
+        let label = format!("Declare {} section{}", found.len(), if found.len() == 1 { "" } else { "s" });
+        if super::kit::button_wide(ui, super::kit::ButtonKind::Secondary, None, &label).on_hover_text(tip).clicked()
+            && let Err(e) = ed.set_role(&found, crate::editor::screens::Role::Section)
         {
             ed.status = e;
         }
@@ -1449,6 +1463,13 @@ fn role_toggles(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         let tip = "A screen of the product (one device viewport), not a section or container. Agents don't edit layers hidden behind its drawers and modals.";
         if super::kit::checkbox(ui, &mut on, "Screen").on_hover_text(tip).changed() {
             set = Some(if on { Role::Screen } else { Role::None });
+        }
+    }
+    if first.section || allowed(Role::Section) {
+        let mut on = first.section;
+        let tip = "Groups screens on the canvas: no fill, a faint outline and its name";
+        if super::kit::checkbox(ui, &mut on, "Section").on_hover_text(tip).changed() {
+            set = Some(if on { Role::Section } else { Role::None });
         }
     }
     if first.overlay || allowed(Role::Overlay) {

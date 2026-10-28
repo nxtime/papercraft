@@ -23,7 +23,7 @@ USAGE:
   papercraft --export-png OUT.png PROJECT|FILE [--page N] [--scale S] [--transparent]
   papercraft --export-svg OUT.svg PROJECT|FILE [--page N]
   papercraft --export-pdf OUT.pdf PROJECT|FILE [--page N] [--frames | --all-pages]
-  papercraft --export OUT PROJECT|FILE --format png|svg|pdf [--scope page|frames|all]
+  papercraft --export OUT PROJECT|FILE --format png|svg|pdf|presentation [--scope page|frames|all]
                                            [--page N] [--scale S] [--transparent]
                                            (frames/all with PNG/SVG write a folder)
   papercraft --import FILE                   create a project from .excalidraw, .svg or
@@ -240,6 +240,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "png" => export::Format::Png,
             "svg" => export::Format::Svg,
             "pdf" => export::Format::Pdf,
+            "presentation" => export::Format::Presentation,
             f => return Err(format!("unknown --format {f}")),
         };
         let scope = match value("--scope").as_deref().unwrap_or("page") {

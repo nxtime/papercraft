@@ -76,6 +76,7 @@ pub enum Action {
     PasteProps,
     Home,
     ExportPdf,
+    ExportPresentation,
     CopyAsPng,
     CopyAsSvg,
 }
@@ -406,6 +407,7 @@ pub fn category(a: Action) -> &'static str {
         | A::SaveAs
         | A::ExportPng
         | A::ExportSvg
+        | A::ExportPresentation
         | A::PlaceImage
         | A::Home => "File",
         A::Undo
@@ -514,6 +516,7 @@ pub fn menus() -> Vec<(&'static str, Vec<MenuEntry>)> {
                 I("Export PNG…", A::ExportPng),
                 I("Export SVG…", A::ExportSvg),
                 I("Export PDF…", A::ExportPdf),
+                I("Export Presentation…", A::ExportPresentation),
             ],
         ),
         (
@@ -675,7 +678,7 @@ mod tests {
                             // Delete is bound to the Delete key; everything should be reachable.
                             assert!(
                                 super::chord_of(*a).is_some()
-                                    || matches!(a, super::Action::ExportSvg),
+                                    || matches!(a, super::Action::ExportSvg | super::Action::ExportPresentation),
                                 "{label} has no shortcut"
                             );
                         }

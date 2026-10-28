@@ -11,6 +11,8 @@ pub enum Format {
     Png,
     Svg,
     Pdf,
+    /// A PDF deck: cover, contents, a slide per screen (`io::deck`).
+    Presentation,
 }
 
 impl Format {
@@ -18,10 +20,10 @@ impl Format {
         match self {
             Format::Png => "png",
             Format::Svg => "svg",
-            Format::Pdf => "pdf",
+            Format::Pdf | Format::Presentation => "pdf",
         }
     }
-    pub const ALL: [Format; 3] = [Format::Png, Format::Svg, Format::Pdf];
+    pub const ALL: [Format; 4] = [Format::Png, Format::Svg, Format::Pdf, Format::Presentation];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -77,7 +79,7 @@ impl Default for Spec {
 impl Spec {
     /// One output file, or a folder of files?
     pub fn single_file(&self, items: usize) -> bool {
-        self.format == Format::Pdf || items <= 1
+        [Format::Pdf, Format::Presentation].contains(&self.format) || items <= 1
     }
 }
 
@@ -97,6 +99,11 @@ pub fn items<'a>(
     selection: &[NodeId],
 ) -> Vec<Item<'a>> {
     let (pname, doc) = pages[active];
+    // A presentation takes whole pages: each frame is already a slide of it.
+    let scope = match spec.scope {
+        Scope::Frames if spec.format == Format::Presentation => Scope::Page,
+        s => s,
+    };
     let frames_of = |doc: &'a Document, among: &[NodeId]| -> Vec<Item<'a>> {
         among
             .iter()
@@ -108,7 +115,7 @@ pub fn items<'a>(
             })
             .collect()
     };
-    match spec.scope {
+    match scope {
         Scope::Selection if !selection.is_empty() => vec![Item {
             name: if selection.len() == 1 {
                 doc.get(selection[0])
@@ -143,6 +150,44 @@ pub fn items<'a>(
     }
 }
 
+/// `roots` plus, for each top-level frame among them, the top-level layers painted after it
+/// that lie inside it: what the canvas shows on the frame (component mains laid out over a
+/// board frame are its siblings, not its children).
+pub fn with_layers_on_top(doc: &Document, roots: &[NodeId]) -> Vec<NodeId> {
+    let mut out = roots.to_vec();
+    for root in roots {
+        let Some(at) = doc.root.iter().position(|id| id == root) else { continue };
+        let Some(frame) = doc.get(*root).filter(|n| n.is_frame()).and_then(|_| doc.world_rect(*root)) else { continue };
+        for id in &doc.root[at + 1..] {
+            let on_top = doc.get(*id).is_some_and(|n| n.visible) && doc.world_rect(*id).is_some_and(|r| frame.contains_rect(&r));
+            if on_top && !out.contains(id) {
+                out.push(*id);
+            }
+        }
+    }
+    out
+}
+
+/// The items as a presentation deck titled `title`: a page's own roots mean its screens, a
+/// selection is shown as it is.
+pub fn presentation(items: &[Item], title: &str) -> Vec<u8> {
+    let sections: Vec<crate::io::deck::Section> = items
+        .iter()
+        .map(|it| crate::io::deck::Section {
+            name: it.name.clone(),
+            doc: it.doc,
+            screens: if it.roots == it.doc.root { crate::io::deck::screens_of(it.doc) } else { it.roots.clone() },
+        })
+        .collect();
+    let meta = crate::io::deck::Meta {
+        title: title.to_string(),
+        subtitle: None,
+        author: None,
+        now_ms: crate::project::format::now_ms(),
+    };
+    crate::io::deck::build(&meta, &sections)
+}
+
 fn safe(name: &str) -> String {
     let s = crate::project::folder_name(name);
     if s.is_empty() { "export".into() } else { s }
@@ -159,6 +204,11 @@ pub fn write(
     let bg = (!spec.transparent).then_some(Color::WHITE);
     if items.is_empty() {
         return Err("nothing to export".into());
+    }
+    if spec.format == Format::Presentation {
+        let title = out.file_stem().map_or("Presentation".into(), |s| s.to_string_lossy().into_owned());
+        crate::io::atomic::write(out, &presentation(items, &title)).map_err(|e| e.to_string())?;
+        return Ok(vec![out.to_path_buf()]);
     }
     if spec.format == Format::Pdf {
         let mut pages = Vec::new();
@@ -195,9 +245,10 @@ pub fn write(
             crate::vfs::create_dir_all(out).map_err(|e| e.to_string())?;
             out.join(format!("{name}.{}", spec.format.ext()))
         };
+        let roots = with_layers_on_top(it.doc, &it.roots);
         match spec.format {
             Format::Svg => {
-                let s = crate::io::svg::export(it.doc, Some(&it.roots), bg)
+                let s = crate::io::svg::export(it.doc, Some(&roots), bg)
                     .ok_or("nothing to export")?;
                 crate::io::atomic::write(&path, s.as_bytes()).map_err(|e| e.to_string())?;
             }
@@ -210,13 +261,13 @@ pub fn write(
                         &owned
                     }
                 };
-                let img = crate::io::png::render(g, it.doc, Some(&it.roots), spec.scale, bg)?;
+                let img = crate::io::png::render(g, it.doc, Some(&roots), spec.scale, bg)?;
                 let mut buf = std::io::Cursor::new(Vec::new());
                 img.write_to(&mut buf, image::ImageFormat::Png)
                     .map_err(|e| e.to_string())?;
                 crate::io::atomic::write(&path, &buf.into_inner()).map_err(|e| e.to_string())?;
             }
-            Format::Pdf => unreachable!(),
+            Format::Pdf | Format::Presentation => unreachable!(),
         }
         written.push(path);
     }
@@ -245,6 +296,9 @@ pub async fn render_files(
     }
     let bg = (!spec.transparent).then_some(Color::WHITE);
     let ext = spec.format.ext();
+    if spec.format == Format::Presentation {
+        return Ok(vec![(format!("{}.{ext}", safe(base)), presentation(items, base))]);
+    }
     if spec.format == Format::Pdf {
         let frames = spec.scope == Scope::Frames;
         let pages: Vec<_> = items
@@ -268,14 +322,15 @@ pub async fn render_files(
         } else {
             crate::io::zip::unique_name(&format!("{}.{ext}", safe(&it.name)), &mut used)
         };
+        let roots = with_layers_on_top(it.doc, &it.roots);
         let bytes = match spec.format {
-            Format::Svg => crate::io::svg::export(it.doc, Some(&it.roots), bg)
+            Format::Svg => crate::io::svg::export(it.doc, Some(&roots), bg)
                 .ok_or("nothing to export")?
                 .into_bytes(),
             Format::Png => encode_png(
-                &crate::io::png::render_async(gpu, it.doc, Some(&it.roots), spec.scale, bg).await?,
+                &crate::io::png::render_async(gpu, it.doc, Some(&roots), spec.scale, bg).await?,
             )?,
-            Format::Pdf => unreachable!(),
+            Format::Pdf | Format::Presentation => unreachable!(),
         };
         files.push((name, bytes));
     }

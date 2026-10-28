@@ -6,6 +6,7 @@ pub mod export;
 pub mod fig;
 pub mod file;
 pub mod import;
+pub mod deck;
 pub mod pdf;
 pub mod png;
 pub mod svg;

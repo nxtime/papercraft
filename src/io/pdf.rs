@@ -20,6 +20,17 @@ pub struct PdfPage<'a> {
     pub roots: Vec<NodeId>,
     pub bounds: Rect,
     pub background: Option<Color>,
+    /// Drawn after `roots`, each scaled into its own area (a presentation's screens).
+    pub inserts: Vec<Insert<'a>>,
+}
+
+/// Layers of another document drawn scaled: `from` (world units of `doc`) maps onto `to`
+/// (the page's units), uniformly by width, clipped to `to`. Stays vector.
+pub struct Insert<'a> {
+    pub doc: &'a Document,
+    pub roots: Vec<NodeId>,
+    pub from: Rect,
+    pub to: Rect,
 }
 
 fn num(x: f64) -> String {
@@ -96,6 +107,8 @@ struct PageWriter<'a> {
     objs: &'a mut Objects,
     res: Res,
     out: String,
+    /// While drawing an insert: its source area. Layers outside it are left out of the file.
+    cull: Option<Rect>,
 }
 
 impl PageWriter<'_> {
@@ -243,11 +256,11 @@ impl PageWriter<'_> {
         if let Some((n, _)) = self.res.images.get(asset) {
             return Some(n.clone());
         }
-        let a = assets::get(asset)?;
-        let (w, h) = (a.width, a.height);
+        let rgba = assets::get(asset)?.rgba()?;
+        let (w, h) = (rgba.width(), rgba.height());
         let mut rgb = Vec::with_capacity((w * h * 3) as usize);
         let mut alpha = Vec::with_capacity((w * h) as usize);
-        for p in a.rgba.pixels() {
+        for p in rgba.pixels() {
             rgb.extend_from_slice(&p.0[..3]);
             alpha.push(p.0[3]);
         }
@@ -426,12 +439,19 @@ impl PageWriter<'_> {
         }
         let wr = doc.world_rect(id).unwrap();
         let op = opacity * n.style.opacity;
-        let d = draw::node_draw(n, wr, op);
-        self.ops(&d.ops, d.blend);
+        let clip = matches!(n.kind, NodeKind::Frame { clip: true });
+        // Outside the insert's area: nothing of it shows, unless an unclipped child pokes in.
+        let outside = self.cull.is_some_and(|c| !wr.intersects(&c));
+        if outside && (clip || n.children.is_empty()) {
+            return;
+        }
+        if !outside {
+            let d = draw::node_draw(n, wr, op);
+            self.ops(&d.ops, d.blend);
+        }
         if n.children.is_empty() {
             return;
         }
-        let clip = matches!(n.kind, NodeKind::Frame { clip: true });
         if clip {
             let p = self.emit_path(&draw::shape_path(n, wr).unwrap_or_default());
             let _ = writeln!(self.out, "q {p}W n");
@@ -457,6 +477,7 @@ pub fn export(pages: &[PdfPage]) -> Vec<u8> {
             objs: &mut objs,
             res: Res::default(),
             out: String::new(),
+            cull: None,
         };
         // y-down user space with the page's top-left at the area's top-left.
         let _ = writeln!(w.out, "1 0 0 -1 {} {} cm", num(-b.x), num(b.y + b.h));
@@ -475,6 +496,31 @@ pub fn export(pages: &[PdfPage]) -> Vec<u8> {
         for r in &pg.roots {
             let op = draw::inherited_opacity(pg.doc, *r);
             w.node(pg.doc, *r, op);
+        }
+        for ins in &pg.inserts {
+            let s = ins.to.w / ins.from.w.max(f64::EPSILON);
+            let (t, f) = (ins.to, ins.from);
+            // Full precision: the scale multiplies world coordinates in the tens of thousands, so
+            // rounding it to num()'s 3 decimals shifts the screen inside its window.
+            let _ = writeln!(
+                w.out,
+                "q {} {} {} {} re W n {s:.9} 0 0 {s:.9} {:.4} {:.4} cm",
+                num(t.x),
+                num(t.y),
+                num(t.w),
+                num(t.h),
+                t.x - f.x * s,
+                t.y - f.y * s
+            );
+            // A margin for strokes drawn outside their layer.
+            const CULL_MARGIN: f64 = 16.0;
+            w.cull = Some(Rect::new(f.x - CULL_MARGIN, f.y - CULL_MARGIN, f.w + 2.0 * CULL_MARGIN, f.h + 2.0 * CULL_MARGIN));
+            for r in &ins.roots {
+                let op = draw::inherited_opacity(ins.doc, *r);
+                w.node(ins.doc, *r, op);
+            }
+            w.cull = None;
+            w.out.push_str("Q\n");
         }
         let content = std::mem::take(&mut w.out);
         let res = std::mem::take(&mut w.res);
@@ -561,19 +607,22 @@ pub fn pages_for<'a>(
                     Some(PdfPage {
                         doc,
                         bounds: crate::io::svg::export_bounds(doc, &[f])?,
-                        roots: vec![f],
+                        roots: crate::io::export::with_layers_on_top(doc, &[f]),
                         background,
+                        inserts: Vec::new(),
                     })
                 })
                 .collect();
         }
     }
+    let roots = crate::io::export::with_layers_on_top(doc, &roots);
     match crate::io::svg::export_bounds(doc, &roots) {
         Some(b) => vec![PdfPage {
             doc,
             roots,
             bounds: b,
             background,
+            inserts: Vec::new(),
         }],
         None => vec![],
     }
@@ -609,5 +658,50 @@ mod tests {
         let table = String::from_utf8_lossy(&pdf[xref_at..]);
         let first_off: usize = table.lines().nth(3).unwrap()[..10].parse().unwrap();
         assert!(pdf[first_off..].starts_with(b"1 0 obj"));
+    }
+
+    #[test]
+    fn an_insert_far_from_the_origin_lands_where_it_is_placed() {
+        use crate::geom::Rect;
+        use crate::model::{Node, NodeKind};
+        let mut ed = crate::editor::Editor::default();
+        let from = Rect::new(4192.0, 25412.0, 1440.0, 900.0);
+        let screen = ed.edit("Add", |tx| {
+            let id = tx.alloc_id();
+            tx.insert(Node::new(id, NodeKind::Frame { clip: true }, from), None, None);
+            id
+        });
+        let to = Rect::new(100.0, 100.0, 1440.0 * 0.3361, 900.0 * 0.3361);
+        let page = PdfPage { doc: &ed.doc, roots: Vec::new(), bounds: Rect::new(0.0, 0.0, 1920.0, 1080.0), background: None, inserts: vec![Insert { doc: &ed.doc, roots: vec![screen], from, to }] };
+        let pdf = export(&[page]);
+        let content = pdf
+            .windows(7)
+            .position(|w| w == b"stream\n")
+            .and_then(|at| miniz_oxide::inflate::decompress_to_vec_zlib(&pdf[at + 7..]).ok())
+            .expect("a page content stream");
+        let line = String::from_utf8_lossy(&content).lines().find(|l| l.ends_with(" cm") && l.contains("re W n")).unwrap().to_owned();
+        let n: Vec<f64> = line.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let (s, ty) = (n[4], n[9]);
+        assert!((from.y * s + ty - to.y).abs() < 0.01, "the screen's top maps onto the window's top: {line}");
+    }
+
+    #[test]
+    fn a_frame_page_includes_layers_laid_over_it() {
+        use crate::geom::Rect;
+        use crate::model::{Node, NodeKind};
+        let mut ed = crate::editor::Editor::default();
+        let mut add = |r: Rect| {
+            ed.edit("Add", |tx| {
+                let id = tx.alloc_id();
+                tx.insert(Node::new(id, NodeKind::Frame { clip: true }, r), None, None);
+                id
+            })
+        };
+        let board = add(Rect::new(0.0, 0.0, 400.0, 300.0));
+        let main = add(Rect::new(20.0, 20.0, 100.0, 40.0));
+        let outside = add(Rect::new(500.0, 0.0, 100.0, 40.0));
+        let pages = pages_for(&ed.doc, Some(&[board]), true, None);
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].roots, vec![board, main], "the main on the board, not the one beside it ({outside:?})");
     }
 }
