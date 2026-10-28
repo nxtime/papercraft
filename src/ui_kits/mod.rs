@@ -17,6 +17,11 @@ pub struct Kit {
     /// The kit page's background variable.
     pub surface: &'static str,
     pub components: &'static [KitComponent],
+    /// Screen layouts built from the kit's components: (name, markup with `<x-paper-instance>`).
+    pub layouts: &'static [(&'static str, &'static str)],
+    /// The library's code per component, for a kit drawn with another kit's markup; empty means
+    /// each component's own.
+    pub code: derived::Code,
 }
 
 pub struct KitComponent {
@@ -27,10 +32,13 @@ pub struct KitComponent {
     pub egui: &'static str,
 }
 
-const EGUI_BUTTON: &str = "if ui.button({Label}).clicked() {\n    // TODO: action\n}";
-const EGUI_INPUT: &str = "ui.add(egui::TextEdit::singleline(&mut text).hint_text({Placeholder}));";
+mod derived;
+mod shadcn;
 
-pub const KITS: [Kit; 4] = [
+pub(crate) const EGUI_BUTTON: &str = "if ui.button({Label}).clicked() {\n    // TODO: action\n}";
+pub(crate) const EGUI_INPUT: &str = "ui.add(egui::TextEdit::singleline(&mut text).hint_text({Placeholder}));";
+
+pub const KITS: [Kit; 8] = [
     Kit {
         id: "shadcn",
         name: "shadcn/ui",
@@ -39,88 +47,21 @@ pub const KITS: [Kit; 4] = [
             ("background", "#ffffff"), ("foreground", "#09090b"), ("card", "#ffffff"), ("primary", "#18181b"),
             ("primary-foreground", "#fafafa"), ("secondary", "#f4f4f5"), ("secondary-foreground", "#18181b"),
             ("muted", "#f4f4f5"), ("muted-foreground", "#71717a"), ("border", "#e4e4e7"), ("input", "#e4e4e7"),
-            ("destructive", "#dc2626"), ("ring", "#a1a1aa"),
+            ("destructive", "#dc2626"), ("destructive-foreground", "#fafafa"), ("ring", "#a1a1aa"), ("accent", "#f4f4f5"),
+            ("accent-foreground", "#18181b"), ("popover", "#ffffff"), ("overlay", "#00000080"),
         ],
         dark: &[
             ("background", "#09090b"), ("foreground", "#fafafa"), ("card", "#18181b"), ("primary", "#fafafa"),
             ("primary-foreground", "#18181b"), ("secondary", "#27272a"), ("secondary-foreground", "#fafafa"),
             ("muted", "#27272a"), ("muted-foreground", "#a1a1aa"), ("border", "#27272a"), ("input", "#3f3f46"),
-            ("destructive", "#ef4444"), ("ring", "#52525b"),
+            ("destructive", "#ef4444"), ("destructive-foreground", "#fafafa"), ("ring", "#52525b"), ("accent", "#27272a"),
+            ("accent-foreground", "#fafafa"), ("popover", "#18181b"), ("overlay", "#000000b3"),
         ],
-        tokens: &[("radius", "10px"), ("control-height", "36px"), ("text-sm", "14px"), ("space-4", "16px"), ("space-6", "24px")],
+        tokens: &[("radius-control", "8px"), ("radius-card", "12px"), ("control-height", "36px"), ("text-sm", "14px"), ("space-4", "16px"), ("space-6", "24px")],
         surface: "background",
-        components: &[
-            KitComponent {
-                name: "Button / Default",
-                html: r#"<div layer-name="Button / Default" style="display:flex;align-items:center;justify-content:center;height:36px;padding:0 16px;border-radius:8px;background:var(--primary)"><span layer-name="Label" style="font-size:14px;font-weight:500;color:var(--primary-foreground)">Button</span></div>"#,
-                import: r#"import { Button } from "@/components/ui/button""#,
-                react: "<Button>{Label}</Button>",
-                egui: EGUI_BUTTON,
-            },
-            KitComponent {
-                name: "Button / Outline",
-                html: r#"<div layer-name="Button / Outline" style="display:flex;align-items:center;justify-content:center;height:36px;padding:0 16px;border-radius:8px;background:var(--background);border:1px solid var(--border)"><span layer-name="Label" style="font-size:14px;font-weight:500;color:var(--foreground)">Button</span></div>"#,
-                import: r#"import { Button } from "@/components/ui/button""#,
-                react: r#"<Button variant="outline">{Label}</Button>"#,
-                egui: EGUI_BUTTON,
-            },
-            KitComponent {
-                name: "Button / Secondary",
-                html: r#"<div layer-name="Button / Secondary" style="display:flex;align-items:center;justify-content:center;height:36px;padding:0 16px;border-radius:8px;background:var(--secondary)"><span layer-name="Label" style="font-size:14px;font-weight:500;color:var(--secondary-foreground)">Button</span></div>"#,
-                import: r#"import { Button } from "@/components/ui/button""#,
-                react: r#"<Button variant="secondary">{Label}</Button>"#,
-                egui: EGUI_BUTTON,
-            },
-            KitComponent {
-                name: "Button / Ghost",
-                html: r#"<div layer-name="Button / Ghost" style="display:flex;align-items:center;justify-content:center;height:36px;padding:0 16px;border-radius:8px"><span layer-name="Label" style="font-size:14px;font-weight:500;color:var(--foreground)">Button</span></div>"#,
-                import: r#"import { Button } from "@/components/ui/button""#,
-                react: r#"<Button variant="ghost">{Label}</Button>"#,
-                egui: EGUI_BUTTON,
-            },
-            KitComponent {
-                name: "Button / Destructive",
-                html: r#"<div layer-name="Button / Destructive" style="display:flex;align-items:center;justify-content:center;height:36px;padding:0 16px;border-radius:8px;background:var(--destructive)"><span layer-name="Label" style="font-size:14px;font-weight:500;color:#ffffff">Delete</span></div>"#,
-                import: r#"import { Button } from "@/components/ui/button""#,
-                react: r#"<Button variant="destructive">{Label}</Button>"#,
-                egui: EGUI_BUTTON,
-            },
-            KitComponent {
-                name: "Input",
-                html: r#"<div layer-name="Input" style="display:flex;align-items:center;width:240px;height:36px;padding:0 12px;border-radius:8px;border:1px solid var(--input);background:var(--background)"><span layer-name="Placeholder" style="font-size:14px;color:var(--muted-foreground)">Email</span></div>"#,
-                import: r#"import { Input } from "@/components/ui/input""#,
-                react: r#"<Input placeholder="{Placeholder}" />"#,
-                egui: EGUI_INPUT,
-            },
-            KitComponent {
-                name: "Badge",
-                html: r#"<div layer-name="Badge" style="display:flex;align-items:center;padding:2px 8px;border-radius:6px;background:var(--primary)"><span layer-name="Label" style="font-size:12px;font-weight:500;color:var(--primary-foreground)">Badge</span></div>"#,
-                import: r#"import { Badge } from "@/components/ui/badge""#,
-                react: "<Badge>{Label}</Badge>",
-                egui: "ui.label(egui::RichText::new({Label}).small().strong());",
-            },
-            KitComponent {
-                name: "Card",
-                html: r#"<div layer-name="Card" style="display:flex;flex-direction:column;gap:6px;width:320px;padding:24px;border-radius:12px;border:1px solid var(--border);background:var(--card)"><span layer-name="Title" style="font-size:16px;font-weight:600;color:var(--foreground)">Card title</span><span layer-name="Description" style="font-size:14px;color:var(--muted-foreground)">A short description of what this card holds.</span></div>"#,
-                import: r#"import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card""#,
-                react: "<Card>\n  <CardHeader>\n    <CardTitle>{Title}</CardTitle>\n    <CardDescription>{Description}</CardDescription>\n  </CardHeader>\n</Card>",
-                egui: "egui::Frame::group(ui.style()).show(ui, |ui| {\n    ui.strong({Title});\n    ui.label({Description});\n});",
-            },
-            KitComponent {
-                name: "Switch",
-                html: r#"<div layer-name="Switch" style="display:flex;align-items:center;justify-content:flex-end;width:32px;height:18px;padding:2px;border-radius:9px;background:var(--primary)"><div style="width:14px;height:14px;border-radius:7px;background:var(--primary-foreground)"></div></div>"#,
-                import: r#"import { Switch } from "@/components/ui/switch""#,
-                react: "<Switch defaultChecked />",
-                egui: "ui.toggle_value(&mut on, \"\");",
-            },
-            KitComponent {
-                name: "Alert",
-                html: r#"<div layer-name="Alert" style="display:flex;flex-direction:column;gap:4px;width:360px;padding:12px 16px;border-radius:10px;border:1px solid var(--border);background:var(--background)"><span layer-name="Title" style="font-size:14px;font-weight:500;color:var(--foreground)">Heads up</span><span layer-name="Description" style="font-size:14px;color:var(--muted-foreground)">You can add components to your app using the CLI.</span></div>"#,
-                import: r#"import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert""#,
-                react: "<Alert>\n  <AlertTitle>{Title}</AlertTitle>\n  <AlertDescription>{Description}</AlertDescription>\n</Alert>",
-                egui: "ui.group(|ui| {\n    ui.strong({Title});\n    ui.label({Description});\n});",
-            },
-        ],
+        components: shadcn::COMPONENTS,
+        layouts: shadcn::LAYOUTS,
+        code: &[],
     },
     Kit {
         id: "antd",
@@ -203,6 +144,8 @@ pub const KITS: [Kit; 4] = [
                 egui: "ui.group(|ui| {\n    ui.strong({Title});\n    ui.label({Description});\n});",
             },
         ],
+        layouts: &[],
+        code: &[],
     },
     Kit {
         id: "reactbits",
@@ -269,6 +212,8 @@ pub const KITS: [Kit; 4] = [
                 egui: EGUI_BUTTON,
             },
         ],
+        layouts: &[],
+        code: &[],
     },
     Kit {
         id: "egui",
@@ -342,6 +287,104 @@ pub const KITS: [Kit; 4] = [
                 egui: "ui.collapsing({Title}, |ui| {\n    // body\n});",
             },
         ],
+        layouts: &[],
+        code: &[],
+    },
+    Kit {
+        id: "mui",
+        name: "Material UI",
+        about: "Material Design 2 in React (@mui/material v6): blue primary, 4px radius, 36px controls.",
+        light: &[
+            ("background", "#ffffff"), ("foreground", "#212121"), ("card", "#ffffff"), ("primary", "#1976d2"),
+            ("primary-foreground", "#ffffff"), ("secondary", "#e0e0e0"), ("secondary-foreground", "#212121"),
+            ("muted", "#f5f5f5"), ("muted-foreground", "#666666"), ("border", "#e0e0e0"), ("input", "#c4c4c4"),
+            ("destructive", "#d32f2f"), ("destructive-foreground", "#ffffff"), ("ring", "#1976d2"), ("accent", "#f5f5f5"),
+            ("accent-foreground", "#212121"), ("popover", "#ffffff"), ("overlay", "#00000080"),
+        ],
+        dark: &[
+            ("background", "#121212"), ("foreground", "#ffffff"), ("card", "#1e1e1e"), ("primary", "#90caf9"),
+            ("primary-foreground", "#0d0d0d"), ("secondary", "#2e2e2e"), ("secondary-foreground", "#ffffff"),
+            ("muted", "#2a2a2a"), ("muted-foreground", "#b3b3b3"), ("border", "#2e2e2e"), ("input", "#5c5c5c"),
+            ("destructive", "#f44336"), ("destructive-foreground", "#0d0d0d"), ("ring", "#90caf9"), ("accent", "#2a2a2a"),
+            ("accent-foreground", "#ffffff"), ("popover", "#1e1e1e"), ("overlay", "#00000080"),
+        ],
+        tokens: &[("radius-control", "4px"), ("radius-card", "4px"), ("control-height", "36px"), ("text-sm", "14px"), ("space-4", "16px"), ("space-6", "24px")],
+        surface: "background",
+        components: shadcn::COMPONENTS,
+        layouts: shadcn::LAYOUTS,
+        code: derived::MUI,
+    },
+    Kit {
+        id: "mantine",
+        name: "Mantine",
+        about: "Mantine v7 React components: blue primary, 4px controls in 8px cards, 36px controls.",
+        light: &[
+            ("background", "#ffffff"), ("foreground", "#000000"), ("card", "#ffffff"), ("primary", "#1971c2"),
+            ("primary-foreground", "#ffffff"), ("secondary", "#e7f5ff"), ("secondary-foreground", "#1864ab"),
+            ("muted", "#f1f3f5"), ("muted-foreground", "#495057"), ("border", "#dee2e6"), ("input", "#ced4da"),
+            ("destructive", "#c92a2a"), ("destructive-foreground", "#ffffff"), ("ring", "#1971c2"), ("accent", "#f8f9fa"),
+            ("accent-foreground", "#000000"), ("popover", "#ffffff"), ("overlay", "#00000080"),
+        ],
+        dark: &[
+            ("background", "#242424"), ("foreground", "#c9c9c9"), ("card", "#2e2e2e"), ("primary", "#1971c2"),
+            ("primary-foreground", "#ffffff"), ("secondary", "#1e3a52"), ("secondary-foreground", "#a5d8ff"),
+            ("muted", "#2e2e2e"), ("muted-foreground", "#a6a7ab"), ("border", "#424242"), ("input", "#424242"),
+            ("destructive", "#c92a2a"), ("destructive-foreground", "#ffffff"), ("ring", "#1971c2"), ("accent", "#2e2e2e"),
+            ("accent-foreground", "#c9c9c9"), ("popover", "#2e2e2e"), ("overlay", "#000000b3"),
+        ],
+        tokens: &[("radius-control", "4px"), ("radius-card", "8px"), ("control-height", "36px"), ("text-sm", "14px"), ("space-4", "16px"), ("space-6", "24px")],
+        surface: "background",
+        components: shadcn::COMPONENTS,
+        layouts: shadcn::LAYOUTS,
+        code: derived::MANTINE,
+    },
+    Kit {
+        id: "bootstrap",
+        name: "Bootstrap",
+        about: "Bootstrap 5 through react-bootstrap: blue primary, 6px radius, 38px controls.",
+        light: &[
+            ("background", "#ffffff"), ("foreground", "#212529"), ("card", "#ffffff"), ("primary", "#0b5ed7"),
+            ("primary-foreground", "#ffffff"), ("secondary", "#6c757d"), ("secondary-foreground", "#ffffff"),
+            ("muted", "#e9ecef"), ("muted-foreground", "#6c757d"), ("border", "#dee2e6"), ("input", "#dee2e6"),
+            ("destructive", "#bb2d3b"), ("destructive-foreground", "#ffffff"), ("ring", "#86b7fe"), ("accent", "#f8f9fa"),
+            ("accent-foreground", "#212529"), ("popover", "#ffffff"), ("overlay", "#00000080"),
+        ],
+        dark: &[
+            ("background", "#212529"), ("foreground", "#dee2e6"), ("card", "#2b3035"), ("primary", "#0b5ed7"),
+            ("primary-foreground", "#ffffff"), ("secondary", "#6c757d"), ("secondary-foreground", "#ffffff"),
+            ("muted", "#343a40"), ("muted-foreground", "#adb5bd"), ("border", "#495057"), ("input", "#495057"),
+            ("destructive", "#bb2d3b"), ("destructive-foreground", "#ffffff"), ("ring", "#86b7fe"), ("accent", "#343a40"),
+            ("accent-foreground", "#dee2e6"), ("popover", "#2b3035"), ("overlay", "#000000b3"),
+        ],
+        tokens: &[("radius-control", "6px"), ("radius-card", "6px"), ("control-height", "38px"), ("text-sm", "14px"), ("space-4", "16px"), ("space-6", "24px")],
+        surface: "background",
+        components: shadcn::COMPONENTS,
+        layouts: shadcn::LAYOUTS,
+        code: derived::BOOTSTRAP,
+    },
+    Kit {
+        id: "chakra",
+        name: "Chakra UI",
+        about: "Chakra UI v3 with the teal colour palette: 6px controls in 8px cards, 40px controls.",
+        light: &[
+            ("background", "#ffffff"), ("foreground", "#09090b"), ("card", "#ffffff"), ("primary", "#0f766e"),
+            ("primary-foreground", "#ffffff"), ("secondary", "#f4f4f5"), ("secondary-foreground", "#18181b"),
+            ("muted", "#f4f4f5"), ("muted-foreground", "#52525b"), ("border", "#e4e4e7"), ("input", "#e4e4e7"),
+            ("destructive", "#dc2626"), ("destructive-foreground", "#ffffff"), ("ring", "#0f766e"), ("accent", "#f4f4f5"),
+            ("accent-foreground", "#18181b"), ("popover", "#ffffff"), ("overlay", "#00000080"),
+        ],
+        dark: &[
+            ("background", "#111111"), ("foreground", "#fafafa"), ("card", "#18181b"), ("primary", "#2dd4bf"),
+            ("primary-foreground", "#042f2e"), ("secondary", "#27272a"), ("secondary-foreground", "#fafafa"),
+            ("muted", "#27272a"), ("muted-foreground", "#a1a1aa"), ("border", "#27272a"), ("input", "#3f3f46"),
+            ("destructive", "#ef4444"), ("destructive-foreground", "#fafafa"), ("ring", "#2dd4bf"), ("accent", "#27272a"),
+            ("accent-foreground", "#fafafa"), ("popover", "#18181b"), ("overlay", "#000000b3"),
+        ],
+        tokens: &[("radius-control", "6px"), ("radius-card", "8px"), ("control-height", "40px"), ("text-sm", "14px"), ("space-4", "16px"), ("space-6", "24px")],
+        surface: "background",
+        components: shadcn::COMPONENTS,
+        layouts: shadcn::LAYOUTS,
+        code: derived::CHAKRA,
     },
 ];
 
