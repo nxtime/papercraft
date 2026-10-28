@@ -6,8 +6,8 @@ use crate::theme::{self, Icon, Surface as _};
 use egui::{RichText, Ui};
 use std::collections::VecDeque;
 
-/// Frame-rate floors to choose from in Settings.
-pub const THRESHOLDS: [u32; 5] = [30, 45, 60, 90, 120];
+/// Refresh rates to choose from in Settings, up to the fastest gaming monitors.
+pub const THRESHOLDS: [u32; 9] = [30, 45, 60, 90, 120, 144, 165, 240, 360];
 const DEFAULT_MIN_FPS: u32 = 60;
 /// Frames kept for the averages (about two seconds of steady animation).
 const WINDOW: usize = 120;
@@ -36,6 +36,10 @@ impl PerfPrefs {
     /// `"<overlay 0|1> <min fps>"`.
     pub fn load() -> PerfPrefs {
         let s = Self::path().and_then(|p| crate::vfs::read_to_string(p).ok()).unwrap_or_default();
+        Self::parse(&s)
+    }
+
+    fn parse(s: &str) -> PerfPrefs {
         let mut it = s.split_whitespace();
         let d = PerfPrefs::default();
         PerfPrefs {
@@ -143,7 +147,7 @@ pub fn settings_page(ui: &mut Ui, perf: &mut Perf) {
         kit::toggle(ui, &mut perf.prefs.overlay);
     });
     ui.add_space(12.0);
-    kit::section_header(ui, "Warn below", None);
+    kit::section_header(ui, "Refresh rate", None);
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
@@ -153,7 +157,7 @@ pub fn settings_page(ui: &mut Ui, perf: &mut Perf) {
             }
         }
     });
-    ui.label(RichText::new("A badge shows on the canvas while frames take longer than this rate allows.").size(theme::SECONDARY).color(theme::pal(ui).tertiary));
+    ui.label(RichText::new("Frames are judged against this rate: a badge shows on the canvas while they take longer than it allows. Set it to your monitor refresh rate.").size(theme::SECONDARY).color(theme::pal(ui).tertiary));
     ui.add_space(16.0);
     kit::section_header(ui, "Now", None);
     ui.add_space(4.0);
@@ -226,7 +230,19 @@ fn rss_bytes() -> Option<u64> {
     Some(pages * unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// The working set, the "Memory" column of Task Manager's Details tab.
+#[cfg(windows)]
+fn rss_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut info: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+    info.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    // SAFETY: the current-process pseudo handle is always valid; `info.cb` is its size.
+    let ok = unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut info, info.cb) } != 0;
+    ok.then_some(info.WorkingSetSize as u64)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn rss_bytes() -> Option<u64> {
     None
 }
@@ -243,7 +259,20 @@ fn cpu_seconds() -> Option<f64> {
     Some(secs(u.ru_utime) + secs(u.ru_stime))
 }
 
-#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+#[cfg(windows)]
+fn cpu_seconds() -> Option<f64> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: the current-process pseudo handle is always valid; the four out-pointers are live.
+    let ok = unsafe { GetProcessTimes(GetCurrentProcess(), &mut creation, &mut exit, &mut kernel, &mut user) } != 0;
+    // FILETIME counts 100 ns ticks.
+    let secs = |t: FILETIME| ((u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime)) as f64 / 1e7;
+    ok.then(|| secs(kernel) + secs(user))
+}
+
+#[cfg(not(any(all(unix, not(target_arch = "wasm32")), windows)))]
 fn cpu_seconds() -> Option<f64> {
     None
 }
@@ -271,10 +300,36 @@ mod tests {
     }
 
     #[test]
+    fn refresh_rate_defaults_to_60_and_offers_high_rate_monitors() {
+        assert_eq!(PerfPrefs::default().min_fps, 60);
+        assert_eq!(PerfPrefs::parse("").min_fps, 60, "nothing saved yet");
+        assert!(THRESHOLDS.contains(&60) && THRESHOLDS.contains(&360));
+        assert!(THRESHOLDS.windows(2).all(|w| w[0] < w[1]), "ascending, so the chips read in order");
+    }
+
+    #[test]
+    fn saved_prefs_round_trip_the_chosen_rate() {
+        let p = PerfPrefs { overlay: true, min_fps: 360 };
+        let saved = format!("{} {}", u8::from(p.overlay), p.min_fps);
+        assert!(PerfPrefs::parse(&saved) == p);
+        assert_eq!(PerfPrefs::parse("1 garbage").min_fps, 60, "an unreadable rate falls back to 60");
+    }
+
+    #[test]
     fn samples_memory() {
         let mut p = Perf::default();
         p.record(0.0, 1.0);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         assert!(p.ram.is_some_and(|m| m > 1.0));
+    }
+
+    #[test]
+    fn cpu_seconds_grow_with_work() {
+        let Some(before) = cpu_seconds() else { return };
+        let mut x = 0u64;
+        while cpu_seconds().is_some_and(|now| now - before < 0.05) {
+            x = std::hint::black_box(x.wrapping_add(1));
+        }
+        assert!(cpu_seconds().is_some_and(|now| now > before));
     }
 }

@@ -101,6 +101,10 @@ libc = "0.2"
 zstd = "0.13"
 
 # Browser build (`src/web.rs`): canvas + WebGPU/WebGL surface, DOM events instead of winit.
+# Process RAM and CPU readings for the performance overlay (`ui::perf`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { version = "30", features = ["webgl"] }
 wasm-bindgen = "0.2"
