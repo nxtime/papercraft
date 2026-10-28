@@ -14,7 +14,7 @@ Check what you just changed between edits, and check everything once at the end.
 2. **Edit.** Make the change (`write_html`, `update_styles`, `set_text_content`, ...). Note the new `rev` from the result.
 3. **Lint what changed.** `lint_design {"changedOnly": true}` checks since this client's last lint. `lint_design {"since": <rev>}` checks since a revision you name. A scoped lint covers the touched layers plus their ancestors, descendants and siblings, and every layer bound to a changed variable. The result says how much it covered, for example `{"checked": 12, "total": 397, "since": 40, "partial": true}`.
 4. **See what an edit really touched.** `get_changes {"since": <rev>}` returns `{rev, since, truncated, changes: [{page, ids}]}`. Add `page` to limit it to one page. If `truncated` is `true`, the log no longer reaches that far back: do a full pass instead of trusting the list.
-5. **Measure in one call.** `get_bounds {"nodeIds": [...]}` (or `pageId`, with `depth`) returns `[{id, parent, x, y, w, h, absX, absY, clip}]` for the subtree. If `truncated` is `true`, narrow `nodeIds` or lower `depth`. Never loop `get_node_info` to read sizes or positions.
+5. **Measure in one call.** `get_bounds {"nodeIds": [...]}` (or `pageId`, with `depth`) returns `columns` `[id, parent, x, y, w, h, absX, absY, clip]` and `rows`, one array per layer, parents first. If `truncated` is `true`, call it again with `continueWith` as `nodeIds` (same `depth`). Never loop `get_node_info` to read sizes or positions.
 6. **Finish with the full check.** Before you report, always:
    * run `lint_design` with no arguments (a full pass, `partial: false`) and fix every error and warning, including `overflow`;
    * take a `get_screenshot` of every artboard you touched in each theme mode (`mode`, scale 2).
@@ -31,7 +31,7 @@ write_html {"targetNodeId": "a1:1", "mode": "insert-children", "html": "<div cla
 // {"rev": 41, ...}
 
 lint_design {"changedOnly": true}
-// {"errors": 0, "warnings": 1, "coverage": {"checked": 12, "total": 397, "since": 40, "partial": true}, ...}
+// {"errors": 0, "warnings": 1, "covered": {"checked": 12, "total": 397, "since": 40, "partial": true}, ...}
 
 update_styles {"nodeIds": ["a1:7"], "styles": {"width": "320px"}}
 // {"rev": 42, ...}
@@ -40,7 +40,8 @@ get_changes {"since": 41}
 // {"rev": 42, "since": 41, "truncated": false, "changes": [{"page": "p1", "ids": ["a1:7"]}]}
 
 get_bounds {"nodeIds": ["a1:1"], "depth": 3}
-// [{"id": "a1:1", "parent": "p1", "x": 0, "y": 0, "w": 390, "h": 844, "absX": 0, "absY": 0, "clip": true}, ...]
+// {"columns": ["id", "parent", "x", "y", "w", "h", "absX", "absY", "clip"],
+//  "rows": [["a1:1", null, 0, 0, 390, 844, 0, 0, true], ...]}
 
 lint_design {}
 // full pass, "partial": false, zero errors and warnings

@@ -33,6 +33,8 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
 3. **Build in small steps.** `create_artboard`, then one `write_html` per visual group (header, card, row) so the user sees progress. Name every layer with `layer-name`.
 4. **Look.** `get_screenshot` of the artboard after each group or two. Scale 2 to read small text. Read it as a designer: hierarchy, alignment, spacing rhythm, clipping, wrapping.
 5. **Lint.** `lint_design` on the artboard. Fix every error and warning; consider the `info` items. Run it again until errors and warnings are zero.
+   Between edits, lint only what changed: keep the `rev` each write returns and run `lint_design {changedOnly: true}` (or `{since: rev}`). `get_changes {since}` shows what an edit touched; `get_bounds` measures a whole subtree in one call instead of looping `get_node_info`.
+   Always finish with one full `lint_design` (no `since` or `changedOnly`: `covered.partial` is false) and a screenshot per artboard in each theme mode before reporting. Details: [incremental-checks.md](references/incremental-checks.md).
 6. **Fix with the smallest edit.** `update_styles` and `set_text_content` on the existing nodes, not a rewrite. Rewrite a group with `write_html` mode `replace` only when its structure is wrong.
 7. **Finish.** `finish_working_on_nodes` (saves). Tell the user what you made in a sentence or two, with artboard names, not ids.
 
@@ -44,6 +46,7 @@ Lessons from redesigning a 3-page, 130-screen project with up to six agents at o
 
 * **Split by section, not by page.** Give each agent named sections (frame ids) and forbid the rest. New sections go below the current lowest one; re-read positions right before creating, since another agent may have just added one.
 * **Section layout**: a section frame holds a title and rows of screen slots (a route label above a fixed-size screen). Keep 640 px between screens and rows and 1600 px between sections, so notes fit beside screens. Stack sections in one column.
+* **See what the others changed** before building on their work: `get_changes {since: <your last rev>, exclude: "self"}` lists layers by the client that changed them. `truncated: true` means re-read everything.
 * **Recreate, then delete.** Build the new screen next to the old one, finish it, then delete the old one, and record the deleted ids and names in the report. A cleanup agent once deleted buttons and lost icons by editing in place.
 * **Reuse the design system across pages**: `create_instance` / `swap_instance` / `<x-paper-instance>` take a main from any page and stay linked. Never `import_components` to use a component: that copies mains onto the page, and instances made from the copies stop following the design system. `lint_design` flags hand-made look-alikes as `not-an-instance` (a different icon is a different component); fix with `write_html` mode replace and the `<x-paper-instance>` it names.
 * **QA pass after a build** (screen by screen at scale 1, one call at a time): text layers with stale fixed widths clip labels ("In prog", "New sess"): set `width: fit-content`. Sidebars and panels fixed at 900 px stop short on taller screens: make them fill the height and let the screen hug with a 900 px minimum. Tags and chips overflowing their box, cards overlapping buttons, footers not pinned, leftover `Text` / `Frame` names, gendered copy about people whose gender is unknown (use their name or neutral wording).
@@ -100,6 +103,8 @@ Full flows: [recipes.md](references/recipes.md).
 | Know the project, pages, artboards | `get_basic_info`, `get_tree_summary`, `get_children` |
 | Know what is selected | `get_selection` |
 | Inspect one node | `get_node_info`, `get_computed_styles`, `get_jsx` |
+| Sizes and positions of a subtree | `get_bounds` (one call, `columns` + `rows`; `continueWith` when `truncated`) |
+| What changed since a revision | `get_changes {since}` (`exclude: "self"` for other agents' edits) |
 | Find nodes by text or style | `find_nodes` (text contains the phrase, any case, every page) |
 | Read all copy in a subtree | `get_tree_summary {nodeId, fullText: true}` (depth counts from the node: rows under a "Screens" frame need depth 3) |
 | See it | `get_screenshot` (`nodeId`, `scale` 1 or 2, `annotations: true` to include notes, `mode` to preview a theme without switching) |
@@ -126,7 +131,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Hand work to the helper agent | `delegate` (`role` qa, read or build, a self-contained `task`; only when Settings, Chat, Helper is set) |
 | Design rules (design-playbook) | `design_rules` (`query` or `rule` id; needs the `playbook` CLI; cite ids in the report) |
 | Report a PaperCraft problem | `report_issue` (a draft the user sends; synthetic repro only) |
-| Check quality | `lint_design` |
+| Check quality | `lint_design` (`changedOnly: true` or `since` between edits, a full pass at the end; `overflow` flags layers past their artboard or clipping parent) |
 | Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf` |
 | Point at things for the user | `select_nodes` (`zoom: true`) |
 | Take back | `undo`, `redo` |
