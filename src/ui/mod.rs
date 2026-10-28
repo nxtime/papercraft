@@ -893,13 +893,6 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         // The turn is over: the "Working" pill goes with it, not 6 s after its last tool call.
         st.agent = None;
     }
-    if st.custom_titlebar {
-        let p = theme::pal(ui);
-        egui::Panel::top("titlebar")
-            .exact_size(TITLEBAR_H)
-            .frame(egui::Frame::NONE.fill(p.window))
-            .show(ui, |ui| title_bar(ui, ed, st));
-    }
     if let Some(a) = &mut st.agent_link {
         a.window(ui.ctx());
     }
@@ -912,6 +905,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         {
             st.updater.open |= std::mem::take(&mut hv.show_updates);
             st.updater.show(ui.ctx());
+        }
+        if st.custom_titlebar {
+            home_window_chrome(ui, st);
         }
         return egui::Rect::NOTHING;
     }
@@ -1050,10 +1046,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     egui::Panel::top("toolbar")
         .exact_size(if floating {
             theme::TOOLBAR_H + gap * 2.0
-        } else if st.native_chrome {
-            theme::TOOLBAR_H
         } else {
-            34.0
+            theme::TOOLBAR_H
         })
         .frame(if floating {
             side_frame(0, 0, gap as i8, gap as i8)
@@ -1162,8 +1156,11 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     // In a narrow window only the essentials stay: zoom, present and share.
     let compact = ui.max_rect().width() < 720.0;
     let tight = ui.max_rect().width() < TIGHT_BAR_W;
+    if st.custom_titlebar {
+        drag_area(ui, ui.max_rect(), st);
+    }
     ui.horizontal_centered(|ui| {
-        if !st.native_chrome && !st.custom_titlebar {
+        if !st.native_chrome {
             if ui.max_rect().width() < MENU_BAR_W {
                 // Not enough room for every menu: they fold into one.
                 ui.scope(|ui| {
@@ -1263,6 +1260,10 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         agent_pill(ui, st, !tight, right_w);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
+            if st.custom_titlebar {
+                window_buttons(ui, st, theme::TOOLBAR_H);
+                ui.add_space(8.0);
+            }
             let share = kit::button_compact(ui, kit::ButtonKind::Primary, Some(Icon::Export), "Share");
             egui::Popup::menu(&share).show(|ui| {
                 crate::theme::popup_backing(ui);
@@ -1473,72 +1474,70 @@ fn theme_menu(ui: &mut Ui) {
     });
 }
 
-const TITLEBAR_H: f32 = 32.0;
 const WIN_BTN_W: f32 = 46.0;
 
-/// Custom window chrome: menus on the left, empty space drags the window, buttons on the right.
-fn title_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
-    let p = theme::pal(ui);
-    let rect = ui.max_rect();
-    let drag = ui.interact(rect, ui.id().with("drag"), egui::Sense::click_and_drag());
+/// Without native chrome (Windows, Linux) the toolbar is the title bar: its empty space drags
+/// the window and a double click maximizes. Widgets added after this take the clicks.
+fn drag_area(ui: &mut Ui, rect: egui::Rect, st: &mut UiState) {
+    let drag = ui.interact(rect, ui.id().with("window-drag"), egui::Sense::click_and_drag());
     if drag.double_clicked() {
         st.win_cmd = Some(WinCmd::ToggleMaximize);
     } else if drag.drag_started() {
         st.win_cmd = Some(WinCmd::Drag);
     }
-    ui.horizontal_centered(|ui| {
-        ui.add_space(8.0);
-        if st.home.is_some() {
-            theme_menu(ui);
-        } else {
-            menu_bar(ui, ed, &mut st.agent_link);
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            for (cmd, hover) in [
-                (WinCmd::Close, Color32::from_rgb(0xe8, 0x11, 0x23)),
-                (WinCmd::ToggleMaximize, p.hover),
-                (WinCmd::Minimize, p.hover),
-            ] {
-                let (r, resp) =
-                    ui.allocate_exact_size(egui::vec2(WIN_BTN_W, TITLEBAR_H), egui::Sense::click());
-                let hot = resp.hovered();
-                if hot {
-                    ui.painter().rect_filled(r, 0.0, hover);
+}
+
+/// Minimize, maximize and close (right to left from the cursor), `h` tall.
+fn window_buttons(ui: &mut Ui, st: &mut UiState, h: f32) {
+    let p = theme::pal(ui);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for (cmd, hover, tip) in [
+            (WinCmd::Close, Color32::from_rgb(0xe8, 0x11, 0x23), "Close"),
+            (WinCmd::ToggleMaximize, p.hover, "Maximize"),
+            (WinCmd::Minimize, p.hover, "Minimize"),
+        ] {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(WIN_BTN_W, h), egui::Sense::click());
+            let hot = resp.hovered();
+            if hot {
+                ui.painter().rect_filled(r.shrink2(egui::vec2(2.0, 4.0)), theme::radius_md(), hover);
+            }
+            let ink = if hot && matches!(cmd, WinCmd::Close) { Color32::WHITE } else { p.text };
+            let stroke = egui::Stroke::new(1.0, ink);
+            let c = r.center();
+            let k = 5.0;
+            match cmd {
+                WinCmd::Minimize => _ = ui.painter().hline(c.x - k..=c.x + k, c.y, stroke),
+                WinCmd::ToggleMaximize => {
+                    ui.painter().rect_stroke(egui::Rect::from_center_size(c, egui::Vec2::splat(k * 2.0)), 0.0, stroke, egui::StrokeKind::Inside);
                 }
-                let ink = if hot && matches!(cmd, WinCmd::Close) {
-                    Color32::WHITE
-                } else {
-                    p.text
-                };
-                let stroke = egui::Stroke::new(1.0, ink);
-                let c = r.center();
-                let h = 5.0;
-                match cmd {
-                    WinCmd::Minimize => {
-                        ui.painter().hline(c.x - h..=c.x + h, c.y, stroke);
-                    }
-                    WinCmd::ToggleMaximize => {
-                        ui.painter().rect_stroke(
-                            egui::Rect::from_center_size(c, egui::Vec2::splat(h * 2.0)),
-                            0.0,
-                            stroke,
-                            egui::StrokeKind::Inside,
-                        );
-                    }
-                    _ => {
-                        let d = egui::vec2(h, h);
-                        let e = egui::vec2(h, -h);
-                        ui.painter().line_segment([c - d, c + d], stroke);
-                        ui.painter().line_segment([c - e, c + e], stroke);
-                    }
-                }
-                if resp.clicked() {
-                    st.win_cmd = Some(cmd);
+                _ => {
+                    let (d, e) = (egui::vec2(k, k), egui::vec2(k, -k));
+                    ui.painter().line_segment([c - d, c + d], stroke);
+                    ui.painter().line_segment([c - e, c + e], stroke);
                 }
             }
-        });
+            if resp.on_hover_text(tip).clicked() {
+                st.win_cmd = Some(cmd);
+            }
+        }
     });
+}
+
+/// The home screen has no toolbar: its top strip drags the window, the buttons sit top right.
+fn home_window_chrome(ui: &mut Ui, st: &mut UiState) {
+    let screen = ui.ctx().content_rect();
+    let strip = egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), theme::TOOLBAR_H));
+    egui::Area::new("home-window-drag".into()).order(egui::Order::Background).fixed_pos(strip.min).show(ui.ctx(), |ui| {
+        drag_area(ui, strip, st);
+    });
+    egui::Area::new("home-window-buttons".into())
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::RIGHT_TOP)
+        .fixed_pos(screen.right_top())
+        .show(ui.ctx(), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| window_buttons(ui, st, theme::TOOLBAR_H));
+        });
 }
 
 /// The sidebar views as a strip that fills the sidebar: layers, library, design (variables, modes,

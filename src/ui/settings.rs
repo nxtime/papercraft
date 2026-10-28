@@ -345,9 +345,14 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
                             if st.settings.page == Page::Chat {
                                 content(ui, ctx, st);
                             } else {
+                                // Inside a horizontal row the area would shrink to the row's
+                                // height: it takes the dialog's.
+                                let height = modal_height(ctx) - 24.0;
                                 egui::ScrollArea::vertical()
                                     .id_salt(("settings-page", st.settings.page as u8))
-                                    .max_height(modal_height(ctx) - 24.0)
+                                    .auto_shrink([false, false])
+                                    .max_height(height)
+                                    .min_scrolled_height(height)
                                     .show(ui, |ui| content(ui, ctx, st));
                             }
                         });

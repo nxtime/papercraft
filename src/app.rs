@@ -60,6 +60,9 @@ const AGENT_FRAME: Duration = Duration::from_millis(50);
 
 pub struct App {
     gfx: Option<Gfx>,
+    /// The undecorated window edge under the pointer (Linux), which a press resizes.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    resize_edge: Option<winit::window::ResizeDirection>,
     pub ed: Editor,
     session: Session,
     st: UiState,
@@ -119,6 +122,8 @@ impl App {
         let library = crate::library::Library::load(&crate::library::Library::path_in(&store.root));
         let mut app = App {
             gfx: None,
+            #[cfg(all(unix, not(target_os = "macos")))]
+            resize_edge: None,
             ed: Editor::default(),
             session: Session::new(store),
             st: UiState::default(),
@@ -1038,8 +1043,12 @@ impl ApplicationHandler<UserEvent> for App {
                 .with_corner_preference(CornerPreference::Round)
                 .with_taskbar_icon(icon)
         };
+        // Linux: no native frame either; the toolbar carries the window buttons and the window
+        // edges resize (`edge_resize`).
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let attrs = attrs.with_decorations(false);
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        self.st.custom_titlebar = cfg!(windows);
+        self.st.custom_titlebar = cfg!(any(windows, all(unix, not(target_os = "macos"))));
         window.set_ime_allowed(true);
         #[cfg(target_os = "macos")]
         {
@@ -1119,6 +1128,10 @@ impl ApplicationHandler<UserEvent> for App {
             log::trace!("event {event:?} -> egui repaint {}", resp.repaint);
         }
         let scale = g.window.scale_factor();
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if self.st.custom_titlebar && edge_resize(&g.window, &event, &mut self.resize_edge) {
+            return;
+        }
         let mut redraw = resp.repaint;
         let now = self.now();
         match event {
@@ -1741,5 +1754,41 @@ mod tests {
             "6.6.87.2-microsoft-standard-WSL2",
             Some(OsStr::new(""))
         ));
+    }
+}
+
+/// An undecorated window has no resize border (Linux): the pointer within a few pixels of an
+/// edge shows a resize cursor and a press resizes. True when the event was consumed.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn edge_resize(window: &Window, event: &WindowEvent, edge: &mut Option<winit::window::ResizeDirection>) -> bool {
+    use winit::window::{CursorIcon, ResizeDirection as D};
+    const BORDER: f64 = 6.0;
+    match event {
+        WindowEvent::CursorMoved { position, .. } => {
+            let size = window.inner_size();
+            let b = BORDER * window.scale_factor();
+            let (l, r) = (position.x < b, position.x > f64::from(size.width) - b);
+            let (t, bo) = (position.y < b, position.y > f64::from(size.height) - b);
+            let next = match (l, r, t, bo) {
+                (true, _, true, _) => Some(D::NorthWest),
+                (_, true, true, _) => Some(D::NorthEast),
+                (true, _, _, true) => Some(D::SouthWest),
+                (_, true, _, true) => Some(D::SouthEast),
+                (true, ..) => Some(D::West),
+                (_, true, ..) => Some(D::East),
+                (_, _, true, _) => Some(D::North),
+                (.., true) => Some(D::South),
+                _ => None,
+            };
+            if next != *edge {
+                window.set_cursor(next.map_or(CursorIcon::Default, CursorIcon::from));
+                *edge = next;
+            }
+            false
+        }
+        WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+            edge.is_some_and(|d| window.drag_resize_window(d).is_ok())
+        }
+        _ => false,
     }
 }

@@ -394,30 +394,7 @@ pub fn close_button(ui: &mut Ui) -> Response {
 
 /// A pill toggle switch.
 pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
-    let p = theme::pal(ui);
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(42.0, 24.0), Sense::click());
-    if resp.clicked() {
-        *on = !*on;
-        resp.mark_changed();
-    }
-    let t = crate::ui::motion::progress(
-        ui.ctx(),
-        resp.id.with("toggle"),
-        *on,
-        crate::ui::motion::FAST,
-        crate::ui::motion::ease_out_cubic,
-    );
-    let fill = theme::blend(p.field, theme::accent().gamma_multiply(t));
-    if t > 0.5 {
-        theme::fill_accent(ui, rect, PILL, fill);
-    } else {
-        theme::fill_control(ui, rect, PILL, fill);
-    }
-    let knob_x = egui::lerp((rect.left() + 12.0)..=(rect.right() - 12.0), t);
-    let knob = if t > 0.5 { on_accent(p) } else { p.secondary };
-    ui.painter()
-        .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, knob);
-    resp
+    craft_ui::controls::toggle(ui, &control_style(ui), on)
 }
 
 /// A sidebar-style navigation row: icon, label, optional selected state. Returns whether it was clicked.
@@ -482,52 +459,29 @@ pub fn lottie_button(ui: &mut Ui, name: &str, tip: &str, size: f32) -> Response 
 
 /// A rounded checkbox with a label.
 pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
+    craft_ui::controls::checkbox(ui, &control_style(ui), on, label)
+}
+
+/// The shared controls' style from the theme (`craft_ui::controls`).
+pub fn control_style(ui: &Ui) -> craft_ui::controls::ControlStyle {
     let p = theme::pal(ui);
-    let font = FontId::proportional(theme::BODY);
-    let w = 26.0 + galley_width(ui, label, font.clone()) + 4.0;
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
-    if resp.clicked() {
-        *on = !*on;
-        resp.mark_changed();
+    craft_ui::controls::ControlStyle {
+        material: if theme::is_acrylic() { craft_ui::material::Material::Acrylic } else { craft_ui::material::Material::Solid },
+        field: p.field,
+        hover: p.hover,
+        text: p.text,
+        secondary: p.secondary,
+        accent: theme::accent(),
+        on_accent: on_accent(p),
+        selected: p.field,
+        radius: theme::radius_md(),
+        box_radius: theme::ru(6),
+        field_height: theme::FIELD_H,
+        font: FontId::proportional(theme::BODY),
+        font_strong: theme::semibold(theme::BODY),
+        menu_max: vec2(320.0, 420.0),
+        animation_time: crate::ui::motion::FAST,
     }
-    let t = crate::ui::motion::progress(
-        ui.ctx(),
-        resp.id.with("check"),
-        *on,
-        crate::ui::motion::FAST,
-        crate::ui::motion::ease_out_cubic,
-    );
-    let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("check-hover"), &resp);
-    let bx = Rect::from_center_size(
-        egui::pos2(rect.left() + 9.0, rect.center().y),
-        vec2(18.0, 18.0),
-    );
-    let fill = theme::blend(
-        theme::blend(p.field, p.hover.gamma_multiply(hover)),
-        theme::accent().gamma_multiply(t),
-    );
-    if t > 0.5 {
-        theme::fill_accent(ui, bx, crate::theme::ru(6), fill);
-    } else {
-        theme::fill_control(ui, bx, crate::theme::ru(6), fill);
-    }
-    if t > 0.0 {
-        let c = bx.center();
-        let ink = on_accent(p).gamma_multiply(t);
-        let stroke = Stroke::new(2.0, ink);
-        ui.painter()
-            .line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.0, 3.5)], stroke);
-        ui.painter()
-            .line_segment([c + vec2(-1.0, 3.5), c + vec2(4.5, -3.0)], stroke);
-    }
-    ui.painter().text(
-        egui::pos2(rect.left() + 26.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        font,
-        p.text,
-    );
-    resp
 }
 
 /// A rounded dropdown: the current value in a field, a rounded menu of options below it.
@@ -538,7 +492,7 @@ pub fn select<T: PartialEq + Copy>(
     options: &[(T, &str)],
     width: f32,
 ) -> Option<T> {
-    select_icons(ui, current, options, &[], width)
+    craft_ui::controls::select(ui, &control_style(ui), current, options, width)
 }
 
 /// [`select`] with `icons[i]` before option `i`, in the trigger and the menu.
@@ -549,129 +503,13 @@ pub fn select_icons<T: PartialEq + Copy>(
     icons: &[Icon],
     width: f32,
 ) -> Option<T> {
-    let p = theme::pal(ui);
-    let icon_of = |i: usize| icons.get(i).copied();
-    let indent = if icons.is_empty() { 0.0 } else { 22.0 };
-    let cur_i = options.iter().position(|(o, _)| *o == current);
-    let label = options
-        .iter()
-        .find(|(o, _)| *o == current)
-        .map_or("—", |(_, l)| *l);
-    let w = if width > 0.0 {
-        width
-    } else {
-        ui.available_width()
+    let paint = |painter: &egui::Painter, r: Rect, i: usize, ink: Color32| {
+        if let Some(icon) = icons.get(i) {
+            theme::paint_icon(painter, r, *icon, ink);
+        }
     };
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, theme::FIELD_H), Sense::click());
-    let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("select"), &resp);
-    theme::fill_control(
-        ui,
-        rect,
-        theme::radius_md(),
-        theme::blend(p.field, p.hover.gamma_multiply(hover)),
-    );
-    if let Some(i) = cur_i.and_then(icon_of) {
-        let r = Rect::from_center_size(egui::pos2(rect.left() + 19.0, rect.center().y), vec2(14.0, 14.0));
-        theme::paint_icon(ui.painter(), r, i, p.secondary);
-    }
-    let g = option_label(ui, label, FontId::proportional(theme::BODY), p.text, rect.width() - 12.0 - indent - 28.0);
-    ui.painter().galley(egui::pos2(rect.left() + 12.0 + indent, rect.center().y - g.size().y / 2.0), g, p.text);
-    let ch = Rect::from_center_size(
-        egui::pos2(rect.right() - 14.0, rect.center().y),
-        vec2(14.0, 14.0),
-    );
-    theme::paint_icon(ui.painter(), ch, Icon::ChevronDown, p.secondary);
-    let mut chosen = None;
-    // The menu grows to fit its longest option, up to a cap; longer ones are shortened.
-    let min_w = rect.width().max(150.0);
-    let menu_w = if egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp)) {
-        let font = theme::semibold(theme::BODY);
-        let widest = options
-            .iter()
-            .map(|(_, l)| ui.painter().layout_no_wrap((*l).to_owned(), font.clone(), p.text).size().x)
-            .fold(0.0, f32::max);
-        (widest + 12.0 + indent + 40.0).clamp(min_w, SELECT_MENU_MAX_W)
-    } else {
-        min_w
-    };
-    egui::Popup::menu(&resp)
-        .width(menu_w)
-        .show(|ui| {
-            crate::theme::popup_backing(ui);
-            ui.spacing_mut().item_spacing.y = 2.0;
-            egui::ScrollArea::vertical().max_height(SELECT_MENU_MAX_H).show(ui, |ui| {
-                for (k, (o, l)) in options.iter().enumerate() {
-                    let (row, r) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-                    let on = *o == current;
-                    let h = crate::ui::motion::hover(ui.ctx(), r.id.with("opt"), &r);
-                    if on {
-                        theme::fill_selected(ui, row, theme::radius_md(), p.field);
-                    } else if h > 0.0 {
-                        ui.painter()
-                            .rect_filled(row, theme::radius_md(), p.hover.gamma_multiply(h));
-                    }
-                    if let Some(i) = icon_of(k) {
-                        let ir = Rect::from_center_size(egui::pos2(row.left() + 19.0, row.center().y), vec2(14.0, 14.0));
-                        theme::paint_icon(ui.painter(), ir, i, if on { p.text } else { p.secondary });
-                    }
-                    let font = if on { theme::semibold(theme::BODY) } else { FontId::proportional(theme::BODY) };
-                    let g = option_label(ui, l, font, p.text, row.width() - 12.0 - indent - 32.0);
-                    let cut = g.text() != *l;
-                    ui.painter().galley(egui::pos2(row.left() + 12.0 + indent, row.center().y - g.size().y / 2.0), g, p.text);
-                    let r = if cut { r.on_hover_text(*l) } else { r };
-                    if on {
-                        let c = egui::pos2(row.right() - 16.0, row.center().y);
-                        let s = Stroke::new(2.0, theme::accent());
-                        ui.painter()
-                            .line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.0, 3.5)], s);
-                        ui.painter()
-                            .line_segment([c + vec2(-1.0, 3.5), c + vec2(4.5, -3.0)], s);
-                    }
-                    if r.clicked() {
-                        chosen = Some(*o);
-                        ui.close();
-                    }
-                }
-            });
-        });
-    chosen.filter(|c| *c != current)
-}
-
-const SELECT_MENU_MAX_W: f32 = 320.0;
-const SELECT_MENU_MAX_H: f32 = 420.0;
-
-/// One line of `text` in `max_w`. A `Group / Sub / Name` path keeps its last parts and drops
-/// leading ones (`… / Name`), since the end tells options apart; the path before the name is
-/// dimmed. Anything still too long ends in "…".
-fn option_label(ui: &Ui, text: &str, font: FontId, ink: Color32, max_w: f32) -> std::sync::Arc<egui::Galley> {
-    let dim = theme::pal(ui).secondary;
-    let parts: Vec<&str> = text.split(" / ").collect();
-    let job = |skip: usize, cut: bool| {
-        let mut job = egui::text::LayoutJob::default();
-        let (prefix, name) = parts.split_at(parts.len() - 1);
-        let mut head = prefix[skip..].join(" / ");
-        if skip > 0 {
-            head = if head.is_empty() { "\u{2026}".into() } else { format!("\u{2026} / {head}") };
-        }
-        if !head.is_empty() {
-            job.append(&format!("{head} / "), 0.0, egui::TextFormat::simple(font.clone(), dim));
-        }
-        job.append(name[0], 0.0, egui::TextFormat::simple(font.clone(), ink));
-        if cut {
-            job.wrap.max_width = max_w;
-            job.wrap.max_rows = 1;
-            job.wrap.overflow_character = Some('\u{2026}');
-        }
-        job
-    };
-    for skip in 0..parts.len() {
-        let g = ui.painter().layout_job(job(skip, false));
-        if g.size().x <= max_w {
-            return g;
-        }
-    }
-    ui.painter().layout_job(job(parts.len() - 1, true))
+    let icon: Option<craft_ui::controls::PaintOptionIcon<'_>> = (!icons.is_empty()).then_some(&paint);
+    craft_ui::controls::select_with_icons(ui, &control_style(ui), current, options, width, icon)
 }
 
 /// A rounded slider: rail, accent fill, round knob. Returns whether the value changed.

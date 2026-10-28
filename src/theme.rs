@@ -469,9 +469,9 @@ pub fn lit(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> egui::Response)
     let r = add(ui);
     let dark = ui.visuals().dark_mode;
     let radius = f32::from(ui.visuals().widgets.inactive.corner_radius.nw);
-    let (top, bottom) = lit_fill(pal(ui).field, dark);
+    let (top, bottom) = craft_ui::material::lit(pal(ui).field, dark);
     ui.painter()
-        .set(slot, vertical_gradient(r.rect, radius, top, bottom));
+        .set(slot, craft_ui::material::vertical_gradient(r.rect, radius, top, bottom));
     r
 }
 
@@ -592,10 +592,7 @@ fn style_for(s: &mut egui::Style, dark: bool, p: Palette) {
 
 /// `over` composited on `base`.
 pub fn blend(base: Color32, over: Color32) -> Color32 {
-    let a = over.a() as f32 / 255.0;
-    let [or, og, ob, _] = over.to_srgba_unmultiplied();
-    let mix = |b: u8, o: u8| (b as f32 * (1.0 - a) + o as f32 * a).round() as u8;
-    Color32::from_rgb(mix(base.r(), or), mix(base.g(), og), mix(base.b(), ob))
+    craft_ui::material::blend(base, over)
 }
 
 /// The appearance setting: follow the system, force light or dark, or a Catppuccin flavour.
@@ -924,110 +921,31 @@ pub fn backdrop_fill(p: Palette) -> Color32 {
     }
 }
 
+/// The shared material for the chosen [`Material`] (`craft_ui::material` paints it).
+fn shared() -> craft_ui::material::Material {
+    if is_acrylic() {
+        craft_ui::material::Material::Acrylic
+    } else {
+        craft_ui::material::Material::Solid
+    }
+}
+
 /// The acrylic backdrop at `pos`: the backdrop colour lit by a soft accent glow that falls off
 /// from the top of the window, a third of the way across.
 pub fn backdrop_at(p: Palette, screen: Rect, pos: Pos2) -> Color32 {
-    const GLOW_ALPHA: f32 = 46.0;
-    const GLOW_REACH: f32 = 0.8;
-    let centre = pos2(screen.left() + screen.width() * 0.3, screen.top());
-    let reach = screen.width().max(screen.height()) * GLOW_REACH;
-    let d = ((pos - centre).length() / reach).min(1.0);
-    let a = accent();
-    let glow = Color32::from_rgba_unmultiplied(
-        a.r(),
-        a.g(),
-        a.b(),
-        (GLOW_ALPHA * (1.0 - d) * (1.0 - d)) as u8,
-    );
-    blend(p.backdrop, glow)
+    craft_ui::material::backdrop_at(p.backdrop, accent(), screen, pos)
 }
 
 /// `rect` filled with the acrylic backdrop: a grid of vertex colours, so the glow is smooth.
 pub fn backdrop_mesh(p: Palette, screen: Rect, rect: Rect) -> egui::Mesh {
-    const CELLS: u32 = 12;
-    let mut mesh = egui::Mesh::default();
-    for j in 0..=CELLS {
-        for i in 0..=CELLS {
-            let t = vec2(i as f32, j as f32) / CELLS as f32;
-            let pos = rect.min + rect.size() * t;
-            mesh.colored_vertex(pos, backdrop_at(p, screen, pos));
-        }
-    }
-    let row = CELLS + 1;
-    for j in 0..CELLS {
-        for i in 0..CELLS {
-            let k = j * row + i;
-            mesh.add_triangle(k, k + 1, k + row);
-            mesh.add_triangle(k + 1, k + row + 1, k + row);
-        }
-    }
-    mesh
-}
-
-/// A rounded rectangle filled with a vertical gradient. A fan from the centre interpolates a
-/// colour that is linear in y exactly; the caller's edge stroke covers the unsmoothed outline.
-fn vertical_gradient(rect: Rect, radius: f32, top: Color32, bottom: Color32) -> egui::Mesh {
-    let mut outline = Vec::new();
-    egui::epaint::tessellator::path::rounded_rectangle(&mut outline, rect, radius.into());
-    let at = |y: f32| top.lerp_to_gamma(bottom, ((y - rect.top()) / rect.height()).clamp(0.0, 1.0));
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(rect.center(), at(rect.center().y));
-    for q in &outline {
-        mesh.colored_vertex(*q, at(q.y));
-    }
-    let n = outline.len() as u32;
-    for i in 0..n {
-        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
-    }
-    mesh
-}
-
-fn paint_vertical_gradient(
-    painter: &egui::Painter,
-    rect: Rect,
-    radius: f32,
-    top: Color32,
-    bottom: Color32,
-) {
-    painter.add(vertical_gradient(rect, radius, top, bottom));
-}
-
-/// The fill of an acrylic surface lit from above: `fill` lightened at the top, shaded at the bottom.
-fn lit_fill(fill: Color32, dark: bool) -> (Color32, Color32) {
-    // A translucent tint (the inspector's fields): brighter at the top, fainter at the bottom.
-    if fill.a() < 255 {
-        let [r, g, b, a] = fill.to_srgba_unmultiplied();
-        let with = |k: f32| Color32::from_rgba_unmultiplied(r, g, b, (f32::from(a) * k).min(255.0) as u8);
-        return (with(1.6), with(0.8));
-    }
-    if dark {
-        (
-            blend(fill, Color32::from_white_alpha(26)),
-            blend(fill, Color32::from_black_alpha(22)),
-        )
-    } else {
-        (
-            blend(fill, Color32::from_white_alpha(140)),
-            blend(fill, Color32::from_black_alpha(4)),
-        )
-    }
+    craft_ui::material::backdrop_mesh(p.backdrop, accent(), screen, rect)
 }
 
 /// Under acrylic, lights a modal's own frame (`fill`, `radius`): call first thing in the
 /// modal's content. Paints over the frame's flat fill at the window's rect from the last frame,
 /// so nothing has to run after the content.
 pub fn modal_backing(ui: &egui::Ui, fill: Color32, radius: u8) {
-    if !is_acrylic() {
-        return;
-    }
-    let Some(rect) = ui.ctx().memory(|m| m.area_rect(ui.layer_id().id)) else {
-        return;
-    };
-    let dark = ui.visuals().dark_mode;
-    let painter = ui.painter().with_clip_rect(rect);
-    let (top, bottom) = lit_fill(fill, dark);
-    paint_vertical_gradient(&painter, rect, f32::from(radius), top, bottom);
-    painter.rect_stroke(rect, radius, acrylic_edge(dark), egui::StrokeKind::Inside);
+    craft_ui::material::paint_backing(ui, shared(), fill, radius);
 }
 
 /// [`modal_backing`] for a popup, menu or context menu: called first in its closure, it lights
@@ -1049,61 +967,19 @@ pub fn well_fill(p: Palette, dark: bool) -> Color32 {
 /// A control's surface (field, chip, select, secondary button, segmented track): lit from above
 /// with a fine edge under acrylic, flat when solid.
 pub fn fill_control(ui: &egui::Ui, rect: Rect, radius: u8, fill: Color32) {
-    if !is_acrylic() {
-        ui.painter().rect_filled(rect, radius, fill);
-        return;
-    }
-    let dark = ui.visuals().dark_mode;
-    let (top, bottom) = lit_fill(fill, dark);
-    paint_vertical_gradient(ui.painter(), rect, f32::from(radius), top, bottom);
-    ui.painter()
-        .rect_stroke(rect, radius, acrylic_edge(dark), egui::StrokeKind::Inside);
+    craft_ui::material::paint_control(ui.painter(), shared(), rect, radius, fill, ui.visuals().dark_mode);
 }
 
 /// A selected row or item (nav, menu option, layer): an accent wash with an accent edge under
 /// acrylic, `fill` when solid.
 pub fn fill_selected(ui: &egui::Ui, rect: Rect, radius: u8, fill: Color32) {
-    if !is_acrylic() {
-        ui.painter().rect_filled(rect, radius, fill);
-        return;
-    }
-    let a = accent();
-    let wash = |alpha| Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), alpha);
-    paint_vertical_gradient(
-        ui.painter(),
-        rect,
-        f32::from(radius),
-        blend(fill, wash(56)),
-        blend(fill, wash(20)),
-    );
-    ui.painter().rect_stroke(
-        rect,
-        radius,
-        Stroke::new(1.0, wash(80)),
-        egui::StrokeKind::Inside,
-    );
+    craft_ui::material::paint_selected(ui.painter(), shared(), rect, radius, fill, accent());
 }
 
 /// An accent surface that is not the primary button (toggle on, active segment, checked box):
 /// glossy with a light edge under acrylic, no glow, flat when solid.
 pub fn fill_accent(ui: &egui::Ui, rect: Rect, radius: u8, fill: Color32) {
-    if !is_acrylic() {
-        ui.painter().rect_filled(rect, radius, fill);
-        return;
-    }
-    paint_vertical_gradient(
-        ui.painter(),
-        rect,
-        f32::from(radius),
-        blend(fill, Color32::from_white_alpha(70)),
-        blend(fill, Color32::from_black_alpha(40)),
-    );
-    ui.painter().rect_stroke(
-        rect,
-        radius,
-        Stroke::new(1.0, Color32::from_white_alpha(90)),
-        egui::StrokeKind::Inside,
-    );
+    craft_ui::material::paint_accent(ui.painter(), shared(), rect, radius, fill);
 }
 
 /// `Frame::show` that, under acrylic, paints the frame's fill lit from above with a fine edge.
@@ -1122,25 +998,7 @@ impl Surface for egui::Frame {
         ui: &mut egui::Ui,
         add: impl FnOnce(&mut egui::Ui) -> R,
     ) -> egui::InnerResponse<R> {
-        if !is_acrylic() || self.fill.a() == 0 {
-            return self.show(ui, add);
-        }
-        let dark = ui.visuals().dark_mode;
-        let (fill, radius) = (self.fill, f32::from(self.corner_radius.nw));
-        let slot = ui.painter().add(egui::Shape::Noop);
-        let edge = if self.stroke.width > 0.0 {
-            self.stroke
-        } else {
-            acrylic_edge(dark)
-        };
-        let r = self
-            .fill(Color32::TRANSPARENT)
-            .stroke(edge)
-            .show(ui, add);
-        let (top, bottom) = lit_fill(fill, dark);
-        ui.painter()
-            .set(slot, vertical_gradient(r.response.rect, radius, top, bottom));
-        r
+        craft_ui::material::show_surface(self, ui, shared(), add)
     }
 }
 
@@ -1153,52 +1011,17 @@ pub fn paint_acrylic_panel(
     fill: Color32,
     dark: bool,
 ) {
-    let shadow = Shadow {
-        offset: [0, 4],
-        blur: 12,
-        spread: 0,
-        color: Color32::from_black_alpha(if dark { 80 } else { 24 }),
-    };
-    painter.add(shadow.as_shape(rect, CornerRadius::same(radius)));
-    let (top, bottom) = lit_fill(fill, dark);
-    paint_vertical_gradient(painter, rect, f32::from(radius), top, bottom);
-    painter.rect_stroke(rect, radius, acrylic_edge(dark), egui::StrokeKind::Inside);
+    craft_ui::material::paint_panel(painter, rect, radius, fill, dark);
 }
 
 /// The fine edge of acrylic surfaces.
 pub fn acrylic_edge(dark: bool) -> Stroke {
-    Stroke::new(
-        1.0,
-        if dark {
-            Color32::from_white_alpha(22)
-        } else {
-            Color32::from_black_alpha(22)
-        },
-    )
+    craft_ui::material::edge(dark)
 }
 
 /// The acrylic primary button: a soft accent glow, a glossy accent gradient and a light edge.
 pub fn paint_gloss(painter: &egui::Painter, rect: Rect, radius: u8, fill: Color32) {
-    let glow = Shadow {
-        offset: [0, 0],
-        blur: 16,
-        spread: 0,
-        color: Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 70),
-    };
-    painter.add(glow.as_shape(rect, CornerRadius::same(radius)));
-    paint_vertical_gradient(
-        painter,
-        rect,
-        f32::from(radius),
-        blend(fill, Color32::from_white_alpha(70)),
-        blend(fill, Color32::from_black_alpha(40)),
-    );
-    painter.rect_stroke(
-        rect,
-        radius,
-        Stroke::new(1.0, Color32::from_white_alpha(90)),
-        egui::StrokeKind::Inside,
-    );
+    craft_ui::material::paint_gloss(painter, rect, radius, fill);
 }
 
 /// Fonts plus the light and dark styles. egui picks the one matching the system appearance
