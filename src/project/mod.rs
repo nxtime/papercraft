@@ -124,6 +124,12 @@ pub fn config_dir() -> Option<PathBuf> {
     }
 }
 
+/// The web build has no config folder: settings keep their defaults.
+#[cfg(target_arch = "wasm32")]
+pub fn config_dir() -> Option<PathBuf> {
+    None
+}
+
 impl Store {
     /// `$PAPERCRAFT_HOME`, else `~/Documents/papercraft` (`~/Documents/paper-rs` when only that exists).
     pub fn default_root() -> PathBuf {
