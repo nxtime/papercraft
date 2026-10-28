@@ -76,6 +76,11 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-28: 0.8.4 (demo video, fresh screenshots)
+
+* README opens with a time-lapse of designing a habit-tracker app (`docs/demo.gif`, full video `docs/demo.mp4`), and every screenshot is retaken from that design.
+* Fix: the Performance overlay reads its settings from the project config folder, so `PAPERCRAFT_HOME` isolates it too.
+
 ### 2026-10-28: 0.8.3 (menus, panel grips, narrow windows)
 
 * Menus open 6 px below their button, are at least 180 px wide and show an icon beside each item. Below 1100 px the hamburger opens every menu in one popup.
