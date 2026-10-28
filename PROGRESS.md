@@ -76,58 +76,67 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
-### 2026-10-25: unreleased (properties modal, row merges)
+### 2026-10-27: 0.8.0 (screens, packed pages, canvas performance)
+
+* Screens (`specs/screens`): a frame can be declared a screen or an overlay (drawer, modal, sheet) with `set_screens`, inspector toggles, or Declare N screens on the page. Agent edits to layers hidden behind an overlay or opaque layer in their screen are refused unless `allowHidden`; partly covered ones are reported with their visible share. `get_basic_info` lists screens, `get_node_info` tells a layer's visibility, `lint_design` skips hidden layers, On click lists screens, nested screens get canvas labels.
+* Pages and saved versions are stored as zstd-compressed compact JSON (`.json.zst`, project format 3): the 68 MB Interview project is 1.3 MB on disk and loads faster. A legacy `.json` still reads and is replaced on the next save; older builds refuse format 3.
+* Canvas performance: the editor logs which layers each change touched, so the scene cache re-tessellates only those and keeps no copy of the document (443 → 346 MB on Interview). Zoom holds its geometry until it settles, tiny layers are skipped, vertices are 24 bytes, redraws follow vsync, the idle pointer no longer redraws, freed memory goes back to the system when idle, off-screen frame labels are skipped, and the layers panel keeps its row heights between frames (panning a large page: ~9 → ~0.7 ms a frame).
+* Frame labels: none on frames too narrow on screen, overlapping labels are dropped (selected and larger frames first), long names end in an ellipsis.
+* Dropdowns size to their longest option (capped), keep the name of `A / B / Name` options, scroll when long and show the full name on hover.
+* Settings: a Performance page (FPS, frame time, RAM, CPU, GPU, optional overlay and slow-frame badge), agent logos in the agent rows; the Chat page no longer collapses.
+
+### 2026-10-25: 0.8.0 (properties modal, row merges)
 
 * Properties modal (inspector, on a main: Edit properties…): a tab per property (name, kind, layer, default, delete); an options property as a Table (a row per option, a column per layer · style; colours picked from the project's variables with a swatch, visibility as a toggle, icon, image and text fields; add or remove options and columns) or as Source (each option's changes as JSON with syntax highlighting); templates from the + Property menu; Save replaces them all. The inline list is name, kind and a remove button. The `status` template writes colours the project has as variables as those variables.
 * Canvas overlays (agent glow, agent outlines, review outlines, the agent-elsewhere chip) sit below modals instead of showing through them. Two segmented controls in one row no longer share widget ids (the second did not respond).
 * `merge_variants` keeps what each moved instance shows (texts that came from its old variant), carries nested instances' property values (a badge's Tone) in the options, and takes `textLayers` for state texts only.
 
-### 2026-10-25: unreleased (prototype links tool, merge icon colours)
+### 2026-10-25: 0.8.0 (prototype links tool, merge icon colours)
 
 * `set_prototype_links`: agents can link a layer to a screen for Present mode (back arrows, rows, tabs); before, only the inspector could.
 * `merge_variants` compares an icon's colour (keeping its variable), now that icons are compared as one unit.
 
-### 2026-10-25: unreleased (data safety fixes)
+### 2026-10-25: 0.8.0 (data safety fixes)
 
 * Sync no longer throws away an instance written over a nested one the way older versions stored it (its own root, no swap): it becomes a swap of the main's child at that place. Projects built before #11 lost such layers (a checked checkbox, a status badge) on the next edit of the outer main.
 * Icons: the HTML parser keeps attribute names in lowercase, so the icon and plugin code never removed the SVG's original `viewBox`; since #14 that made `<x-paper-icon>` (and icon swaps) scale twice and come out tiny. Unreleased builds only; 0.7.3 is not affected.
 * `merge_variants` refuses merges that would leave one option and changes nothing then.
 
-### 2026-10-25: unreleased (merge variants, pinned bars)
+### 2026-10-25: 0.8.0 (merge variants, pinned bars)
 
 * `merge_variants`: per-state components (`Tab bar / Hoje`, `Status / Sucesso`...) become one component with an enum property. Each variant's differences from the base, matched by layer path (fills, colours, borders, weight, radius, visibility, icons; texts on request), become its option; every instance on every page moves to the base with its value; the base takes the family name; the emptied variants are deleted. A variant with layers the base lacks is left out and reported.
 * Absolute children of a scrolling screen stay pinned while its content scrolls (a tab bar, a floating button), and do not add to the scroll range.
 
-### 2026-10-25: unreleased (fix #22)
+### 2026-10-25: 0.8.0 (fix #22)
 
 * #22: a hug column whose width comes from its parent (stretched or filled) re-measures its height once its text wraps at that width, and the parent measures again, instead of keeping a height measured while the text was narrow.
 
-### 2026-10-25: unreleased (component properties)
+### 2026-10-25: 0.8.0 (component properties)
 
 * Main components carry properties (`Node.props`): `text`, `bool`, `icon` and `enum`, whose options are changes in the overrides format (a layer name, `$root` or a path `Item > Label`, to a text or styles that may hold `text`, `icon` and `visibility`), so they restyle, retext, show, hide or re-icon any layer. Instances keep their values (`prop_values`) as overrides, so main edits keep them; changing the definitions re-applies every instance on every page.
 * Templates: `text` (a property per text layer), `active` (which item of a tab bar, nav or segmented row is active) and `status` (options with a colour tint the root and colour the label and icon).
 * `set_component_props`, `set_instance_props`, `props='{...}'` on `<x-paper-instance>`, properties in `get_components`, `{Prop}` in code link templates, and an inspector section (a control per property on an instance; Texts and Active item templates on a main). Icon swaps keep the layer's name and link (a `children` override); recoloured icon shapes inside instances now keep their colour after a sync.
 * Spec: `specs/component-props/spec.md`.
 
-### 2026-10-25: unreleased (scrolling screens)
+### 2026-10-25: 0.8.0 (scrolling screens)
 
 * Screens keep their size and scroll what overflows: a frame's `scroll` flag (CSS `overflow: auto|scroll`, `overflow-y-auto` in the Tailwind export) makes it fixed height and clipped, and the wheel over it scrolls its content on the canvas and in Present, then pans once the content ends. The offset is view state, not saved; hit-testing and overlays follow it.
 * Toggles: a scroll button beside each screen's name (shown when it scrolls, overflows, or is hovered), Scroll overflow on a selected frame, and Screens scroll on the page for every screen at once. A fit-content screen that grew goes back to its min height.
 * Agents are told to keep screens at their size and use overflow:auto for long content.
 
-### 2026-10-25: unreleased (fixes #19, #20, #21)
+### 2026-10-25: 0.8.0 (fixes #19, #20, #21)
 
 * #19: a clipping frame draws its border after its children, so filled rows no longer hide it. Clipping stays rectangular: children's square corners still show past a rounded border.
 * #20: a border written with a colour variable (`1px solid var(--border)`) binds the stroke, a literal one unbinds it, and reads show `var(--name)` for bound strokes. `find_nodes` says when it stopped at 500 matches.
 * #21: hug (fit-content) frames grow around growing children (CSS flex-basis auto) instead of staying at their min height; with short content the min height stays and the growing child fills it, so a pinned footer works.
 
-### 2026-10-25: unreleased (follow agents, skeletons)
+### 2026-10-25: 0.8.0 (follow agents, skeletons)
 
 * Follow agents (Settings, Chat; on by default): in Design and Chat mode alike, the canvas pans, and switches page, to the layer any agent changes (the chat, Claude Code over MCP, a helper). Moving the canvas yourself pauses it for a moment; off, a chip offers the agent's page.
 * Skeletons: the moment the model starts writing a tool call (`ToolDraft` and `ToolInput` events from Claude Code's stream and the API), the canvas shows a shimmering skeleton over its target, or where a new artboard goes, labelled with what it is doing, until the call has run. Fresh agent content comes in through a skeleton that fades, so an outline never frames empty space.
 * Top bar: the title and the agent pill leave room measured from the buttons on the right, so nothing overlaps at narrow widths.
 
-### 2026-10-25: unreleased (fixes #14 to #18)
+### 2026-10-25: 0.8.0 (fixes #14 to #18)
 
 * #14: `write_html` fits an `<svg>` viewBox into its width and height like a browser (centred, aspect kept).
 * #15: a note on something placed straight in its artboard treats the artboard as the screen: tidy keeps cards off it instead of in its free space.
