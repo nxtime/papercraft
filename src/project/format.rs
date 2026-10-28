@@ -87,6 +87,9 @@ pub struct Manifest {
     /// Old manifests have no groups and load with none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub page_groups: BTreeMap<String, Vec<String>>,
+    /// Page id -> icon (`set:name` from the installed icon sets) shown in the pages list.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub page_icons: BTreeMap<String, String>,
 }
 
 impl Manifest {
@@ -106,6 +109,7 @@ impl Manifest {
             active_page: Some(page.id.clone()),
             pages: vec![page],
             page_groups: BTreeMap::new(),
+            page_icons: BTreeMap::new(),
         }
     }
 

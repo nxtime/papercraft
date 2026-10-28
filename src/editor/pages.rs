@@ -98,6 +98,7 @@ impl Editor {
         self.meta_dirty = false;
         // The groups of the previous project are gone; the session sets the new ones.
         self.page_groups.clear();
+        self.page_icons.clear();
     }
 
     pub fn active_page_id(&self) -> &str {
@@ -323,6 +324,7 @@ impl Editor {
         {
             members.retain(|id| id != &removed.id);
         }
+        self.page_icons.remove(&removed.id);
         if self.active_page > i {
             self.active_page -= 1;
         }
@@ -656,6 +658,20 @@ impl Editor {
 /// Page groups (folders). Groups are single level: a page belongs to at most one group,
 /// and a group keeps its pages in the order of the page list.
 impl Editor {
+    /// A page's icon (`set:name`), or none to show the default page icon.
+    pub fn set_page_icon(&mut self, page_id: &str, icon: Option<&str>) -> bool {
+        if !self.pages.iter().any(|p| p.id == page_id) || self.page_icons.get(page_id).map(String::as_str) == icon {
+            return false;
+        }
+        match icon {
+            Some(i) => self.page_icons.insert(page_id.to_string(), i.to_string()),
+            None => self.page_icons.remove(page_id),
+        };
+        self.meta_dirty = true;
+        self.revision += 1;
+        true
+    }
+
     /// Create an empty group. Fails on an empty or already used name.
     pub fn create_page_group(&mut self, name: &str) -> bool {
         let name = name.trim();

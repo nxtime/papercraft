@@ -314,7 +314,7 @@ pub struct AgentMark {
 }
 
 /// How long an agent's outline stays on the canvas, fading out.
-const AGENT_MARK_SECS: f32 = 3.0;
+const AGENT_MARK_SECS: f32 = 1.5;
 /// Outlines kept from one call (its topmost changed layers) and in all.
 const AGENT_MARKS_PER_CALL: usize = 12;
 const AGENT_MARKS_MAX: usize = 48;
@@ -1400,6 +1400,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 for (icon, label, action) in [
                     (Icon::Image, "Export PNG…", Action::ExportPng),
                     (Icon::Pen, "Export SVG…", Action::ExportSvg),
+                    (Icon::Page, "Export presentation…", Action::ExportPresentation),
                     (Icon::Image, "Copy as PNG", Action::CopyAsPng),
                     (Icon::Pen, "Copy as SVG", Action::CopyAsSvg),
                 ] {
@@ -2100,6 +2101,10 @@ fn layer_matches(doc: &crate::model::Document, id: NodeId, needle: &str) -> bool
     })
 }
 
+/// Room a layer row's eye or lock button takes while shown, and how far it slides in from.
+const TRAIL_W: f32 = 20.0;
+const TRAIL_SLIDE: f32 = 12.0;
+
 fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: usize) {
     let Some(n) = ed.doc.get(id).cloned() else {
         return;
@@ -2170,24 +2175,30 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     }
     x += 20.0;
 
-    // Trailing eye / lock buttons: always shown when hidden or locked, otherwise on hover.
+    // Trailing eye / lock buttons: always shown when hidden or locked, otherwise on hover. A
+    // button takes its room only while shown, sliding in from the row's edge, so names use the
+    // whole row the rest of the time.
     let mut right = row.right() - 4.0;
     let mut trailing =
         |ui: &mut Ui, paint: &dyn Fn(&Ui, egui::Rect), tip: &str, show: bool| -> bool {
-            let r =
-                egui::Rect::from_center_size(egui::pos2(right - 9.0, cy), egui::vec2(18.0, 18.0));
-            right -= 20.0;
-            if !show {
+            let shown = motion::progress(ui.ctx(), ("trail-shown", tip, id), show, motion::FAST, motion::ease_out_cubic);
+            if shown <= 0.0 {
                 return false;
             }
+            let slide = (1.0 - shown) * TRAIL_SLIDE;
+            let r = egui::Rect::from_center_size(egui::pos2(right - 9.0 + slide, cy), egui::vec2(18.0, 18.0));
+            right -= TRAIL_W * shown;
             let b = ui.interact(r, ui.id().with((tip, id)), egui::Sense::click());
             let t = motion::hover(ui.ctx(), ui.id().with(("trail-hover", tip, id)), &b);
             if t > 0.0 {
                 let tint = p.hover;
-                ui.painter().rect_filled(r, crate::theme::r(5.0), tint.gamma_multiply(t));
+                ui.painter().rect_filled(r, crate::theme::r(5.0), tint.gamma_multiply(t * shown));
             }
-            paint(ui, r.shrink(3.0));
-            b.on_hover_text(tip).clicked()
+            ui.scope(|ui| {
+                ui.set_opacity(shown);
+                paint(ui, r.shrink(3.0));
+            });
+            show && b.on_hover_text(tip).clicked()
         };
     let eye = if n.visible { Icon::Eye } else { Icon::EyeSlash };
     if trailing(
@@ -2546,8 +2557,6 @@ fn screen_scroll_toggles(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rec
 }
 
 const AGENT_OUTLINE: f32 = 2.0;
-/// How long fresh agent content takes to come in through its skeleton.
-const REVEAL_SECS: f32 = 0.35;
 /// The skeleton over the area a call being written will change.
 const DRAFT_SKELETON_ALPHA: f32 = 0.55;
 const DRAFT_OUTLINE_ALPHA: f32 = 0.8;
@@ -2594,12 +2603,24 @@ fn agent_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
             // The call being written: a skeleton where it lands (its target, or the free spot a
             // new artboard takes), until it has run.
             if let Some(d) = &draft {
-                let at = match d.target.as_deref().and_then(|k| k.trim_start_matches('#').split_once(':')) {
-                    Some((prefix, n)) => crate::mcp::exec::find_page(ed, prefix).ok().filter(|p| *p == ed.active_page).and(n.parse().ok()).and_then(|n| ed.doc.world_rect(NodeId(n))),
+                // An existing target gets the dashed outline only: a skeleton would hide content
+                // that is still there (or, when the agent's events arrive late, already changed).
+                // A target an agent changed a moment ago is done, not being changed.
+                let target = d.target.as_deref().and_then(|k| k.trim_start_matches('#').split_once(':'));
+                let at = match target {
+                    Some((prefix, n)) => crate::mcp::exec::find_page(ed, prefix)
+                        .ok()
+                        .filter(|p| *p == ed.active_page)
+                        .and(n.parse().ok())
+                        .map(NodeId)
+                        .filter(|n| !st.agent_marks.iter().any(|m| m.page_id == page && m.node == *n))
+                        .and_then(|n| ed.doc.world_rect(n)),
                     None => Some(draft_spot(&ed.doc)),
                 };
                 if let Some(r) = at.map(|r| to_screen(&r)) {
-                    kit::skeleton(&painter, r, t, DRAFT_SKELETON_ALPHA);
+                    if target.is_none() {
+                        kit::skeleton(&painter, r, t, DRAFT_SKELETON_ALPHA);
+                    }
                     let stroke = egui::Stroke::new(AGENT_OUTLINE, accent.gamma_multiply(DRAFT_OUTLINE_ALPHA));
                     painter.add(egui::Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], stroke, 6.0, 4.0));
                     let ink = kit::ink_on(accent);
@@ -2612,11 +2633,6 @@ fn agent_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
             let rect = |m: &AgentMark| (m.page_id == page).then(|| ed.doc.world_rect(m.node)).flatten().map(|r| to_screen(&r));
             for m in &st.agent_marks {
                 let Some(r) = rect(m) else { continue };
-                // New content comes in through its skeleton, so the outline never frames nothing.
-                let age = m.at.elapsed().as_secs_f32();
-                if age < REVEAL_SECS {
-                    kit::skeleton(&painter, r, t, (1.0 - age / REVEAL_SECS).powi(2));
-                }
                 let stroke = egui::Stroke::new(AGENT_OUTLINE, accent.gamma_multiply(fade(m)));
                 painter.rect_stroke(r, REVIEW_RADIUS, stroke, egui::StrokeKind::Outside);
             }
@@ -2883,7 +2899,7 @@ mod layer_tests {
     }
 
     #[test]
-    fn agent_outlines_show_after_a_call_and_go_after_three_seconds_without_repainting() {
+    fn agent_outlines_show_after_a_call_and_fade_without_repainting() {
         let ctx = egui::Context::default();
         setup_style(&ctx);
         let mut ed = many_roots(3);

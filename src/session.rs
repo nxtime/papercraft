@@ -68,6 +68,7 @@ impl Session {
         }
         // The groups of the opened project (an old project has none).
         ed.page_groups = p.manifest.page_groups.clone();
+        ed.page_icons = p.manifest.page_icons.clone();
         ed.sync_page_group_order();
         // Freshly loaded pages are saved by definition.
         for i in 0..ed.pages.len() {
@@ -264,6 +265,7 @@ impl Session {
         let wrote = !dirty.is_empty() || ed.meta_dirty;
         p.manifest.pages = pages;
         p.manifest.page_groups = ed.page_groups.clone();
+        p.manifest.page_icons = ed.page_icons.clone();
         p.manifest.active_page = Some(ed.active_page_id().to_string());
         if wrote {
             p.manifest.modified = now_ms();
