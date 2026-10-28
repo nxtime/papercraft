@@ -302,6 +302,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "get_selection" => selection(ed),
                 "get_node_info" => node_info(ed, &a),
                 "get_children" => children(ed, &a),
+                "get_bounds" => get_bounds(ed, &a),
                 "get_tree_summary" => tree_summary(ed, &a),
                 "get_screenshot" => screenshot(host, &a),
                 "get_jsx" => jsx(host, &a),
@@ -1091,6 +1092,38 @@ fn children(ed: &mut Editor, a: &Args) -> ToolResult {
         .map(|c| node_brief(ed, page, *c))
         .collect();
     text(json!({"children": kids}))
+}
+
+fn get_bounds(ed: &mut Editor, a: &Args) -> ToolResult {
+    let def = page_arg(ed, a)?;
+    let targets: Vec<(usize, NodeId)> = match a.get("nodeIds") {
+        Some(_) => a.strs("nodeIds")?.iter().map(|k| resolve(ed, k, def)).collect::<Result<_, _>>()?,
+        None => ed.page_doc(def).root.iter().map(|id| (def, *id)).collect(),
+    };
+    let depth = a.num("depth").filter(|d| *d >= 1.0).map(|d| d as usize);
+    let mut rows: Vec<Value> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    for (page, id) in targets {
+        let room = super::bounds::MAX_ROWS - rows.len();
+        if room == 0 {
+            pending.push(node_key(ed, page, id));
+            continue;
+        }
+        let key = |n: NodeId| node_key(ed, page, n);
+        let got = super::bounds::collect(ed.page_doc(page), &[id], depth, room, &key);
+        rows.extend(got.rows);
+        pending.extend(got.pending.into_iter().map(key));
+    }
+    let mut out = json!({"columns": super::bounds::COLUMNS, "rows": rows});
+    if !pending.is_empty() {
+        out["truncated"] = json!(true);
+        out["continueWith"] = json!(pending);
+        out["note"] = json!(format!(
+            "Stopped at {} rows. Call get_bounds again with nodeIds = continueWith (same depth) for the rest.",
+            super::bounds::MAX_ROWS
+        ));
+    }
+    text(out)
 }
 
 /// Text shown per text layer in `get_tree_summary` unless `fullText` is set.

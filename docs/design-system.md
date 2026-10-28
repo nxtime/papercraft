@@ -93,6 +93,8 @@ Fill-based sets (Phosphor, Material) follow variables; Lucide is stroke-based an
 | `layer-name` | warning | default names (Frame, Rectangle, Group...) on layers with children |
 | `hard-coded-color` | warning, info | a literal color that equals a variable (warning), or a literal used repeatedly when variables exist (info) |
 
+| `overflow` | error | a layer extending past its artboard or clipping parent (by how many px, on which side), or text taller than its box. Scrolling frames and layers pinned in them are exempt. Never auto-fixed by `fix: true`: resize, move or let the parent grow. `get_bounds` returns every rect in one call |
+
 Instances are skipped (their main component is linted). The rules are conventions, not law: pass `scale` to match your own type scale and ignore `info` items you disagree with. Lint does not judge taste; always look at `get_screenshot` too.
 
 ## Libraries

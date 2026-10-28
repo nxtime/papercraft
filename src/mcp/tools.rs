@@ -228,6 +228,25 @@ pub fn definitions() -> Vec<Value> {
             true,
         ),
         tool(
+            "get_bounds",
+            "Rects of a whole subtree in one read, instead of one get_node_info per layer. Returns \
+             `columns` [id, parent, x, y, w, h, absX, absY, clip] and `rows` (one array per layer, \
+             parents before children): x/y/w/h are relative to the parent, absX/absY are page \
+             coordinates, clip is true when the layer clips its content (clipping or scrolling \
+             frame), parent is null for a top-level layer; values are rounded to 0.1. Without \
+             nodeIds it covers every artboard on the page (or pageId); `depth` limits levels, \
+             counting each given node as 1. At most 2000 rows per call: then `truncated` is true \
+             and `continueWith` lists the node ids to pass as nodeIds to get the rest. Read-only; \
+             use it to verify nothing leaves its artboard or clipping parent, or to align and \
+             space layers, and lint_design's overflow rule to list the offenders.",
+            json!({"nodeIds": {"type": "array", "items": {"type": "string"},
+                       "description": "Subtrees to measure; omit for all artboards on the page."},
+                   "depth": {"type": "number", "description": "Levels returned, counting each given node as 1 (default: all)."},
+                   "pageId": page_id()}),
+            &[],
+            true,
+        ),
+        tool(
             "get_tree_summary",
             "Compact indented text tree of a subtree: type, name, id and size per node. Much \
              cheaper than get_jsx for orientation. nodeId \"root\" summarizes the whole page.",
@@ -682,7 +701,8 @@ pub fn definitions() -> Vec<Value> {
             "Check a page or subtree for common design mistakes and get a fix for each: text \
              contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type \
              scale, gap/padding off the 4px grid, buttons and tabs under 44px tall, default layer \
-             names (Frame, Rectangle), and hard-coded colors that equal a variable. Run it before \
+             names (Frame, Rectangle), layers or text overflowing their artboard or clipping \
+             parent (rule `overflow`, never auto-fixed; scrolling frames are exempt), and hard-coded colors that equal a variable. Run it before \
              finish_working_on_nodes and fix errors and warnings; `info` items are suggestions. \
              Pass `fix: true` to automatically snap spacing/padding to 4px, relink matching color \
              variables, snap text sizes, and enlarge small touch targets. After the first full pass, \
@@ -1237,7 +1257,7 @@ pub fn edits_doc(name: &str, args: &Value) -> bool {
 fn classify(name: &str, args: &Value) -> Option<bool> {
     Some(match name {
         "list_resources" | "get_basic_info" | "get_inventory" | "get_selection" | "get_node_info" | "get_children"
-        | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
+        | "get_bounds" | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
         | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "delegate" | "find_nodes" | "get_font_family_info"
         | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
         | "diff_frames" | "publish_library" | "list_libraries" | "get_changes" => false,

@@ -298,6 +298,8 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
         });
     }
     out.extend(theme_copies(doc, roots));
+    let all: Vec<NodeId> = roots.iter().flat_map(|r| doc.subtree(*r)).collect();
+    out.extend(super::lint_overflow::overflow(doc, &all));
     out
 }
 
