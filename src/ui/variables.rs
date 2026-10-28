@@ -715,7 +715,7 @@ fn main_column(
                     ops.push(Op::Mode(c.id.clone()));
                 }
                 let r = kit::button(ui, kit::ButtonKind::Primary, Some(Icon::Plus), "Variable");
-                egui::Popup::menu(&r).show(|ui| {
+                egui::Popup::menu(&r).gap(crate::theme::POPUP_GAP).show(|ui| {
                     crate::theme::popup_backing(ui);
                     for k in [Kind::Color, Kind::Number, Kind::String, Kind::Boolean] {
                         if super::icon_menu_item(ui, kind_icon(k), kind_label(k)).clicked() {
@@ -831,7 +831,7 @@ fn table_header(ui: &mut Ui, c: &Collection, mode_w: f32, st: &mut UiState, ops:
                     return;
                 }
                 let r = theme::icon_button(ui, Icon::More, 22.0, false).on_hover_text("Mode options");
-                egui::Popup::menu(&r).show(|ui| {
+                egui::Popup::menu(&r).gap(crate::theme::POPUP_GAP).show(|ui| {
                     crate::theme::popup_backing(ui);
                     if super::icon_menu_item(ui, Icon::Pen, "Rename").clicked() {
                         st.variables.mode_edit = Some((c.id.clone(), m.id.clone(), m.name.clone()));
@@ -1021,7 +1021,7 @@ fn value_cell(
     if ro {
         return;
     }
-    egui::Popup::menu(&anchor)
+    egui::Popup::menu(&anchor).gap(crate::theme::POPUP_GAP)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .width(280.0)
         .show(|ui| {

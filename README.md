@@ -74,6 +74,19 @@ It is an alpha. It is good for building screens, design systems and sketches, an
   </tr>
 </table>
 
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/readme/toolbar-panels.png" alt="The toolbar with the menu button folded into a back arrow, the File to Theme strip, and the floating left panel with a slim grip beside it" width="100%">
+      <br><sub>Toolbar and panels: the menu button shows or hides the File / Edit strip, and the slim grip between a panel and the canvas resizes it (double click resets). <kbd>/</kbd> hides both side panels.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/readme/menus.png" alt="The Tools menu open below its button, each tool with an icon and its shortcut" width="100%">
+      <br><sub>Menus open a little below their button, are never narrower than 180 px, and carry an icon next to each item.</sub>
+    </td>
+  </tr>
+</table>
+
 **Prototyping and review**
 * Prototype links between frames and a **Present** mode that follows them with a camera glide.
 * **Version history:** named and automatic saved versions per page; rename, restore, delete.
@@ -228,6 +241,7 @@ The scenario tests drive the editor with synthetic pointer and keyboard events; 
 | PageUp / PageDown | Previous / next page | ⌘\\ | Show / hide UI |
 | ⌘J | Design / Chat mode | ⌘L | Add selection to chat (Chat mode) |
 | N | Annotate tool | ⌘⇧A | Annotations: full, badges, hidden |
+| / | Show / hide the side panels | | |
 
 Draw a frame around existing shapes and it adopts them; dragging a layer into or out of a frame re-parents it. Hold ⌘ while dragging to suspend snapping.
 

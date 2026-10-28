@@ -948,9 +948,15 @@ pub fn modal_backing(ui: &egui::Ui, fill: Color32, radius: u8) {
     craft_ui::material::paint_backing(ui, shared(), fill, radius);
 }
 
+/// Narrowest a popup or menu gets, so short lists don't read as a sliver.
+pub const POPUP_MIN_W: f32 = 180.0;
+/// Space between a button and the menu it opens.
+pub const POPUP_GAP: f32 = 6.0;
+
 /// [`modal_backing`] for a popup, menu or context menu: called first in its closure, it lights
 /// the popup's frame (its rect from the last frame) under acrylic.
-pub fn popup_backing(ui: &egui::Ui) {
+pub fn popup_backing(ui: &mut egui::Ui) {
+    ui.set_min_width(POPUP_MIN_W);
     let v = ui.visuals();
     modal_backing(ui, v.window_fill, v.menu_corner_radius.nw);
 }

@@ -59,6 +59,7 @@ pub enum Action {
     Ask,
     Rename,
     ToggleUi,
+    TogglePanels,
     ToggleChat,
     ToggleHelp,
     ToggleGrid,
@@ -168,6 +169,7 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
         (Char('/'), CMD_SHIFT, A::CommandPalette, "Command palette"),
         (Char('r'), CMD, A::Rename, "Rename layer"),
         (Char('\\'), CMD, A::ToggleUi, "Show / hide UI"),
+        (Char('/'), PLAIN, A::TogglePanels, "Show / hide the side panels"),
         (Char('/'), CMD, A::ToggleHelp, "Keyboard shortcuts"),
         (Char('?'), SHIFT, A::ToggleHelp, "Keyboard shortcuts"),
         (Char('\''), CMD_SHIFT, A::ToggleGrid, "Show / hide dot grid"),
@@ -434,6 +436,7 @@ pub fn category(a: Action) -> &'static str {
         | A::ToggleAnnotations
         | A::OpenVariables
         | A::ToggleUi
+        | A::TogglePanels
         | A::ToggleChat
         | A::ToggleHelp
         | A::NextPage
@@ -618,6 +621,7 @@ pub fn menus() -> Vec<(&'static str, Vec<MenuEntry>)> {
                 I("Dot Grid", A::ToggleGrid),
                 I("Annotations", A::ToggleAnnotations),
                 I("Show/Hide UI", A::ToggleUi),
+                I("Show/Hide Panels", A::TogglePanels),
                 I("Design / Chat Mode", A::ToggleChat),
                 I("Keyboard Shortcuts", A::ToggleHelp),
             ],

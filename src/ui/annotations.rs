@@ -279,7 +279,7 @@ fn category_select(ui: &mut Ui, current: &str, cats: &[AnnotationCategory]) -> O
         p.secondary,
     );
     let mut chosen = None;
-    egui::Popup::menu(&resp).width(rect.width().max(190.0)).show(|ui| {
+    egui::Popup::menu(&resp).gap(crate::theme::POPUP_GAP).width(rect.width().max(190.0)).show(|ui| {
         crate::theme::popup_backing(ui);
         ui.spacing_mut().item_spacing.y = 2.0;
         for c in cats {

@@ -1612,9 +1612,8 @@ fn pan_to(ed: &mut Editor, key: &str) {
 /// The left column: replaces the layers panel in Chat mode.
 pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, frame: egui::Frame, floating: bool, fill: egui::Color32) {
     let r = egui::Panel::left("chat")
-        .resizable(true)
-        .default_size(st.chat.column_width())
-        .size_range(COLUMN_MIN..=COLUMN_MAX)
+        .resizable(false)
+        .exact_size(st.chat.column_width().clamp(COLUMN_MIN, COLUMN_MAX))
         .frame(frame)
         .show(ui, |ui| {
             if floating {
@@ -1623,7 +1622,13 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, frame: egui::Frame,
                 column(ui, ed, st);
             }
         });
-    let w = r.response.rect.width();
+    let gap = if floating { super::PANEL_GAP } else { 0.0 };
+    let grip = super::panel_handle::show(ui.ctx(), "chat-grip".into(), r.response.rect, super::panel_handle::Side::Left, gap);
+    let w = if grip.reset {
+        COLUMN_DEFAULT
+    } else {
+        super::panel_handle::resized(st.chat.column_width(), grip.delta, COLUMN_MIN..=COLUMN_MAX)
+    };
     if (w - st.chat.column_width()).abs() > 0.5 {
         st.chat.width = w;
         st.chat.width_dirty = true;
@@ -1924,7 +1929,7 @@ fn chat_menu(anchor: &egui::Response, st: &mut UiState) {
     const LOGO: f32 = 14.0;
     const LIST_MAX_H: f32 = 360.0;
     let running = st.chat.is_running();
-    egui::Popup::menu(anchor).width(300.0).show(|ui| {
+    egui::Popup::menu(anchor).gap(crate::theme::POPUP_GAP).width(300.0).show(|ui| {
         crate::theme::popup_backing(ui);
         let p = theme::pal(ui);
         ui.spacing_mut().item_spacing.y = 2.0;

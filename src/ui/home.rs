@@ -614,7 +614,7 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let more =
                         theme::icon_button(ui, Icon::More, 20.0, false).on_hover_text("More");
-                    egui::Popup::menu(&more).show(|ui| {
+                    egui::Popup::menu(&more).gap(crate::theme::POPUP_GAP).show(|ui| {
             crate::theme::popup_backing(ui);
             card_menu(ui, hv, e)
         });

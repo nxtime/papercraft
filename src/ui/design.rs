@@ -184,37 +184,33 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         | "type-scale"
                         | "touch-target"
                 );
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("●").color(dot_color).size(theme::SECONDARY));
-                    let r = ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("{node_name}: {}", issue.message))
-                                .size(theme::SECONDARY),
-                        )
-                        .truncate()
-                        .sense(egui::Sense::click()),
-                    );
-                    if r.on_hover_text(&issue.fix).clicked() {
-                        ed.selection = vec![issue.node];
-                        ed.run(crate::editor::shortcuts::Action::ZoomSelection);
-                    }
-                    if fixable {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Zap), "Fix")
-                                .on_hover_text(&issue.fix)
-                                .clicked()
-                            {
-                                let target = issue.node;
-                                ed.edit("Fix lint issue", |tx| {
-                                    crate::mcp::lint::autofix_node(
-                                        tx,
-                                        target,
-                                        &crate::mcp::lint::DEFAULT_SCALE,
-                                    );
-                                });
-                            }
+                // The fix button is an icon at the row's end and takes its room first, so the
+                // text beside it truncates instead of running underneath.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if fixable
+                        && crate::theme::small_icon_button(ui, Some(crate::theme::Icon::Zap), "")
+                            .on_hover_text(format!("Fix: {}", issue.fix))
+                            .clicked()
+                    {
+                        let target = issue.node;
+                        ed.edit("Fix lint issue", |tx| {
+                            crate::mcp::lint::autofix_node(tx, target, &crate::mcp::lint::DEFAULT_SCALE);
                         });
                     }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.label(RichText::new("●").color(dot_color).size(theme::SECONDARY));
+                        let r = ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{node_name}: {}", issue.message)).size(theme::SECONDARY),
+                            )
+                            .truncate()
+                            .sense(egui::Sense::click()),
+                        );
+                        if r.on_hover_text(&issue.fix).clicked() {
+                            ed.selection = vec![issue.node];
+                            ed.run(crate::editor::shortcuts::Action::ZoomSelection);
+                        }
+                    });
                 });
             }
         });

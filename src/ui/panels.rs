@@ -891,6 +891,10 @@ enum ReviewAct {
     Undo(String, crate::mcp::diff::NodeDiff),
 }
 
+/// Space between a review row's hover tint and its badge and revert button, so they don't sit on
+/// the tint's edge.
+const DIFF_ROW_PAD: f32 = 10.0;
+
 fn diff_row(
     ui: &mut Ui,
     page_id: &str,
@@ -910,16 +914,16 @@ fn diff_row(
     ui.painter()
         .rect_filled(rect, theme::radius_lg(), p.hover.gamma_multiply(hover));
     let badge = egui::Rect::from_min_size(
-        rect.left_center() - egui::vec2(0.0, 14.0),
+        rect.left_center() + egui::vec2(DIFF_ROW_PAD, -14.0),
         egui::vec2(28.0, 28.0),
     );
     ui.painter()
         .rect_filled(badge, theme::radius_md(), tint.gamma_multiply(0.18));
     theme::paint_icon(ui.painter(), badge.shrink(6.0), icon, tint);
-    let x = rect.left() + 40.0;
+    let x = rect.left() + DIFF_ROW_PAD + 40.0;
     let clip = ui.painter().with_clip_rect(egui::Rect::from_min_max(
         rect.min,
-        egui::pos2(rect.right() - 40.0, rect.bottom()),
+        egui::pos2(rect.right() - DIFF_ROW_PAD - 40.0, rect.bottom()),
     ));
     clip.text(
         egui::pos2(x, rect.center().y - 9.0),
@@ -938,7 +942,7 @@ fn diff_row(
     // A deleted page has no live node to revert into; "Revert run" re-creates it.
     if !deleted {
         let btn = egui::Rect::from_min_size(
-            egui::pos2(rect.right() - 32.0, rect.center().y - 16.0),
+            egui::pos2(rect.right() - DIFF_ROW_PAD - 32.0, rect.center().y - 16.0),
             egui::vec2(32.0, 32.0),
         );
         let undo = ui

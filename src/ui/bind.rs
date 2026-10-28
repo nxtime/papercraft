@@ -162,7 +162,7 @@ fn picker(ui: &mut Ui, ed: &Editor, kind: Kind, current: Option<&str>) -> Option
 }
 
 fn open_picker(resp: &egui::Response, ed: &Editor, kind: Kind, current: Option<&str>) -> Option<String> {
-    egui::Popup::menu(resp)
+    egui::Popup::menu(resp).gap(crate::theme::POPUP_GAP)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .width(POPUP_W)
         .show(|ui| {

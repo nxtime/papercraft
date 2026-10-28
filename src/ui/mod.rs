@@ -17,7 +17,10 @@ pub mod props_modal;
 pub mod kit;
 pub mod library;
 pub mod lottie_icon;
+pub mod crisp;
 pub mod menu_toggle;
+pub mod menus;
+pub mod panel_handle;
 pub mod motion;
 pub mod pages;
 pub mod perf;
@@ -99,6 +102,12 @@ pub struct UiState {
     pub libraries: libraries::LibrariesUi,
     /// All panels hidden (⌘\\): just the canvas.
     pub hide_ui: bool,
+    /// The side panels are tucked away (`/`); the toolbar and canvas stay.
+    pub panels_hidden: bool,
+    /// Dragged widths of the left and right panels; `None` keeps the default.
+    pub panel_w: [Option<f32>; 2],
+    /// Narrowest width each side panel's content needs, learned from how far it overflowed.
+    pub panel_need: [f32; 2],
     /// Present mode: only the canvas, with a presenter bar to step through the page's frames.
     pub present: bool,
     /// Frame shown by the presenter (index into the page's top-level frames).
@@ -607,6 +616,8 @@ pub(crate) const PANEL_GAP: f32 = 12.0;
 
 /// Canvas width under which the top bar drops the zoom pill (it is also on the keyboard).
 const TIGHT_BAR_W: f32 = 520.0;
+/// Room the hamburger, home and mode buttons take on top of the bar's old budget.
+const TIGHT_EXTRA: f32 = 80.0;
 /// Tallest the top bar's page menu grows before it scrolls.
 const PAGE_MENU_MAX_H: f32 = 360.0;
 
@@ -615,6 +626,9 @@ const MENU_BAR_W: f32 = 1100.0;
 
 /// Largest share of the window one side panel may take.
 const SIDE_MAX_SHARE: f32 = 0.3;
+/// The canvas, with the toolbar above it, needs at least this much room; below it the side
+/// panels step aside.
+const MIN_CANVAS_W: f32 = 600.0;
 
 /// Bottom strip of the canvas taken by the presenter bar; clicks there never follow links.
 const PRESENT_BAR_H: f32 = 80.0;
@@ -792,7 +806,48 @@ pub(crate) fn is_floating(translucent: bool) -> bool {
 }
 
 /// A rounded panel that floats on the backdrop and fills the space it is given.
-fn floating_panel(ui: &mut Ui, fill: Color32, margin: egui::Margin, add: impl FnOnce(&mut Ui)) {
+/// The panel width after a grip: `None` (the default) on a double click, else `current` moved by
+/// the drag. Unmoved panels stay `None` so they keep following the default.
+/// How much wider than the `room` it was given a panel's content came out this frame. (Widgets
+/// that overflow grow `max_rect` too, so it is the width that has to be compared.)
+fn overflow(ui: &Ui, room: f32) -> f32 {
+    (ui.min_rect().width() - room).max(0.0)
+}
+
+/// The width a panel has to be to hold its content: what it was plus what overflowed. Kept once
+/// learned, so the panel does not shrink back and overflow again.
+fn grown_need(need: f32, width: f32, overflow: f32) -> f32 {
+    if overflow > 0.5 { need.max(width + overflow + PANEL_BREATH) } else { need }
+}
+
+/// Spare room added to a learned panel width, so the content does not end on the card's edge.
+const PANEL_BREATH: f32 = 8.0;
+
+#[cfg(test)]
+mod panel_need_tests {
+    use super::*;
+
+    #[test]
+    fn a_panel_learns_the_width_its_content_needs_and_keeps_it() {
+        let need = grown_need(0.0, 296.0, 7.0);
+        assert_eq!(need, 296.0 + 7.0 + PANEL_BREATH);
+        assert_eq!(grown_need(need, 320.0, 0.0), need, "no overflow: unchanged");
+        assert_eq!(grown_need(need, 296.0, 3.0), need, "never shrinks");
+    }
+}
+
+fn grip_width(saved: Option<f32>, grip: panel_handle::Grip, current: f32, range: std::ops::RangeInclusive<f32>) -> Option<f32> {
+    if grip.reset {
+        return None;
+    }
+    if grip.delta == 0.0 {
+        return saved;
+    }
+    Some(panel_handle::resized(current, grip.delta, range))
+}
+
+/// Returns how far the content ran past the card's right edge (0 when it fits).
+fn floating_panel(ui: &mut Ui, fill: Color32, margin: egui::Margin, add: impl FnOnce(&mut Ui)) -> f32 {
     let fill = if theme::is_acrylic() {
         let dark = ui.visuals().dark_mode;
         let rect = ui.available_rect_before_wrap();
@@ -808,8 +863,11 @@ fn floating_panel(ui: &mut Ui, fill: Color32, margin: egui::Margin, add: impl Fn
         .show(ui, |ui| {
             ui.set_min_height(ui.available_height());
             ui.set_width(ui.available_width());
+            let room = ui.available_width();
             add(ui);
-        });
+            overflow(ui, room)
+        })
+        .inner
 }
 
 /// The acrylic backdrop around the canvas (which the renderer draws underneath the UI, so it
@@ -929,6 +987,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
                 }
             }
             UiEvent::ToggleUi => st.hide_ui = !st.hide_ui,
+            UiEvent::TogglePanels => st.panels_hidden = !st.panels_hidden,
             UiEvent::ToggleChat => st.set_chat_mode(!st.chat_mode),
             UiEvent::ToggleHelp => st.show_help = !st.show_help,
             UiEvent::ToggleGrid => st.show_grid_off = !st.show_grid_off,
@@ -962,6 +1021,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     // The acrylic backdrop goes under the panels, but needs the canvas rect from after them.
     let backdrop_slot = ui.painter().add(egui::Shape::Noop);
     let gap = PANEL_GAP;
+    // Empty margin between a floating panel's card and the canvas; none when they are flush.
+    let grip_gap = if floating { gap } else { 0.0 };
     let side_frame = |left: i8, right: i8, top: i8, bottom: i8| {
         if floating {
             egui::Frame::NONE
@@ -979,7 +1040,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     // Narrow windows keep the canvas usable: the side panels never take more than 30% each.
     let window_w = ui.max_rect().width();
     let side_max = |min: f32| (window_w * SIDE_MAX_SHARE).clamp(min, 430.0);
-    if st.chat_mode {
+    if st.panels_hidden {
+        // Only the toolbar and the canvas.
+    } else if st.chat_mode {
         chat::panel(
             ui,
             ed,
@@ -995,10 +1058,17 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             sidebar_fill,
         );
     } else {
-        egui::Panel::left("layers")
-            .resizable(true)
-            .default_size(252.0 + 2.0 * gap)
-            .size_range(190.0..=side_max(190.0))
+        let left_range = 190.0f32.max(st.panel_need[0])..=side_max(190.0).max(st.panel_need[0]);
+        let left_w = panel_handle::resized(st.panel_w[0].unwrap_or(252.0 + 2.0 * gap), 0.0, left_range.clone());
+        let right_range = 230.0f32.max(st.panel_need[1])..=side_max(230.0).max(st.panel_need[1]);
+        let right_w = panel_handle::resized(st.panel_w[1].unwrap_or(272.0 + 2.0 * gap), 0.0, right_range.clone());
+        // A window too narrow for the canvas and both panels gives up the right one, then the left.
+        let show_right = window_w - left_w - right_w >= MIN_CANVAS_W;
+        let show_left = show_right || window_w - left_w >= MIN_CANVAS_W;
+        if show_left {
+        let left = egui::Panel::left("layers")
+            .resizable(false)
+            .exact_size(left_w)
             .frame(if floating {
                 side_frame(gap as i8, gap as i8, gap as i8, gap as i8)
             } else {
@@ -1022,15 +1092,21 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
                     layers(ui, ed, st)
                 };
                 if floating {
-                    floating_panel(ui, sidebar_fill, egui::Margin::symmetric(14, 12), body);
+                    floating_panel(ui, sidebar_fill, egui::Margin::symmetric(14, 12), body)
                 } else {
+                    let room = ui.available_width();
                     body(ui);
+                    overflow(ui, room)
                 }
             });
-        egui::Panel::right("design")
-            .resizable(true)
-            .default_size(272.0 + 2.0 * gap)
-            .size_range(230.0..=side_max(230.0))
+        st.panel_need[0] = grown_need(st.panel_need[0], left.response.rect.width(), left.inner);
+        let grip = panel_handle::show(ui.ctx(), "layers-grip".into(), left.response.rect, panel_handle::Side::Left, grip_gap);
+        st.panel_w[0] = grip_width(st.panel_w[0], grip, left_w, left_range);
+        }
+        if show_right {
+        let right = egui::Panel::right("design")
+            .resizable(false)
+            .exact_size(right_w)
             .frame(if floating {
                 side_frame(gap as i8, gap as i8, gap as i8, gap as i8)
             } else {
@@ -1042,11 +1118,17 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
                 if floating {
                     floating_panel(ui, p.inspector, inspector::MARGIN, |ui| {
                         inspector::panel(ui, ed, st)
-                    });
+                    })
                 } else {
-                    inspector::panel(ui, ed, st)
+                    let room = ui.available_width();
+                    inspector::panel(ui, ed, st);
+                    overflow(ui, room)
                 }
             });
+        st.panel_need[1] = grown_need(st.panel_need[1], right.response.rect.width(), right.inner);
+        let grip = panel_handle::show(ui.ctx(), "design-grip".into(), right.response.rect, panel_handle::Side::Right, grip_gap);
+        st.panel_w[1] = grip_width(st.panel_w[1], grip, right_w, right_range);
+        }
     }
     egui::Panel::top("toolbar")
         .exact_size(if floating {
@@ -1128,10 +1210,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
 }
 
 fn menu_item(ui: &mut Ui, ed: &mut Editor, label: &str, action: Action) {
-    if ui
-        .add(egui::Button::new(label).shortcut_text(shortcuts::chord_text(action)))
-        .clicked()
-    {
+    if menus::item(ui, label, shortcuts::chord_text(action), menus::icon_of(action)).clicked() {
         ed.run(action);
         ui.close();
     }
@@ -1154,37 +1233,53 @@ fn menu_entries(ui: &mut Ui, ed: &mut Editor, entries: &[shortcuts::MenuEntry]) 
     }
 }
 
+/// The File / Edit strip. `open` is its eased 0..=1 state: while it moves, the strip is laid out
+/// at its natural width but only `open` of it is shown (clipped and faded), and the toolbar
+/// beside it follows that width, so it slides rather than pops.
+fn menu_strip(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, open: f32) {
+    if open <= 0.0 {
+        return;
+    }
+    let width_id = egui::Id::new("menu-strip-width");
+    let natural: f32 = ui.ctx().data(|d| d.get_temp(width_id)).unwrap_or(MENU_STRIP_GUESS_W);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(natural * open, ui.available_height()), egui::Sense::hover());
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.set_clip_rect(rect.intersect(ui.clip_rect()));
+    child.set_opacity(open);
+    menu_bar(&mut child, ed, &mut st.agent_link);
+    let measured = child.min_rect().width();
+    ui.ctx().data_mut(|d| d.insert_temp(width_id, measured));
+}
+
 /// The unified toolbar: document title on the left, zoom and help on the right. Without native
 /// chrome (Linux) it also carries an egui menu bar.
 fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     // In a narrow window only the essentials stay: zoom, present and share.
-    let compact = ui.max_rect().width() < 720.0;
-    let tight = ui.max_rect().width() < TIGHT_BAR_W;
+    // The window buttons take 3 x 46 px, so the bar gives up its extras that much sooner.
+    let buttons_w = if st.custom_titlebar { 3.0 * WIN_BTN_W } else { 0.0 };
+    let compact = ui.max_rect().width() < 720.0 + buttons_w;
+    let tight = ui.max_rect().width() < TIGHT_BAR_W + buttons_w + TIGHT_EXTRA;
     if st.custom_titlebar {
         drag_area(ui, ui.max_rect(), st);
     }
     ui.horizontal_centered(|ui| {
         if !st.native_chrome {
-            if menu_toggle::button(ui, st.menu_bar_hidden).clicked() {
-                st.menu_bar_hidden = !st.menu_bar_hidden;
-                menu_toggle::save_hidden(st.menu_bar_hidden);
-            }
-            ui.add_space(4.0);
-            if !st.menu_bar_hidden {
-                if ui.max_rect().width() < MENU_BAR_W {
-                    // Not enough room for every menu: they fold into one.
-                    ui.scope(|ui| {
-                        flat_menus(ui);
-                        let menu = ui.menu_button("Menu", |ui| {
-            crate::theme::popup_backing(ui);
-            flat_menu(ui, ed)
-        });
-                        let _ = menu;
-                    });
-                } else {
-                    ui.scope(|ui| menu_bar(ui, ed, &mut st.agent_link));
+            if ui.max_rect().width() < MENU_BAR_W {
+                // Not enough room for every menu: the button opens them all in one popup.
+                let menu = menu_toggle::menu_button(ui);
+                egui::Popup::menu(&menu).gap(theme::POPUP_GAP).show(|ui| {
+                    theme::popup_backing(ui);
+                    flat_menu(ui, ed)
+                });
+            } else {
+                let open = motion::progress(ui.ctx(), "menu-strip", !st.menu_bar_hidden, MENU_STRIP_SECS, motion::ease_in_out_cubic);
+                if menu_toggle::button(ui, open).clicked() {
+                    st.menu_bar_hidden = !st.menu_bar_hidden;
+                    menu_toggle::save_hidden(st.menu_bar_hidden);
                 }
+                ui.add_space(4.0);
+                menu_strip(ui, ed, st, open);
             }
             ui.add_space(6.0);
             ui.separator();
@@ -1250,7 +1345,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     .inner;
                 if many {
                     let page = page.on_hover_text("Switch page").on_hover_cursor(egui::CursorIcon::PointingHand);
-                    egui::Popup::menu(&page).show(|ui| {
+                    egui::Popup::menu(&page).gap(crate::theme::POPUP_GAP).show(|ui| {
                         crate::theme::popup_backing(ui);
                         ui.set_min_width(180.0);
                         egui::ScrollArea::vertical().max_height(PAGE_MENU_MAX_H).show(ui, |ui| {
@@ -1277,7 +1372,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 ui.add_space(8.0);
             }
             let share = kit::button_compact(ui, kit::ButtonKind::Primary, Some(Icon::Export), "Share");
-            egui::Popup::menu(&share).show(|ui| {
+            egui::Popup::menu(&share).gap(crate::theme::POPUP_GAP).show(|ui| {
                 crate::theme::popup_backing(ui);
                 ui.set_min_width(190.0);
                 for (icon, label, action) in [
@@ -1392,7 +1487,7 @@ const ZOOM_BTN: f32 = kit::SEGMENTED_H - 4.0;
 fn menu_bar(ui: &mut Ui, ed: &mut Editor, agent: &mut Option<agent::AgentUi>) {
     flat_menus(ui);
     for (title, entries) in shortcuts::menus() {
-        ui.menu_button(title, |ui| {
+        menus::menu_button(ui, title, |ui| {
             crate::theme::popup_backing(ui);
             menu_entries(ui, ed, &entries);
         });
@@ -1466,7 +1561,7 @@ fn flat_menus(ui: &mut Ui) {
 
 fn theme_menu(ui: &mut Ui) {
     flat_menus(ui);
-    ui.menu_button("Theme", |ui| {
+    menus::menu_button(ui, "Theme", |ui| {
         crate::theme::popup_backing(ui);
         for c in theme::Choice::ALL {
             if ui
@@ -1489,6 +1584,10 @@ fn theme_menu(ui: &mut Ui) {
 const WIN_BTN_W: f32 = 46.0;
 /// Stroke of the minimize, maximize and close glyphs: the weight of the toolbar's icons.
 const WIN_GLYPH_STROKE: f32 = 1.25;
+/// How long the File / Edit strip takes to slide open or shut.
+const MENU_STRIP_SECS: f32 = 0.22;
+/// The strip's width before it has been laid out once (it is measured every frame after).
+const MENU_STRIP_GUESS_W: f32 = 300.0;
 
 /// Without native chrome (Windows, Linux) the toolbar is the title bar: its empty space drags
 /// the window and a double click maximizes. Widgets added after this take the clicks.
@@ -1512,7 +1611,8 @@ fn window_buttons(ui: &mut Ui, st: &mut UiState, h: f32) {
             let (r, resp) = ui.allocate_exact_size(egui::vec2(WIN_BTN_W, h), egui::Sense::click());
             let hover = motion::hover(ui.ctx(), resp.id.with("win-btn"), &resp);
             let down = resp.is_pointer_button_down_on();
-            let cell = r.shrink2(egui::vec2(2.0, 4.0));
+            let ppp = ui.ctx().pixels_per_point();
+            let cell = egui::emath::GuiRounding::round_to_pixels(r.shrink2(egui::vec2(2.0, 4.0)), ppp);
             let closing = matches!(cmd, WinCmd::Close);
             let mut ink = p.text;
             if closing && (hover > 0.0 || down) {
@@ -1523,11 +1623,15 @@ fn window_buttons(ui: &mut Ui, st: &mut UiState, h: f32) {
                 let fill = if down { p.pressed } else { p.hover.gamma_multiply(hover) };
                 ui.painter().rect_filled(cell, theme::radius_md(), fill);
             }
-            let stroke = egui::Stroke::new(WIN_GLYPH_STROKE, ink);
-            let c = r.center();
-            let k = 5.0;
+            // Whole-pixel strokes on the pixel grid, so the straight glyphs stay sharp.
+            let (stroke, px) = crisp::stroke(ppp, WIN_GLYPH_STROKE, ink);
+            let c = crisp::snap_pos(r.center(), ppp, 2);
+            let k = (5.0 * ppp).round() / ppp;
             match cmd {
-                WinCmd::Minimize => _ = ui.painter().hline(c.x - k..=c.x + k, c.y, stroke),
+                WinCmd::Minimize => {
+                    let y = crisp::snap(c.y, ppp, px);
+                    ui.painter().hline(c.x - k..=c.x + k, y, stroke);
+                }
                 WinCmd::ToggleMaximize => {
                     ui.painter().rect_stroke(egui::Rect::from_center_size(c, egui::Vec2::splat(k * 2.0)), 0.0, stroke, egui::StrokeKind::Inside);
                 }
@@ -2190,7 +2294,7 @@ fn layer_menu(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId) {
     item(ui, lock, lock_label, "⇧⌘L", A::ToggleLock);
     item(ui, Icon::Search, "Zoom to layer", "⇧2", A::ZoomSelection);
     ui.separator();
-    ui.menu_button("Actions", |ui| {
+    menus::menu_button(ui, "Actions", |ui| {
         crate::theme::popup_backing(ui);
         if let Some(a) = actions::menu(ui, ed) {
             actions::dispatch(ed, st, a);

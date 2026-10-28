@@ -76,6 +76,13 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-28: 0.8.3 (menus, panel grips, narrow windows)
+
+* Menus open 6 px below their button, are at least 180 px wide and show an icon beside each item. Below 1100 px the hamburger opens every menu in one popup.
+* Side panels: a slim rounded grip in the gap resizes them (double click resets) and `/` hides or shows both. Panels size to their content and step aside when the window is too narrow for the canvas.
+* Sharper window buttons (pixel-snapped glyphs); the hamburger morphs into a back arrow while the File / Edit strip slides open and shut.
+* Fixes: lint Fix buttons no longer cover the issue text; review rows keep their badge and revert button off the hover edge; the Export button stays on one line.
+
 ### 2026-10-28: 0.8.2 (refresh-rate cap, accurate RAM/CPU, toolbar)
 
 * Settings > Performance > Refresh rate is now a real frame cap applied live (30 to 360 Hz, 60 by default); **Auto** draws as fast as the display allows and is the default on macOS.

@@ -58,7 +58,7 @@ pub fn json_config(url: &str) -> String {
 impl AgentUi {
     /// The top-level "Agent" menu.
     pub fn menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("Agent", |ui| {
+        super::menus::menu_button(ui, "Agent", |ui| {
             crate::theme::popup_backing(ui);
             if super::icon_menu_item(ui, crate::theme::Icon::Export, "Connect…").clicked() {
                 self.open = true;

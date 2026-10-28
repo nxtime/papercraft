@@ -80,7 +80,7 @@ pub fn menu(ui: &mut Ui, ed: &Editor) -> Option<Act> {
 pub fn chip(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let r = super::kit::chip(ui, "Actions", false).on_hover_text("Actions on the selection");
     let mut act = None;
-    egui::Popup::menu(&r).width(200.0).show(|ui| {
+    egui::Popup::menu(&r).gap(crate::theme::POPUP_GAP).width(200.0).show(|ui| {
         crate::theme::popup_backing(ui);
         act = menu(ui, ed);
         if act.is_some() {

@@ -901,6 +901,7 @@ fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     };
     if theme::lit(ui, |ui| ui.add(
             egui::Button::new(format!("Export {what}…"))
+                .truncate()
                 .min_size(egui::vec2(ui.available_width(), 24.0)),
         ))
         .clicked()
