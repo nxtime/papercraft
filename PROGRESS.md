@@ -76,6 +76,12 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-28: 0.8.1 (Performance Monitor on Windows, Design tab speed)
+
+* Performance Monitor: RAM (working set) and CPU now show on Windows; before they were `n/a` there. The overlay and slow-frame badge judge frames against a refresh rate you pick in Settings > Performance: 30 to 360 Hz (144, 165 and 240 included), 60 by default.
+* Design tab: the lint and the open-feedback scan are kept until the document changes instead of walking every node each frame; a 12.6k-node page no longer drops to a few FPS while the tab is open.
+* Windows and Linux: window buttons in the toolbar; controls and acrylic come from craft-ui.
+
 ### 2026-10-27: 0.8.0 (screens, packed pages, canvas performance)
 
 * Screens (`specs/screens`): a frame can be declared a screen or an overlay (drawer, modal, sheet) with `set_screens`, inspector toggles, or Declare N screens on the page. Agent edits to layers hidden behind an overlay or opaque layer in their screen are refused unless `allowHidden`; partly covered ones are reported with their visible share. `get_basic_info` lists screens, `get_node_info` tells a layer's visibility, `lint_design` skips hidden layers, On click lists screens, nested screens get canvas labels.
