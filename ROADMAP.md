@@ -32,7 +32,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 15 | MCP and CLI tool surface | **done** | 87 tools, one undo step per call, `papercraft-cli list / schema / call`. |
+| 15 | MCP and CLI tool surface | **done** | 88 tools, one undo step per call, `papercraft-cli list / schema / call`. |
 | 16 | Agent skills | **done** | `skills/papercraft` and `skills/papercraft-design`. |
 | 17 | Accessibility annotations | todo | Reading order, roles and alt text on layers, checked by the linter. |
 | 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |

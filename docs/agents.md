@@ -1,6 +1,6 @@
 # Driving PaperCraft with agents
 
-PaperCraft exposes one set of 70 tools three ways. They all run the same code inside the app, so an agent sees what you see and every call is one undo step.
+PaperCraft exposes one set of 88 tools three ways. They all run the same code inside the app, so an agent sees what you see and every call is one undo step.
 
 | Way | Use it when | Needs the app running |
 |---|---|---|
