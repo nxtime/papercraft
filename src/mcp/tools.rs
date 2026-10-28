@@ -18,7 +18,11 @@ fix each note, then resolve_feedback with a reply. Use list_resources / open_fil
 switching the user's view. Node ids are opaque strings; never show them to the user.
 - Build UI with create_artboard, then write_html into it, one visual group per call (a header, \
 a row, a card) so the user sees progress. Inline styles only; flexbox (display:flex, gap, \
-padding, align-items, justify-content) is the layout model; no margin, grid or tables.
+padding, align-items, justify-content) is the layout model; margins become gaps or spacers \
+and grids become rows of cells (reported in warnings); no tables.
+- get_basic_info lists the person's design lessons (rules kept from past critiques): follow \
+every one. When finish_working_on_nodes returns `next`, offer a critique (ask_user, then \
+critique_design); keep a finding as a lesson (design_lessons) only when the person approves.
 - Text uses Inter (regular, bold, italic). Use px for font sizes.
 - Edit with update_styles, set_text_content, rename_nodes, duplicate_nodes, move_nodes, \
 delete_nodes. Whiteboard shapes, sticky notes and arrows: create_shape. Hand-drawn style: \
@@ -33,6 +37,8 @@ write_html. Name every layer (layer-name) like a real file.\n\
 export_design_system writes one back.\n\
 - Check your work with get_screenshot. Artboard height is a starting point: when content \
 clips set height: \"fit-content\" with update_styles.
+- Other agents may share the project: claim_nodes what you will rewrite, read the conflicts a \
+write reports (`swarm`) with get_changes, and undo takes back only your own steps.
 - Call finish_working_on_nodes when done.";
 
 fn file_id() -> Value {
@@ -62,6 +68,11 @@ fn tool(name: &str, desc: &str, props: Value, required: &[&str], read_only: bool
         )
     {
         m.insert("fileId".into(), file_id());
+    }
+    // Every write can carry the revision the caller last synced to (`swarm`).
+    if !read_only && let Some(m) = props.as_object_mut() {
+        m.entry("ifRev").or_insert(json!({"type": "integer", "description": "The `rev` your last result returned: if another agent or the person changed these layers since, nothing is applied and the conflicts are listed."}));
+        m.entry("onConflict").or_insert(json!({"type": "string", "enum": ["warn"], "description": "Apply even with conflicts (they are listed)."}));
     }
     let ann = if read_only {
         json!({"readOnlyHint": true})
@@ -389,10 +400,15 @@ pub fn definitions() -> Vec<Value> {
              frames, specs or URLs and returns key points, `build` makes edits you fully specify. \
              It does not see this chat: the task carries everything (frame names or ids, the brief, \
              the variables and components to use, exact markup for a build). Only its short answer \
-             comes back.",
+             comes back. A build needs `scope`: those layers are claimed for the helper before it \
+             starts (other agents keep out; you may still edit there) and released when it ends.",
             json!({
                 "role": {"type": "string", "enum": ["qa", "read", "build"]},
                 "task": {"type": "string", "description": "The complete, self-contained instructions."},
+                "scope": {"type": "object", "description": "For build: what the helper may change.", "properties": {
+                    "ids": {"type": "array", "items": {"type": "string"}, "description": "Layers (each with everything under it)."},
+                    "resources": {"type": "array", "items": {"type": "string", "enum": ["variables", "components", "pages"]}},
+                }},
             }),
             &["role", "task"],
             true,
@@ -417,9 +433,85 @@ pub fn definitions() -> Vec<Value> {
              with the kit's variables (Light and Dark modes), tokens and components, each a main \
              component linked to the library (so the code export and the AI spec write \
              <Button variant=\"outline\"> instead of rebuilding divs). Kits: shadcn (shadcn/ui), \
-             antd (Ant Design), reactbits (React Bits animated pieces), egui (native Rust widgets).",
-            json!({"kit": {"type": "string", "enum": ["shadcn", "antd", "reactbits", "egui"]}}),
+             mui (Material UI), mantine, bootstrap (react-bootstrap), chakra (Chakra UI): about 48 \
+             components and 5 screen layouts each; antd (Ant Design), reactbits (React Bits \
+             animated pieces), egui (native Rust widgets).",
+            json!({"kit": {"type": "string", "enum": ["shadcn", "mui", "mantine", "bootstrap", "chakra", "antd", "reactbits", "egui"]}}),
             &["kit"],
+            false,
+        ),
+        tool(
+            "claim_nodes",
+            "Several agents on one project: claim the layers you will rewrite (each with everything \
+             under it) or a shared resource, so other agents' writes there are refused while you \
+             work. All or nothing; a denial names the holder and when it expires (never wait in a \
+             loop: do other work). The claim lasts ttlSeconds after your last call and goes with \
+             finish_working_on_nodes or release_claims. The person is never blocked.",
+            json!({
+                "ids": {"type": "array", "items": {"type": "string"}, "description": "Layer ids (\"3fa9c1:14\")."},
+                "resources": {"type": "array", "items": {"type": "string", "enum": ["variables", "components", "pages"]}, "description": "Shared things that cannot be split by layer."},
+                "ttlSeconds": {"type": "integer", "minimum": 10, "maximum": 1800, "description": "Default 300; renewed by each of your calls."},
+                "note": {"type": "string", "description": "What you are doing, shown to others (120 characters)."},
+            }),
+            &[],
+            false,
+        ),
+        tool(
+            "release_claims",
+            "Release your claims: one by claimId, those on ids or resources, or all of them when \
+             nothing is given.",
+            json!({
+                "claimId": {"type": "string"},
+                "ids": {"type": "array", "items": {"type": "string"}},
+                "resources": {"type": "array", "items": {"type": "string", "enum": ["variables", "components", "pages"]}},
+            }),
+            &[],
+            false,
+        ),
+        tool(
+            "list_claims",
+            "Who is working where: every live claim with its holder, layers, resources, note and \
+             seconds left.",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
+            "critique_design",
+            "Critique finished work the way a design team does (offer it with ask_user when \
+             finish_working_on_nodes says the design changed). Judges against the person's \
+             objective, through independent reviewers: vision (the person's brief and notes), ux \
+             (Nielsen's heuristics), flow (coherent journeys across screens), qa (states and edge \
+             cases), visual, accessibility (W3C POUR), copy and end-user (a walkthrough as \
+             the audience). Returns the reviewers' briefs, the finding format and 0-4 severity \
+             scale, lint, the arrows between screens (dead ends, unreached screens), the \
+             person's lessons and the steps: review each persona independently, merge, fix \
+             severity 3-4, report, then ask which findings to keep as lessons.",
+            json!({
+                "nodeId": {"type": "string", "description": "Artboard or subtree to critique; omit for the whole page."},
+                "objective": {"type": "string", "description": "What the design must achieve, for whom, and its top tasks (from the brief or the person)."},
+                "audience": {"type": "string", "description": "Who the end-user reviewer plays (\"first-time shopper on a phone\")."},
+                "personas": {"type": "array", "items": {"type": "string", "enum": ["vision", "ux", "flow", "qa", "visual", "accessibility", "copy", "end-user"]}, "description": "Reviewers to run (default: all)."},
+            }),
+            &[],
+            true,
+        ),
+        tool(
+            "design_lessons",
+            "The person's design lessons: rules from past critiques that every design must \
+             follow (get_basic_info lists them too; read them before designing). Without \
+             arguments, lists those that apply in the open project. `add` stores one ONLY after \
+             the person approved it in this conversation (ask_user); never on your own. \
+             `remove` deletes one by id.",
+            json!({
+                "add": {"type": "object", "properties": {
+                    "rule": {"type": "string", "description": "One line, an instruction (\"Screens keep their device height; the main column scrolls\")."},
+                    "why": {"type": "string", "description": "What went wrong that taught it."},
+                    "scope": {"type": "string", "enum": ["all", "project"], "description": "Every project (default) or only the open one."},
+                }, "required": ["rule"]},
+                "remove": {"type": "string", "description": "Id of a lesson to delete (\"L3\")."},
+            }),
+            &[],
             false,
         ),
         tool(
@@ -539,6 +631,23 @@ pub fn definitions() -> Vec<Value> {
             &["nodeIds"],
             false,
         ),
+        tool(
+            "export_presentation",
+            "Export pages as a presentation PDF, the way a designer sends work to a client: a \
+             cover, contents, a divider per page, one 1920×1080 slide per screen (its name and \
+             size; narrow side panels share a slide) and a closing slide, numbered. Screens are \
+             the page's declared screens, else its top-level frames of 300×300 or more; they stay \
+             vector. Returns the file path.",
+            json!({
+                "pageIds": {"type": "array", "items": {"type": "string"}, "description": "Pages to include, in this order (default: every page)."},
+                "path": {"type": "string", "description": "Output file (default: Downloads/<title>.pdf)."},
+                "title": {"type": "string", "description": "Deck title (default: the project name)."},
+                "subtitle": {"type": "string", "description": "Cover subtitle (default: screen and page counts)."},
+                "author": {"type": "string", "description": "Shown on the cover after the date."},
+            }),
+            &[],
+            false,
+        ),
         // ------------------------------------------------------------ writing
         tool(
             "create_artboard",
@@ -546,7 +655,10 @@ pub fn definitions() -> Vec<Value> {
              write_html({mode: \"insert-children\"}). `styles` are camelCase CSS; width and height \
              are required (e.g. \"1440px\"). Artboards default to display:flex, \
              flexDirection:column and a white background, and are placed in an empty spot unless \
-             left/top are given. Default sizes: desktop 1440×900, tablet 768×1024, mobile 390×844.",
+             left/top are given. Default sizes: desktop 1440×900, tablet 768×1024, mobile 390×844. \
+             At a device width, height \"fit-content\" becomes the device height; content \
+             taller than a screen scrolls in its main column (else the screen). overflow \
+             \"visible\" lets the board grow instead.",
             json!({
                 "name": {"type": "string", "description": "Layer name."},
                 "styles": {
@@ -571,8 +683,9 @@ pub fn definitions() -> Vec<Value> {
              \"replace\" replaces targetNodeId with it.\n\
              - Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, \
              align-items, justify-content, align-self, flex-grow, flex-wrap) is the layout model; block \
-             elements stack vertically. position:absolute with left/top is supported. No margin, \
-             grid or tables.\n\
+             elements stack vertically. position:absolute with left/top is supported. Margins become \
+             gaps or spacers, display:grid becomes rows of cells, text inputs show their \
+             placeholder (each reported in warnings). No tables.\n\
              - Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, \
              letter-spacing, text-align, text-decoration (including wavy and text-decoration-color); \
              <b>/<i>/<u>/<s>/<span style> make rich text. Font family is always Inter.\n\
@@ -702,7 +815,8 @@ pub fn definitions() -> Vec<Value> {
              contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type \
              scale, gap/padding off the 4px grid, buttons and tabs under 44px tall, default layer \
              names (Frame, Rectangle), layers or text overflowing their artboard or clipping \
-             parent (rule `overflow`, never auto-fixed; scrolling frames are exempt), and hard-coded colors that equal a variable. Run it before \
+             parent (rule `overflow`, never auto-fixed; scrolling frames are exempt), text too \
+             narrow for its words (text-collapsed), and hard-coded colors that equal a variable. Run it before \
              finish_working_on_nodes and fix errors and warnings; `info` items are suggestions. \
              Pass `fix: true` to automatically snap spacing/padding to 4px, relink matching color \
              variables, snap text sizes, and enlarge small touch targets. After the first full pass, \
@@ -979,14 +1093,15 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "set_screens",
             "Declare frames as screens (one device viewport of the product, not a section, slot or \
-             component) or as overlays (a drawer, modal or sheet inside a screen), or clear the role \
-             with `none`. One undo step. Inside a screen, edits to layers fully hidden behind an \
+             component), as overlays (a drawer, modal or sheet inside a screen) or as sections (a \
+             frame grouping screens on the canvas; its fill is removed, the canvas draws its outline \
+             and name), or clear the role with `none`. One undo step. Inside a screen, edits to layers fully hidden behind an \
              overlay or opaque layer are refused (pass allowHidden:true to edit them on purpose), \
              and partly covered ones are reported. get_basic_info lists screens; get_node_info tells \
              a layer's visibility in its screen.",
             json!({
                 "nodeIds": ids("Frames to declare."),
-                "role": {"type": "string", "enum": ["screen", "overlay", "none"], "description": "Default screen."},
+                "role": {"type": "string", "enum": ["screen", "overlay", "section", "none"], "description": "Default screen."},
                 "pageId": page_id(),
             }),
             &["nodeIds"],
@@ -1150,15 +1265,19 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "undo",
-            "Undo the last change on a page (the user's or an agent's).",
-            json!({"pageId": page_id()}),
+            "Undo a change. An agent's undo (scope `mine`, its default) takes back its own newest \
+             step and leaves later steps by others in place; it is refused (`undo_blocked`, with \
+             the steps in the way) when one of them touched the same layers. Scope `page` undoes \
+             the page's last step, whoever made it.",
+            json!({"pageId": page_id(), "scope": {"type": "string", "enum": ["mine", "page"]}}),
             &[],
             false,
         ),
         tool(
             "redo",
-            "Redo the last undone change on a page.",
-            json!({"pageId": page_id()}),
+            "Redo the last undone change on a page. With scope `mine` (an agent's default) only \
+             when that step was the caller's own.",
+            json!({"pageId": page_id(), "scope": {"type": "string", "enum": ["mine", "page"]}}),
             &[],
             false,
         ),
@@ -1233,7 +1352,9 @@ border, border-top/border-right/border-bottom/border-left, border-color/width/st
 border-radius (1–4 values), opacity, mix-blend-mode, color, font-size, font-weight, font-style,
 line-height, letter-spacing, text-align, text-decoration (including `text-decoration-color` and
 `text-decoration-style: wavy`, e.g. `text-decoration: underline wavy var(--warning)`).
-Ignored (reported back): margin, grid, box-shadow, transform, filters, transitions.";
+Rewritten (reported in warnings): margin (gaps or spacers; `auto` pushes), display:grid (rows
+of cells; fr tracks grow), inline boxes (chips), <input>/<textarea> (a box with its placeholder).
+Ignored (reported back): box-shadow, transform, filters, transitions.";
 
 pub const GUIDE_WHITEBOARD: &str = "\
 # Whiteboard elements
@@ -1260,8 +1381,8 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "get_bounds" | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
         | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "delegate" | "find_nodes" | "get_font_family_info"
         | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
-        | "diff_frames" | "publish_library" | "list_libraries" | "get_changes" => false,
-        "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_design_system" | "open_file"
+        | "diff_frames" | "publish_library" | "list_libraries" | "get_changes" | "critique_design" | "design_lessons" | "claim_nodes" | "release_claims" | "list_claims" => false,
+        "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_presentation" | "export_design_system" | "open_file"
         | "create_file" | "rename_file" | "finish_working_on_nodes" => false,
         "lint_design" => args["fix"] == true,
         "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html"

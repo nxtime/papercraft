@@ -244,11 +244,24 @@ Export several nodes into one PDF, one page per node, ordered top-to-bottom then
 | `path` | string |  | Output file (default: Downloads/<project>.pdf). |
 
 
+### `export_presentation`
+
+Export pages as a presentation PDF, the way a designer sends work to a client: a cover, contents, a divider per page, one 1920×1080 slide per screen (its name and size; narrow side panels share a slide) and a closing slide, numbered. Screens are the page's declared screens, else its top-level frames of 300×300 or more; a section holding no screen (a design-system board) gets a slide of its own. They stay vector. Returns the file path.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `pageIds` | array of string |  | Pages to include, in this order (default: every page). |
+| `path` | string |  | Output file (default: Downloads/<title>.pdf). |
+| `title` | string |  | Deck title (default: the project name). |
+| `subtitle` | string |  | Cover subtitle (default: screen and page counts). |
+| `author` | string |  | Shown on the cover after the date. |
+
+
 ## Write
 
 ### `create_artboard`
 
-Creates an artboard (top-level frame) and returns its id; then add content with write_html({mode: "insert-children"}). `styles` are camelCase CSS; width and height are required (e.g. "1440px"). Artboards default to display:flex, flexDirection:column and a white background, and are placed in an empty spot unless left/top are given. Default sizes: desktop 1440×900, tablet 768×1024, mobile 390×844.
+Creates an artboard (top-level frame) and returns its id; then add content with write_html({mode: "insert-children"}). `styles` are camelCase CSS; width and height are required (e.g. "1440px"). Artboards default to display:flex, flexDirection:column and a white background, and are placed in an empty spot unless left/top are given. Default sizes: desktop 1440×900, tablet 768×1024, mobile 390×844. At a device width, height "fit-content" becomes the device height; content taller than a screen scrolls in its main column (else the screen). overflow "visible" lets the board grow instead.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -260,7 +273,7 @@ Creates an artboard (top-level frame) and returns its id; then add content with 
 
 Parse HTML with inline styles into layers. Write incrementally: each call should add one visual group (a header, one list row, a card) so the user sees progress.
 - mode "insert-children" appends the HTML inside targetNodeId ("root" = the page); "replace" replaces targetNodeId with it.
-- Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, align-items, justify-content, align-self, flex-grow, flex-wrap) is the layout model; block elements stack vertically. position:absolute with left/top is supported. No margin, grid or tables.
+- Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, align-items, justify-content, align-self, flex-grow, flex-wrap) is the layout model; block elements stack vertically. position:absolute with left/top is supported. Margins become gaps or spacers, display:grid becomes rows of cells, text inputs show their placeholder (each reported in warnings). No tables.
 - Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, letter-spacing, text-align, text-decoration (including wavy and text-decoration-color); <b>/<i>/<u>/<s>/<span style> make rich text. Font family is always Inter.
 - Boxes: background(-color/-image: colors, linear/radial gradients, url()), border (and border-top/right/bottom/left), border-radius, opacity, overflow:hidden, mix-blend-mode, width/height (px, %, fit-content), min-width/max-width/min-height/max-height.
 - <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths or data: URIs. <svg> markup is imported as vector layers.
@@ -514,9 +527,31 @@ Search installed open icon sets (Lucide, Tabler, Phosphor, Heroicons, Material).
 | `set` | string |  |  |
 
 
+### `critique_design`
+
+Critique finished work the way a design team does (offer it with ask_user when finish_working_on_nodes says the design changed). Judges against the person's objective, through independent reviewers: vision (the person's brief and notes), ux (Nielsen's heuristics), flow (coherent journeys across screens), qa (states and edge cases), visual, accessibility (W3C POUR), copy and end-user (a walkthrough as the audience). Returns the reviewers' briefs, the finding format and 0-4 severity scale, lint, the arrows between screens (dead ends, unreached screens), the person's lessons and the steps: review each persona independently, merge, fix severity 3-4, report, then ask which findings to keep as lessons.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `nodeId` | string |  | Artboard or subtree to critique; omit for the whole page. |
+| `objective` | string |  | What the design must achieve, for whom, and its top tasks (from the brief or the person). |
+| `audience` | string |  | Who the end-user reviewer plays ("first-time shopper on a phone"). |
+| `personas` | array of string |  | Reviewers to run (default: all): vision, ux, flow, qa, visual, accessibility, copy, end-user. |
+
+
+### `design_lessons`
+
+The person's design lessons: rules from past critiques that every design must follow (get_basic_info lists them too; read them before designing). Without arguments, lists those that apply in the open project. `add` stores one ONLY after the person approved it in this conversation (ask_user); never on your own. `remove` deletes one by id.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `add` | object |  | `{rule, why, scope}`: rule is one line, an instruction; why is what went wrong; scope `all` (default) or `project`. |
+| `remove` | string |  | Id of a lesson to delete ("L3"). |
+
+
 ### `lint_design`
 
-Check a page or subtree for common design mistakes and get a fix for each: text contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type scale, gap/padding off the 4px grid, buttons and tabs under 44px tall, default layer names (Frame, Rectangle), and hard-coded colors that equal a variable. Run it before finish_working_on_nodes and fix errors and warnings; `info` items are suggestions. Pass `fix: true` to automatically snap spacing/padding to 4px, relink matching color variables, snap text sizes, and enlarge small touch targets.
+Check a page or subtree for common design mistakes and get a fix for each: text contrast (WCAG 4.5:1, 3:1 for large text), text under 12px, font sizes off the type scale, gap/padding off the 4px grid, buttons and tabs under 44px tall, default layer names (Frame, Rectangle), layers or text overflowing their artboard or clipping parent (rule `overflow`, never auto-fixed; scrolling frames are exempt), text too narrow for its words (text-collapsed), and hard-coded colors that equal a variable. Run it before finish_working_on_nodes and fix errors and warnings; `info` items are suggestions. Pass `fix: true` to automatically snap spacing/padding to 4px, relink matching color variables, snap text sizes, and enlarge small touch targets.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -685,12 +720,48 @@ Move the user's view: switch to pageId (as clicking it in the page list does) an
 
 ### `undo`
 
-Undo the last change on a page (the user's or an agent's).
+Undo a change. An agent's undo (scope `mine`, its default) takes back its own newest step and leaves later steps by others in place; it is refused (`undo_blocked`, with the steps in the way) when one of them touched the same layers. Scope `page` undoes the page's last step, whoever made it.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `scope` | string |  | `mine` or `page`. |
 
 
 ### `redo`
 
-Redo the last undone change on a page.
+Redo the last undone change on a page. With scope `mine` (an agent's default) only when that step was the caller's own.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `scope` | string |  | `mine` or `page`. |
+
+
+### `claim_nodes`
+
+Several agents on one project: claim the layers you will rewrite (each with everything under it) or a shared resource, so other agents' writes there are refused while you work. All or nothing; a denial names the holder and when it expires (never wait in a loop: do other work). The claim lasts ttlSeconds after your last call and goes with finish_working_on_nodes or release_claims. The person is never blocked. Needs the running app.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `ids` | array of string |  | Layer ids. |
+| `resources` | array of string |  | `variables`, `components`, `pages`. |
+| `ttlSeconds` | integer |  | Default 300 (10 to 1800); renewed by each of your calls. |
+| `note` | string |  | What you are doing, shown to others. |
+
+
+### `release_claims`
+
+Release your claims: one by claimId, those on ids or resources, or all of them when nothing is given.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `claimId` | string |  |  |
+| `ids` | array of string |  |  |
+| `resources` | array of string |  |  |
+
+
+### `list_claims` (read-only)
+
+Who is working where: every live claim with its holder, layers, resources, note and seconds left.
 
 
 ### `finish_working_on_nodes`

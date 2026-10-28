@@ -37,6 +37,6 @@ How to keep designs small, keep design and code in step, and spend few tokens do
 
 ## Sharing and several agents
 
-* Several agents may work on one open project through one MCP server: calls run one at a time, each is one undo step, so they do not corrupt each other. Give each agent its own page or artboard prefix and say so in the brief, so they do not restyle each other's nodes.
+* Several agents may work on one open project through one MCP server: calls run one at a time, each is one undo step, so they do not corrupt each other. Give each agent its own page or artboard prefix and say so in the brief, so they do not restyle each other's nodes. Each agent names itself (`papercraft-cli --as <name>`), claims what it rewrites (`claim_nodes`), reads the conflicts its writes report, and undoes only its own steps.
 * Several people on a shared project: pages sync as files and are merged when both sides changed the same page (nodes by id, child lists as sets). Edits to different nodes both survive; the same property changed twice keeps the local value. Ask people to keep a page per person when restyling the same frame.
 * While an agent works the app shows an animated "working" pill and a ring around the canvas; call `finish_working_on_nodes` when done so it stops.

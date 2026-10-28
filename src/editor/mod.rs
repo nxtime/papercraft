@@ -18,7 +18,7 @@ pub mod vector_ops;
 pub mod whiteboard;
 
 use crate::geom::{Camera, Rect, V2, next_zoom_step, v2};
-use crate::history::{History, Recording, Tx};
+use crate::history::{History, Recording, Tx, Undone};
 use crate::ink::{self, InkBuilder};
 use crate::model::{Color, Document, Node, NodeId, NodeKind, StrokePoint, TextAlign};
 use crate::text;
@@ -270,6 +270,8 @@ pub struct Editor {
     pub active_page: usize,
     /// Page groups (folders): group name -> page ids, in page order.
     pub page_groups: BTreeMap<String, Vec<String>>,
+    /// Page id -> icon (`set:name`), saved in the manifest.
+    pub page_icons: BTreeMap<String, String>,
     /// Page list or names changed (not tracked by undo history).
     pub meta_dirty: bool,
     /// The open project's design system (`design.json`).
@@ -373,6 +375,7 @@ impl Editor {
             pages: vec![PageSlot::new(&name)],
             active_page: 0,
             page_groups: BTreeMap::new(),
+            page_icons: BTreeMap::new(),
             meta_dirty: false,
             design: Default::default(),
             library_docs: BTreeMap::new(),
@@ -430,7 +433,7 @@ impl Editor {
         let mains = std::mem::take(&mut self.touched_mains);
         if let Some((rec, key)) = self.take_rec()
             && self.log_touched(&rec)
-            && self.history.commit(&self.doc, rec, key)
+            && self.history.commit_by(&self.doc, rec, key, self.changes.client.as_ref().map(|w| w.key.clone()))
         {
             self.revision += 1;
             if !mains.is_empty() {
@@ -488,7 +491,7 @@ impl Editor {
         let result = f(&mut self.tx());
         if let Some((rec, key)) = self.take_rec()
             && self.log_touched(&rec)
-            && self.history.commit(&self.doc, rec, key)
+            && self.history.commit_by(&self.doc, rec, key, self.changes.client.as_ref().map(|w| w.key.clone()))
         {
             self.revision += 1;
         }
@@ -508,28 +511,30 @@ impl Editor {
     }
 
     pub fn undo(&mut self) {
-        self.cancel_gesture();
-        self.end_text_edit();
-        self.commit();
-        let mut changed = Changed::Nodes(Arc::new([]));
-        if let Some(mut u) = self.history.undo(&mut self.doc) {
-            self.status = format!("Undo {}", u.label);
-            self.log_history(&u.nodes);
-            let design = u.design.is_some();
-            changed = Changed::Nodes(std::mem::take(&mut u.nodes).into());
-            self.restore_project_state(u);
-            self.log_history_design(design);
-        }
-        self.after_history(changed);
+        let Ok(()) = self.step_history("Undo", |h, doc| Ok::<_, std::convert::Infallible>(h.undo(doc)));
     }
 
     pub fn redo(&mut self) {
+        let Ok(()) = self.step_history("Redo", |h, doc| Ok::<_, std::convert::Infallible>(h.redo(doc)));
+    }
+
+    /// Undoes `author`'s newest step under later steps by others (see [`History::undo_by`]).
+    /// Err: the labels of the later steps that touched the same things.
+    pub fn undo_by(&mut self, author: &str) -> Result<(), Vec<String>> {
+        self.step_history("Undo", |h, doc| h.undo_by(doc, author))
+    }
+
+    fn step_history<E>(
+        &mut self,
+        verb: &str,
+        step: impl FnOnce(&mut History, &mut Document) -> Result<Option<Undone>, E>,
+    ) -> Result<(), E> {
         self.cancel_gesture();
         self.end_text_edit();
         self.commit();
         let mut changed = Changed::Nodes(Arc::new([]));
-        if let Some(mut u) = self.history.redo(&mut self.doc) {
-            self.status = format!("Redo {}", u.label);
+        if let Some(mut u) = step(&mut self.history, &mut self.doc)? {
+            self.status = format!("{verb} {}", u.label);
             self.log_history(&u.nodes);
             let design = u.design.is_some();
             changed = Changed::Nodes(std::mem::take(&mut u.nodes).into());
@@ -537,6 +542,7 @@ impl Editor {
             self.log_history_design(design);
         }
         self.after_history(changed);
+        Ok(())
     }
 
     fn after_history(&mut self, changed: Changed) {
@@ -762,8 +768,8 @@ impl Editor {
     /// zoomed-out page shows a few clean names instead of a pile.
     pub fn frame_labels(&self) -> Vec<(NodeId, Rect)> {
         let screen = Rect::new(0.0, 0.0, self.viewport.x, self.viewport.y);
-        // Top-level frames, then declared screens nested in sections.
-        let nested = screens::declared(&self.doc).into_iter().filter(|id| self.doc.get(*id).is_some_and(|n| n.parent.is_some()));
+        // Top-level frames, then declared screens and sections nested in sections.
+        let nested = self.doc.paint_order().into_iter().filter(|id| self.doc.get(*id).is_some_and(|n| n.parent.is_some() && (n.screen || n.section)));
         let bodies: Vec<(usize, NodeId, Rect)> = self
             .doc
             .root
@@ -2184,6 +2190,9 @@ impl Editor {
             A::ExportPdf => self
                 .requests
                 .push(AppRequest::ExportFormat(crate::io::export::Format::Pdf)),
+            A::ExportPresentation => self
+                .requests
+                .push(AppRequest::ExportFormat(crate::io::export::Format::Presentation)),
             A::CopyAsPng => self.requests.push(AppRequest::CopyAsPng),
             A::CopyAsSvg => self.copy_as_svg(),
             A::ToggleSnapping => {

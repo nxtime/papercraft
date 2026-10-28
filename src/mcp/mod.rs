@@ -14,6 +14,7 @@
 
 pub mod bounds;
 pub mod codegen;
+pub mod critique;
 pub mod css;
 pub mod diff;
 pub mod enforcer;
@@ -28,6 +29,10 @@ pub mod imagegen;
 pub mod delegate;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod refs;
+pub mod rewrite;
+pub mod room;
+pub mod screen_fit;
+pub mod swarm;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod relay;
 pub mod relay_proto;
@@ -73,13 +78,25 @@ pub const ACTIONS_CLIENT: &str = "Actions";
 pub struct Client {
     /// The MCP `clientInfo` title or name ("Claude Code"), or [`CHAT_CLIENT`].
     pub name: String,
-    /// The MCP session id, or the chat id.
+    /// The MCP session id, the chat id, or `agent:<name>` for a named CLI agent.
     pub session: String,
+    /// The session of the agent that delegated this one.
+    pub parent: Option<String>,
 }
 
 impl Client {
     pub fn chat(id: &str) -> Client {
-        Client { name: CHAT_CLIENT.into(), session: id.into() }
+        Client { name: CHAT_CLIENT.into(), session: id.into(), parent: None }
+    }
+
+    /// A CLI agent named with `--as` (or `$PAPERCRAFT_AGENT`): one session across its calls.
+    pub fn agent(name: &str, parent: Option<String>) -> Client {
+        Client { name: name.into(), session: format!("agent:{name}"), parent }
+    }
+
+    /// Name and session: what tells two agents apart (the change log's client key).
+    pub fn key(&self) -> String {
+        format!("{}#{}", self.name, self.session)
     }
 }
 

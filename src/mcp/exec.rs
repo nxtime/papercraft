@@ -238,6 +238,27 @@ fn resolve(ed: &Editor, key: &str, default_page: usize) -> Result<(usize, NodeId
     Ok((page, id))
 }
 
+/// The existing layers a call names (`nodeId`, `nodeIds`, `targetNodeId`, `parentId`, and the
+/// same keys inside `updates`, `moves` and `nodes`): what the swarm checks claims and conflicts on.
+pub(crate) fn named_layers(ed: &Editor, args: &Value) -> Vec<(usize, NodeId)> {
+    let Some(m) = args.as_object() else { return Vec::new() };
+    let def = page_arg(ed, &Args(m)).unwrap_or(ed.active_page);
+    let nested = ["updates", "moves", "nodes"].into_iter().flat_map(|l| m.get(l).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object));
+    let mut keys: Vec<&str> = Vec::new();
+    for o in std::iter::once(m).chain(nested) {
+        for k in ["nodeId", "targetNodeId", "parentId"] {
+            keys.extend(o.get(k).and_then(Value::as_str));
+        }
+        if let Some(a) = o.get("nodeIds").and_then(Value::as_array) {
+            keys.extend(a.iter().filter_map(Value::as_str));
+        }
+    }
+    let mut out: Vec<(usize, NodeId)> = keys.into_iter().filter(|k| *k != ROOT).filter_map(|k| resolve(ed, k, def).ok()).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Resolve several ids that must all live on one page.
 fn resolve_all(
     ed: &Editor,
@@ -293,6 +314,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
             // The first content on the page the user is looking at is brought into view.
             let was_empty = ed.doc.root.is_empty();
             let covered = if GUARDED.contains(&name) { screen_guard(ed, &a)? } else { None };
+            let boards = super::room::snapshot(ed.page_doc(scope));
             let r = match name {
                 "create_page" => create_page(ed, &a),
                 "rename_pages" => rename_pages(ed, &a),
@@ -331,7 +353,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                     super::imagegen::generate(host.project().map(|p| p.dir.clone()).as_deref(), None, &provider, &Value::Object(a.0.clone()))
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                "delegate" => super::delegate::run(&crate::ui::settings::ChatPrefs::load().helper_command, None, &Value::Object(a.0.clone())),
+                "delegate" => super::delegate::run(&crate::ui::settings::ChatPrefs::load().helper_command, None, ("Helper", ""), &Value::Object(a.0.clone())),
                 "find_nodes" => find_nodes(ed, &a),
                 "set_component_props" => set_component_props(ed, &a),
                 "set_instance_props" => set_instance_props(ed, &a),
@@ -340,6 +362,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "set_screens" => set_screens(ed, &a),
                 "export" => export(host, &a),
                 "export_combined_pdf" => export_pdf(host, &a),
+                "export_presentation" => export_presentation(host, &a),
                 "create_artboard" => create_artboard(ed, &a),
                 "write_html" => write_html(ed, &a),
                 "create_shape" => create_shape(ed, &a),
@@ -370,6 +393,11 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "rename_nodes" => rename_nodes(ed, &a),
                 "set_code_link" => set_code_link(ed, &a),
                 "apply_ui_kit" => apply_ui_kit(host, &a),
+                "critique_design" => critique_design(host, &a),
+                "claim_nodes" | "release_claims" | "list_claims" => {
+                    Err("claims are shared through the running PaperCraft app; offline there is one writer at a time".into())
+                }
+                "design_lessons" => design_lessons(host, &a),
                 "delete_nodes" => delete_nodes(ed, &a),
                 "duplicate_nodes" => duplicate_nodes(ed, &a),
                 "move_nodes" => move_nodes(ed, &a),
@@ -378,7 +406,11 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "undo" | "redo" => undo_redo(ed, &a, name == "undo"),
                 "finish_working_on_nodes" => {
                     host.save()?;
-                    text(json!({"ok": true, "saved": host.project().is_some()}))
+                    let mut v = json!({"ok": true, "saved": host.project().is_some()});
+                    if mark_critiqued(host) {
+                        v["next"] = json!("The design changed since its last critique: ask the person (ask_user) whether to critique it now; on yes call critique_design.");
+                    }
+                    text(v)
                 }
                 _ => Err(format!("unknown tool `{name}`")),
             };
@@ -386,14 +418,34 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
             if r.is_ok() && was_empty && !ed.doc.root.is_empty() && name != "set_viewport" {
                 ed.zoom_to_fit();
             }
+            let pushed = if r.is_ok() { make_room(ed, scope, &boards) } else { None };
             r.map(|mut out| {
                 if let Some(v) = covered {
                     out.push(Out::Text(serde_json::to_string_pretty(&v).unwrap_or_default()));
                 }
+                out.extend(pushed.map(Out::Text));
                 out
             })
         }
     }
+}
+
+/// Frames that grew into the ones under them push those down (`room`), as one more undo step;
+/// a note for the tool's output names them.
+fn make_room(ed: &mut Editor, page: usize, before: &std::collections::HashMap<NodeId, Rect>) -> Option<String> {
+    let moves = super::room::moves(ed.page_doc(page), before);
+    if moves.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = moves.iter().filter_map(|(id, _)| ed.page_doc(page).get(*id).map(|n| n.name.clone())).collect();
+    ed.with_page(page, |ed| {
+        ed.edit("Make room", |tx| {
+            for (id, dy) in &moves {
+                tx.node_mut(*id).unwrap().rect.y += dy;
+            }
+        })
+    });
+    Some(format!("moved down to clear a frame that grew: {}", names.join(", ")))
 }
 
 /// Projects match by manifest id, name or folder path.
@@ -522,8 +574,9 @@ fn set_screens(ed: &mut Editor, a: &Args) -> ToolResult {
     let role = match a.str("role").unwrap_or("screen") {
         "screen" => Role::Screen,
         "overlay" => Role::Overlay,
+        "section" => Role::Section,
         "none" => Role::None,
-        r => return Err(format!("role `{r}` is not screen, overlay or none")),
+        r => return Err(format!("role `{r}` is not screen, overlay, section or none")),
     };
     let (page, ids) = resolve_all(ed, &a.strs("nodeIds")?, page_arg(ed, a)?)?;
     ed.with_page(page, |ed| ed.set_role(&ids, role))?;
@@ -535,6 +588,9 @@ fn set_screens(ed: &mut Editor, a: &Args) -> ToolResult {
 fn screen_json(ed: &Editor, page: usize, id: NodeId) -> Option<Value> {
     let doc = ed.page_doc(page);
     let n = doc.get(id)?;
+    if n.section {
+        return Some(json!({"isSection": true}));
+    }
     if n.screen {
         return Some(json!({"isScreen": true, "device": crate::editor::screens::device_of(n.rect.w).unwrap_or("Custom")}));
     }
@@ -710,6 +766,10 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
             p.dir.clone(),
         )
     });
+    let lessons: Vec<Value> = super::critique::applying(host.store(), project.as_ref().map(|p| p.0.as_str()))
+        .into_iter()
+        .map(|l| json!({"id": l.id, "rule": l.rule}))
+        .collect();
     let ed = host.editor();
     // Reports every page's node count (also reached right after `open_file`).
     ed.finish_loading();
@@ -753,6 +813,7 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
         "pages": pages,
         "nodeCount": doc.nodes.len(),
         "rev": ed.changes.rev(),
+        "lessons": lessons,
         "artboards": artboards,
         "screens": crate::editor::screens::declared(doc).iter().map(|id| {
             let n = doc.get(*id).unwrap();
@@ -1260,7 +1321,7 @@ fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
     let (page, roots) = match a.str("nodeId").filter(|k| !k.is_empty() && *k != ROOT) {
         Some(k) => {
             let (p, id) = resolve(ed, k, def)?;
-            (p, vec![id])
+            (p, crate::io::export::with_layers_on_top(ed.page_doc(p), &[id]))
         }
         None => (def, ed.page_doc(def).root.clone()),
     };
@@ -2459,6 +2520,49 @@ fn export_pdf(_: &mut dyn Host, _: &Args) -> ToolResult {
     Err(NO_DISK.into())
 }
 
+#[cfg(target_arch = "wasm32")]
+fn export_presentation(_: &mut dyn Host, _: &Args) -> ToolResult {
+    Err(NO_DISK.into())
+}
+
+/// A presentation deck of pages (default all): cover, contents, a divider per page, a slide
+/// per screen, closing slide (`io::deck`).
+#[cfg(not(target_arch = "wasm32"))]
+fn export_presentation(host: &mut dyn Host, a: &Args) -> ToolResult {
+    let project_name = host.project().map(|p| p.manifest.name.clone());
+    let ed = host.editor();
+    ed.finish_loading();
+    let pages: Vec<usize> = match a.strs("pageIds") {
+        Ok(keys) if !keys.is_empty() => keys.iter().map(|k| find_page(ed, k)).collect::<Result<_, _>>()?,
+        _ => (0..ed.pages.len()).collect(),
+    };
+    let sections: Vec<crate::io::deck::Section> = pages
+        .iter()
+        .map(|&p| crate::io::deck::Section { name: ed.pages[p].name.clone(), doc: ed.page_doc(p), screens: crate::io::deck::screens_of(ed.page_doc(p)) })
+        .collect();
+    let screens: usize = sections.iter().map(|s| s.screens.len()).sum();
+    if screens == 0 {
+        return Err("no screens to present: these pages have no declared screens and no top-level frames of 300 × 300 or more".into());
+    }
+    let title = a.str("title").map(str::to_owned).or(project_name).unwrap_or_else(|| "Presentation".into());
+    let meta = crate::io::deck::Meta {
+        title: title.clone(),
+        subtitle: a.str("subtitle").map(str::to_owned),
+        author: a.str("author").map(str::to_owned),
+        now_ms: crate::project::format::now_ms(),
+    };
+    let path = match a.str("path") {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let dir = out_dir(a);
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            unique_path(&dir, &title, "pdf")
+        }
+    };
+    crate::io::atomic::write(&path, &crate::io::deck::build(&meta, &sections)).map_err(|e| e.to_string())?;
+    text(json!({"file": path, "screens": screens, "pages": sections.iter().filter(|s| !s.screens.is_empty()).count()}))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn export(host: &mut dyn Host, a: &Args) -> ToolResult {
     use crate::io::export::{Format, Item, Scope, Spec};
@@ -2975,6 +3079,10 @@ impl Builder<'_, '_> {
     /// Positioning that needs the final size (right/bottom).
     fn place(&mut self, id: NodeId, a: &css::Applied, parent: &Parent) {
         if let (Some(ps), true) = (parent.size, a.right.is_some() || a.bottom.is_some()) {
+            // An absolute box is not laid out with its parent: hug its content before measuring.
+            if self.tx.doc().get(id).is_some_and(|n| n.layout.is_some()) {
+                crate::layout::layout_frame(self.tx, id);
+            }
             let n = self.tx.node_mut(id).unwrap();
             if let Some(r) = a.right {
                 n.rect.x = ps.0 - n.rect.w - r;
@@ -2992,7 +3100,23 @@ impl Builder<'_, '_> {
         let explicit = get(styles, if ca == 0 { "width" } else { "height" }).is_some()
             || get(styles, "alignSelf").is_some_and(|v| v != "stretch")
             || matches!(get(styles, "position"), Some("absolute" | "fixed"));
-        if parent.stretch && parent.definite[ca] && !explicit {
+        // A text in a column that centres or aligns its children still wraps at the column's
+        // width, as a browser's block does: fill it and align its lines instead.
+        let text_in_column = ca == 0 && matches!(n.kind, NodeKind::Text { .. });
+        if text_in_column
+            && !parent.stretch
+            && parent.definite[0]
+            && !explicit
+            && let (Some(l), NodeKind::Text { align, .. }) = (parent.layout, &mut n.kind)
+            && get(styles, "textAlign").is_none()
+        {
+            *align = match l.align_cross {
+                crate::model::Align::Center => TextAlign::Center,
+                crate::model::Align::End => TextAlign::Right,
+                _ => TextAlign::Left,
+            };
+        }
+        if (parent.stretch || text_in_column) && parent.definite[ca] && !explicit {
             n.layout_child.sizing[ca] = Sizing::Fill;
             if ca == 0
                 && let NodeKind::Text { auto_width, .. } = &mut n.kind
@@ -3343,9 +3467,14 @@ impl Builder<'_, '_> {
         index: &mut Option<usize>,
     ) -> Option<NodeId> {
         let raw = el.raw.clone().unwrap_or_default();
+        // `color: var(--on-accent)` on the <svg> is what its currentColor strokes take, bound to
+        // that variable so a theme change reaches them.
+        let color_var = get(own, "color")
+            .or_else(|| get(inherited, "color"))
+            .and_then(|c| c.trim().strip_prefix("var(--")?.split([')', ',']).next().map(|v| v.trim().to_owned()));
         let color = get(own, "color")
             .or_else(|| get(inherited, "color"))
-            .and_then(css::color)
+            .and_then(|c| css::color(&css::substitute_vars(c).0))
             .unwrap_or(Color::BLACK);
         let fs = 16.0;
         let size_of = |k: &str| {
@@ -3430,6 +3559,14 @@ impl Builder<'_, '_> {
         for mut s in shapes {
             s.id = self.tx.alloc_id();
             s.children.clear();
+            if let Some(var) = &color_var {
+                if s.style.stroke == Some(color) {
+                    s.bindings.insert("stroke".into(), var.clone());
+                }
+                for p in s.style.fills.iter_mut().filter(|p| matches!(p, Paint::Solid { color: c, .. } if *c == color)) {
+                    *p = Paint::solid_var(color, var);
+                }
+            }
             self.tx.insert(s, Some(fid), None);
         }
         self.place(fid, &a, parent);
@@ -4106,7 +4243,7 @@ fn create_artboard(ed: &mut Editor, a: &Args) -> ToolResult {
         return Err("styles.width and styles.height are required (e.g. \"1440px\")".into());
     }
     let page_id = ed.pages[page].id.clone();
-    let (id, ignored) = ed.with_page(page, |ed| {
+    let (id, ignored, device) = ed.with_page(page, |ed| {
         ed.edit("Create artboard", |tx| {
             let mut n = Node::new(
                 NodeId(0),
@@ -4124,6 +4261,14 @@ fn create_artboard(ed: &mut Editor, a: &Args) -> ToolResult {
             });
             let a = css::apply(&mut n, &styles, &Context::default());
             let mut ignored = a.ignored.clone();
+            // A screen keeps its device's height and what does not fit scrolls (`screen_fit`);
+            // `overflow: visible` keeps a hugging board (a long landing page drawn in full).
+            let device = super::screen_fit::device_height(n.rect.w)
+                .filter(|_| n.layout_child.sizing[1] == Sizing::Hug && get(&styles, "overflow").is_none_or(|o| o != "visible"));
+            if let Some(h) = device {
+                n.layout_child.sizing[1] = Sizing::Fixed;
+                n.rect.h = h;
+            }
             if let Some((src, mode)) = &a.image {
                 match image_asset(src) {
                     Ok(asset) => n.style.fills.push(Paint::Image {
@@ -4142,10 +4287,15 @@ fn create_artboard(ed: &mut Editor, a: &Args) -> ToolResult {
             let id = tx.insert(n, None, None);
             remember_stretch(&page_id, id, &styles);
             relayout(tx, Some(id));
-            (id, ignored)
+            (id, ignored, device)
         })
     });
     let mut v = json!({"id": node_key(ed, page, id), "name": name, "pageId": ed.pages[page].id});
+    if let Some(h) = device {
+        v["note"] = json!(format!(
+            "height set to the device's {h}px; content taller than the screen scrolls inside it (the main column, else the screen). Pass overflow: \"visible\" to let the board grow instead."
+        ));
+    }
     if !ignored.is_empty() {
         v["ignoredStyles"] = json!(ignored);
     }
@@ -4181,7 +4331,8 @@ fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
     {
         return Err("insert-children needs a frame or group target; use mode \"replace\" or target its parent".into());
     }
-    let tree = html::parse(src);
+    let mut tree = html::parse(src);
+    let rewritten = super::rewrite::rewrite(&mut tree);
     #[cfg(not(target_arch = "wasm32"))]
     crate::plugins::prefetch(&tree, &crate::ui::settings::ChatPrefs::load().plugins);
     let page_id = ed.pages[page].id.clone();
@@ -4256,10 +4407,17 @@ fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
                 }
             }
             relayout(b.tx, parent_id.or(made.first().copied()));
-            let (ig, w) = (b.ignored, b.warnings);
+            let (ig, mut w) = (b.ignored, b.warnings);
+            if let Some(screen) = parent_id.or(made.first().copied()).and_then(|id| artboard_of(b.tx.doc(), id)) {
+                let scrolled = super::screen_fit::fit(b.tx, screen, relayout, &|n| stretches(&page_id, n));
+                if !scrolled.is_empty() {
+                    w.push(format!("content is taller than the screen, so it scrolls in: {} (the rest stays fixed)", scrolled.join(", ")));
+                }
+            }
             (made, ig, w)
         })
     });
+    let warnings: Vec<String> = rewritten.into_iter().chain(warnings).collect();
     if created.is_empty() && !warnings.is_empty() {
         return Err(warnings.join("; "));
     }
@@ -6506,6 +6664,90 @@ fn call_json(host: &mut dyn Host, name: &str, args: Value) -> Result<Value, Stri
     serde_json::from_str(t).map_err(|e| format!("{name}: {e}"))
 }
 
+/// The revision each project was last critiqued or offered a critique at, so a finish with no
+/// edits since does not offer it again.
+fn critiqued() -> &'static Mutex<HashMap<String, u64>> {
+    static S: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Records the current revision; true when it differs from the last critiqued or offered one.
+fn mark_critiqued(host: &mut dyn Host) -> bool {
+    let key = host.project().map(|p| p.manifest.id.clone()).unwrap_or_default();
+    let rev = host.editor().changes.rev();
+    critiqued().lock().unwrap().insert(key, rev) != Some(rev)
+}
+
+/// What a critique judges by (`critique`): the objective, the reviewers, the lint, the flow
+/// between the page's screens, the person's lessons that apply here and the steps, ending with
+/// the offer to keep findings as lessons.
+fn critique_design(host: &mut dyn Host, a: &Args) -> ToolResult {
+    use super::critique::{FINDING, MAX_ISSUES, PERSONAS, SEVERITY, STEPS};
+    let wanted = match a.get("personas") {
+        Some(_) => a.strs("personas")?,
+        None => PERSONAS.iter().map(|p| p.id.to_string()).collect(),
+    };
+    if let Some(bad) = wanted.iter().find(|w| !PERSONAS.iter().any(|p| p.id == w.as_str())) {
+        let all: Vec<&str> = PERSONAS.iter().map(|p| p.id).collect();
+        return Err(format!("no persona `{bad}` (personas: {})", all.join(", ")));
+    }
+    let mut args = json!({});
+    for k in ["pageId", "nodeId"] {
+        if let Some(v) = a.str(k) {
+            args[k] = json!(v);
+        }
+    }
+    let lint = call_json(host, "lint_design", args)?;
+    let project = host.project().map(|p| p.manifest.id.clone());
+    let lessons = super::critique::applying(host.store(), project.as_deref());
+    mark_critiqued(host);
+    let ed = host.editor();
+    let page = page_arg(ed, a)?;
+    let flow = super::critique::flow(ed.page_doc(page));
+    let issues: Vec<Value> = lint["issues"].as_array().map(|i| i.iter().take(MAX_ISSUES).cloned().collect()).unwrap_or_default();
+    let personas: Vec<Value> = PERSONAS
+        .iter()
+        .filter(|p| wanted.iter().any(|w| w == p.id))
+        .map(|p| json!({"id": p.id, "role": p.role, "asks": p.asks, "method": p.method}))
+        .collect();
+    text(json!({
+        "objective": a.str("objective").unwrap_or("missing: ask the person what this must achieve, for whom, and the top tasks"),
+        "audience": a.str("audience").unwrap_or("missing: take it from the objective or ask"),
+        "personas": personas,
+        "findingFormat": FINDING,
+        "severity": SEVERITY,
+        "lint": {"errors": lint["errors"], "warnings": lint["warnings"], "issues": issues},
+        "flow": flow,
+        "lessons": lessons,
+        "steps": STEPS,
+    }))
+}
+
+/// List, add or remove the person's design lessons.
+fn design_lessons(host: &mut dyn Host, a: &Args) -> ToolResult {
+    let project = host.project().map(|p| p.manifest.id.clone());
+    let store = host.store();
+    let mut v = json!({});
+    if let Some(add) = a.get("add") {
+        let add = add.as_object().ok_or("`add` is {rule, why, scope}")?;
+        let s = |k: &str| add.get(k).and_then(Value::as_str).unwrap_or("");
+        let scope = match s("scope") {
+            "" | "all" => None,
+            "project" => Some(project.clone().ok_or("no project is open to keep a project lesson in")?),
+            o => return Err(format!("scope is \"all\" or \"project\", not `{o}`")),
+        };
+        v["added"] = json!(super::critique::add(store, s("rule"), s("why"), scope)?);
+    }
+    if let Some(id) = a.str("remove") {
+        if !super::critique::remove(store, id)? {
+            return Err(format!("no lesson `{id}`"));
+        }
+        v["removed"] = json!(id);
+    }
+    v["lessons"] = json!(super::critique::applying(store, project.as_deref()));
+    text(v)
+}
+
 /// Build a "UI Kit / <name>" page from a kit (`crate::ui_kits`): its variables (Light and Dark),
 /// tokens, and its components, each a main component linked to the library's code.
 fn apply_ui_kit(host: &mut dyn Host, a: &Args) -> ToolResult {
@@ -6520,24 +6762,42 @@ fn apply_ui_kit(host: &mut dyn Host, a: &Args) -> ToolResult {
     call_json(host, "set_variables", json!({"pageId": pid, "variables": map(kit.light), "mode": "Light"}))?;
     call_json(host, "set_variables", json!({"pageId": pid, "variables": map(kit.dark), "mode": "Dark"}))?;
     call_json(host, "set_tokens", json!({"pageId": pid, "tokens": map(kit.tokens)}))?;
-    let body: String = kit.components.iter().map(|c| c.html).collect();
     let html = format!(
-        r#"<div layer-name="UI Kit / {}" style="display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start;padding:48px;width:1200px;background:var(--{})">{body}</div>"#,
+        r#"<div layer-name="UI Kit / {}" style="display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start;padding:48px;width:1200px;background:var(--{})"></div>"#,
         kit.name, kit.surface
     );
     let written = call_json(host, "write_html", json!({"pageId": pid, "targetNodeId": "root", "html": html}))?;
     let board = written["createdNodeIds"][0].as_str().ok_or("write_html made no frame")?.to_owned();
-    let kids = call_json(host, "get_children", json!({"pageId": pid, "nodeId": board}))?;
     let mut made = Vec::new();
-    for c in kit.components {
-        let Some(node) = kids["children"].as_array().into_iter().flatten().find(|k| k["name"] == c.name).and_then(|k| k["id"].as_str()) else { continue };
-        let comp = call_json(host, "create_component", json!({"pageId": pid, "nodeId": node}))?;
-        let cid = comp["id"].as_str().unwrap_or(node).to_owned();
-        call_json(host, "set_code_link", json!({"pageId": pid, "nodeId": cid, "kit": kit.id, "import": c.import, "react": c.react, "egui": c.egui}))?;
-        made.push(json!({"name": c.name, "id": cid}));
+    // Components built from other components (a dialog's buttons) come once those are mains.
+    let (plain, composed): (Vec<_>, Vec<_>) = kit.components.iter().partition(|c| !c.html.contains("<x-paper-instance"));
+    for pass in [plain, composed] {
+        let body: String = pass.iter().map(|c| c.html).collect();
+        let w = call_json(host, "write_html", json!({"pageId": pid, "targetNodeId": board, "html": body}))?;
+        let ids = w["createdNodeIds"].as_array().cloned().unwrap_or_default();
+        for (c, node) in pass.iter().zip(ids.iter().filter_map(|i| i.as_str())) {
+            let comp = call_json(host, "create_component", json!({"pageId": pid, "nodeId": node}))?;
+            let cid = comp["id"].as_str().unwrap_or(node).to_owned();
+            let (import, react) = match kit.code {
+                [] => (c.import, c.react),
+                code => code.iter().find(|(n, ..)| *n == c.name).map_or(("", ""), |(_, i, r)| (*i, *r)),
+            };
+            call_json(host, "set_code_link", json!({"pageId": pid, "nodeId": cid, "kit": kit.id, "import": import, "react": react, "egui": c.egui}))?;
+            made.push(json!({"name": c.name, "id": cid}));
+        }
+    }
+    // Screen layouts from the components, in a row under the kit's board.
+    let below = call_json(host, "get_node_info", json!({"pageId": pid, "nodeId": board}))?;
+    let top = below["y"].as_f64().unwrap_or(0.0) + below["height"].as_f64().unwrap_or(0.0) + 160.0;
+    let mut layouts = Vec::new();
+    for (i, (name, html)) in kit.layouts.iter().enumerate() {
+        let w = call_json(host, "write_html", json!({"pageId": pid, "targetNodeId": "root", "html": html}))?;
+        let Some(id) = w["createdNodeIds"][0].as_str() else { continue };
+        call_json(host, "update_styles", json!({"pageId": pid, "updates": [{"nodeIds": [id], "styles": {"left": i as f64 * 1600.0, "top": top}}]}))?;
+        layouts.push(json!({"name": name, "id": id}));
     }
     text(json!({
-        "pageId": pid, "frame": board, "kit": kit.id, "components": made,
+        "pageId": pid, "frame": board, "kit": kit.id, "components": made, "layouts": layouts,
         "next": "Place these with <x-paper-instance component=\"Name\" overrides='{\"Label\":\"Text\"}'/>; the code export and the AI spec use the library components for them. Use the kit's variables (var(--primary) and so on) for everything else."
     }))
 }
@@ -6955,16 +7215,38 @@ fn set_viewport(ed: &mut Editor, a: &Args) -> ToolResult {
 
 fn undo_redo(ed: &mut Editor, a: &Args, undo: bool) -> ToolResult {
     let page = page_arg(ed, a)?;
-    let label = ed.with_page(page, |ed| {
+    let me = ed.changes.client.as_ref().map(|w| w.key.clone());
+    // An agent takes back its own steps unless it asks for the page's; the person's
+    // undo is always the page's.
+    let mine = match (a.get("scope").and_then(Value::as_str), &me) {
+        (Some("page"), _) | (_, None) => None,
+        (Some("mine") | None, Some(me)) => Some(me.clone()),
+        (Some(other), _) => return Err(format!("scope must be \"mine\" or \"page\", not \"{other}\"")),
+    };
+    let label: Result<Option<String>, Vec<String>> = ed.with_page(page, |ed| {
         let before = ed.history.generation();
-        if undo {
-            ed.undo();
-        } else {
-            ed.redo();
+        match (&mine, undo) {
+            (None, true) => ed.undo(),
+            (None, false) => ed.redo(),
+            (Some(me), true) => ed.undo_by(me)?,
+            // Only the caller's own undone step comes back; someone else's stays undone.
+            (Some(me), false) => {
+                if ed.history.redo_author() == Some(me.as_str()) {
+                    ed.redo();
+                }
+            }
         }
-        (ed.history.generation() != before).then(|| ed.status.clone())
+        Ok((ed.history.generation() != before).then(|| ed.status.clone()))
     });
-    text(json!({"done": label.is_some(), "what": label}))
+    match label {
+        Ok(label) => text(json!({"done": label.is_some(), "what": label})),
+        Err(blocked) => text(json!({
+            "done": false,
+            "reason": "undo_blocked",
+            "blockedBy": blocked,
+            "hint": "later steps by others touched the same layers; fix it forward, or pass scope \"page\" to undo the page's last step",
+        })),
+    }
 }
 
 #[cfg(test)]

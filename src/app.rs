@@ -89,6 +89,9 @@ pub struct App {
     )>,
     /// Groups the agent's editing calls into reviewable runs.
     runs: crate::runs::Tracker,
+    /// Claims and what each agent last saw; shared with delegate threads, which release their
+    /// helper's claims when it ends.
+    swarm: std::sync::Arc<std::sync::Mutex<crate::mcp::swarm::Swarm>>,
 }
 
 /// Events delivered to the winit loop from other sources.
@@ -140,6 +143,7 @@ impl App {
             menu: None,
             mcp: None,
             runs: Default::default(),
+            swarm: Default::default(),
         };
         app.st.library.library = library;
         app.st.perf.prefs = crate::ui::perf::PerfPrefs::load();
@@ -483,7 +487,8 @@ impl App {
         }
         let ext = spec.format.ext();
         let out = if spec.single_file(items.len()) {
-            let base = if items.len() == 1 {
+            // A presentation is named after the project: the name is its title.
+            let base = if items.len() == 1 && spec.format != export::Format::Presentation {
                 items[0].name.clone()
             } else {
                 self.st.project_name.clone()
@@ -700,8 +705,15 @@ impl App {
                     }
                 }
                 AppRequest::ExportFormat(f) => {
+                    // From the menu, a presentation is of the whole project.
+                    let scope = if f == crate::io::export::Format::Presentation {
+                        crate::io::export::Scope::AllPages
+                    } else {
+                        self.st.export.scope
+                    };
                     let spec = crate::io::export::Spec {
                         format: f,
+                        scope,
                         ..self.st.export
                     };
                     self.export(spec);
@@ -770,6 +782,7 @@ impl App {
         if self.st.chat.take_finish_run() {
             // A chat turn that edited is over: close its run now, not after the 30 s idle timeout.
             self.runs.finish(crate::project::format::now_ms(), &self.ed);
+            self.swarm.lock().unwrap().release_chats();
         }
         self.st.sync_runs(&self.ctx, &mut self.runs, &self.ed);
         self.st.chat.tools = self.tool_dispatch().map(crate::chat::events::ToolDispatch);
@@ -1575,9 +1588,27 @@ impl App {
                 let chat = (c.client.name == crate::mcp::CHAT_CLIENT).then(|| c.client.session.clone());
                 let provider = self.st.settings.chat.image_provider();
                 let helper = self.st.settings.chat.helper_command.clone();
+                // A helper is its own agent: named after its caller, with its scope claimed before
+                // it starts and released when it ends.
+                let agent = if c.name == crate::mcp::delegate::TOOL {
+                    let role = c.args["role"].as_str().unwrap_or_default();
+                    let claimed = self.swarm.lock().unwrap().claim_for_helper(&mut self.runs, &mut self.ed, &c.client, role, &c.args["scope"], crate::project::format::now_ms());
+                    match claimed {
+                        Ok(a) => Some(a),
+                        Err(e) => {
+                            let _ = c.reply.send(Err(e));
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+                let swarm = self.swarm.clone();
                 std::thread::spawn(move || {
-                    let r = if c.name == crate::mcp::delegate::TOOL {
-                        crate::mcp::delegate::run(&helper, chat.as_deref(), &c.args)
+                    let r = if let Some(a) = &agent {
+                        let r = crate::mcp::delegate::run(&helper, chat.as_deref(), (&a.name, a.parent.as_deref().unwrap_or_default()), &c.args);
+                        swarm.lock().unwrap().release_client(a);
+                        r
                     } else if c.name == crate::mcp::refs::TOOL {
                         crate::mcp::refs::fetch(dir.as_deref(), chat.as_deref(), &c.args)
                     } else {
@@ -1588,7 +1619,8 @@ impl App {
                 continue;
             }
             let mut runs = std::mem::take(&mut self.runs);
-            let r = runs.call(self, &c.client, &c.name, &c.args, crate::project::format::now_ms());
+            let swarm = self.swarm.clone();
+            let r = swarm.lock().unwrap().call(&mut runs, self, &c.client, &c.name, &c.args, crate::project::format::now_ms());
             let touched = runs.take_touched();
             if r.is_ok() {
                 let who = runs.label(&c.client);

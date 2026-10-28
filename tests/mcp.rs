@@ -849,3 +849,154 @@ async fn parallel_sessions_get_their_own_runs() {
     assert_eq!((rc.calls, rc.added), (1, 1));
     assert_eq!(names, ["A1", "A2", "C1"], "only B's frame is gone");
 }
+
+#[test]
+fn export_presentation_writes_a_deck_of_the_screens() {
+    let mut h = host();
+    let err = exec::call(&mut h, "export_presentation", &json!({})).unwrap_err();
+    assert!(err.to_string().contains("no screens"), "{err}");
+    call(&mut h, "create_artboard", json!({"name": "Sign in", "styles": {"width": 1440, "height": 900}}));
+    let path = std::env::temp_dir().join(format!("papercraft-deck-{:016x}.pdf", fastrand::u64(..)));
+    let out = call(&mut h, "export_presentation", json!({"title": "Deck", "author": "A", "path": path}));
+    assert_eq!((out["screens"].as_u64(), out["pages"].as_u64()), (Some(1), Some(1)));
+    let pdf = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+    // Cover, contents, divider, the screen, next steps, end.
+    assert!(String::from_utf8_lossy(&pdf).contains("/Count 6"));
+}
+
+#[test]
+fn write_html_sizes_flex_items_as_a_browser_does() {
+    let mut h = host();
+    let ab = call(&mut h, "create_artboard", json!({"name": "Rows", "styles": {"width": 800, "height": "fit-content", "display": "flex", "flexDirection": "column", "alignItems": "flex-start"}}));
+    let out = call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children",
+               "html": "<div style=\"display:flex;width:fit-content\"><div style=\"flex:1;padding:8px\"><span>Two Sum</span></div></div>\
+                        <div style=\"display:flex;width:400px\"><div style=\"flex:0 0 120px\">Fixed</div><div style=\"flex-basis:90px\">Basis</div></div>"}),
+    );
+    let width = |h: &mut exec::SessionHost, text: &str| {
+        let found = call(h, "find_nodes", json!({"textValue": text}));
+        let id = found["results"][0]["id"].clone();
+        call(h, "get_node_info", json!({"nodeId": id}))["width"].as_f64().unwrap()
+    };
+    assert!(width(&mut h, "Two Sum") > 40.0, "a growing cell in a hugging row keeps its text on one line: {out}");
+    assert_eq!(width(&mut h, "Fixed"), 120.0);
+    assert_eq!(width(&mut h, "Basis"), 90.0);
+}
+
+#[test]
+fn the_base_kits_build_their_components_and_layouts_clean() {
+    // shadcn and the kits drawn with its markup in another library's palette and code.
+    for (id, package) in [("mui", "@mui/material"), ("mantine", "@mantine/core"), ("bootstrap", "react-bootstrap"), ("chakra", "@chakra-ui/react")] {
+        let mut h = host();
+        let kit = call(&mut h, "apply_ui_kit", json!({"kit": id}));
+        let layouts = kit["layouts"].as_array().unwrap();
+        assert_eq!(layouts.len(), 5, "{id}");
+        for root in std::iter::once(&kit["frame"]).chain(layouts.iter().map(|l| &l["id"])) {
+            let lint = call(&mut h, "lint_design", json!({"pageId": kit["pageId"], "nodeId": root}));
+            assert_eq!((lint["errors"].as_u64(), lint["warnings"].as_u64()), (Some(0), Some(0)), "{id} {root}: {}", lint["issues"]);
+        }
+        let button = &kit["components"].as_array().unwrap().iter().find(|c| c["name"] == "Button / Outline").unwrap()["id"];
+        let jsx = call(&mut h, "get_jsx", json!({"nodeId": button}));
+        assert!(jsx.to_string().contains(package), "{id} links its own library: {jsx}");
+    }
+    let mut h = host();
+    let kit = call(&mut h, "apply_ui_kit", json!({"kit": "shadcn"}));
+    let pid = kit["pageId"].clone();
+    assert!(kit["components"].as_array().unwrap().len() >= 40, "{}", kit["components"]);
+    let layouts = kit["layouts"].as_array().unwrap();
+    assert_eq!(layouts.len(), 5);
+    for root in std::iter::once(&kit["frame"]).chain(layouts.iter().map(|l| &l["id"])) {
+        let lint = call(&mut h, "lint_design", json!({"pageId": pid, "nodeId": root}));
+        assert_eq!((lint["errors"].as_u64(), lint["warnings"].as_u64()), (Some(0), Some(0)), "{root}: {}", lint["issues"]);
+    }
+    // An icon takes its <svg>'s `color: var(--…)`, not black.
+    let found = call(&mut h, "find_nodes", json!({"pageId": pid, "textValue": "New item"}));
+    let label = found["results"][0]["id"].clone();
+    let button = call(&mut h, "get_node_info", json!({"nodeId": label}))["parentId"].clone();
+    let icon = call(&mut h, "get_children", json!({"nodeId": button}))["children"][0]["id"].clone();
+    let jsx = call(&mut h, "get_jsx", json!({"nodeId": icon}));
+    assert!(!jsx.to_string().to_lowercase().contains("#000000"), "{jsx}");
+}
+
+#[test]
+fn a_screen_keeps_its_height_and_scrolls_its_main_column() {
+    let mut h = host();
+    let rows: String = (0..40).map(|i| format!("<div style=\"display:flex;padding:16px\"><span>Order {i}</span></div>")).collect();
+    let shell = |main_style: &str| {
+        format!("<div layer-name=\"Shell\" style=\"display:flex\"><div layer-name=\"Sidebar\" style=\"display:flex;flex-direction:column;width:240px\"><span>Home</span></div><div layer-name=\"Main\" style=\"{main_style}\">{rows}</div></div>")
+    };
+    // A screen made to hug its content takes its device's height; a hugging shell fills it.
+    let ab = call(&mut h, "create_artboard", json!({"name": "Orders", "styles": {"width": "1440px", "height": "fit-content"}}));
+    assert!(ab["note"].as_str().is_some_and(|n| n.contains("900")), "{ab}");
+    let out = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": shell("display:flex;flex-direction:column;flex-grow:1")}));
+    assert!(out["warnings"].to_string().contains("Main"), "{out}");
+    let size = |h: &mut exec::SessionHost, id: &Value| {
+        let info = call(h, "get_node_info", json!({"nodeId": id}));
+        let styles = call(h, "get_computed_styles", json!({"nodeIds": [id]}));
+        (info["height"].as_f64().unwrap(), styles.to_string().contains("\"overflow\":\"auto\""))
+    };
+    let kids = call(&mut h, "get_children", json!({"nodeId": out["createdNodeIds"][0]}))["children"].clone();
+    assert_eq!(size(&mut h, &ab["id"]).0, 900.0);
+    assert_eq!(size(&mut h, &kids[0]["id"]), (900.0, false), "the sidebar stays");
+    assert_eq!(size(&mut h, &kids[1]["id"]), (900.0, true), "the main column scrolls");
+    // `min-height: 100vh` fills the screen instead of being ignored.
+    let ab = call(&mut h, "create_artboard", json!({"name": "Vh", "styles": {"width": "1440px", "height": "900px", "left": "2000px"}}));
+    let html = shell("display:flex;flex-direction:column;flex:1").replace("display:flex\"><div layer-name=\"Sidebar\"", "display:flex;min-height:100vh\"><div layer-name=\"Sidebar\"");
+    let out = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": html}));
+    assert_eq!(size(&mut h, &out["createdNodeIds"][0]).0, 900.0);
+    // A board asked to grow still grows.
+    let ab = call(&mut h, "create_artboard", json!({"name": "Landing", "styles": {"width": "1440px", "height": "fit-content", "overflow": "visible", "left": "4000px"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": rows}));
+    assert!(size(&mut h, &ab["id"]).0 > 900.0);
+}
+
+#[test]
+fn a_finished_design_is_offered_a_critique_and_keeps_approved_lessons() {
+    let mut h = host();
+    let ab = call(&mut h, "create_artboard", json!({"name": "Home", "styles": {"width": "390px", "height": "844px"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"padding:16px\">Hi</div>"}));
+    let done = call(&mut h, "finish_working_on_nodes", json!({}));
+    assert!(done["next"].as_str().is_some_and(|n| n.contains("critique_design")), "{done}");
+    assert!(call(&mut h, "finish_working_on_nodes", json!({}))["next"].is_null(), "no edits, no second offer");
+
+    let review = call(&mut h, "critique_design", json!({"nodeId": ab["id"]}));
+    assert!(review["lint"]["errors"].is_u64() && review["steps"].as_array().unwrap().len() >= 5, "{review}");
+    assert!(review["lessons"].as_array().unwrap().is_empty());
+    assert_eq!(review["personas"].as_array().unwrap().len(), 8, "every reviewer by default");
+    assert!(review["objective"].as_str().unwrap().starts_with("missing"), "no objective: ask for one");
+    // The flow follows arrows between screens: Home -> Cart is fine, Cart leads nowhere, Help is never reached.
+    let screen = |h: &mut exec::SessionHost, name: &str, x: u32| call(h, "create_artboard", json!({"name": name, "styles": {"width": "390px", "height": "844px", "left": format!("{x}px"), "top": "0px"}}))["id"].clone();
+    let cart = screen(&mut h, "Cart", 600);
+    screen(&mut h, "Help", 1200);
+    call(&mut h, "create_shape", json!({"type": "arrow", "startNodeId": ab["id"], "endNodeId": cart}));
+    let review = call(&mut h, "critique_design", json!({"personas": ["flow", "accessibility"], "objective": "Buy in two taps"}));
+    assert_eq!(review["personas"].as_array().unwrap().len(), 2);
+    assert_eq!(review["flow"]["links"], json!([["Home", "Cart"]]), "{}", review["flow"]);
+    assert_eq!(review["flow"]["deadEnds"], json!(["Cart"]));
+    assert_eq!(review["flow"]["unreached"], json!(["Help"]));
+    assert!(exec::call(&mut h, "critique_design", &json!({"personas": ["boss"]})).unwrap_err().contains("no persona"));
+
+    let added = call(&mut h, "design_lessons", json!({"add": {"rule": "Screens keep their device height", "why": "a page grew to 2000px"}}));
+    let id = added["added"]["id"].clone();
+    call(&mut h, "design_lessons", json!({"add": {"rule": "Headlines use the accent colour", "scope": "project"}}));
+    let info = call(&mut h, "get_basic_info", json!({}));
+    assert_eq!(info["lessons"].as_array().unwrap().len(), 2, "{info}");
+    assert_eq!(call(&mut h, "critique_design", json!({}))["lessons"].as_array().unwrap().len(), 2);
+    let left = call(&mut h, "design_lessons", json!({"remove": id}));
+    assert_eq!(left["lessons"].as_array().unwrap().len(), 1, "{left}");
+}
+
+#[test]
+fn claims_need_the_running_app() {
+    // Claims fence agents off from each other, so they live in the app every agent talks to;
+    // the full behaviour is in tests/swarm.rs.
+    let mut h = host();
+    for tool in ["claim_nodes", "release_claims", "list_claims"] {
+        let err = exec::call(&mut h, tool, &json!({"ids": []})).unwrap_err();
+        assert!(err.to_string().contains("running PaperCraft"), "{tool}: {err}");
+    }
+}

@@ -17,7 +17,7 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
 
 * **Check the project is the right one.** `get_basic_info` returns `fileName` and `path`. Build only in a project that belongs to the work (a NotesCraft design file is for NotesCraft screens, not for redesigning PaperCraft). For a different product: `create_file {name}`, then `open_file {fileId}`, and say so. `open_file` swaps the project the user is looking at, so tell them. Pass `fileId` on later calls when more than one project is in play.
 * Not running: ask the user to start PaperCraft and open a project (or `create_file` then `open_file`). `PAPERCRAFT_MCP_PORT` must match if the port was changed. Do not try to launch the GUI yourself unless asked.
-* Read `get_basic_info` (pages, artboards, sizes, fonts), then `get_selection` (what the user is looking at) and `get_variables` and `get_components`. Reuse what exists before creating anything.
+* Read `get_basic_info` (pages, artboards, sizes, fonts, and `lessons`: the person's rules from past critiques; follow every one), then `get_selection` (what the user is looking at) and `get_variables` and `get_components`. Reuse what exists before creating anything.
 * `pageId` defaults to the page the user is viewing, which can change between calls: pass it explicitly. Node ids look like `3fa9c1:14`; never show them to the user.
 * App closed (server, CI)? `papercraft-cli call --offline ... --project <name>` runs the same tools on the project store and saves after every editing call; `papercraft-cli shell` keeps one session for many calls and reads scripts from stdin. It is refused while the app has that project open. See `docs/agents.md`.
 * With MCP tools you do not need the CLI; with a shell, `papercraft-cli list` and `papercraft-cli schema <tool>` give the schemas on demand. Pass big JSON on stdin: `... | papercraft-cli call write_html -`.
@@ -36,7 +36,7 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
    Between edits, lint only what changed: keep the `rev` each write returns and run `lint_design {changedOnly: true}` (or `{since: rev}`). `get_changes {since}` shows what an edit touched; `get_bounds` measures a whole subtree in one call instead of looping `get_node_info`.
    Always finish with one full `lint_design` (no `since` or `changedOnly`: `covered.partial` is false) and a screenshot per artboard in each theme mode before reporting. Details: [incremental-checks.md](references/incremental-checks.md).
 6. **Fix with the smallest edit.** `update_styles` and `set_text_content` on the existing nodes, not a rewrite. Rewrite a group with `write_html` mode `replace` only when its structure is wrong.
-7. **Finish.** `finish_working_on_nodes` (saves). Tell the user what you made in a sentence or two, with artboard names, not ids.
+7. **Finish.** `finish_working_on_nodes` (saves). Tell the user what you made in a sentence or two, with artboard names, not ids. When its result has `next`, offer a critique with `ask_user`; on yes run `critique_design` and follow its steps (the `papercraft-critique` skill has the full gate). Keep a finding as a lesson (`design_lessons {add}`) only when the person approved it.
 
 Lint passes are necessary, not sufficient: contrast and grids say nothing about composition. The screenshot is the real test.
 
@@ -47,6 +47,9 @@ Lessons from redesigning a 3-page, 130-screen project with up to six agents at o
 * **Split by section, not by page.** Give each agent named sections (frame ids) and forbid the rest. New sections go below the current lowest one; re-read positions right before creating, since another agent may have just added one.
 * **Section layout**: a section frame holds a title and rows of screen slots (a route label above a fixed-size screen). Keep 640 px between screens and rows and 1600 px between sections, so notes fit beside screens. Stack sections in one column.
 * **See what the others changed** before building on their work: `get_changes {since: <your last rev>, exclude: "self"}` lists layers by the client that changed them. `truncated: true` means re-read everything.
+* **Name yourself and fence your area.** With the CLI pass `--as <name>` (or `PAPERCRAFT_AGENT`), so writes, conflicts and claims carry your name. `claim_nodes {ids, note}` the sections you will rewrite; others' writes there are refused until you `finish_working_on_nodes` or `release_claims`. A denial names the holder: work elsewhere, never wait in a loop.
+* **Writes report conflicts.** A result with a `swarm` block lists layers another agent changed since you last looked: read them with `get_changes` before going on. Pass `ifRev: <your last rev>` to have the write refused instead (`"error": "conflict"`).
+* **Undo takes back only your own steps** (`undo`, scope `mine`); it is refused with `undo_blocked` when someone changed the same layers since. Fix forward then; `scope: "page"` undoes whoever was last.
 * **Recreate, then delete.** Build the new screen next to the old one, finish it, then delete the old one, and record the deleted ids and names in the report. A cleanup agent once deleted buttons and lost icons by editing in place.
 * **Reuse the design system across pages**: `create_instance` / `swap_instance` / `<x-paper-instance>` take a main from any page and stay linked. Never `import_components` to use a component: that copies mains onto the page, and instances made from the copies stop following the design system. `lint_design` flags hand-made look-alikes as `not-an-instance` (a different icon is a different component); fix with `write_html` mode replace and the `<x-paper-instance>` it names.
 * **QA pass after a build** (screen by screen at scale 1, one call at a time): text layers with stale fixed widths clip labels ("In prog", "New sess"): set `width: fit-content`. Sidebars and panels fixed at 900 px stop short on taller screens: make them fill the height and let the screen hug with a 900 px minimum. Tags and chips overflowing their box, cards overlapping buttons, footers not pinned, leftover `Text` / `Frame` names, gendered copy about people whose gender is unknown (use their name or neutral wording).
@@ -92,7 +95,7 @@ For a screen with dozens of parts, drive the CLI from a short Python helper (`ca
 ```
 
 Artboards: mobile 390×844, tablet 768×1024, desktop 1440×900, large desktop 2560×1440 (a 1440p display; ask which the user uses and design that first). A narrow window (1280×800) is its own artboard: collapse the sidebar to an icon rail, make secondary actions icon-only with a tooltip, keep one labelled primary action.
-Dot-grid canvas (no pattern fill exists): one `<svg>` with a single path of tiny round-capped dashes, absolute at 0,0 inside the canvas frame: `<svg style="position:absolute;left:0px;top:0px" width="W" height="H" viewBox="0 0 W H"><path d="M16 16h0.01M48 16h0.01..." stroke="var(--surface-2)" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>`. One vector layer, about 3,000 dots at a 32px step. Its colour is frozen at write time. Create with `height:"fit-content"` when the content decides the height. Replace margin with `gap` and `padding`.
+Dot-grid canvas (no pattern fill exists): one `<svg>` with a single path of tiny round-capped dashes, absolute at 0,0 inside the canvas frame: `<svg style="position:absolute;left:0px;top:0px" width="W" height="H" viewBox="0 0 W H"><path d="M16 16h0.01M48 16h0.01..." stroke="var(--surface-2)" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>`. One vector layer, about 3,000 dots at a 32px step. Its colour is frozen at write time. A screen keeps its device's size; at a device width (390, 1440...) `height:"fit-content"` becomes the device height. Content taller than the screen scrolls by itself: the main column under a fixed sidebar and header, else the screen (write_html says which). Pass `overflow:"visible"` to let a board grow (a landing page drawn in full). Replace margin with `gap` and `padding`.
 
 Full flows: [recipes.md](references/recipes.md).
 
@@ -120,11 +123,11 @@ Full flows: [recipes.md](references/recipes.md).
 | Component properties | One component with properties instead of one per state: `set_component_props` (`text`, `bool`, `icon`, `enum` options in the overrides format; templates `text`, `active` for tab bars and navs, `status` with [{value, color}]), then `set_instance_props {nodeIds, values}` or `<x-paper-instance component="Badge" props='{"Status":"Rejeitada"}'/>`; `get_components` lists them |
 | Merge per-state components | `merge_variants {componentIds, name}` turns `Tab bar / Hoje`, `Tab bar / Lojas`... into one `Tab bar` with an enum, moves every instance and deletes the emptied variants |
 | Prototype | `set_prototype_links {links:[{nodeId, to}]}`: back arrows, rows and tabs go to their screens in Present mode |
-| Screens | Fixed size (390x844, 1440x900...); content longer than the screen: `overflow: auto` on the screen frame, so it keeps its size and the overflow scrolls on the canvas and in Present (inspector: Scroll overflow; page: Screens scroll) |
+| Screens | Fixed size (390x844, 1440x900...); content longer than the screen scrolls by itself (the main column under a fixed sidebar and header, else the screen), or set `overflow: auto` on the frame that should scroll; it keeps its size and the overflow scrolls on the canvas and in Present (inspector: Scroll overflow; page: Screens scroll) |
 | Project | `rename_file {name}` (open project stays open), `move_nodes {toPageId}` keeps instances linked and notes attached |
 | Shared libraries | `publish_library`, `list_libraries`, `enable_library`, `update_library`, `disable_library` |
 | Icons | `search_icons`, `<x-paper-icon name="set:name">`; CLI: `papercraft-cli icons add\|list\|search` |
-| Design in a library's look, hand off its code | `apply_ui_kit` (shadcn, antd, reactbits, egui), then `<x-paper-instance>` of its components; `set_code_link` for a component of your own; `get_jsx` / `get_design_spec` then write `<Button variant="outline">` instead of divs |
+| Design in a library's look, hand off its code | `apply_ui_kit` (shadcn, mui, mantine, bootstrap, chakra: ~48 components and 5 screen layouts each, re-colour through their variables; antd, reactbits, egui), then `<x-paper-instance>` of its components; `set_code_link` for a component of your own; `get_jsx` / `get_design_spec` then write `<Button variant="outline">` instead of divs |
 | Avatars, more icons, photos, flags, QR | `<x-plugin use="avataaars\|dicebear\|iconify\|picsum\|flags\|qr" …/>` inside `write_html` (plugins the user turned on) |
 | References and art | `fetch_reference_images`, `zoom_image`, `generate_image` (when the user turned image generation on) |
 | Ask the user | `ask_user` (clickable answers; end your turn after it) |
@@ -132,7 +135,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Design rules (design-playbook) | `design_rules` (`query` or `rule` id; needs the `playbook` CLI; cite ids in the report) |
 | Report a PaperCraft problem | `report_issue` (a draft the user sends; synthetic repro only) |
 | Check quality | `lint_design` (`changedOnly: true` or `since` between edits, a full pass at the end; `overflow` flags layers past their artboard or clipping parent) |
-| Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf` |
+| Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf`, `export_presentation` (a client deck: cover, contents, a slide per screen) |
 | Point at things for the user | `select_nodes` (`zoom: true`) |
 | Take back | `undo`, `redo` |
 | Save | `finish_working_on_nodes` |
@@ -165,7 +168,7 @@ Full flows: [recipes.md](references/recipes.md).
 | `papercraft-cli` exits 1, "isn't running" | The app is closed, no project is open, or the port differs. Start it and open a project; check `PAPERCRAFT_MCP_PORT`. |
 | Call fails with an unknown node id | The id is from another page or was deleted. Re-read with `get_children`; pass `pageId`. |
 | `write_html` reports `ignoredStyles` | You used a CSS property that has no equivalent (`margin`, `box-shadow`, `transform`...). Replace it, see [html-subset.md](references/html-subset.md). |
-| Content is cut off | The artboard height is fixed. `update_styles` with `height: "fit-content"` or a larger number. |
+| Content is cut off | A frame inside the screen clips it (`overflow: hidden`, or a fixed height under a hugging parent). Give the column that should scroll `overflow: auto`; for a board that should grow, `overflow: "visible"` and `height: "fit-content"`. |
 | A color did not change with the theme | It was written as hex, or it is a stroke or gradient. Use `var(--name)` on fills and text; strokes need `update_styles` after a mode switch. |
 | `create_instance` fails | Wrong `componentId` / `componentKey` (read `get_components`). Mains on other pages and enabled libraries work; no import needed. |
 | A page is full of copied components at y=0 | Something imported mains onto the page (`import_components`, or old `write_html` builds). Swap their instances to the design-system mains (`swap_instance {componentKey}`), check a screenshot, then delete the unused copies. |
