@@ -6,9 +6,16 @@ use crate::theme::{self, Icon, Surface as _};
 use egui::{RichText, Ui};
 use std::collections::VecDeque;
 
-/// Refresh rates to choose from in Settings, up to the fastest gaming monitors.
+/// Frame-rate caps to choose from in Settings, up to the fastest gaming monitors.
 pub const THRESHOLDS: [u32; 9] = [30, 45, 60, 90, 120, 144, 165, 240, 360];
-const DEFAULT_MIN_FPS: u32 = 60;
+/// The stored rate that means "follow the display": no cap, frames paced by vsync.
+pub const AUTO: u32 = 0;
+/// 60 Hz, except on macOS where many screens run 120 Hz and the display decides.
+const DEFAULT_RATE: u32 = if cfg!(target_os = "macos") { AUTO } else { 60 };
+/// What "slow" is measured against when the rate is Auto.
+const AUTO_JUDGE_FPS: u32 = 60;
+/// A frame this much early still draws: timers wake late and vsync snaps the rest.
+const CAP_SLACK: std::time::Duration = std::time::Duration::from_millis(1);
 /// Frames kept for the averages (about two seconds of steady animation).
 const WINDOW: usize = 120;
 /// Frames that must run slow before the flag shows, so one hitch doesn't raise it.
@@ -19,16 +26,28 @@ const MB: f64 = 1024.0 * 1024.0;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PerfPrefs {
     pub overlay: bool,
+    /// Most frames drawn per second, [`AUTO`] (0) for the display's own rate. Slow frames
+    /// are judged against it too.
     pub min_fps: u32,
 }
 
 impl Default for PerfPrefs {
     fn default() -> Self {
-        PerfPrefs { overlay: false, min_fps: DEFAULT_MIN_FPS }
+        PerfPrefs { overlay: false, min_fps: DEFAULT_RATE }
     }
 }
 
 impl PerfPrefs {
+    /// The rate frames are judged against: the cap, or 60 when there is none.
+    pub fn judge_fps(self) -> u32 {
+        if self.min_fps == AUTO { AUTO_JUDGE_FPS } else { self.min_fps }
+    }
+
+    /// The shortest time between two frames, or `None` to draw as fast as vsync allows.
+    pub fn frame_interval(self) -> Option<std::time::Duration> {
+        (self.min_fps != AUTO).then(|| std::time::Duration::from_secs_f64(1.0 / f64::from(self.min_fps)))
+    }
+
     fn path() -> Option<std::path::PathBuf> {
         Some(dirs::config_dir()?.join("papercraft").join("performance"))
     }
@@ -82,7 +101,7 @@ impl Perf {
         self.ram = rss_bytes().map(|b| b as f64 / MB);
         let cpu_now = cpu_seconds();
         if let (Some((t, c)), Some(c2)) = (self.last_sample, cpu_now) {
-            self.cpu = Some(((c2 - c) / (now - t) * 100.0) as f32);
+            self.cpu = Some(cpu_percent(c2 - c, now - t, cpu_share()));
         }
         self.last_sample = cpu_now.map(|c| (now, c));
     }
@@ -106,7 +125,7 @@ impl Perf {
     /// longer than one frame at `min_fps`. Measured on work, not on the frame rate, since the
     /// app draws nothing while idle.
     pub fn is_slow(&self) -> bool {
-        let budget = 1000.0 / self.prefs.min_fps as f32;
+        let budget = 1000.0 / self.prefs.judge_fps() as f32;
         self.frames.len() >= SLOW_STREAK && self.frames.iter().rev().take(SLOW_STREAK).all(|f| f.1 > budget)
     }
 
@@ -120,7 +139,7 @@ impl Perf {
     pub fn stats(&self, ui: &mut Ui) {
         let p = theme::pal(ui);
         let (avg, worst) = self.frame_ms();
-        let budget = 1000.0 / self.prefs.min_fps as f32;
+        let budget = 1000.0 / self.prefs.judge_fps() as f32;
         let warn = |bad: bool| if bad { p.danger } else { p.text };
         let na = || "n/a".to_string();
         let rows = [
@@ -151,13 +170,16 @@ pub fn settings_page(ui: &mut Ui, perf: &mut Perf) {
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
+        if kit::chip(ui, "Auto", perf.prefs.min_fps == AUTO).on_hover_text("Follow the display: no cap").clicked() {
+            perf.prefs.min_fps = AUTO;
+        }
         for fps in THRESHOLDS {
             if kit::chip(ui, &format!("{fps} FPS"), perf.prefs.min_fps == fps).clicked() {
                 perf.prefs.min_fps = fps;
             }
         }
     });
-    ui.label(RichText::new("Frames are judged against this rate: a badge shows on the canvas while they take longer than it allows. Set it to your monitor refresh rate.").size(theme::SECONDARY).color(theme::pal(ui).tertiary));
+    ui.label(RichText::new("The most frames PaperCraft draws per second, so a fast monitor does not spend power on frames you cannot use. Auto follows the display. A badge shows on the canvas while frames take longer than this rate allows.").size(theme::SECONDARY).color(theme::pal(ui).tertiary));
     ui.add_space(16.0);
     kit::section_header(ui, "Now", None);
     ui.add_space(4.0);
@@ -195,7 +217,7 @@ pub fn overlay(ctx: &egui::Context, perf: &mut Perf, canvas: egui::Rect) {
                         ui.horizontal(|ui| {
                             let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                             theme::paint_icon(ui.painter(), r, Icon::Zap, p.danger);
-                            ui.label(RichText::new(format!("Slow: {:.0} FPS, below {}", perf.capacity(), perf.prefs.min_fps)).size(theme::SECONDARY).color(p.danger));
+                            ui.label(RichText::new(format!("Slow: {:.0} FPS, below {}", perf.capacity(), perf.prefs.judge_fps())).size(theme::SECONDARY).color(p.danger));
                         });
                     })
                     .response
@@ -210,6 +232,31 @@ pub fn overlay(ctx: &egui::Context, perf: &mut Perf, canvas: egui::Rect) {
     if open {
         perf.prefs.overlay = true;
         perf.prefs.save();
+    }
+}
+
+/// How long to wait before the next frame may be drawn, or `None` to draw now: the frame cap
+/// `interval` against the time since the last frame started.
+pub fn cap_wait(interval: Option<std::time::Duration>, since_last: std::time::Duration) -> Option<std::time::Duration> {
+    let interval = interval?;
+    (since_last < interval.saturating_sub(CAP_SLACK)).then(|| interval - since_last)
+}
+
+/// CPU use in percent: `cpu_secs` of processor time over `wall_secs`, scaled by `share`.
+fn cpu_percent(cpu_secs: f64, wall_secs: f64, share: f64) -> f32 {
+    if wall_secs <= 0.0 {
+        return 0.0;
+    }
+    (cpu_secs / wall_secs * share * 100.0) as f32
+}
+
+/// What one busy core counts for. Task Manager shows the share of the whole CPU (a thread
+/// pegging one core of 16 reads 6%); Activity Monitor and top count per core (100% per core).
+fn cpu_share() -> f64 {
+    if cfg!(windows) {
+        std::thread::available_parallelism().map_or(1.0, |n| 1.0 / n.get() as f64)
+    } else {
+        1.0
     }
 }
 
@@ -230,16 +277,28 @@ fn rss_bytes() -> Option<u64> {
     Some(pages * unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64)
 }
 
-/// The working set, the "Memory" column of Task Manager's Details tab.
+/// The private working set: the "Memory" column of Task Manager's Processes tab. The plain
+/// working set also counts pages shared with other processes (DLLs), which reads higher.
 #[cfg(windows)]
 fn rss_bytes() -> Option<u64> {
-    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX2,
+    };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    let mut info: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
-    info.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-    // SAFETY: the current-process pseudo handle is always valid; `info.cb` is its size.
-    let ok = unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut info, info.cb) } != 0;
-    ok.then_some(info.WorkingSetSize as u64)
+    let mut info: PROCESS_MEMORY_COUNTERS_EX2 = unsafe { std::mem::zeroed() };
+    let cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32;
+    // SAFETY: the current-process pseudo handle is always valid; `cb` is the size of the
+    // struct behind the pointer, whose first fields are a PROCESS_MEMORY_COUNTERS.
+    let ok = unsafe { GetProcessMemoryInfo(GetCurrentProcess(), (&raw mut info).cast::<PROCESS_MEMORY_COUNTERS>(), cb) } != 0;
+    if ok {
+        return Some(info.PrivateWorkingSetSize as u64);
+    }
+    // Before Windows 10 1809 the larger struct is refused: the plain working set is close.
+    let mut basic: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+    basic.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    // SAFETY: as above, with the basic struct and its own size.
+    let ok = unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut basic, basic.cb) } != 0;
+    ok.then_some(basic.WorkingSetSize as u64)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
@@ -301,8 +360,11 @@ mod tests {
 
     #[test]
     fn refresh_rate_defaults_to_60_and_offers_high_rate_monitors() {
-        assert_eq!(PerfPrefs::default().min_fps, 60);
-        assert_eq!(PerfPrefs::parse("").min_fps, 60, "nothing saved yet");
+        assert_eq!(PerfPrefs::default().min_fps, DEFAULT_RATE);
+        if !cfg!(target_os = "macos") {
+            assert_eq!(DEFAULT_RATE, 60);
+        }
+        assert_eq!(PerfPrefs::parse("").min_fps, DEFAULT_RATE, "nothing saved yet");
         assert!(THRESHOLDS.contains(&60) && THRESHOLDS.contains(&360));
         assert!(THRESHOLDS.windows(2).all(|w| w[0] < w[1]), "ascending, so the chips read in order");
     }
@@ -312,7 +374,37 @@ mod tests {
         let p = PerfPrefs { overlay: true, min_fps: 360 };
         let saved = format!("{} {}", u8::from(p.overlay), p.min_fps);
         assert!(PerfPrefs::parse(&saved) == p);
-        assert_eq!(PerfPrefs::parse("1 garbage").min_fps, 60, "an unreadable rate falls back to 60");
+        assert_eq!(PerfPrefs::parse("1 garbage").min_fps, DEFAULT_RATE, "an unreadable rate falls back to the default");
+        assert_eq!(PerfPrefs::parse("0 0").min_fps, AUTO, "Auto is a saved choice, not a missing one");
+    }
+
+    #[test]
+    fn auto_has_no_cap_and_is_judged_at_60() {
+        let auto = PerfPrefs { overlay: false, min_fps: AUTO };
+        assert_eq!(auto.frame_interval(), None);
+        assert_eq!(auto.judge_fps(), 60);
+        let p = PerfPrefs { overlay: false, min_fps: 240 };
+        assert_eq!(p.judge_fps(), 240);
+        let ms = p.frame_interval().unwrap().as_secs_f64() * 1000.0;
+        assert!((ms - 1000.0 / 240.0).abs() < 1e-6, "{ms}");
+    }
+
+    #[test]
+    fn cap_waits_out_the_rest_of_the_interval() {
+        use std::time::Duration as D;
+        let sixty = Some(D::from_micros(16_667));
+        assert_eq!(cap_wait(None, D::ZERO), None, "no cap, draw now");
+        assert_eq!(cap_wait(sixty, D::from_millis(20)), None, "a late frame draws at once");
+        assert_eq!(cap_wait(sixty, D::from_micros(16_000)), None, "within the slack of the beat");
+        assert_eq!(cap_wait(sixty, D::from_millis(5)), Some(D::from_micros(11_667)), "too soon: wait for the remainder");
+        assert_eq!(cap_wait(sixty, D::ZERO), Some(D::from_micros(16_667)));
+    }
+
+    #[test]
+    fn cpu_percent_is_scaled_to_the_share_one_core_counts_for() {
+        assert_eq!(cpu_percent(0.5, 1.0, 1.0), 50.0, "half a core, per-core accounting");
+        assert_eq!(cpu_percent(1.0, 1.0, 0.0625), 6.25, "one core busy of 16 reads 6.25%");
+        assert_eq!(cpu_percent(1.0, 0.0, 1.0), 0.0, "no elapsed time yields 0, not infinity");
     }
 
     #[test]

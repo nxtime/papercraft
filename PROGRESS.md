@@ -76,6 +76,12 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-10-28: 0.8.2 (refresh-rate cap, accurate RAM/CPU, toolbar)
+
+* Settings > Performance > Refresh rate is now a real frame cap applied live (30 to 360 Hz, 60 by default); **Auto** draws as fast as the display allows and is the default on macOS.
+* Performance Monitor: RAM is the private working set and CPU is divided by logical cores on Windows, so both match Task Manager.
+* Windows and Linux toolbar: a hamburger button shows or hides the File / Edit strip (remembered); the close button uses the theme's danger colour on the acrylic surface, with hover animation and a pointing-hand cursor.
+
 ### 2026-10-28: 0.8.1 (Performance Monitor on Windows, Design tab speed)
 
 * Performance Monitor: RAM (working set) and CPU now show on Windows; before they were `n/a` there. The overlay and slow-frame badge judge frames against a refresh rate you pick in Settings > Performance: 30 to 360 Hz (144, 165 and 240 included), 60 by default.

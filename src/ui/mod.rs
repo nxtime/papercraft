@@ -17,6 +17,7 @@ pub mod props_modal;
 pub mod kit;
 pub mod library;
 pub mod lottie_icon;
+pub mod menu_toggle;
 pub mod motion;
 pub mod pages;
 pub mod perf;
@@ -57,6 +58,8 @@ pub struct UiState {
     /// The window has native chrome: a system menu bar (so no egui menu) and traffic lights
     /// inset into the toolbar / sidebar.
     pub native_chrome: bool,
+    /// The File / Edit / ... strip is folded away (the menu button in the toolbar toggles it).
+    pub menu_bar_hidden: bool,
     /// Windows: native decorations are off and `title_bar` draws the menu, drag area and
     /// window buttons.
     pub custom_titlebar: bool,
@@ -1163,18 +1166,25 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     }
     ui.horizontal_centered(|ui| {
         if !st.native_chrome {
-            if ui.max_rect().width() < MENU_BAR_W {
-                // Not enough room for every menu: they fold into one.
-                ui.scope(|ui| {
-                    flat_menus(ui);
-                    let menu = ui.menu_button("Menu", |ui| {
+            if menu_toggle::button(ui, st.menu_bar_hidden).clicked() {
+                st.menu_bar_hidden = !st.menu_bar_hidden;
+                menu_toggle::save_hidden(st.menu_bar_hidden);
+            }
+            ui.add_space(4.0);
+            if !st.menu_bar_hidden {
+                if ui.max_rect().width() < MENU_BAR_W {
+                    // Not enough room for every menu: they fold into one.
+                    ui.scope(|ui| {
+                        flat_menus(ui);
+                        let menu = ui.menu_button("Menu", |ui| {
             crate::theme::popup_backing(ui);
             flat_menu(ui, ed)
         });
-                    let _ = menu;
-                });
-            } else {
-                ui.scope(|ui| menu_bar(ui, ed, &mut st.agent_link));
+                        let _ = menu;
+                    });
+                } else {
+                    ui.scope(|ui| menu_bar(ui, ed, &mut st.agent_link));
+                }
             }
             ui.add_space(6.0);
             ui.separator();
@@ -1477,6 +1487,8 @@ fn theme_menu(ui: &mut Ui) {
 }
 
 const WIN_BTN_W: f32 = 46.0;
+/// Stroke of the minimize, maximize and close glyphs: the weight of the toolbar's icons.
+const WIN_GLYPH_STROKE: f32 = 1.25;
 
 /// Without native chrome (Windows, Linux) the toolbar is the title bar: its empty space drags
 /// the window and a double click maximizes. Widgets added after this take the clicks.
@@ -1489,23 +1501,29 @@ fn drag_area(ui: &mut Ui, rect: egui::Rect, st: &mut UiState) {
     }
 }
 
-/// Minimize, maximize and close (right to left from the cursor), `h` tall.
+/// Minimize, maximize and close (right to left from the cursor), `h` tall. They follow the
+/// toolbar's other buttons: the animated hover tint and the pointing hand come from
+/// `motion::hover`, and Close lights up in the theme's danger colour on the accent surface.
 fn window_buttons(ui: &mut Ui, st: &mut UiState, h: f32) {
     let p = theme::pal(ui);
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        for (cmd, hover, tip) in [
-            (WinCmd::Close, Color32::from_rgb(0xe8, 0x11, 0x23), "Close"),
-            (WinCmd::ToggleMaximize, p.hover, "Maximize"),
-            (WinCmd::Minimize, p.hover, "Minimize"),
-        ] {
+        for (cmd, tip) in [(WinCmd::Close, "Close"), (WinCmd::ToggleMaximize, "Maximize"), (WinCmd::Minimize, "Minimize")] {
             let (r, resp) = ui.allocate_exact_size(egui::vec2(WIN_BTN_W, h), egui::Sense::click());
-            let hot = resp.hovered();
-            if hot {
-                ui.painter().rect_filled(r.shrink2(egui::vec2(2.0, 4.0)), theme::radius_md(), hover);
+            let hover = motion::hover(ui.ctx(), resp.id.with("win-btn"), &resp);
+            let down = resp.is_pointer_button_down_on();
+            let cell = r.shrink2(egui::vec2(2.0, 4.0));
+            let closing = matches!(cmd, WinCmd::Close);
+            let mut ink = p.text;
+            if closing && (hover > 0.0 || down) {
+                let fill = if down { p.danger.gamma_multiply(0.8) } else { p.danger.gamma_multiply(hover) };
+                theme::fill_accent(ui, cell, theme::radius_md(), fill);
+                ink = kit::ink_on(p.danger);
+            } else if !closing {
+                let fill = if down { p.pressed } else { p.hover.gamma_multiply(hover) };
+                ui.painter().rect_filled(cell, theme::radius_md(), fill);
             }
-            let ink = if hot && matches!(cmd, WinCmd::Close) { Color32::WHITE } else { p.text };
-            let stroke = egui::Stroke::new(1.0, ink);
+            let stroke = egui::Stroke::new(WIN_GLYPH_STROKE, ink);
             let c = r.center();
             let k = 5.0;
             match cmd {

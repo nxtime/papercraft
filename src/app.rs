@@ -143,6 +143,7 @@ impl App {
         };
         app.st.library.library = library;
         app.st.perf.prefs = crate::ui::perf::PerfPrefs::load();
+        app.st.menu_bar_hidden = crate::ui::menu_toggle::load_hidden();
         app.ed.clipboard_io = crate::io::clipboard::System::new()
             .map(|c| Box::new(c) as Box<dyn crate::io::clipboard::Provider>);
         match start {
@@ -1168,6 +1169,14 @@ impl ApplicationHandler<UserEvent> for App {
                 // egui-winit reports `repaint: true` for RedrawRequested itself; honouring it
                 // re-requested a redraw every frame (a 100% CPU busy loop). Whether another
                 // frame is needed is decided inside redraw() from egui's repaint delay.
+                // The frame-rate cap (Settings > Performance) holds a frame that comes too soon
+                // until its turn; every redraw request ends up here, so one check covers them all.
+                let since_last = self.last_redraw.map_or(Duration::MAX, |t| t.elapsed());
+                if let Some(wait) = ui::perf::cap_wait(self.st.perf.prefs.frame_interval(), since_last) {
+                    let due = Instant::now() + wait;
+                    self.next_repaint = Some(self.next_repaint.map_or(due, |r| r.min(due)));
+                    return;
+                }
                 self.redraw();
                 return;
             }
