@@ -12,9 +12,17 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/readme/hero.png" alt="PaperCraft with the Redesign page of its own design file open: layers on the left, the canvas in the middle, the inspector on the right" width="100%">
+  <a href="docs/demo.mp4">
+    <img src="docs/demo.gif" alt="PaperCraft's editor breaking apart into its panels on a 3D stage, then chat mode with an agent, annotations pinned to a sign-in screen, the variables and libraries modals, and the home screen" width="100%">
+  </a>
   <br>
-  <sub>PaperCraft editing its own design file (the Redesign page).</sub>
+  <sub>A 40-second tour: the editor, chat mode, annotations and design systems. <a href="docs/demo.mp4">Watch it in full quality</a> (MP4, 1080p60). Rendered from the app's own design with <a href="tools/showcase/README.md">tools/showcase</a>, not screen-recorded.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/readme/hero.png" alt="PaperCraft with the Pulse habit-tracker design open: layers on the left, three annotated screens on the canvas, the inspector on the right" width="100%">
+  <br>
+  <sub>The finished design: three screens, a component library and annotations.</sub>
 </p>
 
 <p align="center">
@@ -54,11 +62,11 @@ It is an alpha. It is good for building screens, design systems and sketches, an
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/readme/variables.png" alt="The Variables modal listing the Colors collection with four Catppuccin modes" width="100%">
-      <br><sub>Variables modal: collections, modes, groups and types.</sub>
+      <img src="docs/screenshots/readme/variables.png" alt="The Variables modal listing the Colors collection with Light and Dark values for brand, foreground and background" width="100%">
+      <br><sub>Variables modal: collections, modes (Light and Dark here), groups and types.</sub>
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/readme/assets.png" alt="The Assets side view with components grouped into Banner, Button, Checkbox and Chip" width="100%">
+      <img src="docs/screenshots/readme/assets.png" alt="The Assets side view with the Habit row component and the shadcn Button kit" width="100%">
       <br><sub>Assets view: components grouped by name, from this file and enabled libraries.</sub>
     </td>
   </tr>
@@ -68,8 +76,8 @@ It is an alpha. It is good for building screens, design systems and sketches, an
       <br><sub>Libraries modal: publish this file, enable libraries from the store.</sub>
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/readme/agent-review.png" alt="Agent run review: a list of changes on the left and green, yellow and red outlines on the canvas" width="100%">
-      <br><sub>Review of an agent run, with the changes outlined on the canvas.</sub>
+      <img src="docs/screenshots/readme/agent-review.png" alt="The Agent side view: a finished run with Review and Revert, above the list of earlier runs" width="100%">
+      <br><sub>The Agent view: runs, with Review and Revert for the latest.</sub>
     </td>
   </tr>
 </table>
@@ -84,6 +92,13 @@ It is an alpha. It is good for building screens, design systems and sketches, an
       <img src="docs/screenshots/readme/menus.png" alt="The Tools menu open below its button, each tool with an icon and its shortcut" width="100%">
       <br><sub>Menus open a little below their button, are never narrower than 180 px, and carry an icon next to each item.</sub>
     </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/readme/annotations.png" alt="The Annotations side view listing five notes grouped by screen, with their category chips" width="100%">
+      <br><sub>Annotations: rule, behaviour, content and data notes, kept with the layers they describe.</sub>
+    </td>
+    <td width="50%" valign="top"></td>
   </tr>
 </table>
 
@@ -154,7 +169,7 @@ EOF
 Chat mode (⌘J, or `Design | Chat` in the top bar) puts a conversation next to the canvas. It runs Claude Code and Codex through their CLIs, any agent that speaks the Agent Client Protocol (ACP, such as OpenCode, Gemini CLI or Cursor) found on your PATH, or the Anthropic API with your own key. It shows tool calls, checkpoints and run review in the thread. Chats are saved in the project's `chats/` folder. See [docs/chat.md](docs/chat.md).
 
 <p align="center">
-  <img src="docs/screenshots/readme/chat.png" alt="Chat mode: the chat column on the left shows a finished agent run with its Review, Revert and Accept actions, and the canvas on the right" width="100%">
+  <img src="docs/screenshots/readme/chat.png" alt="Chat mode: the chat column on the left with its starter prompts and input, and the annotated habit-tracker screens on the canvas" width="100%">
   <br>
   <sub>Chat mode with a finished agent run: review, revert or accept from the thread.</sub>
 </p>
