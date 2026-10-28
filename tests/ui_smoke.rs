@@ -32,8 +32,8 @@ fn redesigned_surfaces_draw_in_every_theme() {
         theme::apply_choice(&ctx, choice);
         let mut ed = Editor::default();
         let mut st = UiState::default();
-        st.log_agent("get_basic_info", None);
-        st.log_agent("write_html", Some("bad html".into()));
+        st.log_agent("get_basic_info", &serde_json::Value::Null, None);
+        st.log_agent("write_html", &serde_json::Value::Null, Some("bad html".into()));
         st.agent_endpoint = "http://127.0.0.1:29980/mcp".into();
         st.settings.open = true;
         st.show_help = true;
