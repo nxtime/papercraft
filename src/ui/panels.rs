@@ -488,10 +488,7 @@ pub fn agent(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     st.review_diff = None;
     let p = theme::pal(ui);
     title(ui, "Agent", "Tools an agent ran on this project.");
-    let live = st
-        .agent
-        .as_ref()
-        .is_some_and(|(_, at)| at.elapsed().as_secs() < super::AGENT_WORKING_SECS);
+    let live = st.agent_working().is_some();
     ui.horizontal(|ui| {
         kit::chip(ui, if live { "Working" } else { "Idle" }, live);
         if !st.agent_log.is_empty() && kit::chip(ui, "Clear log", false).clicked() {

@@ -444,7 +444,7 @@ impl Web {
                 .err()
                 .filter(|e| ShotRequest::from_marker(e).is_none())
                 .cloned();
-            self.st.log_agent(&call.name, failed);
+            self.st.log_agent(&call.name, &call.args, failed);
             match result {
                 Err(e) => match ShotRequest::from_marker(&e) {
                     Some(req) => self.start_screenshot(call.id, req),
