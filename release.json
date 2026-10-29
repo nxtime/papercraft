@@ -1,38 +1,38 @@
 {
-  "tag": "v0.8.4",
-  "name": "PaperCraft 0.8.4",
-  "publishedAt": "2026-10-28T19:14:29Z",
-  "url": "https://github.com/nxtime/papercraft/releases/tag/v0.8.4",
+  "tag": "v0.9.1",
+  "name": "PaperCraft 0.9.1",
+  "publishedAt": "2026-10-29T19:20:09Z",
+  "url": "https://github.com/nxtime/papercraft/releases/tag/v0.9.1",
   "assets": [
     {
-      "name": "papercraft-0.8.4-linux-x86_64.tar.gz",
-      "size": 40453197,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.8.4/papercraft-0.8.4-linux-x86_64.tar.gz",
-      "digest": "sha256:70d335dfbf2e1753ec4fb980e4eb117d362aa74104c57dd4cee4aa64b7d0e9cc"
+      "name": "papercraft-0.9.1-linux-x86_64.tar.gz",
+      "size": 41934776,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.9.1/papercraft-0.9.1-linux-x86_64.tar.gz",
+      "digest": "sha256:dffae0372c9807fa781db8d7835117c5444d20d8fa9dca53d4167ecbc988416a"
     },
     {
-      "name": "papercraft-0.8.4-macos-aarch64.dmg",
-      "size": 16060398,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.8.4/papercraft-0.8.4-macos-aarch64.dmg",
-      "digest": "sha256:e96b99e839cd834f1c2b4e0206de8344ced164425b92aa1438d89b719cdf73b7"
+      "name": "papercraft-0.9.1-macos-aarch64.dmg",
+      "size": 16627502,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.9.1/papercraft-0.9.1-macos-aarch64.dmg",
+      "digest": "sha256:420c7abd7f483a30fd11d9ec6c6c6d0156dd971586ee40a5eb970ef1a00fe604"
     },
     {
-      "name": "papercraft-0.8.4-windows-x86_64.zip",
-      "size": 34984468,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.8.4/papercraft-0.8.4-windows-x86_64.zip",
-      "digest": "sha256:541977265c0dc2e7757928118d83435560dd6c1d801f6658a9341e57255f9746"
+      "name": "papercraft-0.9.1-windows-x86_64.zip",
+      "size": 36102700,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.9.1/papercraft-0.9.1-windows-x86_64.zip",
+      "digest": "sha256:9eed98f8e45871f0ef965025bdcd64da5a22572e628e919345f13914977b6a50"
     },
     {
-      "name": "papercraft-cli-0.8.4-linux-x86_64.tar.gz",
-      "size": 17133275,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.8.4/papercraft-cli-0.8.4-linux-x86_64.tar.gz",
-      "digest": "sha256:803d0189cdd4c67f43e771e181394f02945625d9d7c6b0ca7211082376f9666f"
+      "name": "papercraft-cli-0.9.1-linux-x86_64.tar.gz",
+      "size": 17803673,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.9.1/papercraft-cli-0.9.1-linux-x86_64.tar.gz",
+      "digest": "sha256:52ea828d6650c578302b96a0ea016582cec1a7fc9058d284b3c8fd85fef752f4"
     },
     {
-      "name": "papercraft-cli-0.8.4-macos-aarch64.zip",
-      "size": 13729461,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.8.4/papercraft-cli-0.8.4-macos-aarch64.zip",
-      "digest": "sha256:dfd7ebfa384570e2a136396ac050dfd409fc9873362793014f63bdddf3ff6790"
+      "name": "papercraft-cli-0.9.1-macos-aarch64.zip",
+      "size": 14302106,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.9.1/papercraft-cli-0.9.1-macos-aarch64.zip",
+      "digest": "sha256:d66f7a576244a67e47e282cf80f6994fb0c679316075edce22853b351afc9136"
     }
   ]
 }
