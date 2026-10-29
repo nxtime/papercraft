@@ -14,7 +14,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,10 +29,14 @@ jobs:
     if: github.server_url == 'https://github.com'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { ref: "${{ inputs.tag || github.ref }}" }
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain stable
+        with: { toolchain: stable }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: papercraft-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build and zip
         shell: pwsh
         run: |
@@ -41,31 +45,38 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           $exes = 'papercraft','papercraft-cli','papercraft-mcp','papercraft-relay' | ForEach-Object { "target/release/$_.exe" }
           Compress-Archive -Path $exes -DestinationPath "dist/papercraft-$v-windows-x86_64.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: windows, path: dist/* }
 
   macos:
     if: github.server_url == 'https://github.com'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { ref: "${{ inputs.tag || github.ref }}" }
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: aarch64-apple-darwin }
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain stable
+        with: { toolchain: stable, targets: aarch64-apple-darwin }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: papercraft-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Package (Apple silicon, ad-hoc signed, not notarized)
         run: packaging/macos/package.sh --arch aarch64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: macos, path: dist/release/* }
 
   linux:
     if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { ref: "${{ inputs.tag || github.ref }}" }
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain stable
+        with: { toolchain: stable }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: papercraft-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build dependencies
         run: |
           sudo apt-get update
@@ -78,24 +89,32 @@ jobs:
           cp target/release/papercraft target/release/papercraft-cli target/release/papercraft-mcp target/release/papercraft-relay stage/
           tar -C stage -czf "dist/papercraft-$v-linux-x86_64.tar.gz" .
           tar -C stage -czf "dist/papercraft-cli-$v-linux-x86_64.tar.gz" papercraft-cli papercraft-mcp
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: linux, path: dist/* }
 
   publish:
     if: github.server_url == 'https://github.com'
     needs: [test, windows, macos, linux]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { path: files, merge-multiple: true }
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to overwrite its assets." >&2
+            exit 1
+          fi
           gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --title "PaperCraft ${TAG#v}" \
-            --generate-notes --verify-tag || gh release upload "$TAG" files/* --repo "$GITHUB_REPOSITORY" --clobber
+            --generate-notes --verify-tag
 
   site:
     if: github.server_url == 'https://github.com'
     needs: publish
+    permissions:
+      contents: write
     uses: ./.github/workflows/site.yml
