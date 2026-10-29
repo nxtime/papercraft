@@ -1,0 +1,69 @@
+# Builds the landing page (site/) with the latest GitHub release and commits it to the `pages`
+# branch, which GitHub Pages serves (Settings → Pages → Deploy from a branch → pages, / (root)).
+# release.yml calls it after publishing, a daily run catches releases made by hand, and pushes to
+# the page's sources rebuild it. Nothing is committed when the result is unchanged. Gitea reads
+# .github/workflows too, so the job is gated on the server URL.
+name: site
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 5 * * *"
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - docs/demo.mp4
+      - docs/screenshots/readme/**
+      - assets/app-icon/papercraft.svg
+      - assets/agents/**
+      - .github/workflows/site.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      # The page comes from the default branch even when a release tag calls this workflow.
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.repository.default_branch }}" }
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Check out the pages branch
+        run: |
+          echo "PAGES=$RUNNER_TEMP/pages" >> "$GITHUB_ENV"
+          PAGES="$RUNNER_TEMP/pages"
+          if git ls-remote --exit-code --heads origin pages > /dev/null; then
+            git fetch --depth 1 origin pages:refs/remotes/origin/pages
+            git worktree add --detach "$PAGES" origin/pages
+          else
+            git worktree add --orphan -b pages "$PAGES"
+          fi
+      - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh site/build.sh dist/site "$PAGES"
+      - name: Commit and push
+        run: |
+          cd "${PAGES:?}"
+          # Clearing through git drops files the new build no longer has, and only tracked ones.
+          git rm -rqf --ignore-unmatch .
+          cp -a "$GITHUB_WORKSPACE/dist/site/." .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The page is already up to date."
+            exit 0
+          fi
+          tag="$(jq -r .tag release.json)"
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "chore(site): publish the page for $tag"
+          git push origin HEAD:refs/heads/pages

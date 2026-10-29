@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PaperCraft</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="A native, local-first design and whiteboard canvas that AI agents can drive over MCP and a CLI.">
+<meta name="theme-color" content="#11111b">
+<meta property="og:title" content="PaperCraft">
+<meta property="og:description" content="A native canvas that AI agents can drive. Local-first, no account, open source.">
+<meta property="og:image" content="media/poster.jpg">
+<link rel="icon" href="media/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<div class="stage" aria-hidden="true"><div class="glow a"></div><div class="glow b"></div><div class="glow c"></div><div class="spot"></div></div>
+
+<header class="nav" id="nav">
+  <div class="wrap">
+    <div class="nav-bar acrylic">
+      <a class="brand" href="#top"><img src="media/icon.svg" alt="">PaperCraft</a>
+      <nav class="nav-links" aria-label="Sections">
+        <a href="#live">Agents</a>
+        <a href="#features">Features</a>
+        <a href="#local">Local-first</a>
+        <a href="#download">Download</a>
+        <a href="https://github.com/nxtime/papercraft">GitHub</a>
+      </nav>
+      <a class="btn btn-primary btn-sm" href="#download">Download <span class="ver" data-version>latest</span></a>
+      <span class="progress" aria-hidden="true"></span>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero wrap">
+    <img class="hero-mark rise" src="media/icon.svg" alt="PaperCraft app icon" width="76" height="76">
+    <div class="eyebrow rise d1">Rust · egui · wgpu · MCP</div>
+    <h1 class="serif" id="headline">A native canvas that <em>AI agents</em> can drive.</h1>
+    <p class="lede rise d2">PaperCraft is an infinite-canvas design tool and whiteboard. It runs on your desktop with no account and no cloud, and it serves the Model Context Protocol so Claude Code, Codex and other agents can edit the open canvas, screenshot it and lint it, one undo step per call.</p>
+    <div class="cta rise d3">
+      <a class="btn btn-primary" id="hero-dl" href="#download">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>
+        <span id="hero-dl-label">Download</span> <span class="ver" data-version>latest</span>
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/nxtime/papercraft">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+        Source on GitHub
+      </a>
+    </div>
+    <div class="facts rise d3"><span>Local-first, no account</span><span>98 MCP tools</span><span>Windows · macOS · Linux</span><span>MIT or Apache-2.0</span></div>
+  </section>
+
+  <section class="showcase wrap" aria-label="Product tour">
+    <div class="window acrylic" id="window">
+      <div class="chrome" aria-hidden="true"><i></i><i></i><i></i><span>PaperCraft · Landing page</span></div>
+      <video src="media/demo.mp4" poster="media/poster.jpg" autoplay muted loop playsinline preload="metadata" aria-label="A 40-second tour of the editor, chat mode, annotations and design systems"></video>
+    </div>
+    <p class="caption">A 40-second tour, rendered from the app's own design rather than screen-recorded.</p>
+  </section>
+
+  <section class="marquee" aria-label="Agents that work with PaperCraft">
+    <p class="eyebrow wrap">Chat mode runs the agents you already use</p>
+    <div class="track">
+      <div class="belt">
+        <span class="chip acrylic"><i style="--logo:url(media/agents/claude.svg)"></i>Claude Code</span>
+        <span class="chip acrylic"><i style="--logo:url(media/agents/openai.svg)"></i>Codex</span>
+        <span class="chip acrylic"><i style="--logo:url(media/agents/cursor.svg)"></i>Cursor</span>
+        <span class="chip acrylic"><i class="none"></i>OpenCode</span>
+        <span class="chip acrylic"><i style="--logo:url(media/agents/goose.svg)"></i>Goose</span>
+        <span class="chip acrylic"><i style="--logo:url(media/agents/kimi.svg)"></i>Kimi</span>
+        <span class="chip acrylic"><i style="--logo:url(media/agents/mistral.svg)"></i>Mistral Vibe</span>
+        <span class="chip acrylic"><i style="--logo:url(media/agents/qwen.svg)"></i>Qwen Code</span>
+        <span class="chip acrylic"><i style="--logo:url(media/agents/cline.svg)"></i>Cline</span>
+        <span class="chip acrylic"><i style="--logo:url(media/agents/githubcopilot.svg)"></i>Copilot CLI</span>
+        <span class="chip acrylic"><i style="--logo:url(media/agents/nousresearch.svg)"></i>Hermes</span>
+        <span class="chip acrylic"><i class="none"></i>Any ACP agent</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="block wrap" id="live">
+    <div class="section-head reveal">
+      <div class="eyebrow">For agents</div>
+      <h2 class="serif">Watch an agent <em>build a screen.</em></h2>
+      <p>Each tool call is one undo step. The agent writes HTML that becomes real layers, switches the theme by changing a variable mode, takes a screenshot and lints the result.</p>
+    </div>
+    <div class="live acrylic reveal" id="live-demo">
+      <div class="log">
+        <div class="log-head"><span class="dot" aria-hidden="true"></span>Agent run · Sign in<span class="undo" id="undo-count">0 undo steps</span></div>
+        <ol class="calls" id="calls">
+          <li class="call"><span class="st"></span><b>create_artboard</b><span class="ms">9 ms</span><span class="arg">{"name": "Sign in", "width": 360, "height": 480}</span></li>
+          <li class="call"><span class="st"></span><b>set_variables</b><span class="ms">4 ms</span><span class="arg">{"bg", "surface", "text", "accent"} with Dark and Light modes</span></li>
+          <li class="call"><span class="st"></span><b>write_html</b><span class="ms">18 ms</span><span class="arg">&lt;div style="display:flex; flex-direction:column; gap:12px"&gt; → 6 layers</span></li>
+          <li class="call"><span class="st"></span><b>update_styles</b><span class="ms">3 ms</span><span class="arg">{"#submit": {"background": "var(--accent)"}}</span></li>
+          <li class="call"><span class="st"></span><b>set_variable_mode</b><span class="ms">2 ms</span><span class="arg">{"collection": "Colors", "mode": "Light"}</span></li>
+          <li class="call"><span class="st"></span><b>get_screenshot</b><span class="ms">41 ms</span><span class="arg">sign-in@2x.png</span></li>
+          <li class="call"><span class="st"></span><b>lint_design</b><span class="ms">7 ms</span><span class="arg">contrast, 4px grid, type scale, touch targets</span></li>
+        </ol>
+      </div>
+      <div class="board-area" aria-hidden="true">
+        <span class="board-label">Sign in</span>
+        <span class="mode-pill" id="mode-pill">Mode: Dark</span>
+        <div class="board" id="board">
+          <div class="a-logo"></div>
+          <div class="a-title">Welcome back</div>
+          <div class="a-sub">Sign in to continue to your workspace.</div>
+          <div class="a-field"></div>
+          <div class="a-field"></div>
+          <div class="a-btn">Sign in</div>
+        </div>
+        <span class="lint" id="lint">✓ lint_design · 0 issues</span>
+        <span class="flash" id="flash"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="block wrap" id="features">
+    <div class="section-head reveal">
+      <div class="eyebrow">What you get</div>
+      <h2 class="serif">A real design tool, <em>not a chat window</em> with a canvas bolted on.</h2>
+      <p>Frames, auto layout, components, variables and a hand-drawn whiteboard on one GPU-rendered canvas.</p>
+    </div>
+
+    <div class="features">
+      <article class="feature reveal">
+        <div class="copy">
+          <div class="eyebrow">The editor</div>
+          <h3 class="serif">Layers, canvas, inspector. <em>One native window.</em></h3>
+          <p>Built in Rust on egui and wgpu. Cached frames take about 3 ms with ten thousand visible layers.</p>
+          <ul class="ticks">
+            <li>Auto layout with gap, padding, hug, fill, wrap and constraints</li>
+            <li>Pen and Bézier editing, boolean operations, gradients and blend modes</li>
+            <li>A command palette over every action, page and layer</li>
+          </ul>
+        </div>
+        <div class="tilt"><div class="shot acrylic"><img src="media/hero.png" alt="PaperCraft with a habit-tracker design open: layers on the left, three annotated screens on the canvas, the inspector on the right" loading="lazy"></div></div>
+      </article>
+
+      <article class="feature reveal">
+        <div class="copy">
+          <div class="eyebrow">Chat mode</div>
+          <h3 class="serif">Pick an agent. <em>Describe the screen.</em></h3>
+          <p>A conversation sits next to the canvas. Point at layers with @ mentions or a picked area, and the agent gets a crop with your notes drawn on it.</p>
+          <ul class="ticks">
+            <li>Claude Code and Codex through their CLIs, with your own logins</li>
+            <li>Any ACP agent on your PATH, or the Anthropic API with your key</li>
+            <li>Every run can be reviewed, reverted one change at a time, or accepted</li>
+          </ul>
+        </div>
+        <div class="tilt"><div class="shot acrylic"><img src="media/chat.png" alt="Chat mode: a conversation with an agent beside the canvas" loading="lazy"></div></div>
+      </article>
+
+      <article class="feature reveal">
+        <div class="copy">
+          <div class="eyebrow">Annotations</div>
+          <h3 class="serif">Annotate <em>in place.</em> Agents read the notes.</h3>
+          <p>Pin typed notes for rules, behaviour, content and data to any layer, with a template per project. They travel with the design into the handoff spec.</p>
+        </div>
+        <div class="tilt"><div class="shot acrylic"><img src="media/annotations.png" alt="The Annotations view listing notes grouped by screen, with their category chips" loading="lazy"></div></div>
+      </article>
+
+      <article class="feature reveal">
+        <div class="copy">
+          <div class="eyebrow">Design systems</div>
+          <h3 class="serif">Tokens out as CSS, DTCG or Tailwind. <em>Code out as JSX.</em></h3>
+          <p>Variables with modes and aliases, components that work across projects, and shared libraries you publish, enable and update.</p>
+          <ul class="ticks">
+            <li>Light and dark are modes on one artboard, never copies</li>
+            <li>Lint for contrast, the 4px grid, type scale and touch targets, with auto-fix</li>
+          </ul>
+        </div>
+        <div class="tilt"><div class="shot acrylic"><img src="media/variables.png" alt="The Variables modal with Light and Dark values for brand, foreground and background" loading="lazy"></div></div>
+      </article>
+    </div>
+  </section>
+
+  <section class="block wrap" aria-labelledby="more-title">
+    <div class="section-head reveal">
+      <div class="eyebrow">And the rest</div>
+      <h2 class="serif" id="more-title">Sketch it, <em>present it,</em> ship it.</h2>
+    </div>
+    <div class="bento stagger">
+      <article class="tile wide acrylic lit reveal">
+        <div class="art">
+          <svg class="sketch" viewBox="0 0 360 92" width="100%" height="92" preserveAspectRatio="xMinYMid meet" aria-hidden="true">
+            <path d="M12 18 C60 12 110 16 140 19 C143 40 141 60 138 76 C96 79 50 78 14 74 C11 55 13 36 12 18Z"/>
+            <path d="M146 46 C180 44 210 46 236 47 M226 38 L238 47 L226 56"/>
+            <rect class="note" x="252" y="14" width="78" height="64" rx="4" transform="rotate(3 291 46)"/>
+          </svg>
+        </div>
+        <h3>Whiteboard mode</h3>
+        <p>Hand-drawn shapes, arrows bound to shapes, elbow connectors, sticky notes, freehand ink and a laser pointer, on the same canvas as your screens.</p>
+      </article>
+      <article class="tile acrylic lit reveal">
+        <div class="art"><span class="fmt in">.fig</span><span class="fmt in">.excalidraw</span><span class="arrow-dash"></span><span class="fmt out">PDF</span></div>
+        <h3>Import and export</h3>
+        <p>Figma, Excalidraw and SVG in. PNG at 1 to 4x, SVG and vector PDF out, for a selection, a frame or a page.</p>
+      </article>
+      <article class="tile acrylic lit reveal">
+        <div class="art"><div class="versions"><div>Agent run · Sign in</div><div>Auto-version · 14:02</div><div>Before handoff</div></div></div>
+        <h3>Versions and runs</h3>
+        <p>Named and automatic versions per page. An agent run saves one before its first edit, so you can always go back.</p>
+      </article>
+      <article class="tile acrylic lit reveal">
+        <div class="art"><span class="fmt">Welcome</span><span class="arrow-dash"></span><span class="fmt">Today</span></div>
+        <h3>Present mode</h3>
+        <p>Prototype links between frames, followed with a camera glide.</p>
+      </article>
+      <article class="tile acrylic lit reveal">
+        <div class="art"><div class="peers"><span style="background:var(--mauve)">M</span><span style="background:var(--blue)">A</span><span style="background:var(--green)">J</span></div></div>
+        <h3>Shared projects</h3>
+        <p>An optional relay merges concurrent edits to a page. Without one, nothing leaves your machine.</p>
+      </article>
+      <article class="tile wide acrylic lit reveal">
+        <div class="art">
+          <div class="swatches" aria-hidden="true">
+            <span style="background:#eff1f5"></span><span style="background:#303446"></span><span style="background:#24273a"></span><span style="background:#1e1e2e"></span><span style="background:#11111b"></span>
+          </div>
+        </div>
+        <h3>Themes</h3>
+        <p>System, Light and Dark, plus the four Catppuccin flavours: Latte, Frappé, Macchiato and Mocha.</p>
+      </article>
+      <article class="tile acrylic lit reveal">
+        <div class="art"><span class="fmt">wasm32</span><span class="arrow-dash"></span><span class="fmt out">browser</span></div>
+        <h3>Web build</h3>
+        <p>The same editor compiled to WebAssembly, served by <code>papercraft-relay</code>.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="block wrap" id="local">
+    <div class="section-head reveal">
+      <div class="eyebrow">Local-first</div>
+      <h2 class="serif">Your project is <em>a folder on your disk.</em></h2>
+      <p>Plain JSON you can back up, diff and commit. No account to make and no server to trust.</p>
+    </div>
+    <div class="local">
+      <div class="tree acrylic reveal">
+<pre><span class="path">~/Documents/papercraft/</span><span class="d">Pulse/</span>
+├── project.json        <span class="c"># manifest, variables, components</span>
+├── <span class="d">pages/</span>              <span class="c"># one JSON file per page</span>
+├── <span class="d">versions/</span>           <span class="c"># named and automatic versions</span>
+├── <span class="d">runs/</span>               <span class="c"># agent runs, for review and revert</span>
+└── <span class="d">chats/</span>              <span class="c"># chat threads with their tool calls</span></pre>
+      </div>
+      <div class="points stagger">
+        <div class="point acrylic lit reveal"><h3>Atomic autosave</h3><p>Every write is atomic, and older files are migrated forward when they load.</p></div>
+        <div class="point acrylic lit reveal"><h3>Works with the app closed</h3><p><code>papercraft-cli --offline</code> runs the same tools on the project store, screenshots included.</p></div>
+        <div class="point acrylic lit reveal"><h3>Keys stay in your OS</h3><p>API keys live in the system credential store and never in a project file, chat or log.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block wrap" id="agents">
+    <div class="section-head reveal">
+      <div class="eyebrow">Connect</div>
+      <h2 class="serif">Same tools, <em>three ways in.</em></h2>
+      <p>The MCP server is built into the app and listens on loopback only. Browser requests and foreign hosts are rejected.</p>
+    </div>
+    <div class="agents stagger">
+      <div class="card acrylic lit reveal">
+        <div class="stat" id="tool-count" data-to="98">98</div>
+        <h3>MCP tools, one undo step each</h3>
+        <div class="ways">
+          <div class="way"><b>MCP over HTTP</b><span>Built into the app at <code>127.0.0.1:29980/mcp</code>.</span></div>
+          <div class="way"><b>MCP over stdio</b><span><code>papercraft-mcp</code> relays to the running app.</span></div>
+          <div class="way"><b>Shell</b><span><code>papercraft-cli</code> calls the same tools, so the agent needs no schemas in context.</span></div>
+        </div>
+      </div>
+      <div class="card acrylic lit reveal">
+        <h3>Register it once</h3>
+        <p>Start PaperCraft, then add it to your agent.</p>
+        <div class="code">
+          <button class="copy-btn" type="button" data-copy="claude mcp add --transport http --scope user papercraft http://127.0.0.1:29980/mcp">Copy</button>
+<pre><span class="c"># Claude Code</span>
+<span class="k">claude</span> mcp add --transport http --scope user \
+  papercraft http://127.0.0.1:29980/mcp</pre>
+        </div>
+        <div class="code">
+          <button class="copy-btn" type="button" data-copy="codex mcp add papercraft --url http://127.0.0.1:29980/mcp">Copy</button>
+<pre><span class="c"># Codex</span>
+<span class="k">codex</span> mcp add papercraft --url http://127.0.0.1:29980/mcp</pre>
+        </div>
+        <div class="code">
+          <button class="copy-btn" type="button" data-copy="papercraft-cli call get_screenshot '{&quot;nodeId&quot;:&quot;abc123:1&quot;}' --project Demo -o card.png">Copy</button>
+<pre><span class="c"># No app running</span>
+<span class="k">papercraft-cli</span> call get_screenshot '{"nodeId":"abc123:1"}' \
+  --project Demo -o card.png</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block wrap" aria-labelledby="keys-title">
+    <div class="section-head reveal">
+      <div class="eyebrow">Keyboard first</div>
+      <h2 class="serif" id="keys-title">The shortcuts <em>you'll use daily.</em></h2>
+    </div>
+    <div class="keys stagger">
+      <div class="key acrylic lit reveal"><kbd data-keys="mod K"></kbd><span>Command palette</span></div>
+      <div class="key acrylic lit reveal"><kbd data-keys="mod J"></kbd><span>Design or Chat mode</span></div>
+      <div class="key acrylic lit reveal"><kbd data-keys="mod alt shift V"></kbd><span>Variables</span></div>
+      <div class="key acrylic lit reveal"><kbd data-keys="N"></kbd><span>Annotate</span></div>
+      <div class="key acrylic lit reveal"><kbd data-keys="/"></kbd><span>Hide the side panels</span></div>
+    </div>
+  </section>
+
+  <section class="block wrap" id="download">
+    <div class="dl-head reveal">
+      <div class="section-head">
+        <div class="eyebrow">Download</div>
+        <h2 class="serif">Get the <em>latest build.</em></h2>
+      </div>
+      <a class="release-pill acrylic" id="release-link" href="https://github.com/nxtime/papercraft/releases/latest">
+        <span class="pulse" aria-hidden="true"></span>
+        <span><b data-version>latest</b> · <span id="release-date">GitHub releases</span></span>
+      </a>
+    </div>
+
+    <div class="platforms stagger" id="platforms">
+      <article class="platform acrylic">
+        <h3>Loading the latest release</h3>
+        <p class="note">All builds are also on the <a href="https://github.com/nxtime/papercraft/releases/latest">GitHub releases page</a>.</p>
+      </article>
+    </div>
+
+    <div class="dl-foot">
+      <div class="card acrylic reveal">
+        <h3>First run</h3>
+        <p>The Windows zip is unsigned, so SmartScreen may ask you to confirm. macOS builds are ad-hoc signed and not notarized: open the app with right-click, Open the first time.</p>
+      </div>
+      <div class="card acrylic reveal">
+        <h3>Build from source</h3>
+        <p>Rust 1.95 or newer, then <code>cargo build --release</code>. Linux needs Vulkan or GL and the usual X11 or Wayland libraries.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="status acrylic reveal">
+      <div>
+        <div class="eyebrow">Status</div>
+        <h2 class="serif">Alpha, <em>and used daily.</em></h2>
+        <p>PaperCraft is good for screens, design systems and sketches, and it is not yet a replacement for a mature design tool. The roadmap lists what is missing, in priority order.</p>
+      </div>
+      <div class="actions">
+        <a class="btn btn-ghost" href="https://github.com/nxtime/papercraft/blob/main/ROADMAP.md">Roadmap</a>
+        <a class="btn btn-ghost" href="https://github.com/nxtime/papercraft#status-and-known-limits">Known limits</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span>PaperCraft is open source, licensed MIT or Apache-2.0.</span>
+    <nav aria-label="Links">
+      <a href="https://github.com/nxtime/papercraft">GitHub</a>
+      <a href="https://github.com/nxtime/papercraft/releases">Releases</a>
+      <a href="https://github.com/nxtime/papercraft/blob/main/docs/agents.md">Agent guide</a>
+      <a href="https://github.com/nxtime/papercraft/blob/main/CONTRIBUTING.md">Contributing</a>
+    </nav>
+  </div>
+</footer>
+
+<div class="toast acrylic" id="toast" role="status" aria-live="polite"></div>
+
+<script src="site.js"></script>
+</body>
+</html>

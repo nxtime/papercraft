@@ -1,5 +1,6 @@
 # Builds Windows, macOS and Linux on GitHub's runners when a v* tag is pushed, then publishes a
-# GitHub release with the files once the full test suite (test.yml) passes. Gitea reads .github/workflows too, so every job is gated on the
+# GitHub release with the files once the full test suite (test.yml) passes, then refreshes the
+# landing page (site.yml). Gitea reads .github/workflows too, so every job is gated on the
 # server URL: this pipeline only ever runs on github.com.
 name: release
 
@@ -93,3 +94,8 @@ jobs:
         run: |
           gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --title "PaperCraft ${TAG#v}" \
             --generate-notes --verify-tag || gh release upload "$TAG" files/* --repo "$GITHUB_REPOSITORY" --clobber
+
+  site:
+    if: github.server_url == 'https://github.com'
+    needs: publish
+    uses: ./.github/workflows/site.yml
