@@ -1,0 +1,7 @@
+> "method":"initialize"
+< {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}
+> "method":"session/new"
+< {"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-1","configOptions":[{"id":"model","category":"model","type":"select","currentValue":"free/a","options":[{"value":"free/a","name":"A"},{"value":"paid/b","name":"B"}]}]}}
+> "method":"session/prompt"
+< {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"mcp__papercraft__get_basic_info","kind":"other","status":"pending","rawInput":{}}}}
+< {"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Rate limit exceeded for free/a"}}

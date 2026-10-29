@@ -176,7 +176,7 @@ fn job(ui: &Ui, spans: &[Span], size: f32, heading: bool) -> LayoutJob {
 /// A run of spans. Links make it a row of separate widgets (so each can be clicked).
 fn spans(ui: &mut Ui, spans: &[Span], size: f32, heading: bool) {
     if !spans.iter().any(|s| s.link.is_some()) {
-        ui.add(egui::Label::new(job(ui, spans, size, heading)));
+        ui.add(egui::Label::new(job(ui, spans, size, heading)).selectable(true));
         return;
     }
     ui.horizontal_wrapped(|ui| {
@@ -187,7 +187,7 @@ fn spans(ui: &mut Ui, spans: &[Span], size: f32, heading: bool) {
                     ui.hyperlink_to(RichText::new(&s.text).size(size).color(theme::accent()), url);
                 }
                 None => {
-                    ui.add(egui::Label::new(job(ui, std::slice::from_ref(s), size, heading)));
+                    ui.add(egui::Label::new(job(ui, std::slice::from_ref(s), size, heading)).selectable(true));
                 }
             }
         }
@@ -207,7 +207,7 @@ fn code_block(ui: &mut Ui, lang: &str, text: &str) {
                 }
             });
         });
-        ui.add(egui::Label::new(RichText::new(text).font(FontId::new(theme::SECONDARY + 1.0, FontFamily::Monospace)).color(p.text)).wrap());
+        ui.add(egui::Label::new(RichText::new(text).font(FontId::new(theme::SECONDARY + 1.0, FontFamily::Monospace)).color(p.text)).wrap().selectable(true));
     });
 }
 

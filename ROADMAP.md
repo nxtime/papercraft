@@ -32,7 +32,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 15 | MCP and CLI tool surface | **done** | 94 tools, one undo step per call, `papercraft-cli list / schema / call`. |
+| 15 | MCP and CLI tool surface | **done** | 98 tools, one undo step per call, `papercraft-cli list / schema / call`. |
 | 16 | Agent skills | **done** | `skills/papercraft` and `skills/papercraft-design`. |
 | 17 | Accessibility annotations | todo | Reading order, roles and alt text on layers, checked by the linter. |
 | 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |
@@ -92,4 +92,5 @@ Spec: [specs/agent-runs/spec.md](specs/agent-runs/spec.md), tasks: [specs/agent-
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 47 | Design annotations | **done** | Notes with leader lines and categories, templates per project and page, view modes (⌘⇧A), Annotate tool (N), side view, inspector section, six MCP tools; see `docs/annotations.md`. |
-| 48 | ACP agents in Chat | **done** | Any ACP agent on the PATH (OpenCode works; Gemini CLI refuses ACP clients for now; Cursor needs `cursor-agent login`), npx agents after enabling, custom agents; see `docs/chat.md`. |
+| 48 | ACP agents in Chat | **done** | Any ACP agent on the PATH (OpenCode works; Cursor needs `cursor-agent login`), npx agents after enabling, custom agents; see `docs/chat.md`. |
+| 48b | Free agents | **done** | OpenCode and Pi on free models with `Free (auto)` rotation, Pi provider keys, an install dialog per OS; see `specs/free-agents`. |

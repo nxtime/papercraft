@@ -2,13 +2,14 @@
 //! on the resolved PATH and the command that launches one over ACP.
 //!
 //! Launch args were checked against the agents installed on the dev machine (2026-10-21):
-//! * Gemini CLI 0.44.1: `gemini --acp` (`--help` lists `--acp`; `--experimental-acp` is deprecated).
 //! * OpenCode 1.18.30: `opencode acp` ("start ACP (Agent Client Protocol) server").
 //! * Cursor Agent 2026.03.20: the binary is `cursor-agent` (its help says `agent`); `cursor-agent acp`
 //!   ("Start the Cursor Agent as an ACP server").
 //! * Pi 0.80.3 has no ACP mode of its own; the `pi-acp` adapter is run with `npx`.
 //! * Goose: `/opt/homebrew/bin/goose` here is pressly/goose, the SQL migration tool. Block's agent
 //!   has an `acp` subcommand; the migration tool's `--help` never says `acp`, so that is the identity.
+//!
+//! Gemini CLI is left out: Google retired it for the Antigravity CLI (June 2026).
 //! The rest keep their documented command and fail with the agent's own error.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -52,7 +53,6 @@ const fn npx(id: &'static str, name: &'static str, package: &'static str, launch
 pub const AGENTS: &[AgentDef] = &[
     AgentDef { id: "claude-code", name: "Claude Code", binary: "claude", launch: &[], kind: AgentKind::Direct, docs_url: super::CLAUDE_DOCS, identity: Some("claude code") },
     AgentDef { id: "codex", name: "Codex", binary: "codex", launch: &[], kind: AgentKind::Direct, docs_url: super::CODEX_DOCS, identity: Some("codex") },
-    native("gemini", "Gemini CLI", "gemini", &["--acp"], "https://github.com/google-gemini/gemini-cli", Some("gemini cli")),
     native("cursor", "Cursor", "cursor-agent", &["acp"], "https://cursor.com/cli", Some("cursor agent")),
     native("opencode", "OpenCode", "opencode", &["acp"], "https://opencode.ai/docs", Some("opencode")),
     native("goose", "Goose", "goose", &["acp"], "https://block.github.io/goose", Some("acp")),
@@ -264,6 +264,75 @@ fn probe(bin: &std::path::Path, arg: &str, path: &std::ffi::OsStr, timeout: std:
     done.then_some(out)
 }
 
+/// Environment agent `id` always runs with. opencode waits 60 s for an MCP reply (the SDK's
+/// default), less than PaperCraft lets a call run (`CALL_TIMEOUT`): a slow `generate_image` would
+/// finish with nobody left to read it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn base_env(id: &str) -> Vec<(String, String)> {
+    const MARGIN_MS: u128 = 30_000;
+    match id {
+        "opencode" => {
+            let ms = crate::mcp::server::CALL_TIMEOUT.as_millis() + MARGIN_MS;
+            vec![("OPENCODE_CONFIG_CONTENT".into(), serde_json::json!({"experimental": {"mcp_timeout": ms}}).to_string())]
+        }
+        _ => vec![],
+    }
+}
+
+/// Environment that starts agent `id` without the user's own setup (config, plugins, rules,
+/// skills), so a lean turn carries only PaperCraft's instructions. `home` is an empty folder
+/// PaperCraft owns. Empty for agents whose sign-in would not survive it, and where `real_home` is
+/// unknown (Windows).
+pub fn pure_env(id: &str, home: &std::path::Path, real_home: Option<&std::path::Path>) -> Vec<(String, String)> {
+    let Some(real) = real_home else { return vec![] };
+    let xdg = |k: &str, under: &str| (k.to_owned(), std::env::var(k).unwrap_or_else(|_| real.join(under).display().to_string()));
+    match id {
+        // Skills are found under HOME (~/.agents, ~/.claude) and config under XDG_CONFIG_HOME;
+        // sign-ins and sessions (so `session/load` still works) stay in the real data folder.
+        "opencode" => vec![
+            ("HOME".into(), home.display().to_string()),
+            ("XDG_CONFIG_HOME".into(), home.join("config").display().to_string()),
+            xdg("XDG_DATA_HOME", ".local/share"),
+            xdg("XDG_CACHE_HOME", ".cache"),
+            xdg("XDG_STATE_HOME", ".local/state"),
+            ("OPENCODE_PURE".into(), "1".into()),
+            ("OPENCODE_DISABLE_PROJECT_CONFIG".into(), "1".into()),
+        ],
+        // Pi finds skills under HOME (~/.agents/skills) and its config, packages and sessions in
+        // PI_CODING_AGENT_DIR; npm (npx pi-acp, Pi's package installs) keeps the user's cache.
+        "pi" => vec![
+            ("HOME".into(), home.display().to_string()),
+            ("PI_CODING_AGENT_DIR".into(), home.join(PI_AGENT_DIR).display().to_string()),
+            ("npm_config_cache".into(), std::env::var("npm_config_cache").unwrap_or_else(|_| real.join(".npm").display().to_string())),
+        ],
+        _ => vec![],
+    }
+}
+
+/// Pi's folder inside its lean home (`PI_CODING_AGENT_DIR`).
+pub const PI_AGENT_DIR: &str = "agent";
+
+/// Writes the lean Pi folder under `home`: only `pi-mcp-adapter` as a package, connected to
+/// PaperCraft at `mcp_url` with its tools listed one by one (not behind the adapter's `mcp`
+/// proxy) and a call timeout above PaperCraft's own.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_pi_home(home: &std::path::Path, mcp_url: &str) -> Result<(), String> {
+    const MARGIN_MS: u128 = 30_000;
+    let dir = home.join(PI_AGENT_DIR);
+    crate::vfs::create_dir_all(&dir).map_err(|e| format!("Could not make {}: {e}", dir.display()))?;
+    let settings = serde_json::json!({"packages": ["npm:pi-mcp-adapter"], "quietStartup": true});
+    let mcp = serde_json::json!({
+        "mcpServers": {"papercraft": {"url": mcp_url, "directTools": true}},
+        "settings": {"requestTimeoutMs": crate::mcp::server::CALL_TIMEOUT.as_millis() + MARGIN_MS},
+    });
+    for (name, v) in [("settings.json", settings), ("mcp.json", mcp)] {
+        let path = dir.join(name);
+        let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+        crate::io::atomic::write(&path, text.as_bytes()).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// What the ACP backend runs for this agent: program and args. None for an unknown id, a
 /// `Direct` agent, an `npx` agent that is not enabled, or a program that is not on PATH.
 #[cfg(not(target_arch = "wasm32"))]
@@ -331,7 +400,7 @@ mod tests {
     #[test]
     fn detects_ready_wrong_missing_and_npx_states() {
         let (dir, path) = fake_dir(&[
-            ("gemini", r#"if [ "$1" = --version ]; then echo 0.1.0; else echo "Gemini CLI help"; fi"#),
+            ("cursor-agent", r#"if [ "$1" = --version ]; then echo 0.1.0; else echo "Cursor Agent help"; fi"#),
             // The migration tool: version string and help with no "acp".
             ("goose", r#"if [ "$1" = --version ]; then echo "goose version: v3.27.1"; else echo "Usage: goose DRIVER DBSTRING"; fi"#),
             ("opencode", r#"echo "opencode 1.0""#),
@@ -341,10 +410,10 @@ mod tests {
         let all = detect_all_in(&prefs, &path);
         assert_eq!(all.len(), AGENTS.len());
         let shown = |n: &str| dir.join(n).display().to_string();
-        assert_eq!(state(&all, "gemini"), AgentState::Ready { path: shown("gemini"), version: "0.1.0".into() });
+        assert_eq!(state(&all, "cursor"), AgentState::Ready { path: shown("cursor-agent"), version: "0.1.0".into() });
         assert_eq!(state(&all, "opencode"), AgentState::Ready { path: shown("opencode"), version: "opencode 1.0".into() });
         assert_eq!(state(&all, "goose"), AgentState::WrongProgram { path: shown("goose") });
-        assert_eq!(state(&all, "cursor"), AgentState::NotFound);
+        assert_eq!(state(&all, "kimi"), AgentState::NotFound);
         assert_eq!(state(&all, "pi"), AgentState::NeedsEnable);
         prefs.agents.insert("pi".into(), AgentPrefs { enabled: true, ..Default::default() });
         assert_eq!(state(&detect_all_in(&prefs, &path), "pi"), AgentState::Ready { path: shown("npx"), version: String::new() });
@@ -368,21 +437,55 @@ mod tests {
     }
 
     #[test]
+    fn opencode_waits_longer_for_a_tool_than_papercraft_lets_it_run() {
+        let env = base_env("opencode");
+        let config: serde_json::Value = serde_json::from_str(&env[0].1).unwrap();
+        let ms = config["experimental"]["mcp_timeout"].as_u64().unwrap();
+        assert!(u128::from(ms) > crate::mcp::server::CALL_TIMEOUT.as_millis());
+        assert!(base_env("cursor").is_empty());
+    }
+
+    #[test]
+    fn pure_opencode_hides_the_users_home_but_keeps_its_sign_ins() {
+        let env = pure_env("opencode", std::path::Path::new("/pc/home"), Some(std::path::Path::new("/Users/me")));
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!((get("HOME"), get("XDG_CONFIG_HOME"), get("OPENCODE_PURE")), (Some("/pc/home"), Some("/pc/home/config"), Some("1")));
+        let data = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| "/Users/me/.local/share".into());
+        assert_eq!(get("XDG_DATA_HOME"), Some(data.as_str()), "auth.json and sessions live there");
+        assert!(pure_env("cursor", std::path::Path::new("/pc/home"), Some(std::path::Path::new("/Users/me"))).is_empty(), "its sign-in is under HOME");
+        assert!(pure_env("opencode", std::path::Path::new("/pc/home"), None).is_empty());
+        let pi = pure_env("pi", std::path::Path::new("/pc/home"), Some(std::path::Path::new("/Users/me")));
+        assert!(pi.contains(&("HOME".into(), "/pc/home".into())) && pi.contains(&("PI_CODING_AGENT_DIR".into(), "/pc/home/agent".into())), "{pi:?}");
+    }
+
+    #[test]
+    fn the_lean_pi_folder_has_only_the_mcp_adapter_pointed_at_papercraft() {
+        let home = std::env::temp_dir().join(format!("pc-pi-home-{}", std::process::id()));
+        write_pi_home(&home, "http://127.0.0.1:1/mcp?chat=c1&tools=core").unwrap();
+        let read = |f: &str| serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(home.join("agent").join(f)).unwrap()).unwrap();
+        assert_eq!(read("settings.json")["packages"], serde_json::json!(["npm:pi-mcp-adapter"]));
+        let mcp = read("mcp.json");
+        assert_eq!(mcp["mcpServers"]["papercraft"]["url"], "http://127.0.0.1:1/mcp?chat=c1&tools=core");
+        assert!(mcp["settings"]["requestTimeoutMs"].as_u64().unwrap() > crate::mcp::server::CALL_TIMEOUT.as_millis() as u64);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
     fn launch_commands_for_native_npx_custom_and_direct() {
-        let (dir, path) = fake_dir(&[("gemini", ""), ("npx", ""), ("my-agent", "")]);
+        let (dir, path) = fake_dir(&[("cursor-agent", ""), ("npx", ""), ("my-agent", "")]);
         let mut prefs = ChatPrefs::default();
         prefs.custom_agents.push(CustomAgent { id: "mine".into(), name: "Mine".into(), command: "my-agent".into(), args: "serve  --stdio".into() });
         let at = |n: &str| dir.join(n);
-        assert_eq!(launch_command_in("gemini", &prefs, &path), Some((at("gemini"), vec!["--acp".into()])));
+        assert_eq!(launch_command_in("cursor", &prefs, &path), Some((at("cursor-agent"), vec!["acp".into()])));
         assert_eq!(launch_command_in("mine", &prefs, &path), Some((at("my-agent"), vec!["serve".into(), "--stdio".into()])));
         assert_eq!(launch_command_in("pi", &prefs, &path), None);
         prefs.agents.insert("pi".into(), AgentPrefs { enabled: true, ..Default::default() });
         assert_eq!(launch_command_in("pi", &prefs, &path), Some((at("npx"), vec!["-y".into(), "pi-acp".into()])));
-        prefs.agents.insert("gemini".into(), AgentPrefs { args: Some("--acp --debug".into()), ..Default::default() });
-        assert_eq!(launch_command_in("gemini", &prefs, &path).unwrap().1, ["--acp", "--debug"]);
+        prefs.agents.insert("cursor".into(), AgentPrefs { args: Some("acp --debug".into()), ..Default::default() });
+        assert_eq!(launch_command_in("cursor", &prefs, &path).unwrap().1, ["acp", "--debug"]);
         assert_eq!(launch_command_in("claude-code", &prefs, &path), None);
         assert_eq!(launch_command_in("nope", &prefs, &path), None);
-        assert_eq!(launch_command_in("cursor", &prefs, &path), None);
+        assert_eq!(launch_command_in("kimi", &prefs, &path), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

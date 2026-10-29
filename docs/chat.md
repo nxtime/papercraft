@@ -18,14 +18,15 @@ Chat drives the same tools as an agent connected over MCP, so the edits, runs, u
 
 The ACP agents PaperCraft knows about, and what was checked on the development Mac:
 
-* **OpenCode** (`opencode acp`): works.
-* **Gemini CLI** (`gemini --acp`): found and started, but its server currently refuses ACP clients, so turns fail with the agent's error until Google changes that.
+* **OpenCode** (`opencode acp`): works. Its free models (`opencode/*-free`, Big Pickle) need no key.
 * **Cursor** (`cursor-agent acp`): sign in first with `cursor-agent login`.
-* **Pi** (`pi-acp`, an adapter run through `npx`): enable it once in the agent panel or Settings, then it works like the others.
+* **Pi** (`pi-acp`, an adapter run through `npx`): enable it once in the agent panel or Settings. `pi-acp` does not pass MCP servers on to Pi, so a lean Pi gets its own folder (`PI_CODING_AGENT_DIR`) whose only package is `pi-mcp-adapter`, connected to PaperCraft. Pi runs on the providers you add a key for in Settings → Chat → Pi: OpenRouter (`:free` models, 50 requests a day without credits), Groq, Gemini, NVIDIA NIM and Cerebras. Keys live in the OS secret store and reach Pi only as environment variables.
 * **Goose, Kimi, Devin, Junie, Mistral Vibe, Hermes, OpenHands, Stakpak, VT Code, Poolside, Droid**: started with the command their own docs give. They are not all verified here.
 * **Claude Code and Codex ACP adapters** (`npx`): listed under Enable via npx. Claude Code and Codex themselves use the direct backends above.
 
 Agents that run through `npx` are off until you enable them, because enabling runs code that npx fetches from npm.
+
+**Free models.** For OpenCode and Pi the model list starts on free models (`Free only`) and offers `Free (auto)`, the default for new chats on them. It starts on the free model with the largest context. When a model fails with a rate limit, quota, overload or "gone" error before any tool ran, the turn moves to the next free one (at most two more) and the thread says so. A model that failed is skipped for 15 minutes. A failure after a tool ran is not retried, because the design may already have changed.
 
 ACP permissions: PaperCraft's own tools run without asking, except the destructive ones listed under Approval below. Any other tool the agent asks to run (its own shell or file tools, for example) shows an approval card with Approve or Deny in the thread, and Deny is sent back to the agent.
 
@@ -68,7 +69,7 @@ Settings → Chat has the same list, so an agent can also be hidden from the pan
 
 ### Setup card
 
-A chat with no backend chosen shows one card, "Connect an agent". It lists the agents detected on this computer, up to four, with `Show all agents` for the rest. Below them are `Add an API endpoint` and `Add custom agent`. The card never lists install steps.
+A chat with no backend chosen shows one card, "Connect an agent". It lists the agents detected on this computer, up to four, with `Show all agents` for the rest. Below them are `Add an API endpoint` and `Add custom agent`. When OpenCode or Pi is not found, its row has `Install…`. The dialog offers the install methods that work on this OS (Homebrew, Scoop, npm, Nix or the agent's install script; on Linux also the distribution's own). It shows the exact command and runs it only after you click Install, streaming the output. Methods that need `sudo` or an admin shell, and npm when Node is missing or too old, are shown with the reason and a command to copy instead.
 
 ### Sign-in
 

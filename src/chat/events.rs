@@ -24,6 +24,13 @@ pub enum Event {
     /// Tokens in the context at the backend's latest model call (input and cache), not summed
     /// over the turn: the header meter.
     Context(u64),
+    /// The model the agent's session runs on and the ones it offers, as `(id, name)`.
+    Models { current: String, options: Vec<(String, String)> },
+    /// The selected ACP model's available reasoning levels.
+    ModelEfforts { model: String, options: Vec<(String, String)> },
+    /// The turn moved from model `from` to `to` because `from` failed with `reason` before doing
+    /// anything ("Free (auto)").
+    ModelSwitch { from: String, to: String, reason: String },
 }
 
 /// Sends a tool call to the UI thread (the app's MCP dispatch), so runs, undo and the agent log
@@ -73,7 +80,10 @@ pub struct TurnConfig {
     pub ds_digest: String,
     /// Model id; None = the backend's default (API: the endpoint's model).
     pub model: Option<String>,
-    /// `low` | `medium` | `high`; None = the backend's default.
+    /// ACP: models to move to, in order, when `model` fails before any tool ran (rate limit,
+    /// quota, gone). Filled for "Free (auto)".
+    pub fallbacks: Vec<String>,
+    /// Reasoning level; None = the backend's default.
     pub effort: Option<String>,
     /// Resume this backend session.
     pub session: Option<String>,

@@ -8,6 +8,11 @@ use super::pdf::{Insert, PdfPage};
 use crate::editor::Editor;
 use crate::geom::{Rect, V2, v2};
 use crate::model::{Color, Document, Node, NodeId, NodeKind, TextAlign};
+pub use words::Lang;
+use words::{Noun, Words, fill};
+
+pub(crate) mod unroll;
+mod words;
 
 /// A page of the project in the deck.
 pub struct Section<'a> {
@@ -23,6 +28,8 @@ pub struct Meta {
     pub author: Option<String>,
     /// Unix milliseconds, for the date on the cover.
     pub now_ms: u64,
+    /// The deck's own words; None: the language the screens are written in.
+    pub language: Option<Lang>,
 }
 
 const W: f64 = 1920.0;
@@ -52,8 +59,6 @@ const INK: Color = Color { r: 232, g: 232, b: 242, a: 255 };
 const MUTED: Color = Color { r: 150, g: 150, b: 170, a: 255 };
 const ACCENT: Color = Color { r: 180, g: 160, b: 250, a: 255 };
 
-const MONTHS: [&str; 12] =
-    ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 /// The screens of a page in reading order (top to bottom, then left to right): its declared
 /// screens, else its visible top-level frames (not component mains) of at least [`MIN_SCREEN`]
@@ -133,10 +138,10 @@ const MAP_MIN: usize = 3;
 const QUESTIONS_PER_SLIDE: usize = 8;
 
 /// "12 screens · 6 boards": a page's screens and boards (sections shown by their cards).
-fn tally(s: &Section) -> String {
+fn tally(w: &Words, s: &Section) -> String {
     let boards = s.screens.iter().filter(|id| s.doc.get(**id).is_some_and(|n| n.section)).count();
-    let screens = count(s.screens.len() - boards, "screen");
-    if boards == 0 { screens } else { format!("{screens} \u{b7} {}", count(boards, "board")) }
+    let screens = w.count(s.screens.len() - boards, Noun::Screen);
+    if boards == 0 { screens } else { format!("{screens} \u{b7} {}", w.count(boards, Noun::Board)) }
 }
 
 /// A design note shown on a slide.
@@ -373,7 +378,14 @@ fn cards_of(doc: &Document, board: NodeId) -> Option<Vec<NodeId>> {
 
 /// The deck as PDF bytes. Sections without screens are left out.
 pub fn build(meta: &Meta, sections: &[Section]) -> Vec<u8> {
-    let sections: Vec<&Section> = sections.iter().filter(|s| !s.screens.is_empty()).collect();
+    let unrolled: Vec<Option<Document>> = sections.iter().map(|s| unroll::unrolled(s.doc, &s.screens)).collect();
+    let sections: Vec<Section> = sections
+        .iter()
+        .zip(&unrolled)
+        .filter(|(s, _)| !s.screens.is_empty())
+        .map(|(s, u)| Section { name: s.name.clone(), doc: u.as_ref().unwrap_or(s.doc), screens: s.screens.clone() })
+        .collect();
+    let sections: Vec<&Section> = sections.iter().collect();
     let mut slides = vec![Slide::Cover, Slide::Contents];
     let mut starts = Vec::new();
     let mut appendix = Vec::new();
@@ -423,6 +435,7 @@ pub fn build(meta: &Meta, sections: &[Section]) -> Vec<u8> {
 
     let total = slides.len();
     let screens: usize = sections.iter().map(|s| s.screens.iter().filter(|id| s.doc.get(**id).is_some_and(|n| !n.section)).count()).sum();
+    let w = meta.language.unwrap_or_else(|| Lang::detect(sections.iter().map(|s| s.doc))).words();
     let mut ed = Editor::default();
     // Each slide, and its overlay (drawn above the screens: note markers).
     let mut pages: Vec<(Rect, NodeId, Option<NodeId>, Vec<Insert>)> = Vec::new();
@@ -435,13 +448,13 @@ pub fn build(meta: &Meta, sections: &[Section]) -> Vec<u8> {
         let mut overlay = None;
         match slide {
             Slide::Cover => {
-                t(&mut ed, f, "DESIGN PRESENTATION", 22.0, true, ACCENT, v2(MARGIN, 330.0));
+                t(&mut ed, f, w.presentation, 22.0, true, ACCENT, v2(MARGIN, 330.0));
                 text(&mut ed, f, &meta.title, 88.0, true, INK, v2(MARGIN, 372.0), Some((800.0, TextAlign::Left)));
-                let sub = meta.subtitle.clone().unwrap_or_else(|| format!("{} \u{b7} {}", count(screens, "screen"), count(sections.len(), "page")));
+                let sub = meta.subtitle.clone().unwrap_or_else(|| format!("{} \u{b7} {}", w.count(screens, Noun::Screen), w.count(sections.len(), Noun::Page)));
                 text(&mut ed, f, &sub, 30.0, false, MUTED, v2(MARGIN, 520.0), Some((800.0, TextAlign::Left)));
                 let by = match &meta.author {
-                    Some(a) => format!("{} \u{b7} {a}", date(meta.now_ms)),
-                    None => date(meta.now_ms),
+                    Some(a) => format!("{} \u{b7} {a}", w.date(meta.now_ms)),
+                    None => w.date(meta.now_ms),
                 };
                 text(&mut ed, f, &by, 22.0, false, MUTED, v2(MARGIN, H - MARGIN - 30.0), None);
                 // The hero: the largest regular screen of the deck (the first of equals).
@@ -459,15 +472,15 @@ pub fn build(meta: &Meta, sections: &[Section]) -> Vec<u8> {
                 }
             }
             Slide::Contents => {
-                t(&mut ed, f, "Contents", 56.0, true, INK, v2(MARGIN, MARGIN));
+                t(&mut ed, f, w.contents, 56.0, true, INK, v2(MARGIN, MARGIN));
                 for (i, s) in sections.iter().enumerate() {
                     let y = 230.0 + i as f64 * 64.0;
                     t(&mut ed, f, &format!("{:02}", i + 1), 28.0, true, ACCENT, v2(MARGIN, y));
                     t(&mut ed, f, &s.name, 28.0, false, INK, v2(MARGIN + 84.0, y));
-                    t(&mut ed, f, &tally(s), 22.0, false, MUTED, v2(1200.0, y + 4.0));
+                    t(&mut ed, f, &tally(w, s), 22.0, false, MUTED, v2(1200.0, y + 4.0));
                     text(&mut ed, f, &starts[i].to_string(), 22.0, false, MUTED, v2(W - MARGIN - 200.0, y + 4.0), Some((200.0, TextAlign::Right)));
                 }
-                let extras = [("?", "Open questions", questions_start), ("A", "Appendix \u{b7} states", appendix_start)];
+                let extras = [("?", w.open_questions, questions_start), ("A", w.appendix_states, appendix_start)];
                 for (j, (mark, name, start)) in extras.iter().filter_map(|(m, n, s)| Some((*m, *n, (*s)?))).enumerate() {
                     let y = 230.0 + (sections.len() + j) as f64 * 64.0;
                     t(&mut ed, f, mark, 28.0, true, ACCENT, v2(MARGIN, y));
@@ -478,7 +491,7 @@ pub fn build(meta: &Meta, sections: &[Section]) -> Vec<u8> {
             Slide::Map(i, ids) => {
                 let s = sections[*i];
                 t(&mut ed, f, &s.name.to_uppercase(), 20.0, true, ACCENT, v2(MARGIN, 64.0));
-                t(&mut ed, f, "At a glance", 44.0, true, INK, v2(MARGIN, 96.0));
+                t(&mut ed, f, w.at_a_glance, 44.0, true, INK, v2(MARGIN, 96.0));
                 const GAP: f64 = 32.0;
                 let cw = (STAGE.w - GAP * (MAP_COLS - 1) as f64) / MAP_COLS as f64;
                 let ch = (STAGE.h - GAP * (MAP_ROWS - 1) as f64) / MAP_ROWS as f64;
@@ -493,7 +506,7 @@ pub fn build(meta: &Meta, sections: &[Section]) -> Vec<u8> {
             }
             Slide::Questions(i, qs) => {
                 t(&mut ed, f, &sections[*i].name.to_uppercase(), 20.0, true, ACCENT, v2(MARGIN, 64.0));
-                t(&mut ed, f, "Open questions", 44.0, true, INK, v2(MARGIN, 96.0));
+                t(&mut ed, f, w.open_questions, 44.0, true, INK, v2(MARGIN, 96.0));
                 let slot = STAGE.h / QUESTIONS_PER_SLIDE as f64;
                 for (j, (screen, q)) in qs.iter().enumerate() {
                     let y = STAGE.y + j as f64 * slot;
@@ -503,19 +516,23 @@ pub fn build(meta: &Meta, sections: &[Section]) -> Vec<u8> {
                 }
             }
             Slide::NextSteps => {
-                t(&mut ed, f, "Next steps", 56.0, true, INK, v2(MARGIN, MARGIN));
+                t(&mut ed, f, w.next_steps, 56.0, true, INK, v2(MARGIN, MARGIN));
                 let boards: usize = sections.iter().map(|s| s.screens.len()).sum::<usize>() - screens;
                 let mut steps = Vec::new();
                 if let Some(q) = questions_start {
-                    steps.push((format!("Answer {}", count(asked, "open question")), format!("From the notes on the screens; slide {q} on")));
+                    steps.push((fill(w.answer, &[&w.count(asked, Noun::OpenQuestion)]), fill(w.answer_detail, &[&q.to_string()])));
                 }
-                let reviewed = if boards == 0 { count(screens, "screen") } else { format!("{} and {}", count(screens, "screen"), count(boards, "board")) };
-                steps.push((format!("Review the {reviewed}"), "Feedback on a screen by its name, as titled on its slide".to_owned()));
+                let reviewed = if boards == 0 {
+                    w.count(screens, Noun::Screen)
+                } else {
+                    fill(w.and, &[&w.count(screens, Noun::Screen), &w.count(boards, Noun::Board)])
+                };
+                steps.push((fill(w.review, &[&reviewed]), w.review_detail.to_owned()));
                 if let Some(a) = appendix_start {
-                    steps.push(("Check the other states".to_owned(), format!("The states kept out of the main flow; appendix, slide {a} on")));
+                    steps.push((w.check_states.to_owned(), fill(w.check_states_detail, &[&a.to_string()])));
                 }
                 if let Some(a) = &meta.author {
-                    steps.push(("Send feedback".to_owned(), format!("To {a}")));
+                    steps.push((w.send_feedback.to_owned(), fill(w.to, &[a])));
                 }
                 for (j, (step, detail)) in steps.iter().enumerate() {
                     let y = 260.0 + j as f64 * 130.0;
@@ -526,26 +543,26 @@ pub fn build(meta: &Meta, sections: &[Section]) -> Vec<u8> {
             }
             Slide::Appendix => {
                 t(&mut ed, f, "A", 160.0, true, ACCENT, v2(MARGIN, 300.0));
-                t(&mut ed, f, "Appendix", 80.0, true, INK, v2(MARGIN, 500.0));
-                t(&mut ed, f, "Other states of the screens", 28.0, false, MUTED, v2(MARGIN, 620.0));
+                t(&mut ed, f, w.appendix, 80.0, true, INK, v2(MARGIN, 500.0));
+                t(&mut ed, f, w.other_states, 28.0, false, MUTED, v2(MARGIN, 620.0));
             }
             Slide::Divider(i) => {
                 let s = sections[*i];
                 t(&mut ed, f, &format!("{:02}", i + 1), 160.0, true, ACCENT, v2(MARGIN, 300.0));
                 text(&mut ed, f, &s.name, 80.0, true, INK, v2(MARGIN, 500.0), Some((W - 2.0 * MARGIN, TextAlign::Left)));
-                t(&mut ed, f, &tally(s), 28.0, false, MUTED, v2(MARGIN, 620.0));
+                t(&mut ed, f, &tally(w, s), 28.0, false, MUTED, v2(MARGIN, 620.0));
             }
             Slide::Screen { i, id, notes, part, states } => {
                 let s = sections[*i];
                 kicker(&mut ed, f, s, *id);
                 let mut title = clean(name_of(s.doc, *id));
                 if let Some((k, n)) = part {
-                    title = format!("{title} (notes {k}/{n})");
+                    title = format!("{title} ({})", fill(w.notes, &[&k.to_string(), &n.to_string()]));
                 }
                 t(&mut ed, f, &title, 44.0, true, INK, v2(MARGIN, 96.0));
                 let mut aside = Vec::new();
                 if *states > 0 {
-                    aside.push(format!("+ {} in the appendix", count(*states, "state")));
+                    aside.push(fill(w.in_appendix, &[&w.count(*states, Noun::State)]));
                 }
                 if let Some(b) = s.doc.world_rect(*id) {
                     aside.push(format!("{} \u{d7} {}", b.w.round(), b.h.round()));
@@ -624,9 +641,9 @@ pub fn build(meta: &Meta, sections: &[Section]) -> Vec<u8> {
                 inserts.extend(place(&mut ed, f, s.doc, *id, Some(*from), area, r));
             }
             Slide::End => {
-                t(&mut ed, f, "Thank you", 96.0, true, INK, v2(MARGIN, 380.0));
+                t(&mut ed, f, w.thank_you, 96.0, true, INK, v2(MARGIN, 380.0));
                 t(&mut ed, f, &meta.title, 30.0, false, MUTED, v2(MARGIN, 520.0));
-                t(&mut ed, f, &format!("{} \u{b7} {}", count(screens, "screen"), date(meta.now_ms)), 22.0, false, MUTED, v2(MARGIN, 570.0));
+                t(&mut ed, f, &format!("{} \u{b7} {}", w.count(screens, Noun::Screen), w.date(meta.now_ms)), 22.0, false, MUTED, v2(MARGIN, 570.0));
             }
         }
         if k > 0 {
@@ -761,24 +778,6 @@ fn ask(line: &str) -> String {
     let s = s.replace("(? team)", "").replace("? (team)", "?").replace(": ?", "?").replace(" ?", "?").replace("??", "?");
     let s = s.trim();
     if s.contains('?') { s.to_owned() } else { format!("{s}?") }
-}
-
-fn count(n: usize, what: &str) -> String {
-    format!("{n} {what}{}", if n == 1 { "" } else { "s" })
-}
-
-/// "28 October 2026" for Unix milliseconds (UTC; civil-from-days).
-fn date(ms: u64) -> String {
-    let z = (ms / 86_400_000) as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{d} {} {y}", MONTHS[(m - 1) as usize])
 }
 
 #[cfg(test)]

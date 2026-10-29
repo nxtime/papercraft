@@ -50,7 +50,7 @@ const BACKENDS: [(BackendKind, &str); 3] = [
 
 /// One registry agent's settings. Native agents are always on; `enabled` gates `npx` ones
 /// (running them fetches code, so the user opts in once).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentPrefs {
     pub path: Option<String>,
@@ -59,6 +59,10 @@ pub struct AgentPrefs {
     pub enabled: bool,
     /// Native agents only: left out of the chat agent picker.
     pub hidden: bool,
+    /// The model new chats on this agent start on; None leaves the agent's own choice.
+    pub model: Option<String>,
+    /// The models the agent offers (its CLI's listing, or its latest session's): the picker's list.
+    pub catalog: Vec<crate::chat::models::AgentModel>,
 }
 
 /// An ACP agent the user added: `command` runs with `args` (whitespace-split) over stdio.
@@ -629,6 +633,7 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
 mod native {
     use super::*;
     use crate::chat::agents::{self, AgentKind, AgentState, AgentStatus};
+    use crate::chat::keys;
     use crate::chat::endpoint::ApiFormat;
     use crate::ui::confirm;
     use egui::{Align, Layout, vec2};
@@ -639,6 +644,8 @@ mod native {
     const KEY_ENV: &str = "ANTHROPIC_API_KEY";
     const KEY_TAIL_CHARS: usize = 4;
     const KEY_MASK: &str = "•••• ";
+    /// Room for one button next to a key field (Save, Forget).
+    const KEY_BUTTON_W: f32 = 80.0;
     const KEY_PLACEHOLDER: &str = "API key (optional for a local server)";
     const CLAUDE_KEY_PLACEHOLDER: &str = "sk-ant-…";
     /// One grid for every field row: a label column, then the field.
@@ -699,6 +706,7 @@ mod native {
             });
             self.probe = Some(rx);
             self.key_tails = prefs.endpoints.iter().filter_map(|e| Some((e.id.clone(), key_tail(&endpoint::get_key(e)?)))).collect();
+            self.key_tails.extend(keys::PROVIDERS.iter().filter_map(|p| Some((pi_key_id(p), key_tail(&keys::get(p)?)))));
             self.env_key = std::env::var(KEY_ENV).is_ok();
         }
 
@@ -1021,7 +1029,7 @@ mod native {
             (r, shown)
         }));
         for row in &primary {
-            agent_row(ui, row, prefs, page, ed);
+            agent_row(ui, row, prefs, page, scan, ed);
         }
         if !more.is_empty() {
             let text = if page.show_more { "Show fewer agents".to_owned() } else { format!("Show {} more agents", more.len()) };
@@ -1032,7 +1040,7 @@ mod native {
             }
             if page.show_more {
                 for row in &more {
-                    agent_row(ui, row, prefs, page, ed);
+                    agent_row(ui, row, prefs, page, scan, ed);
                 }
             }
         }
@@ -1046,7 +1054,7 @@ mod native {
         }
     }
 
-    fn agent_row(ui: &mut Ui, row: &AgentRow, prefs: &mut ChatPrefs, page: &mut ChatPage, ed: &mut Edits) {
+    fn agent_row(ui: &mut Ui, row: &AgentRow, prefs: &mut ChatPrefs, page: &mut ChatPage, scan: &Scan, ed: &mut Edits) {
         let p = theme::pal(ui);
         let key = format!("agent:{}", row.id);
         let open = page.open.contains(&key);
@@ -1096,6 +1104,9 @@ mod native {
             if !open {
                 return;
             }
+            if row.id == "pi" {
+                pi_keys(ui, page, scan, ed);
+            }
             match row.kind {
                 Some(_) => registry_body(ui, row, prefs, ed),
                 None => custom_body(ui, row, prefs, page, ed),
@@ -1126,6 +1137,46 @@ mod native {
                 ui.label(RichText::new("Runs code fetched by npx").size(theme::SECONDARY).color(theme::pal(ui).warning));
             });
         }
+    }
+
+    fn pi_key_id(p: &keys::Provider) -> String {
+        format!("pi:{}", p.id)
+    }
+
+    /// Pi's provider keys: each one adds that provider's models (free ones first) to Pi's list.
+    fn pi_keys(ui: &mut Ui, page: &mut ChatPage, scan: &Scan, ed: &mut Edits) {
+        for prov in &keys::PROVIDERS {
+            let id = pi_key_id(prov);
+            let tail = scan.key_tails.get(&id).cloned();
+            let draft = page.key_drafts.entry(id.clone()).or_default();
+            let mut save = false;
+            let mut forget = false;
+            field_row(ui, prov.name, |ui| {
+                ui.horizontal(|ui| {
+                    let hint = tail.as_ref().map_or_else(|| "Paste a key".to_owned(), |t| format!("{KEY_MASK}{t}"));
+                    let w = ui.available_width() - 2.0 * KEY_BUTTON_W;
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(draft).password(true).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(w)));
+                    save = ui.add_enabled_ui(!draft.trim().is_empty(), |ui| kit::button(ui, kit::ButtonKind::Primary, None, "Save").clicked()).inner;
+                    forget = tail.is_some() && kit::button(ui, kit::ButtonKind::Secondary, None, "Forget").clicked();
+                });
+                ui.horizontal_wrapped(|ui| {
+                    note(ui, prov.note);
+                    ui.hyperlink_to(RichText::new("Get a free key").size(theme::SECONDARY), prov.key_url);
+                });
+            });
+            let done = if save {
+                keys::set(prov, draft).map(|()| draft.clear())
+            } else if forget {
+                keys::forget(prov)
+            } else {
+                continue;
+            };
+            match done {
+                Ok(()) => (ed.rescan, ed.notify, page.key_error) = (true, true, None),
+                Err(e) => page.key_error = Some(format!("Could not save the {} key: {e}", prov.name)),
+            }
+        }
+        note(ui, &format!("Keys live in the {} and reach Pi only as environment variables.", keychain_name()));
     }
 
     fn custom_body(ui: &mut Ui, row: &AgentRow, prefs: &mut ChatPrefs, page: &mut ChatPage, ed: &mut Edits) {
@@ -1356,11 +1407,11 @@ mod native {
             }
             note(ui, "Stops a turn once its steps have read this much in all (each step re-reads the chat). 10M is about $2 on Opus with caching.");
         });
-        field_row(ui, "Claude Code", |ui| {
+        field_row(ui, "Agents", |ui| {
             if kit::checkbox(ui, &mut prefs.cli_lean, "Lean sessions").changed() {
                 ed.save = true;
             }
-            note(ui, "Leaves out your CLAUDE.md, hooks, plugins and skills: about half the tokens per turn.");
+            note(ui, "Claude Code and OpenCode start without your own rules, config, plugins and skills: a fraction of the tokens per turn. Sign-ins and API keys still work.");
         });
     }
 }
@@ -1517,7 +1568,7 @@ mod tests {
         let page = native::ChatPage {
             scan: Some(native::Scan { agents: Some(statuses), probe: None, key_tails: Default::default(), env_key: false }),
             show_more: true,
-            open: ["agent:claude-code", "agent:qwen", "agent:mine", "ep:anthropic", "ep:ep-1"].into_iter().map(String::from).collect(),
+            open: ["agent:claude-code", "agent:qwen", "agent:pi", "agent:mine", "ep:anthropic", "ep:ep-1"].into_iter().map(String::from).collect(),
             ..Default::default()
         };
         st.settings = SettingsUi { open: true, page: Page::Chat, chat, chat_changed: false, chat_page: page, issue_token: String::new(), issue_note: None };

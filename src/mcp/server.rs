@@ -5,7 +5,7 @@
 //! `Accept` header (some clients omit it and then misread the 406 as an auth failure) and
 //! answers unknown routes with a plain JSON hint rather than an OAuth-looking error.
 
-use super::{Call, Client, ENDPOINT, Out, ToolResult, tools};
+use super::{Call, Client, ENDPOINT, Out, ToolResult, core_tools, tools};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -77,9 +77,13 @@ impl ServerHandler for PaperServer {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(tool_list()))
+        if !wants_core(&context) {
+            return Ok(ListToolsResult::with_all_items(tool_list()));
+        }
+        let core = core_tools::definitions(tools::definitions());
+        Ok(ListToolsResult::with_all_items(core.into_iter().map(|t| serde_json::from_value(t).expect("core tool definitions are valid MCP tools")).collect()))
     }
 
     async fn call_tool(
@@ -87,13 +91,19 @@ impl ServerHandler for PaperServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let (mut name, mut args) = (request.name.to_string(), serde_json::Value::Object(request.arguments.unwrap_or_default()));
+        if name == core_tools::SEARCH {
+            let found = core_tools::search(&tools::definitions(), args["query"].as_str().unwrap_or_default(), args["detail"].as_str().unwrap_or("schema"));
+            return Ok(to_result(Ok(vec![Out::Text(found.to_string())])).into());
+        }
+        if name == core_tools::CALL {
+            match core_tools::target(&args) {
+                Ok(t) => (name, args) = t,
+                Err(e) => return Ok(to_result(Err(e)).into()),
+            }
+        }
         let (reply, rx) = tokio::sync::oneshot::channel();
-        let call = Call {
-            name: request.name.to_string(),
-            args: serde_json::Value::Object(request.arguments.unwrap_or_default()),
-            client: client_of(&context),
-            reply,
-        };
+        let call = Call { name, args, client: client_of(&context), reply };
         let r = if !(self.dispatch)(call) {
             Err("papercraft is shutting down".to_string())
         } else {
@@ -127,6 +137,12 @@ fn client_of(context: &RequestContext<RoleServer>) -> Client {
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     Client { name, session: session.into(), parent: None }
+}
+
+/// The session asked for the lean tool list (`tools=core` in the URL query).
+fn wants_core(context: &RequestContext<RoleServer>) -> bool {
+    let parts = context.extensions.get::<axum::http::request::Parts>();
+    parts.and_then(|p| p.uri.query()).is_some_and(|q| q.split('&').any(|kv| kv == "tools=core"))
 }
 
 /// The chat id in an MCP URL query (`chat=<id>`).

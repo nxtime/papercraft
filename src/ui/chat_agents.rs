@@ -78,7 +78,7 @@ impl Groups {
     }
 }
 
-/// "gemini 0.44.1" -> "v0.44.1"; "" when no token looks like a version.
+/// "opencode 1.18.30" -> "v1.18.30"; "" when no token looks like a version.
 fn short_version(v: &str) -> String {
     let starts_digit = |t: &str| t.trim_start_matches('v').chars().next().is_some_and(|c| c.is_ascii_digit());
     v.split_whitespace().find(|t| starts_digit(t)).map(|t| format!("v{}", t.trim_start_matches('v'))).unwrap_or_default()
@@ -165,7 +165,7 @@ pub fn backend_for(pick: &Pick, prefs: &ChatPrefs) -> Backend {
         Pick::Agent(id) => match id.as_str() {
             "claude-code" => Backend { kind: BackendKind::ClaudeCode, ..Default::default() },
             "codex" => Backend { kind: BackendKind::Codex, ..Default::default() },
-            _ => Backend { kind: BackendKind::Acp, agent: Some(id.clone()), ..Default::default() },
+            _ => Backend { kind: BackendKind::Acp, model: super::chat_models::default_model(prefs, id), agent: Some(id.clone()), ..Default::default() },
         },
         Pick::Endpoint(id) => {
             let ep = prefs.endpoint(Some(id));
@@ -220,7 +220,6 @@ fn login_command(id: &str) -> Option<&'static str> {
         "cursor" => "cursor-agent login",
         "opencode" => "opencode auth login",
         "codex" | "codex-acp" => "codex login",
-        "gemini" => "gemini",
         "goose" => "goose configure",
         "claude-acp" => "claude /login",
         _ => return None,
@@ -242,6 +241,8 @@ pub enum Act {
     /// Model or effort of an Anthropic endpoint changed.
     SetBackend(Backend),
     Enable(String),
+    /// Open the install dialog for this agent.
+    Install(String),
     /// Settings, Chat: set a path, add an endpoint or a custom agent.
     Settings,
     DetectAgain,
@@ -257,6 +258,8 @@ pub struct PanelState {
     /// Focus the search field on the next frame.
     pub fresh: bool,
     pub missing_open: bool,
+    /// The model list shows paid models too (it starts on free ones for free agents).
+    pub all_models: bool,
 }
 
 pub struct PanelIn<'a> {
@@ -266,6 +269,8 @@ pub struct PanelIn<'a> {
     pub running: bool,
     /// The chat column, the agent chip, and the top of the composer.
     pub column: Rect,
+    /// The whole chat card, including its inner padding.
+    pub backdrop: Rect,
     pub chip: Rect,
     pub composer_top: f32,
 }
@@ -287,7 +292,6 @@ fn logo(agent: &str) -> Option<(&'static str, &'static [u8])> {
     Some(match agent {
         "claude-code" | "claude-acp" => svg!("claude"),
         "codex" | "codex-acp" => svg!("openai"),
-        "gemini" => svg!("gemini"),
         "cursor" => svg!("cursor"),
         "goose" => svg!("goose"),
         "kimi" => svg!("kimi"),
@@ -454,6 +458,13 @@ fn agent_row(ui: &mut Ui, scope: &str, r: &Row, selected: bool, focused: bool) -
             if ui.link(RichText::new("Set path\u{2026}").size(theme::SECONDARY)).clicked() {
                 act = Some(Act::Settings);
             }
+            if let Pick::Agent(a) = &r.pick
+                && r.status == Status::NotFound
+                && crate::chat::install::AGENTS.contains(&a.as_str())
+                && ui.link(RichText::new("Install\u{2026}").size(theme::SECONDARY)).clicked()
+            {
+                act = Some(Act::Install(a.clone()));
+            }
             if let Some(url) = r.docs {
                 ui.hyperlink_to(RichText::new("Docs").size(theme::SECONDARY), url);
             }
@@ -500,14 +511,14 @@ fn nav_row(ui: &mut Ui, scope: &str, icon: Icon, name: &str, sub: &str, card: bo
     clicked
 }
 
-enum Fold {
+pub(super) enum Fold {
     None,
     Action(Icon),
     Open(bool),
 }
 
 /// "DETECTED  7" with an action (a + icon) or a fold chevron on the right. True when clicked.
-fn section(ui: &mut Ui, title: &str, count: Option<usize>, fold: Fold) -> bool {
+pub(super) fn section(ui: &mut Ui, title: &str, count: Option<usize>, fold: Fold) -> bool {
     let p = theme::pal(ui);
     ui.add_space(6.0);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
@@ -563,8 +574,8 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
     }
 
     // Dimmed backdrop over the column: a click outside the panel closes it.
-    egui::Area::new("chat-agent-backdrop".into()).order(egui::Order::Foreground).fade_in(false).fixed_pos(i.column.min).show(ctx, |ui| {
-        let (r, resp) = ui.allocate_exact_size(i.column.size(), Sense::click());
+    egui::Area::new("chat-agent-backdrop".into()).order(egui::Order::Foreground).fade_in(false).fixed_pos(i.backdrop.min).show(ctx, |ui| {
+        let (r, resp) = ui.allocate_exact_size(i.backdrop.size(), Sense::click());
         ui.painter().rect_filled(r, theme::radius_panel(), Color32::from_black_alpha(BACKDROP_ALPHA));
         if resp.clicked() {
             act = Some(Act::Close);
@@ -593,7 +604,8 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
                     });
                 });
                 ui.add_space(4.0);
-                let search = kit::icon_field(ui, Icon::Search, &mut ps.query, "Search agents");
+                let hint = if i.backend.kind == BackendKind::Acp { "Search agents and models" } else { "Search agents" };
+                let search = kit::icon_field(ui, Icon::Search, &mut ps.query, hint);
                 if std::mem::take(&mut ps.fresh) {
                     search.request_focus();
                 }
@@ -628,10 +640,10 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
                     if nav_row(ui, "panel", Icon::Plus, "Add custom agent", "Command and arguments (ACP)", false) {
                         act = Some(Act::Settings);
                     }
-                    if g.is_empty() {
+                    if g.is_empty() && i.backend.kind != BackendKind::Acp {
                         ui.label(RichText::new("No agent matches the search").size(theme::SECONDARY).color(p.tertiary));
                     }
-                    if let Some(a) = model_block(ui, i) {
+                    if let Some(a) = model_block(ui, i, &ps.query, &mut ps.all_models) {
                         act = Some(a);
                     }
                 });
@@ -662,11 +674,14 @@ fn draw_rows(ui: &mut Ui, rows: &[Row], selected: &Pick, sel: usize, n: &mut usi
 
 /// Model and effort of a Claude API endpoint, or of Claude Code (where no pick, "Default", leaves
 /// the CLI's own choice).
-fn model_block(ui: &mut Ui, i: &PanelIn) -> Option<Act> {
+fn model_block(ui: &mut Ui, i: &PanelIn, query: &str, all_models: &mut bool) -> Option<Act> {
     use crate::ui::settings::{API_EFFORTS, API_MODELS};
     let b = i.backend;
     let ep = i.prefs.endpoint(b.endpoint.as_deref());
     let api = b.kind == BackendKind::Anthropic && ep.is_claude_host();
+    if b.kind == BackendKind::Acp {
+        return super::chat_models::list(ui, i, query, all_models);
+    }
     if !api && b.kind != BackendKind::ClaudeCode {
         return None;
     }
@@ -763,7 +778,7 @@ mod tests {
         Detect {
             claude: Some(("/bin/claude".into(), "2.1.0 (Claude Code)".into())),
             agents: vec![
-                ready("gemini", "gemini 0.44.1"),
+                ready("cursor", "cursor-agent 2026.10.1"),
                 AgentStatus { id: "pi".into(), state: AgentState::NeedsEnable },
                 AgentStatus { id: "goose".into(), state: AgentState::WrongProgram { path: "/opt/goose".into() } },
                 ready("mine", ""),
@@ -787,8 +802,8 @@ mod tests {
     #[test]
     fn groups_split_ready_npx_missing_endpoints_and_custom() {
         let g = group_agents(&detect(), &prefs(), "");
-        assert_eq!(names(&g.detected), ["Claude Code", "Gemini CLI"]);
-        assert_eq!(g.detected[1].version, "v0.44.1");
+        assert_eq!(names(&g.detected), ["Claude Code", "Cursor"]);
+        assert_eq!(g.detected[1].version, "v2026.10.1");
         assert!(g.npx.iter().any(|r| r.name == "Pi" && r.status == Status::NeedsEnable));
         assert!(g.missing.iter().any(|r| r.name == "Codex" && r.status == Status::NotFound && r.docs.is_some()));
         let goose = g.missing.iter().find(|r| r.name == "Goose").unwrap();
@@ -801,15 +816,15 @@ mod tests {
     #[test]
     fn hidden_agents_stay_out_of_the_panel() {
         let mut p = prefs();
-        p.agents.insert("gemini".into(), crate::ui::settings::AgentPrefs { hidden: true, ..Default::default() });
+        p.agents.insert("cursor".into(), crate::ui::settings::AgentPrefs { hidden: true, ..Default::default() });
         let g = group_agents(&detect(), &p, "");
         assert_eq!(names(&g.detected), ["Claude Code"]);
     }
 
     #[test]
     fn query_filters_every_section_case_insensitively() {
-        let g = group_agents(&detect(), &prefs(), "  GEM ");
-        assert_eq!(names(&g.detected), ["Gemini CLI"]);
+        let g = group_agents(&detect(), &prefs(), "  CURS ");
+        assert_eq!(names(&g.detected), ["Cursor"]);
         assert!(g.npx.is_empty() && g.missing.is_empty() && g.endpoints.is_empty() && g.custom.is_empty());
         assert!(group_agents(&detect(), &prefs(), "zzz").is_empty());
         assert_eq!(names(&group_agents(&detect(), &prefs(), "mine").custom), ["Mine"]);
@@ -818,7 +833,7 @@ mod tests {
     #[test]
     fn only_ready_rows_are_selectable_in_draw_order() {
         let picks = selectable(&group_agents(&detect(), &prefs(), ""));
-        assert_eq!(picks, [Pick::Agent("claude-code".into()), Pick::Agent("gemini".into()), Pick::Endpoint("anthropic".into()), Pick::Agent("mine".into())]);
+        assert_eq!(picks, [Pick::Agent("claude-code".into()), Pick::Agent("cursor".into()), Pick::Endpoint("anthropic".into()), Pick::Agent("mine".into())]);
     }
 
     #[test]
@@ -827,12 +842,12 @@ mod tests {
         let claude = backend_for(&Pick::Agent("claude-code".into()), &prefs);
         assert_eq!(claude.kind, BackendKind::ClaudeCode);
         assert_eq!(backend_for(&Pick::Agent("codex".into()), &prefs).kind, BackendKind::Codex);
-        let acp = backend_for(&Pick::Agent("gemini".into()), &prefs);
-        assert_eq!((acp.kind, acp.agent.as_deref()), (BackendKind::Acp, Some("gemini")));
+        let acp = backend_for(&Pick::Agent("cursor".into()), &prefs);
+        assert_eq!((acp.kind, acp.agent.as_deref()), (BackendKind::Acp, Some("cursor")));
         let ep = backend_for(&Pick::Endpoint("anthropic".into()), &prefs);
         assert_eq!((ep.kind, ep.endpoint.as_deref()), (BackendKind::Anthropic, Some("anthropic")));
         assert!(ep.model.is_some());
-        for pick in [Pick::Agent("claude-code".into()), Pick::Agent("gemini".into()), Pick::Endpoint("anthropic".into())] {
+        for pick in [Pick::Agent("claude-code".into()), Pick::Agent("cursor".into()), Pick::Endpoint("anthropic".into())] {
             assert_eq!(current_pick(&backend_for(&pick, &prefs), &prefs), pick);
         }
         // No endpoint stored means the default one.
@@ -878,6 +893,98 @@ mod tests {
     }
 
     #[test]
+    fn backdrop_covers_and_closes_from_card_padding() {
+        let ctx = egui::Context::default();
+        crate::ui::setup_style(&ctx);
+        let backdrop = Rect::from_min_size(pos2(10.0, 60.0), vec2(450.0, 700.0));
+        let column = backdrop.shrink2(vec2(14.0, 12.0));
+        let chip = Rect::from_min_size(pos2(30.0, 100.0), vec2(120.0, 22.0));
+        let input = PanelIn { detect: &Detect::default(), prefs: &ChatPrefs::default(), backend: &Backend::default(), running: false, column, backdrop, chip, composer_top: 700.0 };
+        let mut state = PanelState::default();
+        let mut frame = |events| {
+            let mut action = None;
+            let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1280.0, 800.0))), events, ..Default::default() }, |_| action = panel(&ctx, &mut state, &input));
+            out.textures_delta.clear();
+            (action, out.shapes)
+        };
+        frame(vec![]);
+        let (_, shapes) = frame(vec![]);
+        assert!(shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect == backdrop && r.fill == Color32::from_black_alpha(BACKDROP_ALPHA))));
+        let at = pos2(15.0, 65.0);
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![button(true)]);
+        assert!(matches!(frame(vec![button(false)]).0, Some(Act::Close)));
+    }
+
+    /// Draws the panel, then clicks the first text that reads `label`; returns the panel's act.
+    fn click_text(i: &PanelIn, label: &str) -> Option<Act> {
+        let ctx = egui::Context::default();
+        crate::ui::setup_style(&ctx);
+        let mut ps = PanelState::default();
+        let mut frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1280.0, 2400.0))), events, ..Default::default() };
+            let mut act = None;
+            let mut out = ctx.run_ui(input, |_| act = panel(&ctx, &mut ps, i));
+            out.textures_delta.clear();
+            (act, out.shapes)
+        };
+        // The scroll area sizes to the content it measured on earlier frames.
+        frame(vec![]);
+        frame(vec![]);
+        let (_, shapes) = frame(vec![]);
+        let panel = Rect::from_min_max(pos2(i.column.left(), 0.0), pos2(i.column.right(), f32::INFINITY));
+        for s in &shapes {
+            if let egui::epaint::Shape::Text(t) = &s.shape
+                && !t.galley.text().is_empty()
+            {
+                assert!(panel.contains_rect(t.visual_bounding_rect()), "{:?} overflows the panel", t.galley.text());
+            }
+        }
+        let at = shapes.iter().find_map(|s| match &s.shape {
+            egui::epaint::Shape::Text(t) if t.galley.text().contains(label) => Some(t.visual_bounding_rect().center()),
+            _ => None,
+        });
+        let texts: Vec<String> = shapes.iter().map(|s| match &s.shape { egui::epaint::Shape::Text(t) => format!("T:{}@{:?}", t.galley.text(), t.pos), o => format!("{:?}", std::mem::discriminant(o)).chars().take(12).collect() }).collect();
+        let at = at.unwrap_or_else(|| panic!("{label} is not drawn: {texts:?}"));
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![button(true)]);
+        frame(vec![button(false)]).0
+    }
+
+    #[test]
+    fn a_listed_model_is_picked_by_a_click() {
+        let mut prefs = ChatPrefs::default();
+        let long = "Model B with a name far too long to fit on one line of the agent panel, cut short";
+        prefs.agents.entry("opencode".into()).or_default().catalog = crate::chat::models::from_options(&[("free/a".into(), "Model A".into()), ("paid/b".into(), long.into())]);
+        for m in &mut prefs.agents.get_mut("opencode").unwrap().catalog {
+            (m.cost_in, m.cost_out) = (Some(0.0), Some(0.0));
+        }
+        let backend = Backend { kind: BackendKind::Acp, agent: Some("opencode".into()), model: Some("free/a".into()), ..Default::default() };
+        let col = Rect::from_min_size(pos2(10.0, 60.0), vec2(450.0, 2300.0));
+        let chip = Rect::from_min_size(pos2(10.0, 90.0), vec2(120.0, 22.0));
+        let i = PanelIn { detect: &Detect::default(), prefs: &prefs, backend: &backend, running: false, column: col, backdrop: col, chip, composer_top: 2300.0 };
+        let act = click_text(&i, "Model B");
+        assert!(matches!(&act, Some(Act::SetBackend(b)) if b.model.as_deref() == Some("paid/b")), "a click on a model row picks it");
+    }
+
+    #[test]
+    fn free_agents_offer_free_auto_and_hide_paid_models_until_asked() {
+        let mut prefs = ChatPrefs::default();
+        let mut list = crate::chat::models::from_options(&[("opencode/glm-free".into(), "GLM Free".into()), ("anthropic/opus".into(), "Opus Paid".into())]);
+        (list[0].cost_in, list[0].cost_out) = (Some(0.0), Some(0.0));
+        prefs.agents.entry("opencode".into()).or_default().catalog = list;
+        let backend = Backend { kind: BackendKind::Acp, agent: Some("opencode".into()), ..Default::default() };
+        let col = Rect::from_min_size(pos2(10.0, 60.0), vec2(450.0, 2300.0));
+        let chip = Rect::from_min_size(pos2(10.0, 90.0), vec2(120.0, 22.0));
+        let i = PanelIn { detect: &Detect::default(), prefs: &prefs, backend: &backend, running: false, column: col, backdrop: col, chip, composer_top: 2300.0 };
+        let act = click_text(&i, "Free (auto)");
+        assert!(matches!(&act, Some(Act::SetBackend(b)) if b.model.as_deref() == Some(crate::chat::models::FREE_AUTO)), "a click on Free (auto) picks it");
+        assert!(std::panic::catch_unwind(|| click_text(&i, "Opus Paid")).is_err(), "a paid model is hidden while Free only is on");
+    }
+
+    #[test]
     fn panel_and_setup_draw_and_keys_select() {
         let ctx = egui::Context::default();
         crate::ui::setup_style(&ctx);
@@ -887,13 +994,13 @@ mod tests {
         let chip = Rect::from_min_size(pos2(10.0, 90.0), vec2(120.0, 22.0));
         let drive = |events: Vec<egui::Event>, ps: &mut PanelState| {
             let mut last = None;
-            run(&ctx, events, &mut |_| last = panel(&ctx, ps, &PanelIn { detect: &d, prefs: &prefs, backend: &backend, running: false, column: col, chip, composer_top: 700.0 }));
+            run(&ctx, events, &mut |_| last = panel(&ctx, ps, &PanelIn { detect: &d, prefs: &prefs, backend: &backend, running: false, column: col, backdrop: col, chip, composer_top: 700.0 }));
             last
         };
         let mut ps = PanelState { fresh: true, ..Default::default() };
         assert!(drive(vec![], &mut ps).is_none(), "nothing happens without input");
         let two = drive(vec![key(egui::Key::ArrowDown), key(egui::Key::Enter)], &mut ps);
-        assert!(matches!(two, Some(Act::Select(Pick::Agent(id))) if id == "gemini"), "second ready row");
+        assert!(matches!(two, Some(Act::Select(Pick::Agent(id))) if id == "cursor"), "second ready row");
         assert!(matches!(drive(vec![key(egui::Key::Escape)], &mut ps), Some(Act::Close)));
         run(&ctx, vec![], &mut |ui| {
             assert!(setup(ui, &Detect::default(), &prefs).is_none());

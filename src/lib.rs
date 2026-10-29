@@ -11,6 +11,7 @@ pub mod demo;
 pub mod design_system;
 pub mod editor;
 pub mod geom;
+pub mod handoffs;
 pub mod history;
 pub mod icons;
 #[cfg(not(target_arch = "wasm32"))]

@@ -249,8 +249,8 @@ pub fn save_ui_font() {
     }
 }
 
-/// The chosen [`UiFont`] (Regular/Medium/SemiBold) as the proportional family, egui's fonts as
-/// fallbacks.
+/// The chosen [`UiFont`] (Regular/Medium/SemiBold) as the proportional family, then Inter (the
+/// other fonts lack symbols such as arrows and check marks), then egui's fonts.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     let [regular, medium, semibold] = UI_FONTS[ui_font()].faces;
@@ -258,6 +258,9 @@ pub fn install_fonts(ctx: &egui::Context) {
         ("Inter", regular),
         ("Inter-Medium", medium),
         ("Inter-SemiBold", semibold),
+        ("Inter-Symbols", INTER_REGULAR),
+        ("Inter-Medium-Symbols", INTER_MEDIUM),
+        ("Inter-SemiBold-Symbols", INTER_SEMIBOLD),
     ] {
         fonts
             .font_data
@@ -269,7 +272,7 @@ pub fn install_fonts(ctx: &egui::Context) {
         .cloned()
         .unwrap_or_default();
     let with = |first: &str| {
-        let mut v = vec![first.to_string()];
+        let mut v = vec![first.to_string(), format!("{first}-Symbols")];
         v.extend(fallbacks.iter().cloned());
         v
     };
@@ -1844,5 +1847,23 @@ mod choice_tests {
             }
         }
         apply_choice(&ctx, Choice::System);
+    }
+}
+
+#[cfg(test)]
+mod font_tests {
+    #[test]
+    fn every_ui_font_draws_the_symbols_agents_write() {
+        for (i, font) in super::UI_FONTS.iter().enumerate() {
+            super::set_ui_font(i);
+            let ctx = egui::Context::default();
+            super::install_fonts(&ctx);
+            ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name("semibold".into())] {
+                let id = egui::FontId::new(14.0, family);
+                assert!(ctx.fonts_mut(|f| f.has_glyphs(&id, "\u{2192}\u{2264}\u{d7}\u{2014}\u{2026}\u{2713}")), "{} lacks a symbol", font.name);
+            }
+        }
+        super::set_ui_font(0);
     }
 }

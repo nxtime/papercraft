@@ -3,7 +3,7 @@
 > "method":"session/load"
 < {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"old","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"OLD QUESTION"}}}}
 < {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"old","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"OLD ANSWER"}}}}
-< {"jsonrpc":"2.0","id":1,"result":{}}
+< {"jsonrpc":"2.0","id":1,"result":{"models":{"currentModelId":"gemini-3-pro"}}}
 > "method":"session/prompt"
 < {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"old","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"fresh"}}}}
 < {"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}

@@ -1676,6 +1676,10 @@ fn build_spec_tree(
         if let NodeKind::Frame { clip } = n.kind {
             m.insert("clip".into(), json!(clip));
         }
+        if n.scroll {
+            // How far the content reaches past the frame: code needs it for `overflow: auto`.
+            m.insert("scroll".into(), json!(crate::editor::scroll_range(doc, n.id).round()));
+        }
         if let Some(sh) = n.style.shadow {
             m.insert(
                 "shadow".into(),
@@ -2036,7 +2040,7 @@ fn format_compact(spec: &Value) -> String {
             out.push('\n');
         }
     }
-    out.push_str("## Tree\nFormat: Kind \"layer\" WxH layout style. hug/fill = sizing. Tokens as --name. Text: \"content\" size/lineHeight weight color.\n\n");
+    out.push_str("## Tree\nFormat: Kind \"layer\" WxH layout style. hug/fill = sizing. Tokens as --name. scroll+N = content scrolls, N px past the bottom. Text: \"content\" size/lineHeight weight color.\n\n");
     compact_node(&spec["layoutTree"], 0, &mut out);
     out
 }
@@ -2136,6 +2140,9 @@ fn compact_style(st: &Value) -> Vec<String> {
     }
     if st["clip"] == true {
         parts.push("clip".into());
+    }
+    if let Some(more) = st["scroll"].as_f64() {
+        parts.push(format!("scroll+{}", px_num(more)));
     }
     parts
 }

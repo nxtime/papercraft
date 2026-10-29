@@ -3,16 +3,18 @@
 //! One PDF page per exported area (a selection, each frame, or a whole page). Shapes, strokes
 //! and glyph outlines are vector paths; gradients are axial/radial shadings; images are
 //! deflated RGB XObjects with an alpha soft mask; opacity and all 16 blend modes go through
-//! ExtGState; clipping frames clip. Text is outlined (not selectable), as in the SVG export.
+//! ExtGState; clipping frames clip. Text is real text in the embedded Inter faces (`font`), so
+//! it can be selected, searched and edited.
 
 use crate::assets;
 use crate::geom::{Rect, V2};
 use crate::model::{BlendMode, Cap, Color, Document, Join, NodeId, NodeKind, Stop};
 use crate::render::draw::{self, DrawOp, PaintSpec};
-use crate::text;
 use crate::vector::{Seg, VPath};
 use std::collections::HashMap;
 use std::fmt::Write;
+
+mod font;
 
 /// One page of output: what to draw and the area it covers.
 pub struct PdfPage<'a> {
@@ -101,10 +103,12 @@ struct Res {
     gstate_objs: Vec<(String, usize)>,
     shadings: Vec<(String, usize)>,
     images: HashMap<String, (String, usize)>,
+    fonts: std::collections::BTreeMap<String, usize>,
 }
 
 struct PageWriter<'a> {
     objs: &'a mut Objects,
+    fonts: &'a mut font::Fonts,
     res: Res,
     out: String,
     /// While drawing an insert: its source area. Layers outside it are left out of the file.
@@ -420,13 +424,35 @@ impl PageWriter<'_> {
                     color,
                     glyphs,
                 } => {
-                    let mut p = VPath::new();
-                    for (gid, o) in glyphs {
-                        p.append(&text::glyph_path(*face, *gid, *o, *size));
-                    }
-                    let path = self.emit_path(&p);
+                    let (name, id) = self.fonts.name(self.objs, *face, glyphs.iter().map(|g| g.0));
+                    self.res.fonts.insert(name.clone(), id);
                     let gs = self.gstate(color[3], 1.0, blend);
-                    let _ = writeln!(self.out, "q /{gs} gs {} rg {path}f\nQ", Self::rgb(*color));
+                    let _ = write!(self.out, "q /{gs} gs {} rg BT /{name} {} Tf", Self::rgb(*color), num(*size));
+                    // One text matrix per baseline (it flips y back upright), then each glyph
+                    // nudged from where the font's advance would put it to where layout did.
+                    let mut pen: Option<V2> = None;
+                    for (gid, o) in glyphs {
+                        match pen {
+                            Some(p) if (p.y - o.y).abs() < 0.01 => {
+                                let adj = (p.x - o.x) * 1000.0 / size;
+                                if adj.abs() > 0.05 {
+                                    let _ = write!(self.out, " {}", num(adj));
+                                }
+                            }
+                            _ => {
+                                if pen.is_some() {
+                                    self.out.push_str("] TJ");
+                                }
+                                let _ = write!(self.out, " 1 0 0 -1 {} {} Tm [", num(o.x), num(o.y));
+                            }
+                        }
+                        let _ = write!(self.out, "<{gid:04X}>");
+                        pen = Some(V2 { x: o.x + font::advance(*face, *gid, *size), y: o.y });
+                    }
+                    if pen.is_some() {
+                        self.out.push_str("] TJ");
+                    }
+                    self.out.push_str(" ET Q\n");
                 }
             }
         }
@@ -471,10 +497,12 @@ pub fn export(pages: &[PdfPage]) -> Vec<u8> {
     let catalog = objs.reserve();
     let pages_id = objs.reserve();
     let mut kids = Vec::new();
+    let mut fonts = font::Fonts::default();
     for pg in pages {
         let b = pg.bounds;
         let mut w = PageWriter {
             objs: &mut objs,
+            fonts: &mut fonts,
             res: Res::default(),
             out: String::new(),
             cull: None,
@@ -533,19 +561,22 @@ pub fn export(pages: &[PdfPage]) -> Vec<u8> {
                 .join(" ")
         };
         let images: Vec<(String, usize)> = res.images.values().cloned().collect();
+        let fonts_of_page: Vec<(String, usize)> = res.fonts.into_iter().collect();
         let page = objs.add(
             format!(
-                "<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {} {}] /Contents {content_id} 0 R /Resources << /ExtGState << {} >> /Shading << {} >> /XObject << {} >> >> >>",
+                "<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {} {}] /Contents {content_id} 0 R /Resources << /ExtGState << {} >> /Shading << {} >> /XObject << {} >> /Font << {} >> >> >>",
                 num(b.w),
                 num(b.h),
                 dict(&res.gstate_objs),
                 dict(&res.shadings),
-                dict(&images)
+                dict(&images),
+                dict(&fonts_of_page)
             )
             .into_bytes(),
         );
         kids.push(page);
     }
+    fonts.finish(&mut objs);
     objs.set(
         catalog,
         format!("<< /Type /Catalog /Pages {pages_id} 0 R >>").into_bytes(),
@@ -658,6 +689,17 @@ mod tests {
         let table = String::from_utf8_lossy(&pdf[xref_at..]);
         let first_off: usize = table.lines().nth(3).unwrap()[..10].parse().unwrap();
         assert!(pdf[first_off..].starts_with(b"1 0 obj"));
+    }
+
+    #[test]
+    fn text_is_written_as_text_in_an_embedded_font() {
+        use crate::model::{Node, NodeKind};
+        let mut ed = crate::editor::Editor::default();
+        let t = ed.add_node(Node::new(NodeId(0), NodeKind::Text { text: "Olá".into(), font_size: 16.0, auto_width: true, align: Default::default() }, Rect::new(0.0, 0.0, 200.0, 40.0)), None);
+        let pdf = export(&pages_for(&ed.doc, Some(&[t]), false, None));
+        let s = String::from_utf8_lossy(&pdf);
+        assert!(s.contains("/Subtype /Type0") && s.contains("/ToUnicode") && s.contains("/FontFile2"), "embedded font");
+        assert_eq!(s.matches("/Subtype /Type0").count(), 1, "one font object per face");
     }
 
     #[test]

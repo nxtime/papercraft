@@ -18,6 +18,7 @@ pub mod critique;
 pub mod css;
 pub mod diff;
 pub mod enforcer;
+pub mod handoff;
 pub mod exec;
 pub mod html;
 pub mod incremental;
@@ -36,6 +37,7 @@ pub mod swarm;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod relay;
 pub mod relay_proto;
+pub mod core_tools;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;
 pub mod steer;

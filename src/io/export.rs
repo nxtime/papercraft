@@ -184,6 +184,7 @@ pub fn presentation(items: &[Item], title: &str) -> Vec<u8> {
         subtitle: None,
         author: None,
         now_ms: crate::project::format::now_ms(),
+        language: None,
     };
     crate::io::deck::build(&meta, &sections)
 }

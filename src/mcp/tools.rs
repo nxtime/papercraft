@@ -39,14 +39,21 @@ export_design_system writes one back.\n\
 clips set height: \"fit-content\" with update_styles.
 - Other agents may share the project: claim_nodes what you will rewrite, read the conflicts a \
 write reports (`swarm`) with get_changes, and undo takes back only your own steps.
-- Call finish_working_on_nodes when done.";
+- Call finish_working_on_nodes when done.
+- Parameters many tools share: fileId is the project (id, name or folder from list_resources; \
+omitted = the project open in the app). pageId omitted = the page the user is viewing, which can \
+change between calls, so prefer explicit ids. ifRev is the `rev` your last result returned: when \
+another agent or the person changed those layers since, nothing is applied and the conflicts are \
+listed; onConflict \"warn\" applies anyway.";
 
+// The shared parameters are explained once in INSTRUCTIONS: repeated on every tool they were a
+// third of the tool list.
 fn file_id() -> Value {
-    json!({"type": "string", "description": "The project to operate on (id, name or folder path from list_resources). When omitted the project open in the app is used."})
+    json!({"type": "string"})
 }
 
 fn page_id() -> Value {
-    json!({"type": "string", "description": "The page to operate on. When omitted the page the user is viewing is used. The user's page can change between calls; prefer explicit page ids."})
+    json!({"type": "string", "description": "Omitted = the page the user is viewing."})
 }
 
 fn styles_schema(desc: &str) -> Value {
@@ -71,8 +78,8 @@ fn tool(name: &str, desc: &str, props: Value, required: &[&str], read_only: bool
     }
     // Every write can carry the revision the caller last synced to (`swarm`).
     if !read_only && let Some(m) = props.as_object_mut() {
-        m.entry("ifRev").or_insert(json!({"type": "integer", "description": "The `rev` your last result returned: if another agent or the person changed these layers since, nothing is applied and the conflicts are listed."}));
-        m.entry("onConflict").or_insert(json!({"type": "string", "enum": ["warn"], "description": "Apply even with conflicts (they are listed)."}));
+        m.entry("ifRev").or_insert(json!({"type": "integer"}));
+        m.entry("onConflict").or_insert(json!({"type": "string", "enum": ["warn"]}));
     }
     let ann = if read_only {
         json!({"readOnlyHint": true})
@@ -595,7 +602,7 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "get_guide",
             "Read a guide. Topics: \"papercraft-mcp-instructions\" (read first), \"html\" (what \
-             write_html supports), \"whiteboard\" (shapes, arrows, stickies, hand-drawn style).",
+             write_html supports), \"whiteboard\" (shapes, arrows, stickies, hand-drawn style), \"skill\" (the full papercraft skill).",
             json!({"topic": {"type": "string"}}),
             &["topic"],
             true,
@@ -644,8 +651,63 @@ pub fn definitions() -> Vec<Value> {
                 "title": {"type": "string", "description": "Deck title (default: the project name)."},
                 "subtitle": {"type": "string", "description": "Cover subtitle (default: screen and page counts)."},
                 "author": {"type": "string", "description": "Shown on the cover after the date."},
+                "language": {"type": "string", "enum": ["en", "pt", "es", "fr", "de", "it"], "description": "Language of the deck's own words and date (default: the one the screens are written in)."},
             }),
             &[],
+            false,
+        ),
+        tool(
+            "mark_handoff",
+            "Mark a handoff point: a named snapshot of every page, taken when screens go to \
+             development. get_handoff_changes and export_handoff `since` then report what changed \
+             against what the developers received. Marking a name again moves it to now. Saved in \
+             the project (handoffs/). Returns {name, pages, screens}.",
+            json!({"name": {"type": "string", "description": "Name of the point, e.g. \"design v1\" or a release tag."}}),
+            &["name"],
+            false,
+        ),
+        tool(
+            "list_handoffs",
+            "The project's handoff points (mark_handoff), newest first: [{name, saved}].",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
+            "get_handoff_changes",
+            "What changed since a handoff point, sorted the way code acts on it, in few tokens: \
+             token values once (regenerate the theme), main components once with the screens using \
+             them (instances follow), then screens: added, removed, renamed, and per changed layer \
+             its kind (copy, binding, style, layout, structure, instance, note) and `field: old → new` \
+             with token names. Sizes that follow content, positions set by auto layout and instance \
+             fields that follow their main are left out. Markdown shows 8 changes per screen; pass \
+             `nodeId` (a screen or component key from it) for all of one. Layer keys work with \
+             get_design_spec {nodeId, format: compact} to fetch just that subtree.",
+            json!({
+                "since": {"type": "string", "description": "Handoff point name (list_handoffs)."},
+                "nodeId": {"type": "string", "description": "Only this screen or main component, every change."},
+                "format": {"type": "string", "enum": ["markdown", "json"], "description": "markdown (default, an index) or json (everything)."},
+            }),
+            &["since"],
+            true,
+        ),
+        tool(
+            "export_handoff",
+            "Write the handoff bundle a code base builds from into a folder: index.md (one line per \
+             screen with its spec file and size in tokens), inventory.json, tokens.json (DTCG with \
+             modes), tokens.css, tokens.tailwind.css, components.json, open-questions.md (`? (team)` \
+             notes and the table on a page named Handoff), and per screen a compact spec \
+             (screens/<page>/<screen>.txt) and a reference PNG at scale 1 (a scrolling screen shown \
+             whole). With `since`, also changes.md and changes.json (get_handoff_changes). \
+             manifest.json lists each file's hash and tokens. Only files whose bytes changed are \
+             written, and files a previous export wrote that no longer exist are removed; nothing \
+             else in the folder is touched. Returns {dir, files, written, removed, screens, images}.",
+            json!({
+                "dir": {"type": "string", "description": "Folder to write into (created if missing), e.g. docs/design."},
+                "since": {"type": "string", "description": "Handoff point to report changes against."},
+                "images": {"type": "boolean", "description": "Write reference PNGs (default true)."},
+            }),
+            &["dir"],
             false,
         ),
         // ------------------------------------------------------------ writing
@@ -1383,7 +1445,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
         | "diff_frames" | "publish_library" | "list_libraries" | "get_changes" | "critique_design" | "design_lessons" | "claim_nodes" | "release_claims" | "list_claims" => false,
         "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_presentation" | "export_design_system" | "open_file"
-        | "create_file" | "rename_file" | "finish_working_on_nodes" => false,
+        | "create_file" | "rename_file" | "finish_working_on_nodes" | "mark_handoff" | "list_handoffs" | "get_handoff_changes" | "export_handoff" => false,
         "lint_design" => args["fix"] == true,
         "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html"
         | "create_shape" | "update_styles" | "set_text_content" | "rename_nodes"

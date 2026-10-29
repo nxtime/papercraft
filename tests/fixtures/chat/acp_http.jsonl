@@ -1,7 +1,7 @@
 > "method":"initialize"
 < {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":false,"promptCapabilities":{"image":true},"mcpCapabilities":{"http":true,"sse":false}},"authMethods":[]}}
 > "method":"session/new"
-< {"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-1"}}
+< {"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-1","configOptions":[{"id":"mode","category":"mode","currentValue":"build"},{"id":"model","category":"model","currentValue":"opencode/big-pickle"}]}}
 > "method":"session/prompt"
 < {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"hmm"}}}}
 < {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hel"}}}}

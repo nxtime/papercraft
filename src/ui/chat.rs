@@ -9,6 +9,11 @@ use crate::theme::Surface as _;
 use super::chat_msgs::{self, Acts, View};
 #[path = "chat_agents.rs"]
 pub mod chat_agents;
+#[path = "chat_models.rs"]
+mod chat_models;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "chat_install.rs"]
+mod chat_install;
 #[path = "chat_pick.rs"]
 pub mod chat_pick;
 pub use chat_pick::{layer_chip, open_ask};
@@ -16,6 +21,7 @@ use chat_agents::{Act, PanelIn};
 use crate::chat::events::{Event, ImageAttachment};
 use crate::chat::agents::{self, AgentKind, AgentState, AgentStatus};
 use crate::chat::{Backend, BackendKind, Chat, ChatSummary, IssueOutcome, Message, Role, ToolCall, store};
+use crate::chat::models;
 use crate::project::format::{new_id, now_ms};
 use crate::theme::{self, Icon};
 use crate::ui::{UiState, kit};
@@ -34,6 +40,9 @@ pub const COLUMN_MAX: f32 = 640.0;
 const INSPECTOR_W: f32 = 272.0;
 /// Context window of the CLIs and of the API models (all three list 200k).
 const CONTEXT_WINDOW: u64 = 1_000_000;
+/// A free model that failed a "Free (auto)" turn is left out of the next ones for this long.
+#[cfg(not(target_arch = "wasm32"))]
+const FREE_RETRY_AFTER: Duration = Duration::from_secs(15 * 60);
 /// Past this a CLI chat's next message starts a fresh agent session with a recap: every step
 /// re-reads the whole context, and answers get worse well before the window is full.
 const FRESH_SESSION_AT: u64 = 120_000;
@@ -193,6 +202,10 @@ pub struct Detect {
     pub default_endpoint: String,
     /// Every registry and custom agent (`agents::detect_all`).
     pub agents: Vec<AgentStatus>,
+    /// Agents hidden from the picker; a new chat never starts on one.
+    pub hidden: Vec<String>,
+    /// Model listings read from agents' CLIs during the scan (agent id, models).
+    pub catalogs: Vec<(String, Vec<crate::chat::models::AgentModel>)>,
 }
 
 impl Detect {
@@ -222,7 +235,9 @@ impl Detect {
 
     /// The first ready agent that runs over ACP.
     pub fn first_acp(&self) -> Option<&str> {
-        let acp = |s: &&AgentStatus| matches!(s.state, AgentState::Ready { .. }) && agents::find(&s.id).is_none_or(|d| d.kind != AgentKind::Direct);
+        let acp = |s: &&AgentStatus| {
+            matches!(s.state, AgentState::Ready { .. }) && agents::find(&s.id).is_none_or(|d| d.kind != AgentKind::Direct) && !self.hidden.contains(&s.id)
+        };
         self.agents.iter().find(acp).map(|s| s.id.as_str())
     }
 
@@ -283,7 +298,27 @@ fn scan(prefs: &super::settings::ChatPrefs) -> Detect {
         endpoints,
         default_endpoint: prefs.default_endpoint.clone(),
         agents: agents::detect_all(prefs),
+        hidden: prefs.agents.iter().filter(|(_, a)| a.hidden).map(|(id, _)| id.clone()).collect(),
+        catalogs: [("opencode", opencode_catalog(prefs)), ("pi", pi_catalog(prefs))].into_iter().filter_map(|(id, m)| Some((id.to_owned(), m?))).collect(),
     }
+}
+
+/// opencode's models, listed the way a turn would start it (lean or not).
+#[cfg(not(target_arch = "wasm32"))]
+fn opencode_catalog(prefs: &super::settings::ChatPrefs) -> Option<Vec<crate::chat::models::AgentModel>> {
+    let (program, _) = agents::launch_command("opencode", prefs)?;
+    let env = agent_env("opencode", prefs.cli_lean).map_err(|e| log::warn!("models: {e}")).ok()?;
+    crate::chat::models::fetch_opencode(&program, &env)
+}
+
+/// Pi's models for the providers it has keys for, listed with the turn's environment. Only when
+/// Pi is enabled, since a turn runs it through `npx pi-acp`.
+#[cfg(not(target_arch = "wasm32"))]
+fn pi_catalog(prefs: &super::settings::ChatPrefs) -> Option<Vec<crate::chat::models::AgentModel>> {
+    agents::launch_command("pi", prefs)?;
+    let program = crate::chat::path::which("pi")?;
+    let env = agent_env("pi", prefs.cli_lean).map_err(|e| log::warn!("models: {e}")).ok()?;
+    crate::chat::models::fetch_pi(&program, &env)
 }
 
 /// The current selection as a composer chip.
@@ -382,6 +417,11 @@ pub struct ChatState {
     finish_run: bool,
     /// Tokens in the context at the latest model call of the running turn.
     live_context: Option<u64>,
+    /// Free models that failed a "Free (auto)" turn, and when; skipped for `FREE_RETRY_AFTER`.
+    free_failed: Vec<(String, web_time::Instant)>,
+    /// Models agents offered (agent id, list): from the scan or a session, for `keep_models`.
+    seen_models: Vec<(String, Vec<crate::chat::models::AgentModel>)>,
+    seen_efforts: Vec<(String, String, Vec<String>)>,
     /// The user asked to compact (the meter): the next message starts a fresh CLI session.
     pub fresh_next: bool,
     /// Tokens the running turn has read so far (every model call's context), for the budget.
@@ -424,6 +464,9 @@ pub struct ChatState {
     /// The agent panel is open.
     pub picker_open: bool,
     panel: chat_agents::PanelState,
+    /// The install dialog of an agent that is not found.
+    #[cfg(not(target_arch = "wasm32"))]
+    install: Option<chat_install::Install>,
     /// Composer text, selection chip and images.
     pub draft: String,
     /// One chip per `@ Selection` click, oldest first.
@@ -713,15 +756,38 @@ impl ChatState {
                 }
             }
             Event::NeedsApproval { id, name, args } => self.approvals.push(Approval { id, name, args }),
+            Event::Models { current, options } => {
+                if chat.backend.kind == BackendKind::Acp {
+                    if chat.backend.model.as_deref() != Some(models::FREE_AUTO) {
+                        chat.backend.model = Some(current);
+                    }
+                    if let Some(a) = chat.backend.agent.clone().filter(|_| !options.is_empty()) {
+                        self.seen_models.push((a, crate::chat::models::from_options(&options)));
+                    }
+                }
+            }
+            Event::ModelEfforts { model, options } => {
+                if let Some(agent) = chat.backend.agent.clone() {
+                    self.seen_efforts.push((agent, model, options.into_iter().map(|(id, _)| id).collect()));
+                }
+            }
+            Event::ModelSwitch { from, to, reason } => {
+                const REASON_CHARS: usize = 160;
+                let names = |m: &str| acp_model_name(chat.backend.agent.as_deref(), m, &self.prefs);
+                let reason: String = reason.chars().take(REASON_CHARS).collect();
+                let line = format!("\n\n*Switched to {}: {} failed ({reason})*\n\n", names(&to), names(&from));
+                text_target(chat, now).text.push_str(&line);
+                self.free_failed.push((from, web_time::Instant::now()));
+            }
             Event::Context(n) => {
                 self.live_context = Some(n);
                 self.turn_read += n;
             }
             Event::TurnEnd { usage, session, .. } => {
                 self.thought_secs = self.thinking_since.take().map(|t| t.elapsed().as_secs());
-                // Claude Code reports the session's running cost; a resumed session's turn costs
-                // the difference from the last total.
-                let cli = chat.backend.kind == BackendKind::ClaudeCode;
+                // Claude Code and ACP agents report the session's running cost; a resumed
+                // session's turn costs the difference from the last total.
+                let cli = [BackendKind::ClaudeCode, BackendKind::Acp].contains(&chat.backend.kind);
                 let resumed = cli && session.is_some() && session == chat.backend.cli_session;
                 let before = chat.messages.iter().rev().find_map(|m| m.session_cost).filter(|_| resumed);
                 if let Some(m) = chat.messages.last_mut().filter(|m| m.role == Role::Assistant) {
@@ -844,7 +910,7 @@ impl ChatState {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn system_prompt(&self) -> String {
-        let skill = include_str!("../../skills/papercraft/SKILL.md");
+        let skill = chat_skill(include_str!("../../skills/papercraft/SKILL.md"));
         let dir = self.project.as_deref().map(|d| d.display().to_string()).unwrap_or_default();
         let art = if self.prefs.image_provider() == crate::mcp::imagegen::Provider::Off { "" } else { ART_RULE };
         let playbook = if crate::chat::path::which("playbook").is_some() { PLAYBOOK_RULE } else { "" };
@@ -936,7 +1002,18 @@ impl ChatState {
             BackendKind::ClaudeCode if self.prefs.cli_lean => (model.or_else(claude_code::user_model), effort),
             _ => (model, effort),
         };
+        let (model, fallbacks) = match model {
+            Some(m) if m == models::FREE_AUTO => {
+                self.free_failed.retain(|(_, at)| at.elapsed() < FREE_RETRY_AFTER);
+                let skip: Vec<String> = self.free_failed.iter().map(|(m, _)| m.clone()).collect();
+                let catalog = agent.as_ref().and_then(|a| self.prefs.agents.get(a)).map_or(&[][..], |a| a.catalog.as_slice());
+                let mut order = models::free_order(catalog, &skip).into_iter();
+                (order.next(), order.take(models::MAX_FALLBACKS).collect())
+            }
+            m => (m, vec![]),
+        };
         let cfg = TurnConfig {
+            fallbacks,
             endpoint: ep.clone(),
             api_history: Some(dir.join("chats").join(format!("{}.api.json", chat.id))),
             project_dir: dir,
@@ -1067,6 +1144,25 @@ impl ChatState {
         }
     }
 
+    /// Remembers the models agents offered, so the picker lists them before a session starts.
+    pub fn keep_models(&mut self, prefs: &mut super::settings::ChatPrefs) {
+        let mut changed = false;
+        for (id, models) in self.seen_models.drain(..) {
+            changed |= crate::chat::models::merge(&mut prefs.agents.entry(id).or_default().catalog, models);
+        }
+        for (id, model, variants) in self.seen_efforts.drain(..) {
+            if let Some(m) = prefs.agents.entry(id).or_default().catalog.iter_mut().find(|m| m.id == model) {
+                if m.variants != variants {
+                    m.variants = variants;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            prefs.save();
+        }
+    }
+
     /// Reads the background scan's answer; starts the first scan.
     pub fn poll_detect(&mut self, ctx: &egui::Context, prefs: &super::settings::ChatPrefs) {
         if self.prefs != *prefs {
@@ -1074,7 +1170,8 @@ impl ChatState {
         }
         if let Some(rx) = &self.detect_rx {
             match rx.try_recv() {
-                Ok(d) => {
+                Ok(mut d) => {
+                    self.seen_models.append(&mut d.catalogs);
                     self.detect = Some(d);
                     self.detect_rx = None;
                 }
@@ -1126,6 +1223,7 @@ impl ChatState {
             cli_session: None,
             agent: (kind == BackendKind::Acp).then(|| d.first_acp().map(str::to_owned)).flatten(),
         };
+        c.backend.model = c.backend.agent.as_deref().and_then(|a| chat_models::default_model(prefs, a)).or(c.backend.model.take());
     }
 
     /// Signed-out agent: the error is its authentication error.
@@ -1155,7 +1253,13 @@ impl ChatState {
                 self.set_backend(chat_agents::backend_for(&pick, &settings.chat));
                 self.picker_open = self.is_running();
             }
-            Act::SetBackend(b) => self.set_backend(b),
+            Act::SetBackend(b) => {
+                if let Some(a) = b.agent.as_ref().filter(|_| b.kind == BackendKind::Acp) {
+                    settings.chat.agents.entry(a.clone()).or_default().model.clone_from(&b.model);
+                    settings.chat.save();
+                }
+                self.set_backend(b);
+            }
             Act::Enable(id) => {
                 settings.chat.agents.entry(id).or_default().enabled = true;
                 settings.chat.save();
@@ -1166,6 +1270,13 @@ impl ChatState {
                 self.picker_open = false;
             }
             Act::DetectAgain => self.rescan(ctx, &settings.chat),
+            #[cfg(not(target_arch = "wasm32"))]
+            Act::Install(id) => {
+                self.install = Some(chat_install::Install::new(&id, &crate::chat::install::detect()));
+                self.picker_open = false;
+            }
+            #[cfg(target_arch = "wasm32")]
+            Act::Install(_) => {}
             Act::OpenPanel => (self.picker_open, self.panel.fresh) = (true, true),
             Act::Close => self.picker_open = false,
         }
@@ -1344,7 +1455,13 @@ impl ChatState {
         let fresh = self.chat.as_ref().is_some_and(|c| c.messages.is_empty()) && !self.ds_text().is_empty();
         let first = fresh.then(|| self.ds.tokens());
         let used = self.live_context.filter(|_| self.turn.is_some()).or(saved).or(first)?;
-        Some((used.min(CONTEXT_WINDOW), CONTEXT_WINDOW))
+        // An ACP agent's catalog knows its model's window; the rest count against the largest one.
+        let window = self.chat.as_ref().filter(|c| c.backend.kind == BackendKind::Acp).and_then(|c| {
+            let model = c.backend.model.as_deref()?;
+            self.prefs.agents.get(c.backend.agent.as_deref()?)?.catalog.iter().find(|m| m.id == model)?.context
+        });
+        let window = window.unwrap_or(CONTEXT_WINDOW);
+        Some((used.min(window), window))
     }
 }
 
@@ -1354,7 +1471,58 @@ fn start_acp(cfg: &crate::chat::events::TurnConfig, prefs: &super::settings::Cha
     let id = agent.ok_or("No agent is chosen for this chat. Pick one from the agent chip.")?;
     let name = agent_name(id, prefs);
     let (program, args) = agents::launch_command(id, prefs).ok_or_else(|| format!("{name} is not available. Check it in the agent panel (Not found, or off until enabled)."))?;
-    crate::chat::acp::start(cfg, &program, &args, prompt, tx).map(TurnHandle::Acp)
+    let env = agent_env(id, cfg.lean)?;
+    // A lean Pi's folder names this chat in its MCP URL, so it is written for each turn.
+    if let Some((_, home)) = env.iter().find(|(k, _)| k == "HOME").filter(|_| id == "pi") {
+        agents::write_pi_home(std::path::Path::new(home), &crate::chat::acp::session_url(cfg))?;
+    }
+    crate::chat::acp::start(cfg, &program, &args, &env, prompt, tx).map(TurnHandle::Acp)
+}
+
+/// The environment agent `id` runs with: `agents::base_env`, plus its pure one when `lean`.
+#[cfg(not(target_arch = "wasm32"))]
+fn agent_env(id: &str, lean: bool) -> Result<Vec<(String, String)>, String> {
+    let mut env = agents::base_env(id);
+    if id == "pi" {
+        env.extend(crate::chat::keys::env(crate::chat::keys::get));
+    }
+    let Some(dir) = crate::project::config_dir().filter(|_| lean) else { return Ok(env) };
+    let home = dir.join("agent-home").join(id);
+    crate::vfs::create_dir_all(&home).map_err(|e| format!("Could not make the lean home for {id} ({}): {e}", home.display()))?;
+    env.extend(agents::pure_env(id, &home, std::env::var_os("HOME").map(PathBuf::from).as_deref()));
+    Ok(env)
+}
+
+/// Sections of the papercraft skill a chat turn does without: connecting, other agents,
+/// annotations, scripting, the tool cheat sheet (the tool list says it) and troubleshooting.
+const SKILL_LEFT_OUT: [&str; 6] = ["## 1.", "## 2b.", "## 2c.", "## 3b.", "## 5.", "## 7."];
+
+/// The papercraft skill without its front matter and the sections a chat turn does without, which
+/// stay one `get_guide` call away. About 14 KB less on every turn.
+fn chat_skill(md: &str) -> String {
+    let body = md.strip_prefix("---").and_then(|r| r.split_once("\n---\n")).map_or(md, |(_, b)| b);
+    let mut out = String::new();
+    let mut keep = true;
+    for line in body.lines() {
+        if line.starts_with("## ") {
+            keep = !SKILL_LEFT_OUT.iter().any(|s| line.starts_with(s));
+        }
+        if keep {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out.push_str("\nThe rest of this skill (several agents, annotations, scripting, a tool cheat sheet, troubleshooting) is get_guide({topic: \"skill\"}).\n");
+    out
+}
+
+/// What the agent calls `model`, from the models it offered; the id when it is not listed.
+pub fn acp_model_name(agent: Option<&str>, model: &str, prefs: &super::settings::ChatPrefs) -> String {
+    if model == models::FREE_AUTO {
+        return "Free (auto)".into();
+    }
+    let listed = agent.and_then(|a| prefs.agents.get(a)).and_then(|a| a.catalog.iter().find(|m| m.id == model));
+    listed.map_or_else(|| model.to_owned(), |m| m.name.clone())
 }
 
 /// The name an agent shows under: the registry's, a custom agent's, else its id.
@@ -1500,7 +1668,16 @@ fn backend_label(b: &Backend, prefs: &super::settings::ChatPrefs) -> String {
             ["Claude Code", b.model.as_deref().map_or("", model_name), b.effort.as_deref().unwrap_or_default()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" \u{b7} ")
         }
         BackendKind::Codex => "Codex".into(),
-        BackendKind::Acp => b.agent.as_deref().map_or("Agent".into(), |id| agent_name(id, prefs)),
+        BackendKind::Acp => {
+            let name = b.agent.as_deref().map_or("Agent".into(), |id| agent_name(id, prefs));
+            match b.model.as_deref() {
+                Some(m) => {
+                    let model = acp_model_name(b.agent.as_deref(), m, prefs);
+                    [Some(name.as_str()), Some(model.as_str()), b.effort.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" \u{b7} ")
+                }
+                None => name,
+            }
+        }
         BackendKind::Anthropic => {
             let ep = prefs.endpoint(b.endpoint.as_deref());
             if ep.is_claude_host() {
@@ -1624,15 +1801,21 @@ fn pan_to(ed: &mut Editor, key: &str) {
 
 /// The left column: replaces the layers panel in Chat mode.
 pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, frame: egui::Frame, floating: bool, fill: egui::Color32) {
+    let margin = frame.inner_margin;
     let r = egui::Panel::left("chat")
         .resizable(false)
         .exact_size(st.chat.column_width().clamp(COLUMN_MIN, COLUMN_MAX))
         .frame(frame)
         .show(ui, |ui| {
+            let content = ui.max_rect();
             if floating {
-                super::floating_panel(ui, fill, egui::Margin::symmetric(14, 12), |ui| column(ui, ed, st));
+                super::floating_panel(ui, fill, egui::Margin::symmetric(14, 12), |ui| column(ui, ed, st, content));
             } else {
-                column(ui, ed, st);
+                let backdrop = egui::Rect::from_min_max(
+                    content.min - egui::vec2(margin.left as f32, margin.top as f32),
+                    content.max + egui::vec2(margin.right as f32, margin.bottom as f32),
+                );
+                column(ui, ed, st, backdrop);
             }
         });
     let gap = if floating { super::PANEL_GAP } else { 0.0 };
@@ -1705,7 +1888,7 @@ pub fn canvas_pill(ctx: &egui::Context, st: &UiState, canvas: egui::Rect) {
         });
 }
 
-fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, backdrop: egui::Rect) {
     let ctx = ui.ctx().clone();
     let column_rect = ui.max_rect();
     chat_msgs::lightbox(&ctx);
@@ -1720,6 +1903,7 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         // Paths, key or Re-scan changed in Settings: what was detected is stale.
         st.chat.rescan(&ctx, &st.settings.chat);
     }
+    st.chat.keep_models(&mut st.settings.chat);
     st.chat.poll_detect(&ctx, &st.settings.chat);
     st.chat.ensure_defaults(&st.settings.chat);
     send_draft(&ctx, ed, &mut st.chat);
@@ -1775,10 +1959,19 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     }
     if let Some(chip) = chip.filter(|_| st.chat.picker_open) {
         let (d, backend) = (st.chat.detect.clone().unwrap_or_default(), st.chat.chat.as_ref().map(|c| c.backend.clone()).unwrap_or_default());
-        let input = PanelIn { detect: &d, prefs: &st.settings.chat, backend: &backend, running: st.chat.is_running(), column: column_rect, chip, composer_top };
+        let input = PanelIn { detect: &d, prefs: &st.settings.chat, backend: &backend, running: st.chat.is_running(), column: column_rect, backdrop, chip, composer_top };
         if let Some(a) = chat_agents::panel(&ctx, &mut st.chat.panel, &input) {
             st.chat.act(&ctx, a, &mut st.settings);
         }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    match chat_install::dialog(&ctx, &mut st.chat.install) {
+        Some(chat_install::Outcome::Installed) => st.chat.rescan(&ctx, &st.settings.chat),
+        Some(chat_install::Outcome::Settings) => {
+            st.chat.rescan(&ctx, &st.settings.chat);
+            st.settings.open_chat();
+        }
+        Some(chat_install::Outcome::Closed) | None => {}
     }
     apply_acts(&ctx, ed, st, acts);
     if let Some(dir) = st.project_dir.clone() {
@@ -2527,6 +2720,25 @@ mod tests {
         assert!(!Detect::default().any());
         assert!(ready_detect().has(BackendKind::Anthropic));
         assert!(!Detect { endpoints: vec![EndpointState { id: "x".into(), key: false, ready: false }], ..Default::default() }.has(BackendKind::Anthropic));
+    }
+
+    #[test]
+    fn the_chat_skill_keeps_the_loop_and_limits_and_points_to_the_rest() {
+        let full = include_str!("../../skills/papercraft/SKILL.md");
+        let skill = chat_skill(full);
+        assert!(!skill.starts_with("---") && !skill.contains("## 5. Tools cheat sheet"));
+        assert!(skill.contains("## 2. The loop") && skill.contains("## 6. Known limits") && skill.contains("topic: \"skill\""));
+        assert!(skill.len() * 2 < full.len(), "{} of {}", skill.len(), full.len());
+    }
+
+    #[test]
+    fn a_hidden_agent_is_never_the_default_acp_agent() {
+        let ready = |id: &str| AgentStatus { id: id.into(), state: AgentState::Ready { path: format!("/bin/{id}"), version: "1".into() } };
+        let mut d = Detect { agents: vec![ready("gemini"), ready("opencode")], ..Default::default() };
+        assert_eq!(d.first_acp(), Some("gemini"));
+        d.hidden = vec!["gemini".into()];
+        assert_eq!(d.first_acp(), Some("opencode"));
+        assert!(d.agent_ready("gemini"), "a chat already on a hidden agent still runs");
     }
 
     fn ready_detect() -> Detect {

@@ -10,6 +10,9 @@ pub mod codex;
 pub mod ds_digest;
 pub mod endpoint;
 pub mod events;
+pub mod install;
+pub mod keys;
+pub mod models;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod openai;
 #[cfg(not(target_arch = "wasm32"))]

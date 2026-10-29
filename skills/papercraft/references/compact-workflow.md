@@ -21,7 +21,7 @@ How to keep designs small, keep design and code in step, and spend few tokens do
 
 1. Design is the source of truth for structure, tokens and copy. Code is generated or verified from it, never the other way round without updating the design.
 2. `get_design_spec {nodeId}` for each artboard: one deterministic JSON (layout, sizing, tokens, icons, `instanceOf`, `componentDefinitions`). Hand that to the implementer, not screenshots.
-3. Implement from the spec. `verify_code {code, nodeId, language}` after each file; fix what it reports. Re-run `get_design_spec` only for artboards that changed (`diff_frames` between the old and new version of an artboard names the changed properties).
+3. Implement from the spec. `verify_code {code, nodeId, language}` after each file; fix what it reports. Re-run `get_design_spec` only for what changed: `mark_handoff {name}` when screens go to development, then `get_handoff_changes {since: name}` lists each changed screen, component and token with its kind and action, and `export_handoff {dir, since}` writes the bundle (specs, reference images, tokens, changes.md) rewriting only changed files.
 4. Name code pieces after components: `Button / Primary` becomes `button::primary` or `<ButtonPrimary>`. A 1:1 name map is the cheapest way to stay synced; keep it in a table in the feature spec (`specs/<feature>/design-map.md`).
 5. Screenshots only for the final visual check (one per artboard, scale 1), and for diffing code output against the design (`get_screenshot` of both, compare).
 

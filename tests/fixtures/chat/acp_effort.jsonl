@@ -1,0 +1,10 @@
+> "method":"initialize"
+< {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}
+> "method":"session/new"
+< {"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-1","configOptions":[{"id":"model","category":"model","currentValue":"free/a","options":[{"value":"free/a","name":"A"},{"value":"paid/b","name":"B"}]}]}}
+> "method":"session/set_config_option"
+< {"jsonrpc":"2.0","id":2,"result":{"configOptions":[{"id":"effort","category":"thought_level","currentValue":"low","options":[{"value":"low","name":"Low"},{"value":"high","name":"High"}]}]}}
+> "method":"session/set_config_option"
+< {"jsonrpc":"2.0","id":3,"result":{}}
+> "method":"session/prompt"
+< {"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}

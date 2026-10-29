@@ -106,13 +106,14 @@ impl Turn for AcpTurn {
 
 /// Starts `program args…` and runs one prompt. Events arrive on `tx`; the last is `TurnEnd` or
 /// `Error`.
-pub fn start(cfg: &TurnConfig, program: &Path, args: &[String], prompt: &str, tx: Sender<Event>) -> Result<AcpTurn, String> {
-    spawn(cfg, program, args, prompt, tx, None)
+/// `env` is added to the agent's environment (a lean turn's `agents::pure_env`).
+pub fn start(cfg: &TurnConfig, program: &Path, args: &[String], env: &[(String, String)], prompt: &str, tx: Sender<Event>) -> Result<AcpTurn, String> {
+    spawn(cfg, program, args, env, prompt, tx, None)
 }
 
-fn spawn(cfg: &TurnConfig, program: &Path, args: &[String], prompt: &str, tx: Sender<Event>, bridge: Option<PathBuf>) -> Result<AcpTurn, String> {
+fn spawn(cfg: &TurnConfig, program: &Path, args: &[String], env: &[(String, String)], prompt: &str, tx: Sender<Event>, bridge: Option<PathBuf>) -> Result<AcpTurn, String> {
     let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(&cfg.project_dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args).envs(env.iter().cloned()).current_dir(&cfg.project_dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     for k in CREDENTIAL_ENV {
         cmd.env_remove(k);
     }
@@ -213,6 +214,14 @@ fn spawn(cfg: &TurnConfig, program: &Path, args: &[String], prompt: &str, tx: Se
     Ok(turn)
 }
 
+/// An error that says the model, not the request, is the problem: rate limited, out of quota,
+/// overloaded or gone. ponytail: agents do not document these, so it matches their wording.
+fn is_retryable(e: &str) -> bool {
+    const SIGNS: [&str; 10] = ["429", "rate limit", "rate_limit", "too many requests", "quota", "overloaded", "unavailable", "model not found", "no longer available", "insufficient"];
+    let e = e.to_lowercase();
+    SIGNS.iter().any(|s| e.contains(s))
+}
+
 fn tail(s: &str) -> &str {
     const KEEP: usize = 600;
     let mut from = s.len().saturating_sub(KEEP);
@@ -253,6 +262,20 @@ impl Client {
         let _ = self.tx.send(e);
     }
 
+    /// Switches the session to the chat's model when the agent offers it. A refusal keeps the
+    /// agent's model, which is what the chat then shows.
+    fn pick_model(&mut self, sid: &str, m: &mut Models, want: Option<&str>) -> Option<Value> {
+        let want = want.filter(|w| *w != m.current && m.options.iter().any(|(id, _)| id == w))?;
+        let r = match &m.config_id {
+            Some(config) => self.call("session/set_config_option", json!({"sessionId": sid, "configId": config, "value": want}), Some(HANDSHAKE_TIMEOUT)),
+            None => self.call("session/set_model", json!({"sessionId": sid, "modelId": want}), Some(HANDSHAKE_TIMEOUT)),
+        };
+        match r {
+            Ok(r) => { want.clone_into(&mut m.current); Some(r) },
+            Err(e) => { log::warn!("acp: could not switch the model to {want}: {e}"); None },
+        }
+    }
+
     fn run(&mut self, cfg: &TurnConfig, prompt: &str, bridge: Option<PathBuf>, slot: &Mutex<Option<String>>) -> Result<String, String> {
         let init = self.call(
             "initialize",
@@ -268,7 +291,7 @@ impl Client {
         let image = caps["promptCapabilities"]["image"] == true;
         let bridge = if http { None } else { bridge.or_else(find_bridge) };
         let session_params = |extra: Value| -> Result<Value, String> {
-            let mut p = json!({"cwd": cfg.project_dir, "mcpServers": mcp_servers(&cfg.mcp_url, http, bridge.as_deref())?});
+            let mut p = json!({"cwd": cfg.project_dir, "mcpServers": mcp_servers(&session_url(cfg), http, bridge.as_deref())?});
             if let (Some(p), Some(extra)) = (p.as_object_mut(), extra.as_object()) {
                 p.extend(extra.clone());
             }
@@ -281,21 +304,46 @@ impl Client {
             let r = self.call("session/load", session_params(json!({"sessionId": id}))?, Some(HANDSHAKE_TIMEOUT));
             self.replay = false;
             match r {
-                Ok(_) => loaded = Some(id.clone()),
+                Ok(r) => loaded = Some((id.clone(), r)),
                 Err(e) => log::warn!("acp: session/load failed ({e}); starting a new session"),
             }
         }
         let first = loaded.is_none();
-        let sid = match loaded {
-            Some(id) => id,
+        let (sid, initial) = match loaded {
+            Some((id, r)) => (id, r),
             None => {
                 let r = self.call("session/new", session_params(json!({}))?, Some(HANDSHAKE_TIMEOUT))?;
-                r["sessionId"].as_str().ok_or("session/new returned no sessionId")?.to_string()
+                (r["sessionId"].as_str().ok_or("session/new returned no sessionId")?.to_string(), r)
             }
         };
+        let mut models = session_models(&initial);
         self.sid = Some(sid.clone());
         *slot.lock().unwrap() = Some(sid.clone());
         self.emit(Event::Session(sid.clone()));
+        if let Some(m) = models.as_mut() {
+            let updated = self.pick_model(&sid, m, cfg.model.as_deref());
+            self.emit(Event::Models { current: m.current.clone(), options: m.options.clone() });
+            if cfg.effort.is_some() && cfg.model.as_deref().is_some_and(|want| want != m.current) {
+                return Err("Could not select the model for the requested effort".into());
+            }
+            let configs = updated.as_ref().unwrap_or(&initial);
+            if let Some(option) = effort_option(configs) {
+                self.emit(Event::ModelEfforts { model: m.current.clone(), options: option.options.clone() });
+                if let Some(want) = cfg.effort.as_deref() {
+                    if !option.options.iter().any(|(id, _)| id == want) {
+                        return Err(format!("The selected model does not offer effort {want}"));
+                    }
+                    if want != option.current {
+                        self.call("session/set_config_option", json!({"sessionId": sid, "configId": option.id, "value": want}), Some(HANDSHAKE_TIMEOUT))
+                            .map_err(|e| format!("Could not set effort to {want}: {e}"))?;
+                    }
+                }
+            } else if cfg.effort.is_some() {
+                return Err("This agent did not offer an effort setting for the selected model".into());
+            }
+        } else if cfg.effort.is_some() {
+            return Err("This agent did not offer an effort setting for the selected model".into());
+        }
 
         // ACP has no system prompt: the PaperCraft text leads the first prompt of a session.
         let mut blocks = vec![];
@@ -306,7 +354,24 @@ impl Client {
         if image {
             blocks.extend(cfg.images.iter().map(|i| json!({"type": "image", "mimeType": i.mime, "data": STANDARD.encode(&i.data)})));
         }
-        let r = self.call("session/prompt", json!({"sessionId": sid, "prompt": blocks}), None)?;
+        let mut fallbacks = cfg.fallbacks.iter();
+        let r = loop {
+            let e = match self.call("session/prompt", json!({"sessionId": sid, "prompt": blocks}), None) {
+                Ok(r) => break r,
+                Err(e) => e,
+            };
+            // A failure after a tool ran is not retried: the design may already have changed.
+            let retry = is_retryable(&e) && self.tools.is_empty() && !self.stopped.load(Ordering::SeqCst);
+            let Some(m) = models.as_mut().filter(|_| retry) else { return Err(e) };
+            let Some(next) = fallbacks.find(|f| m.options.iter().any(|(id, _)| id == *f)) else { return Err(e) };
+            let from = m.current.clone();
+            self.pick_model(&sid, m, Some(next));
+            if m.current != *next {
+                return Err(e);
+            }
+            self.emit(Event::ModelSwitch { from, to: next.clone(), reason: e });
+            self.emit(Event::Models { current: m.current.clone(), options: m.options.clone() });
+        };
         self.usage = usage_of(&r["usage"]).map(|mut u| {
             u.cost_usd = self.cost;
             u
@@ -530,6 +595,45 @@ fn content_text(v: &Value) -> String {
         .unwrap_or_default()
 }
 
+/// The models of a session: its current one and the ones it offers.
+struct Models {
+    current: String,
+    options: Vec<(String, String)>,
+    /// The `model` config option's id; None when the agent only has the older `models` field.
+    config_id: Option<String>,
+}
+
+struct EffortOption {
+    id: String,
+    current: String,
+    options: Vec<(String, String)>,
+}
+
+fn effort_option(r: &Value) -> Option<EffortOption> {
+    let o = r["configOptions"].as_array()?.iter().find(|o| o["category"] == "thought_level" || ["effort", "reasoning_effort"].contains(&o["id"].as_str().unwrap_or_default()))?;
+    let options = o["options"].as_array()?.iter().filter_map(|v| {
+        let id = v["value"].as_str()?;
+        Some((id.to_owned(), v["name"].as_str().unwrap_or(id).to_owned()))
+    }).collect();
+    Some(EffortOption { id: o["id"].as_str()?.to_owned(), current: o["currentValue"].as_str()?.to_owned(), options })
+}
+
+/// The models in a `session/new` or `session/load` result: the `model` config option, else the
+/// older (unstable) `models` field.
+fn session_models(r: &Value) -> Option<Models> {
+    let pairs = |list: &Value, id: &str| -> Vec<(String, String)> {
+        let list = list.as_array().into_iter().flatten();
+        list.filter_map(|o| Some((o[id].as_str()?.to_owned(), o["name"].as_str().or(o[id].as_str())?.to_owned()))).collect()
+    };
+    let opts = r["configOptions"].as_array().into_iter().flatten();
+    if let Some(o) = opts.into_iter().find(|o| o["category"] == "model" || o["id"] == "model") {
+        let current = o["currentValue"].as_str()?.to_owned();
+        return Some(Models { current, options: pairs(&o["options"], "value"), config_id: o["id"].as_str().map(String::from) });
+    }
+    let m = &r["models"];
+    Some(Models { current: m["currentModelId"].as_str()?.to_owned(), options: pairs(&m["availableModels"], "modelId"), config_id: None })
+}
+
 /// `{inputTokens, outputTokens, cachedReadTokens, cachedWriteTokens}` of a prompt response.
 fn usage_of(u: &Value) -> Option<Usage> {
     if !u.is_object() {
@@ -537,6 +641,16 @@ fn usage_of(u: &Value) -> Option<Usage> {
     }
     let get = |k: &str| u[k].as_u64().unwrap_or(0);
     Some(Usage { input: get("inputTokens"), output: get("outputTokens"), cache_read: get("cachedReadTokens"), cache_write: get("cachedWriteTokens"), cost_usd: None })
+}
+
+/// The MCP URL for the session. ACP agents load every tool schema up front, so a lean turn asks
+/// for the core list (`mcp::core_tools`); the rest stay reachable through `call_tool`.
+pub fn session_url(cfg: &TurnConfig) -> String {
+    if !cfg.lean {
+        return cfg.mcp_url.clone();
+    }
+    let join = if cfg.mcp_url.contains('?') { '&' } else { '?' };
+    format!("{}{join}tools=core", cfg.mcp_url)
 }
 
 /// PaperCraft's MCP server as an ACP `mcpServers` list: HTTP when the agent supports it, else
@@ -563,6 +677,10 @@ mod tests {
 
     const AGENT: &str = include_str!("../../tests/fixtures/chat/acp_fake_agent.sh");
     const HTTP: &str = include_str!("../../tests/fixtures/chat/acp_http.jsonl");
+    const MODEL: &str = include_str!("../../tests/fixtures/chat/acp_model.jsonl");
+    const EFFORT: &str = include_str!("../../tests/fixtures/chat/acp_effort.jsonl");
+    const ROTATE: &str = include_str!("../../tests/fixtures/chat/acp_rotate.jsonl");
+    const ROTATE_LATE: &str = include_str!("../../tests/fixtures/chat/acp_rotate_late.jsonl");
     const STDIO: &str = include_str!("../../tests/fixtures/chat/acp_stdio.jsonl");
     const PERMISSION: &str = include_str!("../../tests/fixtures/chat/acp_permission.jsonl");
     const CANCEL: &str = include_str!("../../tests/fixtures/chat/acp_cancel.jsonl");
@@ -584,7 +702,7 @@ mod tests {
         std::fs::write(&fx, fixture).unwrap();
         let args: Vec<String> = [&script, &fx, &log].iter().map(|p| p.display().to_string()).collect();
         let (tx, rx) = channel();
-        let mut turn = spawn(&cfg, Path::new("/bin/sh"), &args, "hello", tx, bridge).unwrap();
+        let mut turn = spawn(&cfg, Path::new("/bin/sh"), &args, &[], "hello", tx, bridge).unwrap();
         let mut events = vec![];
         loop {
             let e = rx.recv_timeout(Duration::from_secs(15)).expect("turn timed out");
@@ -630,19 +748,122 @@ mod tests {
         assert_eq!(sent.iter().find(|v| v["id"] == 50).unwrap()["error"]["code"], METHOD_NOT_FOUND);
 
         assert_eq!(ev[0], Event::Session("sess-1".into()));
-        assert_eq!(ev[1], Event::Thinking("hmm".into()));
-        assert_eq!(ev[2], Event::Text("Hel".into()));
-        assert_eq!(ev[3], Event::Text("lo".into()));
-        assert_eq!(ev[4], Event::ToolStart { id: "t1".into(), name: "get_basic_info".into(), args: json!({}) });
-        assert_eq!(ev[5], Event::ToolEnd { id: "t1".into(), result: Some(json!("{\"ok\":true}")), error: None });
-        assert_eq!(ev[6], Event::ToolStart { id: "t2".into(), name: "ls".into(), args: json!({"path": "."}) });
-        assert_eq!(ev[7], Event::ToolEnd { id: "t2".into(), result: None, error: Some("denied".into()) });
-        assert_eq!(ev[8], Event::ToolStart { id: "acp-plan-1".into(), name: "TodoWrite".into(), args: json!({"todos": [{"content": "A", "status": "completed"}, {"content": "B", "status": "pending"}]}) });
-        assert_eq!(ev[9], Event::ToolEnd { id: "acp-plan-1".into(), result: Some(json!("ok")), error: None });
-        assert_eq!(ev[10], Event::Context(5000));
-        let Event::TurnEnd { usage: Some(u), session: Some(s), stop_reason: Some(r) } = &ev[11] else { panic!("{:?}", ev[11]) };
+        assert_eq!(ev[1], Event::Models { current: "opencode/big-pickle".into(), options: vec![] }, "the model option, not the mode");
+        assert_eq!(ev[2], Event::Thinking("hmm".into()));
+        assert_eq!(ev[3], Event::Text("Hel".into()));
+        assert_eq!(ev[4], Event::Text("lo".into()));
+        assert_eq!(ev[5], Event::ToolStart { id: "t1".into(), name: "get_basic_info".into(), args: json!({}) });
+        assert_eq!(ev[6], Event::ToolEnd { id: "t1".into(), result: Some(json!("{\"ok\":true}")), error: None });
+        assert_eq!(ev[7], Event::ToolStart { id: "t2".into(), name: "ls".into(), args: json!({"path": "."}) });
+        assert_eq!(ev[8], Event::ToolEnd { id: "t2".into(), result: None, error: Some("denied".into()) });
+        assert_eq!(ev[9], Event::ToolStart { id: "acp-plan-1".into(), name: "TodoWrite".into(), args: json!({"todos": [{"content": "A", "status": "completed"}, {"content": "B", "status": "pending"}]}) });
+        assert_eq!(ev[10], Event::ToolEnd { id: "acp-plan-1".into(), result: Some(json!("ok")), error: None });
+        assert_eq!(ev[11], Event::Context(5000));
+        let Event::TurnEnd { usage: Some(u), session: Some(s), stop_reason: Some(r) } = &ev[12] else { panic!("{:?}", ev[12]) };
         assert_eq!((u.input, u.output, u.cost_usd, s.as_str(), r.as_str()), (7, 3, Some(0.5), "sess-1", "end_turn"));
-        assert_eq!(ev.len(), 12);
+        assert_eq!(ev.len(), 13);
+    }
+
+    #[test]
+    fn switches_to_the_chats_model_when_offered() {
+        let mut c = cfg();
+        c.model = Some("paid/b".into());
+        let (ev, sent) = run(MODEL, c, None, |_, _| {});
+        assert_eq!(method(&sent, "session/set_config_option")["params"], json!({"sessionId": "sess-1", "configId": "model", "value": "paid/b"}));
+        let options = vec![("free/a".into(), "A".into()), ("paid/b".into(), "B".into())];
+        assert_eq!(ev[1], Event::Models { current: "paid/b".into(), options });
+    }
+
+    #[test]
+    fn selects_effort_after_switching_model() {
+        let mut c = cfg();
+        c.model = Some("paid/b".into());
+        c.effort = Some("high".into());
+        let (ev, sent) = run(EFFORT, c, None, |_, _| {});
+        let settings: Vec<_> = sent.iter().filter(|v| v["method"] == "session/set_config_option").collect();
+        assert_eq!(settings[0]["params"]["value"], "paid/b");
+        assert_eq!(settings[1]["params"], json!({"sessionId": "sess-1", "configId": "effort", "value": "high"}));
+        assert!(ev.iter().any(|e| matches!(e, Event::ModelEfforts { model, options } if model == "paid/b" && options.iter().any(|(id, _)| id == "high"))));
+        assert!(matches!(ev.last(), Some(Event::TurnEnd { .. })));
+    }
+
+    #[test]
+    fn model_switch_without_refreshed_options_never_uses_old_efforts() {
+        let fixture = r#"> "method":"initialize"
+< {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}
+> "method":"session/new"
+< {"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-1","configOptions":[{"id":"model","category":"model","currentValue":"free/a","options":[{"value":"free/a"},{"value":"paid/b"}]},{"id":"effort","category":"thought_level","currentValue":"low","options":[{"value":"low"},{"value":"high"}]}]}}
+> "method":"session/set_config_option"
+< {"jsonrpc":"2.0","id":2,"result":{}}
+"#;
+        let mut c = cfg();
+        c.model = Some("paid/b".into());
+        c.effort = Some("high".into());
+        let (ev, sent) = run(fixture, c, None, |_, _| {});
+        assert!(matches!(ev.last(), Some(Event::Error(e)) if e.contains("effort setting")), "{ev:?}");
+        assert_eq!(sent.iter().filter(|v| v["method"] == "session/set_config_option").count(), 1);
+        assert!(sent.iter().all(|v| v["method"] != "session/prompt"));
+
+        let rejected = fixture.replace(r#"{"jsonrpc":"2.0","id":2,"result":{}}"#, r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"invalid model"}}"#);
+        let mut c = cfg();
+        c.model = Some("paid/b".into());
+        c.effort = Some("high".into());
+        let (ev, sent) = run(&rejected, c, None, |_, _| {});
+        assert!(matches!(ev.last(), Some(Event::Error(e)) if e.contains("select the model")), "{ev:?}");
+        assert_eq!(sent.iter().filter(|v| v["method"] == "session/set_config_option").count(), 1);
+    }
+
+    #[test]
+    fn effort_without_session_model_is_not_silently_ignored() {
+        let fixture = r#"> "method":"initialize"
+< {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}
+> "method":"session/new"
+< {"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-1"}}
+"#;
+        let mut c = cfg();
+        c.effort = Some("high".into());
+        let (ev, sent) = run(fixture, c, None, |_, _| {});
+        assert!(matches!(ev.last(), Some(Event::Error(e)) if e.contains("effort setting")), "{ev:?}");
+        assert!(sent.iter().all(|v| v["method"] != "session/prompt"));
+    }
+
+    #[test]
+    fn a_rate_limited_model_hands_the_turn_to_the_next_free_one() {
+        let mut c = cfg();
+        c.fallbacks = vec!["gone/x".into(), "paid/b".into()];
+        let (ev, sent) = run(ROTATE, c, None, |_, _| {});
+        assert_eq!(sent.iter().filter(|v| v["method"] == "session/prompt").count(), 2);
+        assert_eq!(method(&sent, "session/set_config_option")["params"]["value"], "paid/b");
+        assert!(ev.iter().any(|e| matches!(e, Event::ModelSwitch { from, to, reason } if from == "free/a" && to == "paid/b" && reason.contains("Rate limit"))), "{ev:?}");
+        assert!(matches!(ev.last(), Some(Event::TurnEnd { .. })), "{ev:?}");
+    }
+
+    #[test]
+    fn a_failure_after_a_tool_ran_is_not_retried() {
+        let mut c = cfg();
+        c.fallbacks = vec!["paid/b".into()];
+        let (ev, sent) = run(ROTATE_LATE, c, None, |_, _| {});
+        assert_eq!(sent.iter().filter(|v| v["method"] == "session/prompt").count(), 1);
+        assert!(matches!(ev.last(), Some(Event::Error(e)) if e.contains("Rate limit")), "{ev:?}");
+        assert!(!is_retryable("invalid params") && is_retryable("HTTP 429 Too Many Requests"));
+    }
+
+    #[test]
+    fn a_model_the_agent_does_not_offer_is_not_sent() {
+        let mut c = cfg();
+        c.model = Some("gone/x".into());
+        let (ev, sent) = run(HTTP, c, None, |_, _| {});
+        assert!(sent.iter().all(|v| v["method"] != "session/set_config_option" && v["method"] != "session/set_model"));
+        assert!(matches!(ev.last(), Some(Event::TurnEnd { .. })), "{ev:?}");
+    }
+
+    #[test]
+    fn a_lean_turn_asks_for_the_core_tools() {
+        let mut c = cfg();
+        assert_eq!(session_url(&c), c.mcp_url);
+        c.lean = true;
+        c.mcp_url = "http://127.0.0.1:1/mcp?chat=c1".into();
+        assert_eq!(session_url(&c), "http://127.0.0.1:1/mcp?chat=c1&tools=core");
     }
 
     #[test]
@@ -693,7 +914,7 @@ mod tests {
     fn stop_kills_an_agent_that_ignores_cancel() {
         let (tx, rx) = channel();
         let args = ["-c".to_string(), "trap '' INT TERM; while :; do sleep 1; done".to_string()];
-        let mut turn = spawn(&cfg(), Path::new("/bin/sh"), &args, "x", tx, None).unwrap();
+        let mut turn = spawn(&cfg(), Path::new("/bin/sh"), &args, &[], "x", tx, None).unwrap();
         thread::sleep(Duration::from_millis(100));
         let t = Instant::now();
         turn.stop();
@@ -717,8 +938,9 @@ mod tests {
         assert!(sent.iter().all(|v| v["method"] != "session/new"));
         assert_eq!(method(&sent, "session/prompt")["params"]["prompt"], json!([{"type": "text", "text": "hello"}]));
         assert_eq!(ev[0], Event::Session("old".into()));
-        assert_eq!(ev[1], Event::Text("fresh".into()), "replayed history must not surface: {ev:?}");
-        assert!(matches!(&ev[2], Event::TurnEnd { session: Some(s), .. } if s == "old"));
+        assert_eq!(ev[1], Event::Models { current: "gemini-3-pro".into(), options: vec![] });
+        assert_eq!(ev[2], Event::Text("fresh".into()), "replayed history must not surface: {ev:?}");
+        assert!(matches!(&ev[3], Event::TurnEnd { session: Some(s), .. } if s == "old"));
     }
 
     #[test]
@@ -739,7 +961,7 @@ mod tests {
     #[test]
     fn missing_program_is_an_error() {
         let (tx, _rx) = channel();
-        assert!(spawn(&cfg(), Path::new("/nonexistent/agent"), &[], "x", tx, None).is_err());
+        assert!(spawn(&cfg(), Path::new("/nonexistent/agent"), &[], &[], "x", tx, None).is_err());
     }
 
     #[test]
@@ -782,7 +1004,7 @@ mod tests {
         let (tx, rx) = channel();
         // never reads stdin; a big write fills the pipe and blocks
         let args = ["-c".to_string(), "trap '' INT TERM; while :; do sleep 1; done".to_string()];
-        let mut turn = spawn(&cfg(), Path::new("/bin/sh"), &args, "x", tx, None).unwrap();
+        let mut turn = spawn(&cfg(), Path::new("/bin/sh"), &args, &[], "x", tx, None).unwrap();
         *turn.session.lock().unwrap() = Some("s".repeat(1 << 20));
         thread::sleep(Duration::from_millis(100));
         turn.stop();

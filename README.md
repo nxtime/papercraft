@@ -119,11 +119,11 @@ Projects live in `~/Documents/papercraft/<name>/` (`project.json`, one JSON file
 
 ## Agents
 
-PaperCraft exposes **94 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
+PaperCraft exposes **98 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
 
 | Way | Notes |
 |---|---|
-| MCP over HTTP | Built into the app: `http://127.0.0.1:29980/mcp`. Loopback only; browser requests (with an `Origin` header) and foreign `Host` headers are rejected. `PAPERCRAFT_MCP_PORT` changes the port, `PAPERCRAFT_MCP=0` turns it off. |
+| MCP over HTTP | Built into the app: `http://127.0.0.1:29980/mcp`. Loopback only; browser requests (with an `Origin` header) and foreign `Host` headers are rejected. `?tools=core` lists 33 common tools in full plus `search_tools` and `call_tool`, which reach the rest (about a third of the schema size); lean chat agents use it. `PAPERCRAFT_MCP_PORT` changes the port, `PAPERCRAFT_MCP=0` turns it off. |
 | MCP over stdio | `papercraft-mcp` relays stdio to the running app. It lists tools even when the app is closed. |
 | Shell | `papercraft-cli` calls the same tools, so an agent with a terminal needs no schemas in its context. |
 
@@ -167,7 +167,7 @@ EOF
 
 ### Chat
 
-Chat mode (⌘J, or `Design | Chat` in the top bar) puts a conversation next to the canvas. It runs Claude Code and Codex through their CLIs, any agent that speaks the Agent Client Protocol (ACP, such as OpenCode, Gemini CLI or Cursor) found on your PATH, or the Anthropic API with your own key. It shows tool calls, checkpoints and run review in the thread. Chats are saved in the project's `chats/` folder. See [docs/chat.md](docs/chat.md).
+Chat mode (⌘J, or `Design | Chat` in the top bar) puts a conversation next to the canvas. It runs Claude Code and Codex through their CLIs, any agent that speaks the Agent Client Protocol (ACP, such as OpenCode, Cursor or Goose) found on your PATH, or the Anthropic API with your own key. It shows tool calls, checkpoints and run review in the thread. Chats are saved in the project's `chats/` folder. See [docs/chat.md](docs/chat.md).
 
 <p align="center">
   <img src="docs/screenshots/readme/chat.png" alt="Chat mode: the chat column on the left with its starter prompts and input, and the annotated habit-tracker screens on the canvas" width="100%">

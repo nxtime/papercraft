@@ -531,6 +531,30 @@ async fn http_client_draws_a_frame_with_text() {
     assert_eq!(undo_len, 2);
 }
 
+/// `?tools=core` lists the core tools plus search_tools and call_tool; the others still run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_core_session_reaches_every_tool_through_search_and_call() {
+    let (running, worker) = spawn_app();
+    let transport = rmcp::transport::StreamableHttpClientTransport::from_uri(format!("{}?tools=core", running.url()));
+    let client = ().serve(transport).await.unwrap();
+    let names: Vec<String> = client.list_all_tools().await.unwrap().iter().map(|t| t.name.to_string()).collect();
+    assert_eq!(names.len(), mcp::core_tools::CORE.len() + 2);
+    assert!(names.iter().any(|n| n == "call_tool") && !names.iter().any(|n| n == "create_shape"));
+    let found = text_of(&client.call_tool(tool("search_tools", json!({"query": "create_shape"}))).await.unwrap());
+    assert!(found["tools"][0]["inputSchema"]["properties"].is_object(), "{found}");
+    let page = text_of(&client.call_tool(tool("call_tool", json!({"name": "create_page", "arguments": {"name": "Moodboard"}}))).await.unwrap());
+    assert!(page.is_object(), "{page}");
+    let wrapped = client.call_tool(tool("call_tool", json!({"name": "rename_pages", "arguments": {"renames": []}}))).await.unwrap();
+    assert!(wrapped.content.iter().any(|c| matches!(c, ContentBlock::Text(_))), "the tool's own result or error comes back");
+    let full = ().serve(rmcp::transport::StreamableHttpClientTransport::from_uri(running.url())).await.unwrap();
+    assert!(full.list_all_tools().await.unwrap().len() > names.len() * 2, "without the query every tool is listed");
+    for c in [client, full] {
+        c.cancel().await.unwrap();
+    }
+    running.stop();
+    worker.join().unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_rejects_browsers_and_unknown_routes() {
     let (running, _worker) = spawn_app();
@@ -864,6 +888,10 @@ fn export_presentation_writes_a_deck_of_the_screens() {
     assert!(pdf.starts_with(b"%PDF"));
     // Cover, contents, divider, the screen, next steps, end.
     assert!(String::from_utf8_lossy(&pdf).contains("/Count 6"));
+    let err = exec::call(&mut h, "export_presentation", &json!({"language": "xx", "path": path})).unwrap_err();
+    assert!(err.to_string().contains("en, pt"), "{err}");
+    call(&mut h, "export_presentation", json!({"language": "pt-BR", "path": path}));
+    std::fs::remove_file(&path).unwrap();
 }
 
 #[test]
@@ -999,4 +1027,58 @@ fn claims_need_the_running_app() {
         let err = exec::call(&mut h, tool, &json!({"ids": []})).unwrap_err();
         assert!(err.to_string().contains("running PaperCraft"), "{tool}: {err}");
     }
+}
+
+#[test]
+fn a_handoff_point_reports_what_changed_and_the_bundle_rewrites_only_that() {
+    let mut h = host();
+    let ab = call(&mut h, "create_artboard", json!({"name": "Sign in", "styles": {"width": 390, "height": 844, "display": "flex", "flexDirection": "column"}}));
+    let r = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<p layer-name=\"Title\" style=\"font-size:24px\">Entrar</p><div layer-name=\"Box\" style=\"width:100px;height:40px;background:#ff0000\"></div>"}));
+    let (title, bx) = (r["createdNodeIds"][0].clone(), r["createdNodeIds"][1].clone());
+    assert!(exec::call(&mut h, "get_handoff_changes", &json!({"since": "v1"})).unwrap_err().contains("none"), "nothing marked yet");
+    assert_eq!(call(&mut h, "mark_handoff", json!({"name": "v1"}))["screens"], 1);
+    assert!(call(&mut h, "get_handoff_changes", json!({"since": "v1"})).as_str().unwrap().contains("No changes."));
+    call(&mut h, "set_text_content", json!({"updates": [{"nodeId": title, "textContent": "Acessar"}]}));
+    call(&mut h, "update_styles", json!({"updates": [{"nodeIds": [bx], "styles": {"width": "120px"}}]}));
+    let md = call(&mut h, "get_handoff_changes", json!({"since": "v1"})).as_str().unwrap().to_owned();
+    assert!(md.contains("copy: text: Entrar → Acessar"), "{md}");
+    assert!(md.contains("layout: size: 100 × 40 → 120 × 40"), "{md}");
+    assert!(!md.contains("position"), "auto layout placed them, code does not: {md}");
+
+    let dir = std::env::temp_dir().join(format!("papercraft-bundle-{:016x}", fastrand::u64(..)));
+    let args = json!({"dir": dir, "since": "v1", "images": false});
+    let first = call(&mut h, "export_handoff", args.clone());
+    assert_eq!(first["screens"], 1, "{first}");
+    let index = std::fs::read_to_string(dir.join("index.md")).unwrap();
+    let page_dir = index.lines().filter(|l| l.starts_with("## ")).find_map(|l| l.split_once(" (")).unwrap().1.trim_end_matches(')').to_owned();
+    let spec = format!("{page_dir}{}", index.lines().find(|l| l.starts_with("- ")).unwrap().rsplit(" · ").next().unwrap().split(" ~").next().unwrap());
+    assert!(std::fs::read_to_string(dir.join(&spec)).unwrap().contains("Acessar"), "{spec}");
+    assert!(std::fs::read_to_string(dir.join("changes.md")).unwrap().contains("Entrar → Acessar"));
+    assert_eq!(call(&mut h, "export_handoff", args.clone())["written"], 0, "same design, same bytes");
+    call(&mut h, "rename_nodes", json!({"updates": [{"nodeId": ab["id"], "name": "Login"}]}));
+    let again = call(&mut h, "export_handoff", args);
+    assert_eq!(again["removed"], 1, "the old spec goes: {again}");
+    assert!(!dir.join(&spec).exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_changed_main_or_token_is_reported_once_with_the_screens_using_it() {
+    let mut h = host();
+    call(&mut h, "set_variables", json!({"variables": {"accent": "#cba6f7"}}));
+    let ds = call(&mut h, "create_artboard", json!({"name": "Button", "styles": {"width": 120, "height": 40, "display": "flex", "background": "var(--accent)"}}));
+    let label = call(&mut h, "write_html", json!({"targetNodeId": ds["id"], "html": "<p layer-name=\"Label\">Save</p>"}))["createdNodeIds"][0].clone();
+    call(&mut h, "create_component", json!({"nodeId": ds["id"]}));
+    for (name, x) in [("Form", 400), ("Settings", 900)] {
+        let s = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": 390, "height": 844, "left": format!("{x}px"), "display": "flex"}}));
+        call(&mut h, "create_instance", json!({"componentId": ds["id"], "parentId": s["id"]}));
+    }
+    call(&mut h, "mark_handoff", json!({"name": "v1"}));
+    call(&mut h, "set_text_content", json!({"updates": [{"nodeId": label, "textContent": "Save all"}]}));
+    call(&mut h, "set_variables", json!({"variables": {"accent": "#89b4fa"}}));
+    let md = call(&mut h, "get_handoff_changes", json!({"since": "v1"})).as_str().unwrap().to_owned();
+    assert!(md.contains("- --accent: #cba6f7 → #89b4fa · 2 screens: Form, Settings"), "{md}");
+    assert!(md.contains("used on 2 screens: Form, Settings"), "{md}");
+    assert_eq!(md.matches("Save → Save all").count(), 1, "the main says it once, its instances follow: {md}");
+    assert!(!md.contains("## Screens"), "no screen needs its own work: {md}");
 }

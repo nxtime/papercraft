@@ -759,7 +759,7 @@ fn user_bubble(ui: &mut Ui, text: &str) {
         }
         egui::Frame::new().fill(p.popover).corner_radius(theme::radius_panel()).inner_margin(egui::Margin::symmetric(12, 9)).show_surface(ui, |ui| {
             ui.set_max_width(ui.available_width() * 0.88);
-            ui.add(egui::Label::new(prompt).wrap());
+            ui.add(egui::Label::new(prompt).wrap().selectable(true));
         });
     });
 }

@@ -363,6 +363,10 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "export" => export(host, &a),
                 "export_combined_pdf" => export_pdf(host, &a),
                 "export_presentation" => export_presentation(host, &a),
+                "mark_handoff" => super::handoff::mark(host, args),
+                "list_handoffs" => super::handoff::list(host),
+                "get_handoff_changes" => super::handoff::get_changes(host, args),
+                "export_handoff" => export_handoff(host, args),
                 "create_artboard" => create_artboard(ed, &a),
                 "write_html" => write_html(ed, &a),
                 "create_shape" => create_shape(ed, &a),
@@ -1815,9 +1819,10 @@ fn guide(a: &Args) -> ToolResult {
         }
         "html" | "write_html" => tools::GUIDE_HTML,
         "whiteboard" | "excalidraw" => tools::GUIDE_WHITEBOARD,
+        "skill" | "papercraft" => include_str!("../../skills/papercraft/SKILL.md"),
         _ => {
             return Err(format!(
-                "unknown topic `{t}`; topics: papercraft-mcp-instructions, html, whiteboard"
+                "unknown topic `{t}`; topics: papercraft-mcp-instructions, html, whiteboard, skill"
             ));
         }
     };
@@ -2545,11 +2550,16 @@ fn export_presentation(host: &mut dyn Host, a: &Args) -> ToolResult {
         return Err("no screens to present: these pages have no declared screens and no top-level frames of 300 × 300 or more".into());
     }
     let title = a.str("title").map(str::to_owned).or(project_name).unwrap_or_else(|| "Presentation".into());
+    let language = match a.str("language") {
+        Some(code) => Some(crate::io::deck::Lang::parse(code).ok_or_else(|| format!("language `{code}` is not one of en, pt, es, fr, de, it"))?),
+        None => None,
+    };
     let meta = crate::io::deck::Meta {
         title: title.clone(),
         subtitle: a.str("subtitle").map(str::to_owned),
         author: a.str("author").map(str::to_owned),
         now_ms: crate::project::format::now_ms(),
+        language,
     };
     let path = match a.str("path") {
         Some(p) => PathBuf::from(p),
@@ -2561,6 +2571,16 @@ fn export_presentation(host: &mut dyn Host, a: &Args) -> ToolResult {
     };
     crate::io::atomic::write(&path, &crate::io::deck::build(&meta, &sections)).map_err(|e| e.to_string())?;
     text(json!({"file": path, "screens": screens, "pages": sections.iter().filter(|s| !s.screens.is_empty()).count()}))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn export_handoff(host: &mut dyn Host, a: &Value) -> ToolResult {
+    super::handoff::bundle::export(host, a)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn export_handoff(_: &mut dyn Host, _: &Value) -> ToolResult {
+    Err(NO_DISK.into())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

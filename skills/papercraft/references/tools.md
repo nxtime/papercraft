@@ -255,6 +255,43 @@ Export pages as a presentation PDF, the way a designer sends work to a client: a
 | `title` | string |  | Deck title (default: the project name). |
 | `subtitle` | string |  | Cover subtitle (default: screen and page counts). |
 | `author` | string |  | Shown on the cover after the date. |
+| `language` | string |  | Language of the deck's own words and date: en, pt, es, fr, de, it (default: the one the screens are written in). |
+
+
+### `mark_handoff`
+
+Mark a handoff point: a named snapshot of every page, taken when screens go to development. get_handoff_changes and export_handoff `since` then report what changed against what the developers received. Marking a name again moves it to now. Saved in the project (handoffs/). Returns {name, pages, screens}.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | yes | Name of the point, e.g. "design v1" or a release tag. |
+
+
+### `list_handoffs` (read-only)
+
+The project's handoff points (mark_handoff), newest first: [{name, saved}].
+
+
+### `get_handoff_changes` (read-only)
+
+What changed since a handoff point, sorted the way code acts on it, in few tokens: token values once (regenerate the theme), main components once with the screens using them (instances follow), then screens: added, removed, renamed, and per changed layer its kind (copy, binding, style, layout, structure, instance, note) and `field: old → new` with token names. Sizes that follow content, positions set by auto layout and instance fields that follow their main are left out. Markdown shows 8 changes per screen; pass `nodeId` (a screen or component key from it) for all of one. Layer keys work with get_design_spec {nodeId, format: compact} to fetch just that subtree.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `format` | `markdown` \| `json` |  | markdown (default, an index) or json (everything). |
+| `nodeId` | string |  | Only this screen or main component, every change. |
+| `since` | string | yes | Handoff point name (list_handoffs). |
+
+
+### `export_handoff`
+
+Write the handoff bundle a code base builds from into a folder: index.md (one line per screen with its spec file and size in tokens), inventory.json, tokens.json (DTCG with modes), tokens.css, tokens.tailwind.css, components.json, open-questions.md (`? (team)` notes and the table on a page named Handoff), and per screen a compact spec (screens/<page>/<screen>.txt) and a reference PNG at scale 1 (a scrolling screen shown whole). With `since`, also changes.md and changes.json (get_handoff_changes). manifest.json lists each file's hash and tokens. Only files whose bytes changed are written, and files a previous export wrote that no longer exist are removed; nothing else in the folder is touched. Returns {dir, files, written, removed, screens, images}.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `dir` | string | yes | Folder to write into (created if missing), e.g. docs/design. |
+| `images` | boolean |  | Write reference PNGs (default true). |
+| `since` | string |  | Handoff point to report changes against. |
 
 
 ## Write
