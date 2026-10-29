@@ -373,9 +373,9 @@ pub fn definitions() -> Vec<Value> {
              options each, the option you recommend first. A palette option lists its hex colors \
              in `colors` (shown as swatches); a reference option gives its saved `image` path. The user can also type their own answer. After \
              calling it, end your turn: the answers come as the user's next message.",
-            json!({"questions": {"type": "array", "items": {"type": "object", "properties": {
-                "question": {"type": "string"},
-                "options": {"type": "array", "items": {"type": "object", "properties": {
+            json!({"questions": {"type": "array", "minItems": 1, "maxItems": 7, "items": {"type": "object", "properties": {
+                "question": {"type": "string", "minLength": 1},
+                "options": {"type": "array", "minItems": 2, "maxItems": 6, "items": {"type": "object", "properties": {
                     "label": {"type": "string"},
                     "detail": {"type": "string", "description": "One short line under the label."},
                     "colors": {"type": "array", "items": {"type": "string"}, "description": "Hex colors to show as swatches."},
@@ -554,8 +554,8 @@ pub fn definitions() -> Vec<Value> {
             "fetch_reference_images",
             "Bring images from the web into the chat as design references (the user sees them \
              as a gallery). `urls`: image URLs or page URLs; a page gives its largest images. \
-             Public http(s) only. Good sources: nicelydone.club/apps/<app> (SaaS web apps), \
-             banani.co/references/apps, screenlane.com, App Store / Google Play listings. Returns the images and their saved `path`s \
+             Public http(s) only. Use URLs found in search results or verified pages; do not guess \
+             product slugs or listing URLs. Returns the images and their saved `path`s \
              (usable with zoom_image, or as <img src> in write_html for a References page).",
             json!({"urls": {"type": "array", "items": {"type": "string"}, "description": "1 to 6 image or page URLs."}}),
             &["urls"],
@@ -1470,6 +1470,15 @@ mod tests {
             .iter()
             .map(|def| def["name"].as_str().unwrap_or_default().to_string())
             .collect()
+    }
+
+    #[test]
+    fn ask_user_schema_reports_accepted_question_and_option_counts() {
+        let ask = definitions().into_iter().find(|d| d["name"] == "ask_user").unwrap();
+        let questions = &ask["inputSchema"]["properties"]["questions"];
+        assert_eq!((questions["minItems"].as_u64(), questions["maxItems"].as_u64()), (Some(1), Some(7)));
+        let options = &questions["items"]["properties"]["options"];
+        assert_eq!((options["minItems"].as_u64(), options["maxItems"].as_u64()), (Some(2), Some(6)));
     }
 
     #[test]

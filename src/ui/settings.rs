@@ -75,6 +75,14 @@ pub struct CustomAgent {
     pub args: String,
 }
 
+/// A user's subscription and its total simultaneous agent limit (0 means unknown).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderLimit {
+    pub tier: String,
+    pub max_agents: u32,
+}
+
 /// Chat defaults and agent paths, kept in `chat_settings.json` in the config folder.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -121,6 +129,8 @@ pub struct ChatPrefs {
     pub issue_repo: String,
     /// The helper agent `delegate` runs (`{prompt}`); empty: no helper, the chat agent does it all.
     pub helper_command: String,
+    /// Subscription information keyed by the exact provider id, including its main agent.
+    pub provider_limits: BTreeMap<String, ProviderLimit>,
     /// Auto mode (the composer's Auto chip): a turn that ends on questions is answered with the
     /// recommended options and the chat goes on, until Stop or the turn budget.
     pub auto: bool,
@@ -150,6 +160,7 @@ impl Default for ChatPrefs {
             plugins: Vec::new(),
             issue_repo: ISSUE_REPO.into(),
             helper_command: String::new(),
+            provider_limits: BTreeMap::new(),
             auto: false,
             follow_agents: true,
         }
@@ -676,6 +687,8 @@ mod native {
         /// Expanded rows, as `agent:<id>` or `ep:<id>`.
         pub(super) open: HashSet<String>,
         pub(super) show_more: bool,
+        /// New provider id until the user adds it.
+        pub(super) provider_draft: String,
     }
 
     /// What the page shows about the agents and the stored keys. Keys themselves are never kept.
@@ -813,6 +826,9 @@ mod native {
         ui.add_space(SECTION_GAP - 8.0);
         section(ui, "Defaults for new chats", "Each chat can still pick its own.", |_| {});
         card(ui, |ui| defaults_card(ui, prefs, &mut ed));
+        ui.add_space(SECTION_GAP - 8.0);
+        section(ui, "Provider plans", "Limits include the main agent. These guide agents but are not enforced.", |_| {});
+        card(ui, |ui| provider_limits_card(ui, prefs, page, &mut ed));
         ui.add_space(SECTION_GAP);
 
         confirm_removals(ctx, prefs, page, &mut scan, &mut ed);
@@ -1306,6 +1322,43 @@ mod native {
 
     // ---- defaults ----
 
+    fn provider_limits_card(ui: &mut Ui, prefs: &mut ChatPrefs, page: &mut ChatPage, ed: &mut Edits) {
+        let mut remove = None;
+        for (id, limit) in &mut prefs.provider_limits {
+            field_row(ui, id, |ui| {
+                ed.save |= text_field(ui, &mut limit.tier, "Subscription tier").changed();
+                let mut count = if limit.max_agents == 0 { String::new() } else { limit.max_agents.to_string() };
+                let response = text_field(ui, &mut count, "Maximum agents (unknown)");
+                if response.changed() {
+                    if count.is_empty() {
+                        limit.max_agents = 0;
+                        ed.save = true;
+                    } else if let Ok(n) = count.parse::<u32>() && n > 0 {
+                        limit.max_agents = n;
+                        ed.save = true;
+                    }
+                }
+                if kit::button(ui, kit::ButtonKind::Danger, Some(Icon::Trash), "Remove").clicked() {
+                    remove = Some(id.clone());
+                }
+            });
+        }
+        if let Some(id) = remove {
+            prefs.provider_limits.remove(&id);
+            ed.save = true;
+        }
+        field_row(ui, "Add provider", |ui| {
+            text_field(ui, &mut page.provider_draft, "Provider id, e.g. ollama-cloud");
+            let id = page.provider_draft.trim();
+            if !id.is_empty() && kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Plus), "Add").clicked() {
+                prefs.provider_limits.entry(id.to_owned()).or_default();
+                page.provider_draft.clear();
+                ed.save = true;
+            }
+            note(ui, "Use the provider id before / in the model id. Leave the maximum empty when unknown.");
+        });
+    }
+
     fn defaults_card(ui: &mut Ui, prefs: &mut ChatPrefs, ed: &mut Edits) {
         field_row(ui, "Backend", |ui| {
             let width = ui.available_width();
@@ -1446,6 +1499,16 @@ mod tests {
     use crate::chat::endpoint::ApiFormat;
 
     #[test]
+    fn provider_limits_round_trip_and_old_settings_leave_them_unknown() {
+        let mut prefs = ChatPrefs::default();
+        prefs.provider_limits.insert("ollama-cloud".into(), ProviderLimit { tier: "Pro".into(), max_agents: 3 });
+        prefs.provider_limits.insert("minimax-coding-plan".into(), ProviderLimit { tier: String::new(), max_agents: 0 });
+        let loaded = ChatPrefs::from_json(&prefs.to_json());
+        assert_eq!(loaded.provider_limits, prefs.provider_limits);
+        assert!(ChatPrefs::from_json("{}").provider_limits.is_empty());
+    }
+
+    #[test]
     fn chat_prefs_round_trip_with_new_fields() {
         let prefs = ChatPrefs {
             claude_path: Some("/opt/homebrew/bin/claude".into()),
@@ -1474,6 +1537,7 @@ mod tests {
             plugins: vec!["avataaars".into()],
             issue_repo: "https://example.com/me/repo".into(),
             helper_command: "pi -p {prompt}".into(),
+            provider_limits: BTreeMap::new(),
             auto: true,
             follow_agents: false,
         };

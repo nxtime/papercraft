@@ -1584,7 +1584,7 @@ fn fill_image(ed: &mut Editor, a: &Args) -> ToolResult {
 fn ask_user(a: &Args) -> ToolResult {
     let qs = a.arr("questions")?;
     if !(1..=ASK_MAX_QUESTIONS).contains(&qs.len()) {
-        return Err(format!("ask 1 to {ASK_MAX_QUESTIONS} questions"));
+        return Err(format!("questions has {} items; provide 1 to {ASK_MAX_QUESTIONS} questions and retry", qs.len()));
     }
     for (i, q) in qs.iter().enumerate() {
         let n = q["options"].as_array().map_or(0, Vec::len);
