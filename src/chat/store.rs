@@ -228,7 +228,9 @@ mod tests {
         let r = loaded.messages[0].tools[0].result.as_ref().unwrap();
         let Some((mime, ImageSrc::File(path))) = image_data(&r[0]) else { panic!("still inline: {r}") };
         let on_disk = std::fs::read_to_string(file_of(&dir, "shots")).unwrap();
-        assert!(on_disk.contains(path) && !on_disk.contains(&STANDARD.encode(&png)), "the slimmer chat was written back");
+        let saved: Value = serde_json::from_str(&on_disk).unwrap();
+        assert_eq!(saved["messages"][0]["tools"][0]["result"][0]["path"], path, "the slimmer chat was written back");
+        assert!(!on_disk.contains(&STANDARD.encode(&png)));
         assert_eq!((mime, ImageSrc::File(path).bytes()), ("image/png", Some(png)));
         assert_eq!(r[1]["text"], "ok");
         remove_tmp(&dir, "shots");

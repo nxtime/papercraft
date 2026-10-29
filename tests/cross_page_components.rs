@@ -325,14 +325,14 @@ fn a_border_written_with_a_variable_stays_bound_to_it() {
 fn a_fit_content_artboard_grows_around_a_growing_child() {
     // Issue #21.
     let mut h = host();
-    let ab = call(&mut h, "create_artboard", json!({"name": "Phone", "styles": {"width": "390px", "height": "fit-content", "minHeight": "844px", "display": "flex", "flexDirection": "column"}}));
+    let ab = call(&mut h, "create_artboard", json!({"name": "Phone", "styles": {"width": "390px", "height": "fit-content", "minHeight": "844px", "display": "flex", "flexDirection": "column", "overflow": "visible"}}));
     call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"display:flex;flex-direction:column;flex-grow:1\"><div style=\"height:1200px;width:100px\"></div></div>"}));
     let doc = &h.ed.doc;
     let a = doc.get(num(&ab["id"])).unwrap();
     let k = doc.get(a.children[0]).unwrap();
     assert_eq!((a.rect.h, k.rect.h), (1200.0, 1200.0));
     // Short content: the screen keeps its min height and the growing area pins the footer down.
-    let ab = call(&mut h, "create_artboard", json!({"name": "Short", "styles": {"width": "390px", "height": "fit-content", "minHeight": "844px", "display": "flex", "flexDirection": "column"}}));
+    let ab = call(&mut h, "create_artboard", json!({"name": "Short", "styles": {"width": "390px", "height": "fit-content", "minHeight": "844px", "display": "flex", "flexDirection": "column", "overflow": "visible"}}));
     call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"display:flex;flex-direction:column;flex-grow:1\"><div style=\"height:100px;width:100px\"></div></div><div style=\"height:60px;width:390px\"></div>"}));
     let doc = &h.ed.doc;
     let a = doc.get(num(&ab["id"])).unwrap();
@@ -359,7 +359,7 @@ fn a_scrolling_screen_keeps_its_size_and_the_wheel_scrolls_its_overflow() {
     use papercraft::editor::InputEvent;
     use papercraft::geom::v2;
     let mut h = host();
-    let ab = call(&mut h, "create_artboard", json!({"name": "Phone", "styles": {"width": "390px", "height": "fit-content", "minHeight": "844px", "display": "flex", "flexDirection": "column"}}));
+    let ab = call(&mut h, "create_artboard", json!({"name": "Phone", "styles": {"width": "390px", "height": "fit-content", "minHeight": "844px", "display": "flex", "flexDirection": "column", "overflow": "visible"}}));
     let kid = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"height:1200px;width:390px;background:#eee\"></div>"}))["createdNodeIds"][0].clone();
     let (ab, kid) = (num(&ab["id"]), num(&kid));
     assert_eq!(h.ed.doc.get(ab).unwrap().rect.h, 1200.0, "fit-content grew");

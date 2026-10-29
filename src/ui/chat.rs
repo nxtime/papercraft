@@ -1510,7 +1510,7 @@ const SKILL_LEFT_OUT: [&str; 6] = ["## 1.", "## 2b.", "## 2c.", "## 3b.", "## 5.
 /// The papercraft skill without its front matter and the sections a chat turn does without, which
 /// stay one `get_guide` call away. About 14 KB less on every turn.
 fn chat_skill(md: &str) -> String {
-    let body = md.strip_prefix("---").and_then(|r| r.split_once("\n---\n")).map_or(md, |(_, b)| b);
+    let body = md.strip_prefix("---").and_then(|r| r.split_once("\n---\n").or_else(|| r.split_once("\n---\r\n"))).map_or(md, |(_, b)| b);
     let mut out = String::new();
     let mut keep = true;
     for line in body.lines() {
@@ -2774,6 +2774,8 @@ mod tests {
     fn the_chat_skill_keeps_the_loop_and_limits_and_points_to_the_rest() {
         let full = include_str!("../../skills/papercraft/SKILL.md");
         let skill = chat_skill(full);
+        let lf = full.replace("\r\n", "\n");
+        assert_eq!(chat_skill(&lf.replace('\n', "\r\n")), chat_skill(&lf));
         assert!(!skill.starts_with("---") && !skill.contains("## 5. Tools cheat sheet"));
         assert!(skill.contains("## 2. The loop") && skill.contains("## 6. Known limits") && skill.contains("topic: \"skill\""));
         assert!(skill.len() * 2 < full.len(), "{} of {}", skill.len(), full.len());

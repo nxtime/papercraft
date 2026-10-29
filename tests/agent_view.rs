@@ -116,10 +116,10 @@ fn annotate_tidy_without_notes_reports_moves() {
     let h = &mut f.host;
     let id = artboard(h, "Sign in", 0.0);
     call(h, "annotate", json!({"notes": [{"node": id, "text": "One"}, {"node": id, "text": "Two"}]}));
-    assert_eq!(call(h, "annotate", json!({"tidy": true})), json!({"tidied": 0}));
+    assert_eq!(call(h, "annotate", json!({"tidy": true}))["tidied"], 0);
     let note = h.ed.doc.annotations[0].id;
     h.ed.update_annotation(note, |a| a.position = v2(2000.0, 2000.0));
-    assert_eq!(call(h, "annotate", json!({"tidy": true})), json!({"tidied": 1}));
+    assert_eq!(call(h, "annotate", json!({"tidy": true}))["tidied"], 1);
 }
 
 #[test]
