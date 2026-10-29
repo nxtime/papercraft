@@ -55,7 +55,9 @@ fetches from a public git repository at the revision pinned in `Cargo.toml`.
 
 ## Make the change
 
-1. Fork the repository and branch from `main` (`fix/short-name`, `feat/short-name`).
+1. Fork the repository if needed and make a short-lived branch from current `main`
+   (`fix/short-name`, `feat/short-name`). Open a pull request into `main` when ready, or a draft
+   while work is in progress.
 2. **Write the test first.** Fix a bug by adding a test that fails, then make it pass. See
    [Tests](#tests).
 3. Keep the change focused. One concern per pull request; unrelated cleanups go in their own.
@@ -74,8 +76,9 @@ cargo check --lib --target wasm32-unknown-unknown     # the web build
 ```
 
 Each file in `tests/` is its own binary linking the whole app, so the full suite is slow and heavy
-on a desktop. It runs on GitHub instead: before every release (`.github/workflows/test.yml`), or
-on demand with `gh workflow run test.yml -f ref=<branch>`.
+on a desktop. GitHub runs the full Windows suite, the web check and Windows, macOS and Linux
+release builds on pull requests and `main`, and again before each release. The Windows suite can
+also be run on demand with `gh workflow run test.yml -f ref=<branch>`.
 
 Keep the tree free of the third-party branding patterns listed in `.debrand`.
 
@@ -111,14 +114,17 @@ Reference the issue (`Fixes #123`).
 * Fill in the template: what changed, why, how you tested it, screenshots for UI changes.
 * Keep it reviewable. If it grows past a few hundred lines of non-generated code, split it.
 * The branch must be up to date with `main`; rebase rather than merge.
+* All required checks must pass before merging. Request review when another maintainer is
+  available; a solo maintainer may review and merge their own change after checks pass.
 * Expect review comments; they are about the code, not you. Push fixes as new commits and we
   squash on merge.
-* A maintainer merges once a review is approved.
 
 ## Releases
 
-Maintainers cut releases. A `v*` tag pushed to GitHub builds Windows, macOS and Linux and
-publishes them (`.github/workflows/release.yml`). Contributors do not need to bump versions.
+Maintainers cut releases from green `main`. Merge a version-bump pull request first, then tag its
+commit. A `v*` tag pushed to GitHub builds Windows, macOS and Linux and publishes them after the
+tests pass (`.github/workflows/release.yml`). Do not move a published tag; release a new patch
+version for a fix. Contributors do not need to bump versions for ordinary changes.
 
 ## Licensing
 

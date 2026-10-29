@@ -1,10 +1,13 @@
-# The full test suite. Local runs cover only the targets a change touches (RULES.md, "The machine
-# you build on"); this is where everything runs, before a release can publish. Run it alone with
-# `gh workflow run test.yml -f ref=<branch or tag>`. Gitea reads .github/workflows too, so the job
-# is gated on the server URL.
+# Pull requests and main run the full test suite and release-profile builds. The release workflow
+# calls the same test job; its own platform jobs build the release artifacts. Gitea reads
+# .github/workflows too, so jobs are gated on the server URL.
 name: test
 
 on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_call:
     inputs:
       ref:
@@ -16,19 +19,74 @@ on:
         description: Branch or tag to test (default the one you run from)
         required: false
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   test:
+    name: CI Windows tests
     if: github.server_url == 'https://github.com'
     # Windows: the platform the app is developed on, and its runners render with a software GPU.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { ref: "${{ inputs.ref || github.ref }}" }
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: wasm32-unknown-unknown }
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain stable
+        with: { toolchain: stable, targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: papercraft-test
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: cargo test --locked --no-fail-fast
       - run: cargo check --locked --lib --target wasm32-unknown-unknown
+
+  windows:
+    name: CI Windows release build
+    if: github.server_url == 'https://github.com' && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain stable
+        with: { toolchain: stable }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: papercraft-release
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - run: cargo build --release --locked --bins
+
+  macos:
+    name: CI macOS release build
+    if: github.server_url == 'https://github.com' && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain stable
+        with: { toolchain: stable, targets: aarch64-apple-darwin }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: papercraft-release
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - run: cargo build --release --locked --bins --target aarch64-apple-darwin
+
+  linux:
+    name: CI Linux release build
+    if: github.server_url == 'https://github.com' && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain stable
+        with: { toolchain: stable }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: papercraft-release
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libxkbcommon-x11-dev libxcb-xkb-dev libx11-xcb-dev libwayland-dev libvulkan-dev libdbus-1-dev
+      - run: cargo build --release --locked --bins
