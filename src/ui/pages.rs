@@ -172,7 +172,12 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         },
         p.secondary,
     );
-    if resp.on_hover_text("Show all pages").clicked() {
+    let page_info = format!(
+        "{} pages · current: {} · click to switch or manage pages",
+        ed.pages.len(),
+        ed.page_name()
+    );
+    if resp.on_hover_text(page_info).clicked() {
         st.pages.collapsed = !st.pages.collapsed;
         st.pages.query.clear();
     }
