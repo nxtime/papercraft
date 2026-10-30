@@ -52,7 +52,7 @@ if (-not $haveCert -and -not $haveAzure) {
 }
 
 $script:SignTool = Find-SignTool
-$common = @('sign', '/v', '/fd', 'SHA256', '/td', 'SHA256', '/d', 'PaperCraft', '/du', 'https://git.marcospaulo.dev.br/masi/papercraft')
+$common = @('sign', '/v', '/fd', 'SHA256', '/td', 'SHA256', '/d', 'PaperCraft', '/du', 'https://github.com/nxtime/papercraft')
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "papercraft-sign-$([IO.Path]::GetRandomFileName())"
 New-Item -ItemType Directory -Path $tmp | Out-Null
 
