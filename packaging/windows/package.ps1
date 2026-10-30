@@ -5,7 +5,7 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     papercraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    papercraft-<version>-windows-<arch>-portable.zip   papercraft.exe + papercraft-cli.exe + papercraft-mcp.exe
+    papercraft-<version>-windows-<arch>-portable.zip   all four executables: app, CLI, MCP bridge and relay
     papercraft-cli-<version>-windows-<arch>.zip        papercraft-cli.exe + papercraft-mcp.exe standalone
 
 .EXAMPLE

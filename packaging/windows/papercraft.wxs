@@ -23,8 +23,8 @@
 
     <Icon Id="PapercraftIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="PapercraftIcon.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://git.marcospaulo.dev.br/masi/papercraft" />
-    <Property Id="ARPURLUPDATEINFO" Value="https://git.marcospaulo.dev.br/masi/papercraft" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/nxtime/papercraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/nxtime/papercraft/releases/latest" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="PaperCraft" />

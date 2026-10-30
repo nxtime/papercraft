@@ -9,7 +9,7 @@ const ICONS = {
 };
 
 const PLATFORMS = [
-  { key: 'windows', name: 'Windows', arch: 'x86_64', note: 'App, CLI, MCP bridge and relay in one zip.' },
+  { key: 'windows', name: 'Windows', arch: 'x86_64', note: 'Choose the MSI installer, standalone app, full portable bundle, CLI tools or relay.' },
   { key: 'macos', name: 'macOS', arch: 'Apple silicon', note: 'PaperCraft.app in a disk image, plus the CLI tools.' },
   { key: 'linux', name: 'Linux', arch: 'x86_64 · X11 and Wayland', note: 'Needs Vulkan or GL and the usual X11 libraries.' }
 ];
@@ -46,7 +46,14 @@ const formatDate = iso => new Date(iso).toLocaleDateString('en-GB', { day: 'nume
 
 const fileType = name => (name.endsWith('.tar.gz') ? 'tar.gz' : name.split('.').pop());
 
-const fileLabel = name => (name.includes('-cli-') ? 'CLI tools' : 'Desktop app');
+const fileLabel = name => {
+  if (name.includes('-relay-')) return 'Relay server';
+  if (name.includes('-cli-')) return 'CLI + MCP tools';
+  if (name.endsWith('.msi')) return 'Installer';
+  if (name.includes('-portable.exe')) return 'Portable app';
+  if (name.includes('-portable.zip')) return 'Portable bundle';
+  return 'Desktop app';
+};
 
 const loadRelease = async () => {
   try {
@@ -105,7 +112,10 @@ const renderRelease = release => {
   grid.querySelectorAll('.reveal').forEach(el => revealer.observe(el));
   grid.querySelectorAll('.lit').forEach(light);
 
-  const primary = OS && release.assets.find(a => a.name.includes(`-${OS}-`) && !a.name.includes('-cli-'));
+  const platformAssets = OS ? release.assets.filter(a => a.name.includes(`-${OS}-`)) : [];
+  const primary = platformAssets.find(a => a.name.endsWith('.msi'))
+    || platformAssets.find(a => a.name.includes('-portable.exe'))
+    || platformAssets.find(a => !a.name.includes('-cli-') && !a.name.includes('-relay-'));
 
   if (primary) {
     document.getElementById('hero-dl').href = primary.url;

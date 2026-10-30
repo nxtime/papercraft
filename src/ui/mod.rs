@@ -2104,6 +2104,10 @@ fn layer_matches(doc: &crate::model::Document, id: NodeId, needle: &str) -> bool
 /// Room a layer row's eye or lock button takes while shown, and how far it slides in from.
 const TRAIL_W: f32 = 20.0;
 const TRAIL_SLIDE: f32 = 12.0;
+const LAYER_DEPTH_INDENT: f32 = 11.0;
+const LAYER_DISCLOSURE_LANE: f32 = 16.0;
+const LAYER_ICON_SIZE: f32 = 14.0;
+const LAYER_ICON_LANE: f32 = 18.0;
 
 fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: usize) {
     let Some(n) = ed.doc.get(id).cloned() else {
@@ -2134,7 +2138,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     }
     let fg = if n.visible { p.text } else { p.secondary };
     let fg2 = p.secondary;
-    let mut x = row.left() + 4.0 + depth as f32 * 14.0;
+    let mut x = row.left() + 4.0 + depth as f32 * LAYER_DEPTH_INDENT;
     let cy = row.center().y;
     let sq = |x: f32, s: f32| {
         egui::Rect::from_center_size(egui::pos2(x + s / 2.0, cy), egui::vec2(s, s))
@@ -2143,7 +2147,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     // Disclosure chevron.
     if !n.children.is_empty() {
         let open = !st.collapsed.contains(&id);
-        let r = sq(x, 14.0);
+        let r = sq(x, LAYER_ICON_SIZE);
         let cr = ui.interact(
             r.expand(2.0),
             ui.id().with(("disclose", id)),
@@ -2165,15 +2169,15 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
             }
         }
     }
-    x += 16.0;
-    theme::paint_icon(ui.painter(), sq(x, 14.0), node_icon(&n), theme::accent());
+    x += LAYER_DISCLOSURE_LANE;
+    theme::paint_icon(ui.painter(), sq(x, LAYER_ICON_SIZE), node_icon(&n), theme::accent());
     if n.open_comments() > 0 {
-        let at = egui::pos2(x + 14.0, cy - 6.0);
+        let at = egui::pos2(x + LAYER_ICON_SIZE, cy - 6.0);
         ui.painter().circle_filled(at, 4.5, Color32::WHITE);
         ui.painter()
             .circle_filled(at, 3.0, Color32::from_rgb(250, 189, 47));
     }
-    x += 20.0;
+    x += LAYER_ICON_LANE;
 
     // Trailing eye / lock buttons: always shown when hidden or locked, otherwise on hover. A
     // button takes its room only while shown, sliding in from the row's edge, so names use the
@@ -2253,6 +2257,8 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
             .with_clip_rect(name_rect.intersect(ui.clip_rect()));
         clip.galley(egui::pos2(x, cy - galley.size().y / 2.0), galley, fg);
     }
+
+    let resp = resp.on_hover_text(&n.name);
 
     // Right-click acts on the row's layer: it joins the selection first unless already in it.
     if resp.secondary_clicked() && !selected {

@@ -187,17 +187,20 @@ Annotations are notes that explain a design in place: business rules, behaviour,
 
 ### Download
 
-Releases are at [git.marcospaulo.dev.br/masi/papercraft/releases](https://git.marcospaulo.dev.br/masi/papercraft/releases).
+Releases are at [GitHub releases](https://github.com/nxtime/papercraft/releases/latest).
 
 | Build | File |
 |---|---|
-| Windows (x86_64) | `papercraft-<version>-windows-x86_64.zip`: `papercraft.exe`, `papercraft-cli.exe`, `papercraft-mcp.exe` and `papercraft-relay.exe` |
+| Windows installer | `papercraft-<version>-windows-x64.msi` |
+| Windows portable app | `papercraft-<version>-windows-x64-portable.exe` (app only) or `papercraft-<version>-windows-x64-portable.zip` (app, CLI, MCP bridge and relay) |
+| Windows CLI tools | `papercraft-cli-<version>-windows-x64.zip` (`papercraft-cli.exe` and `papercraft-mcp.exe`) |
+| Windows relay | `papercraft-relay-<version>-windows-x64.zip` (`papercraft-relay.exe`) |
 | macOS app (Apple silicon) | `papercraft-<version>-macos-aarch64.dmg`, containing PaperCraft.app |
 | Linux (x86_64) | `papercraft-<version>-linux-x86_64.tar.gz` |
 | CLI tools, macOS | `papercraft-cli-<version>-macos-aarch64.zip` (`papercraft-cli` and `papercraft-mcp`) |
 | CLI tools, Linux | `papercraft-cli-<version>-linux-x86_64.tar.gz` |
 
-The Windows zip is unsigned: SmartScreen may ask you to confirm the first run. macOS builds are ad-hoc signed and not notarized: on another Mac, open the app with right-click, Open the first time. Other platforms: build from source.
+The Windows downloads are unsigned: SmartScreen may ask you to confirm the first run. macOS builds are ad-hoc signed and not notarized: on another Mac, open the app with right-click, Open the first time. Other platforms: build from source.
 
 ### Build from source
 
