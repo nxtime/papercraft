@@ -2,6 +2,7 @@
 
 use super::annotation::Annotation;
 use super::node::{Color, Node, NodeId};
+use super::type_style::TypeStyle;
 use crate::geom::{Rect, V2};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -26,6 +27,10 @@ pub struct Document {
     /// substituted for `var(--name)` when styles are written.
     #[serde(default)]
     pub tokens: BTreeMap<String, String>,
+    /// Named type styles ("Heading / L") that text layers can follow. Absent from page files
+    /// when empty.
+    #[serde(default)]
+    pub text_styles: BTreeMap<String, TypeStyle>,
     /// Notes that explain the design. Absent from page files when empty.
     #[serde(default)]
     pub annotations: Vec<Annotation>,
@@ -42,6 +47,7 @@ impl Default for Document {
             modes: BTreeMap::new(),
             mode: None,
             tokens: BTreeMap::new(),
+            text_styles: BTreeMap::new(),
             annotations: Vec::new(),
         }
     }
@@ -54,6 +60,7 @@ pub struct VarState {
     pub modes: BTreeMap<String, BTreeMap<String, Color>>,
     pub mode: Option<String>,
     pub tokens: BTreeMap<String, String>,
+    pub text_styles: BTreeMap<String, TypeStyle>,
 }
 
 impl Document {
@@ -63,6 +70,7 @@ impl Document {
             modes: self.modes.clone(),
             mode: self.mode.clone(),
             tokens: self.tokens.clone(),
+            text_styles: self.text_styles.clone(),
         }
     }
 
@@ -71,6 +79,7 @@ impl Document {
         self.modes = s.modes.clone();
         self.mode = s.mode.clone();
         self.tokens = s.tokens.clone();
+        self.text_styles = s.text_styles.clone();
     }
 
     pub fn get(&self, id: NodeId) -> Option<&Node> {

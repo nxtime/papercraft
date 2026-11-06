@@ -530,6 +530,24 @@ Bind a field of layers to a variable (or detach it). `field`: stroke, text-color
 | `variable` | string \| null |  |  |
 
 
+### `set_text_style`
+
+Named type styles of a page ("Heading / L", "Body / M"); get_variables lists them as `textStyles`. `action` set: create the style `name` or change the fields given (fontSize is required for a new one); every layer that follows it is updated at once, and a style edit replaces local font size, font, bold, italic, line height and letter spacing on those layers (character spans stay). delete: removes the style; layers keep their look and stop following it. apply: `nodeIds` text layers follow `name` (omitted or null detaches, keeping the look). Editing a layer's font properties by hand does not detach it: the next style change overwrites them. One undo step per call.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `action` | string | yes | set, delete or apply. |
+| `name` | string |  |  |
+| `fontSize` | number |  | px |
+| `font` | string \| null |  | Family added with install_font; null = Inter. |
+| `bold` | boolean |  |  |
+| `italic` | boolean |  |  |
+| `lineHeight` | number \| null |  | Multiple of the font size (1.5); null = font default. |
+| `letterSpacing` | number |  | px per character |
+| `nodeIds` | array of string |  | apply: text layers. |
+| `pageId` | string |  |  |
+
+
 ### `set_strings`
 
 Translate a page in one undoable call; languages are modes of a string collection, never copies. Does not switch the active mode (set_variable_mode does). One of: (a) `extract` true with `frame` (default the page) and `collection` (default `Strings`, created with a base mode named `mode`, default `Default`): every unbound text layer gets a string variable named from its layer path (`hero/title`, repeats numbered), holding its text in the base mode, and is bound to it; returns the keys with their texts. (b) `collection`, `mode` and `strings` {key: text}: sets those values, creating the mode if missing; an unknown key, a non-string variable or an unknown collection is an error that lists the offenders and changes nothing. (c) `collection`, `mode` and `pseudo` true: fills the mode with the base text accented, about 35% longer and in brackets, to show overflow before a real translation. Bound text re-fits when the mode is switched, so run lint_design and get_screenshot per mode.

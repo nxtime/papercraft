@@ -32,6 +32,10 @@ fn call(h: &mut exec::SessionHost, name: &str, args: Value) -> Value {
     }
 }
 
+fn call_err(h: &mut exec::SessionHost, name: &str, args: Value) -> String {
+    exec::call(h, name, &args).err().unwrap_or_else(|| panic!("{name} should fail"))
+}
+
 fn num(id: &Value) -> papercraft::model::NodeId {
     papercraft::model::NodeId(
         id.as_str()
@@ -2429,4 +2433,40 @@ fn a11y_annotations_are_set_read_linted_and_exported() {
     ] {
         assert!(exec::call(&mut h, "set_accessibility", &json!({"items": [bad.clone()]})).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn a_text_style_updates_every_layer_that_follows_it_in_one_undo_step() {
+    let mut h = host();
+    card(&mut h);
+    let id = |h: &exec::SessionHost, name: &str| h.ed.doc.nodes.values().find(|n| n.name == name).unwrap().id.0.to_string();
+    let size = |h: &exec::SessionHost, name: &str| h.ed.doc.nodes.values().find(|n| n.name == name).unwrap().kind.font_size().unwrap();
+    let title = id(&h, "Title");
+    let body_size = size(&h, "Body");
+
+    let r = call(&mut h, "set_text_style", json!({"action": "set", "name": "Heading / L", "fontSize": 40, "bold": true, "lineHeight": 1.2}));
+    assert_eq!(r["layersUpdated"], 0);
+    assert!(call_err(&mut h, "set_text_style", json!({"action": "set", "name": "Nope"})).contains("fontSize"));
+    assert!(call_err(&mut h, "set_text_style", json!({"action": "apply", "name": "Missing", "nodeIds": [title.clone()]})).contains("no text style"));
+
+    let r = call(&mut h, "set_text_style", json!({"action": "apply", "name": "Heading / L", "nodeIds": [title.clone()]}));
+    assert_eq!(r["layersChanged"], 1);
+    assert_eq!(size(&h, "Title"), 40.0);
+    assert_eq!(size(&h, "Body"), body_size, "only the applied layer follows");
+    assert!(h.ed.doc.nodes.values().find(|n| n.name == "Title").unwrap().text_style.bold);
+    assert_eq!(call(&mut h, "get_variables", json!({}))["textStyles"]["Heading / L"]["font_size"], 40.0);
+
+    let r = call(&mut h, "set_text_style", json!({"action": "set", "name": "Heading / L", "fontSize": 56}));
+    assert_eq!(r["layersUpdated"], 1);
+    assert_eq!(r["style"]["bold"], true, "fields not given are kept");
+    assert_eq!(size(&h, "Title"), 56.0);
+    call(&mut h, "undo", json!({}));
+    assert_eq!(size(&h, "Title"), 40.0);
+    call(&mut h, "redo", json!({}));
+
+    let r = call(&mut h, "set_text_style", json!({"action": "delete", "name": "Heading / L"}));
+    assert_eq!(r["layersDetached"], 1);
+    assert_eq!(size(&h, "Title"), 56.0, "a detached layer keeps its look");
+    assert!(h.ed.doc.text_styles.is_empty());
+    assert!(h.ed.doc.nodes.values().all(|n| n.text_style.style_ref.is_none()));
 }

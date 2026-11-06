@@ -1380,6 +1380,21 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "set_text_style",
+            "Named type styles of a page (\"Heading / L\", \"Body / M\"); get_variables lists them as              `textStyles`. `action` set: create the style `name` or change the fields given (fontSize              is required for a new one); every layer that follows it is updated at once, and a style              edit replaces local font size, font, bold, italic, line height and letter spacing on              those layers (character spans stay). delete: removes the style; layers keep their look              and stop following it. apply: `nodeIds` text layers follow `name` (omitted or null              detaches, keeping the look). Editing a layer's font properties by hand does not detach              it: the next style change overwrites them. One undo step per call.",
+            json!({"action": {"type": "string", "enum": ["set", "delete", "apply"]},
+                   "name": {"type": "string"},
+                   "fontSize": {"type": "number", "description": "px"},
+                   "font": {"type": ["string", "null"], "description": "Family added with install_font; null = Inter."},
+                   "bold": {"type": "boolean"}, "italic": {"type": "boolean"},
+                   "lineHeight": {"type": ["number", "null"], "description": "Multiple of the font size (1.5); null = font default."},
+                   "letterSpacing": {"type": "number", "description": "px per character"},
+                   "nodeIds": ids("apply: text layers."),
+                   "pageId": page_id()}),
+            &["action"],
+            false,
+        ),
+        tool(
             "set_strings",
             "Translate a page in one undoable call; languages are modes of a string collection,              never copies. Does not switch the active mode (set_variable_mode does). One of:              (a) `extract` true with `frame` (default the page) and `collection` (default `Strings`,              created with a base mode named `mode`, default `Default`): every unbound text layer              gets a string variable named from its layer path (`hero/title`, repeats numbered),              holding its text in the base mode, and is bound to it; returns the keys with their              texts. (b) `collection`, `mode` and `strings` {key: text}: sets those values, creating              the mode if missing; an unknown key, a non-string variable or an unknown collection is              an error that lists the offenders and changes nothing. (c) `collection`, `mode` and              `pseudo` true: fills the mode with the base text accented, about 35% longer and in              brackets, to show overflow before a real translation. Bound text re-fits when the              mode is switched, so run lint_design and get_screenshot per mode.",
             json!({"extract": {"type": "boolean"},
@@ -1615,7 +1630,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html" | "import_html"
         | "create_shape" | "update_styles" | "set_text_content" | "rename_nodes"
         | "annotate" | "set_annotation_template" | "upsert_annotation_template" | "delete_annotation_template" | "update_annotation" | "delete_annotations" | "add_feedback" | "resolve_feedback" | "set_variables" | "set_tokens"
-        | "create_collection" | "delete_variables" | "bind_variable" | "set_strings"
+        | "create_collection" | "delete_variables" | "bind_variable" | "set_strings" | "set_text_style"
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
         | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "apply_ui_kit" | "set_code_link"

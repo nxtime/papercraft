@@ -306,7 +306,7 @@ impl<'a> Tx<'a> {
         }
     }
 
-    fn snapshot_variables(&mut self) {
+    pub(crate) fn snapshot_variables(&mut self) {
         if self.rec.variables_before.is_none() {
             self.rec.variables_before = Some(self.doc.var_state());
         }

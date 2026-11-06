@@ -329,6 +329,9 @@ pub struct TextStyle {
     pub letter_spacing: f64,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<TextSpan>,
+    /// Name of the document text style this layer follows (see `Document::text_styles`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_ref: Option<String>,
 }
 
 impl TextStyle {
