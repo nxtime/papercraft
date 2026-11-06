@@ -119,7 +119,7 @@ Projects live in `~/Documents/papercraft/<name>/` (`project.json`, one JSON file
 
 ## Agents
 
-PaperCraft exposes **98 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
+PaperCraft exposes **104 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
 
 | Way | Notes |
 |---|---|
@@ -187,7 +187,7 @@ Annotations are notes that explain a design in place: business rules, behaviour,
 
 ### Download
 
-Releases are at [git.marcospaulo.dev.br/masi/papercraft/releases](https://git.marcospaulo.dev.br/masi/papercraft/releases).
+Releases are at [github.com/nxtime/papercraft/releases](https://github.com/nxtime/papercraft/releases), the same place the in-app updater checks.
 
 | Build | File |
 |---|---|
@@ -266,7 +266,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 ## Status and known limits
 
 > [!IMPORTANT]
-> PaperCraft is an alpha (0.8.x). It is used daily on Windows, macOS and Linux, and its project format migrates forward, but expect rough edges. [ROADMAP.md](ROADMAP.md) lists what is missing, in priority order; [PROGRESS.md](PROGRESS.md) is the milestone history.
+> PaperCraft is an alpha (0.9.x). It is used daily on Windows, macOS and Linux, and its project format migrates forward, but expect rough edges. [ROADMAP.md](ROADMAP.md) lists what is missing, in priority order; [PROGRESS.md](PROGRESS.md) is the milestone history.
 
 **What works today:** local projects with pages and an infinite canvas; vector, text, auto layout, constraints, components with properties and variants, variables with modes, shared libraries and screens; annotations, lint and Present mode with prototype links; PNG, SVG and PDF export, Figma, Excalidraw and SVG import; the MCP server, CLI (online and offline) and in-app Chat mode; versions, agent runs with review and revert; optional relay sync.
 
@@ -284,7 +284,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 * **Sharing** has no live presence (cursors, selections) yet.
 * **Scale:** cached frames take about 3 ms at 10k visible nodes; it is not tuned for 100k.
 * **Pen pressure** is simulated from stroke velocity on macOS tablets, because winit 0.30 does not expose it for mouse-like pen events.
-* **Releases:** the Gitea releases ship Windows x86_64. macOS (Apple silicon) and Linux x86_64 builds come from the packaging scripts or from source; the Linux build is not part of the current releases.
+* **Releases:** the GitHub releases ship Windows x86_64. macOS (Apple silicon) and Linux x86_64 builds come from the packaging scripts or from source; the Linux build is not part of the current releases.
 * **PDF** text is outlined, not selectable.
 
 ## Project layout

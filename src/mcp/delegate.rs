@@ -4,7 +4,7 @@
 //! inherits `PAPERCRAFT_MCP_PORT`), and only its final answer comes back into the main context.
 
 use super::{Out, ToolResult};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -44,20 +44,12 @@ pub fn run(command: &str, chat: Option<&str>, agent: (&str, &str), args: &serde_
     let task = args["task"].as_str().map(str::trim).filter(|t| !t.is_empty()).ok_or("give the task with everything the helper needs")?;
     let cli = crate::chat::path::which("papercraft-cli").ok_or("papercraft-cli is not installed, so a helper cannot reach PaperCraft")?;
     let prompt = format!("{}\n\n{}\n\nTask:\n{task}", preamble(&cli.display().to_string()), role_rules(role));
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd.exe");
-        c.args(["/C", &command.replace("{prompt}", "%PAPERCRAFT_PROMPT%")]);
-        c
-    } else {
-        let mut c = Command::new("/bin/sh");
-        c.args(["-c", &command.replace("{prompt}", "\"$PAPERCRAFT_PROMPT\"")]);
-        c
-    };
+    let mut cmd = super::shell::command(command, &[("{prompt}", "PAPERCRAFT_PROMPT", &prompt)]);
+    crate::chat::path::no_window(&mut cmd);
     // Its own process group, so stopping it also ends the agent the shell started.
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = cmd
-        .env("PAPERCRAFT_PROMPT", &prompt)
         .env("PAPERCRAFT_AGENT", agent.0)
         .env("PAPERCRAFT_PARENT", agent.1)
         // An app opened from Finder has a bare PATH: give the helper the user's shell PATH.
@@ -99,7 +91,7 @@ pub fn run(command: &str, chat: Option<&str>, agent: (&str, &str), args: &serde_
 /// End the helper and everything it started.
 fn kill_group(child: &mut std::process::Child) {
     #[cfg(unix)]
-    let _ = Command::new("kill").args(["-TERM", &format!("-{}", child.id())]).status();
+    let _ = std::process::Command::new("kill").args(["-TERM", &format!("-{}", child.id())]).status();
     let _ = child.kill();
     let _ = child.wait();
 }

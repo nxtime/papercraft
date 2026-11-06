@@ -20,6 +20,7 @@ fn normalized_download_paths_must_stay_in_official_repository() {
         name: "papercraft-0.4.0-macos-aarch64.dmg".into(),
         url: "https://git.marcospaulo.dev.br/masi/papercraft/releases/download/v0.4.0/%2e%2e/%2e%2e/%2e%2e/%2e%2e/other/papercraft-0.4.0-macos-aarch64.dmg".into(),
         size: 1024,
+        digest: "a".repeat(64),
     };
     assert!(validate_asset(&asset).is_err());
 }

@@ -12,13 +12,17 @@
 //! over all keyframes and may reject animations whose sampled frames are smaller.
 //! The 0.05 pixel cubic tessellation tolerance is subject to `f32` rounding.
 
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unimplemented,
-    clippy::todo,
-    clippy::unreachable
+// Tests assert with `panic!`/`unwrap`; only the shipped code must not.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unimplemented,
+        clippy::todo,
+        clippy::unreachable
+    )
 )]
 
 mod decode;

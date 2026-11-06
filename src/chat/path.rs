@@ -56,7 +56,7 @@ fn merge(shell: &str, process: &OsStr, extras: Vec<PathBuf>) -> String {
 /// Runs `shell -l -c script` and returns the text between the PATH markers; None on failure or timeout.
 fn shell_path(shell: &str, script: &str, timeout: Duration) -> Option<String> {
     let mut cmd = Command::new(shell);
-    cmd.args(["-l", "-c", script]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    no_window(&mut cmd).args(["-l", "-c", script]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     for k in CREDENTIAL_ENV {
         cmd.env_remove(k);
     }
@@ -107,7 +107,14 @@ fn is_executable(p: &Path) -> bool {
 
 /// Sets the merged PATH on a child, so node-based CLIs find `node`.
 pub fn apply(cmd: &mut Command) -> &mut Command {
-    cmd.env("PATH", OsString::from(resolved_path()))
+    no_window(cmd).env("PATH", OsString::from(resolved_path()))
+}
+
+/// The app has no console on Windows, so every console tool it starts would open its own.
+pub fn no_window(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(cmd, windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    cmd
 }
 
 #[cfg(all(test, unix))]

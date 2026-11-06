@@ -20,6 +20,9 @@ const METHOD_DEFLATE: u16 = 8;
 const DOS_DATE: u16 = 0x0021;
 /// Largest entry the reader inflates, against zip bombs.
 const MAX_ENTRY: usize = 512 << 20;
+/// Largest total the reader inflates across all entries: entries may overlap in the file, so
+/// per-entry limits alone let a small archive expand to many times its size.
+const MAX_TOTAL: usize = 1 << 30;
 
 pub type Entry = (String, Vec<u8>);
 
@@ -99,6 +102,12 @@ fn u32_at(b: &[u8], i: usize) -> Result<u32, String> {
 
 /// Every file in the archive (folders are skipped), verifying CRCs.
 pub fn read(bytes: &[u8]) -> Result<Vec<Entry>, String> {
+    read_capped(bytes, MAX_TOTAL)
+}
+
+/// [`read`] with a smaller cap on the total inflated size.
+pub fn read_capped(bytes: &[u8], max_total: usize) -> Result<Vec<Entry>, String> {
+    let mut total = 0usize;
     let end = (0..=bytes.len().saturating_sub(END_LEN))
         .rev()
         .find(|&i| u32_at(bytes, i).is_ok_and(|s| s == END_SIG))
@@ -134,12 +143,23 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Entry>, String> {
             + u16_at(bytes, local + 26)? as usize
             + u16_at(bytes, local + 28)? as usize;
         let raw = bytes.get(start..start + csize).ok_or("truncated zip")?;
+        let budget = max_total - total;
+        let too_big = || format!("{name}: archive expands past {} MiB", max_total >> 20);
         let data = match method {
+            METHOD_STORED if raw.len() > budget => return Err(too_big()),
             METHOD_STORED => raw.to_vec(),
-            METHOD_DEFLATE => miniz_oxide::inflate::decompress_to_vec_with_limit(raw, MAX_ENTRY)
-                .map_err(|e| format!("cannot inflate {name}: {e:?}"))?,
+            METHOD_DEFLATE => {
+                miniz_oxide::inflate::decompress_to_vec_with_limit(raw, MAX_ENTRY.min(budget))
+                    .map_err(|e| match e.status {
+                        miniz_oxide::inflate::TINFLStatus::HasMoreOutput if budget < MAX_ENTRY => {
+                            too_big()
+                        }
+                        _ => format!("cannot inflate {name}: {:?}", e.status),
+                    })?
+            }
             m => return Err(format!("{name}: unsupported zip method {m}")),
         };
+        total += data.len();
         if data.len() != usize_ || crc32(&data) != crc {
             return Err(format!("{name}: checksum mismatch"));
         }
@@ -211,6 +231,63 @@ mod tests {
         patched[n - 6..n - 2].copy_from_slice(&dir_offset.to_le_bytes());
         patched[n - 10..n - 6].copy_from_slice(&dir_len.to_le_bytes());
         assert_eq!(read(&patched).unwrap(), vec![("x".to_string(), data)]);
+    }
+
+    /// A zip whose `count` central entries all point at one deflated local entry of `data`.
+    fn overlapping_zip(data: &[u8], count: u16) -> Vec<u8> {
+        let packed = miniz_oxide::deflate::compress_to_vec(data, 6);
+        let mut z = Vec::new();
+        z.extend(LOCAL_SIG.to_le_bytes());
+        z.extend([20, 0, 0, 0]);
+        z.extend(METHOD_DEFLATE.to_le_bytes());
+        z.extend([0; 4]);
+        z.extend(crc32(data).to_le_bytes());
+        z.extend((packed.len() as u32).to_le_bytes());
+        z.extend((data.len() as u32).to_le_bytes());
+        z.extend([1, 0, 0, 0]);
+        z.push(b'x');
+        z.extend(&packed);
+        let dir = z.len() as u32;
+        for i in 0..count {
+            let mut c = vec![0u8; CENTRAL_LEN];
+            c[..4].copy_from_slice(&CENTRAL_SIG.to_le_bytes());
+            c[10..12].copy_from_slice(&METHOD_DEFLATE.to_le_bytes());
+            c[16..20].copy_from_slice(&crc32(data).to_le_bytes());
+            c[20..24].copy_from_slice(&(packed.len() as u32).to_le_bytes());
+            c[24..28].copy_from_slice(&(data.len() as u32).to_le_bytes());
+            c[28] = 1;
+            z.extend(c);
+            z.push(b'a' + i as u8);
+        }
+        let dir_len = z.len() as u32 - dir;
+        z.extend(END_SIG.to_le_bytes());
+        z.extend([0; 4]);
+        z.extend(count.to_le_bytes());
+        z.extend(count.to_le_bytes());
+        z.extend(dir_len.to_le_bytes());
+        z.extend(dir.to_le_bytes());
+        z.extend([0; 2]);
+        z
+    }
+
+    #[test]
+    fn refuses_archives_that_inflate_past_the_total_cap() {
+        let data = vec![7u8; 600_000];
+        let one = overlapping_zip(&data, 1);
+        assert_eq!(read_capped(&one, 1 << 20).unwrap().len(), 1);
+        // Two entries over the same bytes: each is under the cap, together they are not.
+        let two = overlapping_zip(&data, 2);
+        let err = read_capped(&two, 1 << 20).unwrap_err();
+        assert!(err.contains("expands past 1 MiB"), "{err}");
+        // A single entry bigger than the whole cap is refused too.
+        assert!(read_capped(&one, 100_000).is_err());
+    }
+
+    #[test]
+    fn counts_stored_entries_against_the_total_cap() {
+        let z = write(&[("a".into(), vec![1; 600]), ("b".into(), vec![2; 600])]);
+        assert!(read_capped(&z, 1000).is_err());
+        assert_eq!(read_capped(&z, 1200).unwrap().len(), 2);
     }
 
     #[test]

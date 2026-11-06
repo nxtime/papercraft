@@ -3,6 +3,8 @@
 //! become gaps or spacers, inline boxes (chips, badges) become boxes, and text inputs show their
 //! placeholder. Each rewrite matches what a browser shows; what cannot be matched is reported.
 
+use std::collections::BTreeSet;
+
 use super::html::{Element, Html};
 
 /// Rewrite `tree` in place; returns notes on what was only approximated.
@@ -167,47 +169,96 @@ fn grid(e: &mut Element, notes: &mut Vec<String>) {
     let col_gap = get(&d, "column-gap").and_then(px).or(gaps.get(1).or(gaps.first()).copied()).unwrap_or(0.0);
     let width = get(&d, "width").and_then(px);
     let tracks = get(&d, "grid-template-columns").map_or_else(|| vec!["1fr".to_owned()], |t| tracks(t, width, col_gap, notes));
+    unmapped_container(&d, notes);
     d.retain(|(k, _)| !(k.starts_with("grid") || ["display", "gap", "row-gap", "column-gap", "justify-items"].contains(&k.as_str())));
     d.extend([("display".into(), "flex".into()), ("flex-direction".into(), "column".into()), ("gap".into(), format!("{row_gap}px"))]);
     set_decls(e, &d);
-    let cell_style = |t: &str| -> String {
-        if let Some(fr) = t.strip_suffix("fr").and_then(|f| f.trim().parse::<f64>().ok()) {
-            format!("flex-grow:{fr}")
-        } else if let Some(w) = px(t) {
-            format!("width:{w}px")
-        } else {
-            String::new()
-        }
-    };
-    if e.children.iter().any(|c| matches!(c, Html::Element(k) if k.attr("style").is_some_and(|s| s.contains("grid-column")))) {
-        notes.push("grid-column spans are laid out as one cell each".into());
-    }
     let cells: Vec<Html> = std::mem::take(&mut e.children).into_iter().filter(|c| !matches!(c, Html::Text(t) if t.trim().is_empty())).collect();
-    let n = tracks.len().max(1);
-    let mut rows = Vec::new();
-    for (r, chunk) in cells.chunks(n).enumerate() {
-        let mut kids = Vec::new();
-        for (i, t) in tracks.iter().enumerate() {
-            let style = cell_style(t);
-            match chunk.get(i) {
-                Some(Html::Element(k)) => {
-                    let mut k = k.clone();
-                    let mut kd = decls(&k);
-                    kd.retain(|(n, _)| !n.starts_with("grid"));
-                    if get(&kd, "width").is_none() {
-                        kd.extend(style.split_once(':').map(|(a, b)| (a.to_owned(), b.to_owned())));
-                    }
-                    set_decls(&mut k, &kd);
-                    kids.push(Html::Element(k));
-                }
-                Some(t @ Html::Text(_)) => kids.push(div(&style, "Cell", vec![t.clone()])),
-                None if style.is_empty() => {}
-                None => kids.push(div(&style, "Empty", vec![])),
-            }
-        }
-        rows.push(div(&format!("display:flex;gap:{col_gap}px"), &format!("Row {}", r + 1), kids));
+    if cells.is_empty() {
+        return;
     }
-    e.children = rows;
+    let n = tracks.len().max(1);
+    let mut unmapped = BTreeSet::new();
+    // An empty cell keeps the columns of a short row aligned.
+    let empty = |t: &String| {
+        let style = cell_style(std::slice::from_ref(t), col_gap);
+        (!style.is_empty()).then(|| div(&style, "Empty", vec![]))
+    };
+    let mut rows: Vec<Vec<Html>> = vec![vec![]];
+    let mut used = 0;
+    for cell in cells {
+        let span = match &cell {
+            Html::Element(k) => get(&decls(k), "grid-column").and_then(|v| column_span(v, n)).unwrap_or(1),
+            Html::Text(_) => 1,
+        };
+        if used + span > n {
+            if let Some(r) = rows.last_mut() {
+                r.extend(tracks[used..].iter().filter_map(empty));
+            }
+            rows.push(vec![]);
+            used = 0;
+        }
+        let style = cell_style(&tracks[used..used + span], col_gap);
+        let cell = match cell {
+            Html::Element(mut k) => {
+                let mut kd = decls(&k);
+                unmapped.extend(kd.iter().filter(|(p, _)| p.starts_with("grid") && p != "grid-column").map(|(p, _)| p.clone()));
+                kd.retain(|(p, _)| !p.starts_with("grid"));
+                if get(&kd, "width").is_none() {
+                    kd.extend(style.split_once(':').map(|(a, b)| (a.to_owned(), b.to_owned())));
+                }
+                set_decls(&mut k, &kd);
+                Html::Element(k)
+            }
+            t => div(&style, "Cell", vec![t]),
+        };
+        if let Some(r) = rows.last_mut() {
+            r.push(cell);
+        }
+        used += span;
+    }
+    if let Some(r) = rows.last_mut() {
+        r.extend(tracks[used.min(n)..].iter().filter_map(empty));
+    }
+    if !unmapped.is_empty() {
+        notes.push(format!("grid {} not supported: cells flow row by row", unmapped.into_iter().collect::<Vec<_>>().join(", ")));
+    }
+    e.children = rows
+        .into_iter()
+        .enumerate()
+        .map(|(r, kids)| div(&format!("display:flex;gap:{col_gap}px"), &format!("Row {}", r + 1), kids))
+        .collect();
+}
+
+/// `grid-template-rows`, areas and auto-flow have no layer equivalent.
+fn unmapped_container(d: &[(String, String)], notes: &mut Vec<String>) {
+    let lost: Vec<&str> = d.iter().map(|(k, _)| k.as_str()).filter(|k| k.starts_with("grid") && !matches!(*k, "grid-template-columns" | "grid-column")).collect();
+    if !lost.is_empty() {
+        notes.push(format!("grid {} not supported: cells flow row by row", lost.join(", ")));
+    }
+}
+
+/// The style that gives a cell spanning `tracks` their width: `fr` tracks add their shares, px
+/// tracks add their widths and the gaps between them.
+fn cell_style(tracks: &[String], gap: f64) -> String {
+    let fr: Vec<f64> = tracks.iter().filter_map(|t| t.strip_suffix("fr").and_then(|f| f.trim().parse().ok())).collect();
+    if !fr.is_empty() {
+        return format!("flex-grow:{}", fr.iter().sum::<f64>());
+    }
+    let w: Vec<f64> = tracks.iter().filter_map(|t| px(t)).collect();
+    if w.is_empty() { String::new() } else { format!("width:{}px", w.iter().sum::<f64>() + gap * (w.len() - 1) as f64) }
+}
+
+/// Columns a `grid-column` value covers: `span 2`, `1 / 3` or `1 / -1`, at most `max`.
+fn column_span(v: &str, max: usize) -> Option<usize> {
+    let span = if let Some((_, n)) = v.rsplit_once("span") {
+        n.trim().parse().ok()?
+    } else {
+        let (a, b) = v.split_once('/')?;
+        let (a, b): (i64, i64) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+        if b < 0 { max as i64 + b + 2 - a } else { b - a }
+    };
+    usize::try_from(span).ok().filter(|s| *s >= 1).map(|s| s.min(max))
 }
 
 /// The columns of `grid-template-columns`, with `repeat(n, x)` expanded. `auto-fill` and
@@ -291,10 +342,52 @@ fn margin(d: &[(String, String)], row: bool) -> (Option<Option<f64>>, Option<Opt
     if row { (m[3], m[1]) } else { (m[0], m[2]) }
 }
 
+/// An element's padding as top, right, bottom, left when every part is a px length.
+fn padding(d: &[(String, String)]) -> Option<[f64; 4]> {
+    let mut p = [0.0; 4];
+    for (k, v) in d.iter().filter(|(k, _)| k.starts_with("padding")) {
+        let parts: Vec<f64> = v.split_whitespace().map(px).collect::<Option<_>>()?;
+        match (k.as_str(), parts.as_slice()) {
+            ("padding", [a]) => p = [*a; 4],
+            ("padding", [a, b]) => p = [*a, *b, *a, *b],
+            ("padding", [a, b, c]) => p = [*a, *b, *c, *b],
+            ("padding", [a, b, c, l]) => p = [*a, *b, *c, *l],
+            ("padding-top", [a]) => p[0] = *a,
+            ("padding-right", [a]) => p[1] = *a,
+            ("padding-bottom", [a]) => p[2] = *a,
+            ("padding-left", [a]) => p[3] = *a,
+            _ => return None,
+        }
+    }
+    Some(p)
+}
+
+/// Layers cannot overlap by pulling a sibling in, so a negative margin is dropped, with a note.
+fn drop_negative(k: &mut Element, notes: &mut Vec<String>) {
+    let mut d = decls(k);
+    let mut found = false;
+    for (_, v) in d.iter_mut().filter(|(n, _)| n.starts_with("margin")) {
+        let parts: Vec<&str> = v.split_whitespace().collect();
+        if parts.iter().any(|t| px(t).is_some_and(|x| x < 0.0)) {
+            found = true;
+            *v = parts.iter().map(|t| if px(t).is_some_and(|x| x < 0.0) { "0" } else { t }).collect::<Vec<_>>().join(" ");
+        }
+    }
+    if found {
+        notes.push(format!("negative margin dropped on `{}`", k.attr("layer-name").unwrap_or(&k.tag)));
+        set_decls(k, &d);
+    }
+}
+
 /// Children's margins along the parent's flow become its gap when they are all one size, else
-/// spacers of their size; `auto` margins become growing spacers (they take the free space). A
+/// spacers of their size; the margins at either end become the parent's padding; `auto` margins become growing spacers (they take the free space). A
 /// block's `margin: 0 auto` centres it.
 fn margins(e: &mut Element, notes: &mut Vec<String>) {
+    for c in e.children.iter_mut() {
+        if let Html::Element(k) = c {
+            drop_negative(k, notes);
+        }
+    }
     let d = decls(e);
     let row = is_row(&d);
     let flex = matches!(get(&d, "display"), Some("flex" | "inline-flex"));
@@ -320,7 +413,11 @@ fn margins(e: &mut Element, notes: &mut Vec<String>) {
         space.push(if flex { before + after } else { before.max(after) });
     }
     let between = &space[1..m.len()];
-    let uniform = !between.is_empty() && between.iter().all(|s| (s - between[0]).abs() < 1e-9) && space[0] == 0.0 && space[m.len()] == 0.0;
+    // Margins at either end of the flow pad the parent, when its padding is plain px.
+    let (lead, trail) = (space[0], space[m.len()]);
+    let pad = padding(&d).filter(|_| lead > 0.0 || trail > 0.0);
+    // Without that padding the end margins need spacers, which the uniform gap does not make.
+    let uniform = !between.is_empty() && between.iter().all(|s| (s - between[0]).abs() < 1e-9) && (pad.is_some() || (lead == 0.0 && trail == 0.0));
     let mut pd = d.clone();
     let mut out: Vec<Html> = Vec::new();
     let size = if row { "width" } else { "height" };
@@ -334,7 +431,7 @@ fn margins(e: &mut Element, notes: &mut Vec<String>) {
         let Html::Element(mut k) = c else { unreachable!() };
         let (start, end) = m[j];
         let extra = if j > 0 { space[j] - gap } else { space[j] };
-        if !uniform && extra > 0.0 {
+        if !uniform && extra > 0.0 && !(j == 0 && pad.is_some()) {
             out.push(spacer(extra));
         }
         if auto(start) {
@@ -355,12 +452,22 @@ fn margins(e: &mut Element, notes: &mut Vec<String>) {
             out.push(grow());
         }
     }
-    if !uniform && space[m.len()] > 0.0 {
-        out.push(spacer(space[m.len()]));
+    if !uniform && trail > 0.0 && pad.is_none() {
+        out.push(spacer(trail));
     }
-    if uniform && between[0] > 0.0 {
+    let gapped = uniform && between[0] > 0.0;
+    if gapped {
         pd.retain(|(k, _)| k != "gap");
         pd.push(("gap".into(), format!("{}px", gap + between[0])));
+    }
+    if let Some(mut p) = pad {
+        let (s, t) = if row { (3, 1) } else { (0, 2) };
+        p[s] += lead;
+        p[t] += trail;
+        pd.retain(|(k, _)| !k.starts_with("padding"));
+        pd.push(("padding".into(), format!("{}px {}px {}px {}px", p[0], p[1], p[2], p[3])));
+    }
+    if gapped || pad.is_some() {
         set_decls(e, &pd);
     }
     e.children = out;
@@ -406,6 +513,47 @@ mod tests {
         assert!(out.contains("<div flex-grow:1></><button >Save"), "auto margin takes the free space: {out}");
         let out = run("<div><p style=\"margin-bottom:8px\">a</p><p style=\"margin-top:24px\">b</p><p>c</p></div>");
         assert!(out.contains("height:24px") && !out.contains("height:8px"), "block margins collapse: {out}");
+    }
+
+    #[test]
+    fn outer_margins_pad_the_parent_and_auto_centres() {
+        let out = run("<div style=\"padding:8px\"><p style=\"margin:16px 0\">a</p><p style=\"margin:16px 0\">b</p></div>");
+        assert!(out.starts_with("<div gap:16px;padding:24px 8px 24px 8px>") && !out.contains("margin") && !out.contains("Spacer"), "{out}");
+        let out = run("<div style=\"display:flex\"><p style=\"margin-left:12px\">a</p></div>");
+        assert!(out.contains("padding:0px 0px 0px 12px"), "{out}");
+        let out = run("<div><div style=\"width:200px;margin:0 auto\">a</div></div>");
+        assert!(out.contains("align-self:center") && !out.contains("margin"), "{out}");
+    }
+
+    #[test]
+    fn end_margins_survive_a_parent_whose_padding_is_not_plain_px() {
+        for pad in ["5%", "0 auto"] {
+            let out = run(&format!("<div style=\"padding:{pad}\"><p style=\"margin:16px 0\">a</p><p style=\"margin:16px 0\">b</p></div>"));
+            assert!(out.matches("height:16px").count() >= 2 && !out.contains("margin"), "{pad}: {out}");
+        }
+    }
+
+    #[test]
+    fn an_empty_grid_makes_no_rows() {
+        let out = run("<div style=\"display:grid;grid-template-columns:1fr 1fr\"></div>");
+        assert!(!out.contains("Row 1"), "{out}");
+    }
+
+    #[test]
+    fn negative_margins_are_dropped_with_a_note() {
+        let mut t = super::super::html::parse("<div><p style=\"margin-top:-8px\">a</p></div>");
+        let notes = rewrite(&mut t);
+        assert_eq!(notes, ["negative margin dropped on `p`"]);
+    }
+
+    #[test]
+    fn grid_spans_cover_columns_and_the_rest_is_reported() {
+        let out = run("<div style=\"display:grid;grid-template-columns:1fr 1fr 2fr;gap:8px\"><p style=\"grid-column:span 2\">a</p><p>b</p><p style=\"grid-column:1 / -1\">c</p></div>");
+        assert!(out.contains("<p flex-grow:2>a") && out.contains("<p flex-grow:2>b") && out.contains("<p flex-grow:4>c"), "{out}");
+        assert_eq!(out.matches("display:flex;gap:8px").count(), 2, "{out}");
+        let mut t = super::super::html::parse("<div style=\"display:grid;grid-template-columns:100px 100px;grid-template-rows:auto\"><p style=\"grid-row:2\">a</p></div>");
+        let notes = rewrite(&mut t);
+        assert!(notes.iter().any(|n| n.contains("grid-template-rows")) && notes.iter().any(|n| n.contains("grid-row")), "{notes:?}");
     }
 
     #[test]

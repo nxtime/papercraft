@@ -115,7 +115,7 @@ impl Tool {
 }
 
 /// Ctrl+wheel zoom rate: one 40px wheel notch is about 13%.
-const ZOOM_PER_SCROLL_PX: f64 = 0.003;
+pub const ZOOM_PER_SCROLL_PX: f64 = 0.003;
 
 /// Requests the editor can't fulfil itself (dialogs, file system, clipboard).
 #[derive(Debug, Clone, PartialEq)]
@@ -217,6 +217,15 @@ enum Gesture {
 const DRAG_THRESHOLD: f64 = 3.0;
 const PASTE_OFFSET: f64 = 16.0;
 
+/// A frame Present mode shows as an overlay: drawn `shift` away from where it sits on the canvas,
+/// clipped to `window`, over a dimmed backdrop. A view state; the document is not touched.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PresentOverlay {
+    pub id: NodeId,
+    pub shift: V2,
+    pub window: Rect,
+}
+
 pub struct Editor {
     pub doc: Document,
     pub history: History,
@@ -231,6 +240,8 @@ pub struct Editor {
     pub guides: Vec<Guide>,
     /// World-space marquee rectangle while dragging.
     pub marquee: Option<Rect>,
+    /// The overlay Present mode has open, if any.
+    pub present_overlay: Option<PresentOverlay>,
     pub hover: Option<NodeId>,
     pub pointer: V2,
     pub ink_width: f64,
@@ -348,6 +359,7 @@ impl Editor {
             text_edit: None,
             guides: Vec::new(),
             marquee: None,
+            present_overlay: None,
             hover: None,
             pointer: V2::ZERO,
             ink_width: 3.0,
@@ -474,6 +486,22 @@ impl Editor {
     fn log_history(&mut self, nodes: &[NodeId]) {
         if let Some(page) = self.pages.get(self.edit_page_index()).map(|p| p.id.clone()) {
             self.changes.record(&page, nodes.iter().copied());
+        }
+    }
+
+    /// Rolls back the open transaction, if any, without touching the undo history. For work that
+    /// stopped half way (a gesture cancelled, a tool call that panicked).
+    pub fn abort(&mut self) {
+        self.touched_mains.clear();
+        if let Some((rec, key)) = self.take_rec() {
+            let mut h = History::default();
+            let mut changed = Changed::Nodes(Arc::new([]));
+            if h.commit(&self.doc, rec, key)
+                && let Some(u) = h.undo(&mut self.doc)
+            {
+                changed = Changed::Nodes(u.nodes.into());
+            }
+            self.after_history(changed);
         }
     }
 
@@ -2259,17 +2287,7 @@ impl Editor {
             | Gesture::ConnectorEnd { .. }
             | Gesture::ConnectorMid { .. }
             | Gesture::Erase => {
-                // Roll back the open transaction.
-                if let Some((rec, key)) = self.take_rec() {
-                    let mut h = History::default();
-                    let mut changed = Changed::Nodes(Arc::new([]));
-                    if h.commit(&self.doc, rec, key)
-                        && let Some(u) = h.undo(&mut self.doc)
-                    {
-                        changed = Changed::Nodes(u.nodes.into());
-                    }
-                    self.after_history(changed);
-                }
+                self.abort();
             }
             _ => {}
         }
@@ -2332,6 +2350,17 @@ impl Editor {
             io.write_text(&text);
             self.clipboard_written = Some(text);
         }
+    }
+
+    /// Image ids held by the clipboard and the library documents: they can outlive the project
+    /// that registered them, so [`crate::assets::release_unused`] must keep them.
+    pub fn images_held_outside_pages(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.library_docs.values().flat_map(crate::assets::used_by).collect();
+        ids.extend(self.clipboard.iter().flat_map(|n| n.style.fills.iter()).filter_map(|p| match p {
+            crate::model::Paint::Image { asset, .. } => Some(asset.clone()),
+            _ => None,
+        }));
+        ids
     }
 
     /// Paste from the system clipboard when it holds something newer than our own copy
@@ -2448,8 +2477,13 @@ impl Editor {
         let same_page = self.clipboard_page.as_deref() == Some(self.active_page_id());
         let world = self.clipboard_world.clone();
         let new_roots = self.insert_subtrees("Paste", &nodes, &roots, &world, offset, same_page);
+        let skipped = roots.len() - new_roots.len();
         self.selection = new_roots;
-        self.status = format!("Pasted {} layer(s)", self.selection.len());
+        self.status = if skipped > 0 {
+            format!("Pasted {} layer(s); {skipped} skipped: a component can't contain an instance of itself", self.selection.len())
+        } else {
+            format!("Pasted {} layer(s)", self.selection.len())
+        };
     }
 
     /// Insert copies of subtrees. `world[i]` is root `i`'s world rect; `same_page` keeps the
@@ -2633,6 +2667,16 @@ pub fn insert_subtrees_tx(
         let parent = n
             .parent
             .filter(|p| same_page && tx.doc().nodes.contains_key(p));
+        // An instance of X pasted inside X's main would expand into itself and lose its layers.
+        let nests = parent.is_some()
+            && nodes
+                .iter()
+                .filter(|d| d.id == n.id || is_desc(nodes, d.id, n.id))
+                .filter_map(|d| d.instance.as_ref())
+                .any(|l| l.source.is_none() && !map.contains_key(&l.main) && structure::would_nest(tx.doc(), l.main, parent));
+        if nests {
+            continue;
+        }
         let w = world.get(i).copied().unwrap_or(n.rect);
         let mut copy = n.clone();
         copy.id = map[&n.id];

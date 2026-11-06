@@ -115,7 +115,7 @@ fn run_codex(bin: &Path, prompt: &str) -> Result<Vec<PathBuf>, String> {
     let scratch = std::env::temp_dir().join(format!("papercraft-imagegen-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
     let mut cmd = Command::new(bin);
-    cmd.env("PATH", crate::chat::path::resolved_path());
+    crate::chat::path::no_window(&mut cmd).env("PATH", crate::chat::path::resolved_path());
     for k in CREDENTIAL_ENV {
         cmd.env_remove(k);
     }
@@ -154,21 +154,10 @@ fn run_codex(bin: &Path, prompt: &str) -> Result<Vec<PathBuf>, String> {
 fn run_command(template: &str, prompt: &str, aspect: &str) -> Result<Vec<PathBuf>, String> {
     let out = std::env::temp_dir().join(format!("papercraft-imagegen-{}-{}-{:08x}", std::process::id(), crate::project::format::now_ms(), fastrand::u32(..)));
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let script = shell_script(template);
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd.exe");
-        c.args(["/C", &script]);
-        c
-    } else {
-        let mut c = Command::new("/bin/sh");
-        c.args(["-c", &script]);
-        c
-    };
-    let mut child = cmd
-        .env("PAPERCRAFT_PROMPT", prompt)
-        .env("PAPERCRAFT_ASPECT", aspect)
-        .env("PAPERCRAFT_RATIO", ratio(aspect))
-        .env("PAPERCRAFT_OUT", &out)
+    let out_dir = out.display().to_string();
+    let vars = [("{prompt}", "PAPERCRAFT_PROMPT", prompt), ("{aspect}", "PAPERCRAFT_ASPECT", aspect), ("{ratio}", "PAPERCRAFT_RATIO", ratio(aspect)), ("{out}", "PAPERCRAFT_OUT", out_dir.as_str())];
+    let mut cmd = super::shell::command(template, &vars);
+    let mut child = crate::chat::path::no_window(&mut cmd)
         // An app opened from Finder has a bare PATH: give the command the user's shell PATH.
         .env("PATH", crate::chat::path::resolved_path())
         .current_dir(&out)
@@ -195,15 +184,6 @@ fn run_command(template: &str, prompt: &str, aspect: &str) -> Result<Vec<PathBuf
         .unwrap_or_default();
     images.sort();
     Ok(images)
-}
-
-/// The template with its placeholders turned into quoted variable references.
-fn shell_script(template: &str) -> String {
-    template
-        .replace("{prompt}", "\"$PAPERCRAFT_PROMPT\"")
-        .replace("{aspect}", "\"$PAPERCRAFT_ASPECT\"")
-        .replace("{ratio}", "\"$PAPERCRAFT_RATIO\"")
-        .replace("{out}", "\"$PAPERCRAFT_OUT\"")
 }
 
 /// The thread id of a `codex exec --json` run (`thread.started`).

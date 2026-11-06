@@ -5,7 +5,7 @@ description: Design-quality rules for work made in PaperCraft (or any flexbox-ba
 
 # papercraft-design
 
-Rules for making designs that look intentional, adapted to what PaperCraft can do: flexbox layout, Inter as the only font, color variables, components, `lint_design`. Mechanics (tools, loop, limits) are in the `papercraft` skill. Sources: Figma's agent skills (variables, auto layout, components, design-system audits, spacing snapped to a scale), Anthropic's frontend-design guidance (commit to a direction, avoid generic AI aesthetics) and common UI practice (4/8pt grid, WCAG contrast, 44px targets).
+Rules for making designs that look intentional, adapted to what PaperCraft can do: flexbox layout, Inter as the default font, color variables, components, `lint_design`. Mechanics (tools, loop, limits) are in the `papercraft` skill. Sources: Figma's agent skills (variables, auto layout, components, design-system audits, spacing snapped to a scale), Anthropic's frontend-design guidance (commit to a direction, avoid generic AI aesthetics) and common UI practice (4/8pt grid, WCAG contrast, 44px targets).
 
 ## 0. Before you draw anything: commit to a direction
 
@@ -18,7 +18,7 @@ Write down, in a few lines, before the first tool call:
 
 Avoid the default AI look: purple-to-blue gradient on white, a row of three identical rounded cards with an icon and two lines, centered everything, generic stock phrases ("Seamless. Powerful. Effortless."), emoji as icons, drop shadows everywhere. If your draft would pass for any SaaS template, change one structural thing (layout, scale contrast, color block) until it would not.
 
-**Inter is the only font.** You cannot pair typefaces, so hierarchy has to come from size, weight, color and space. Use real scale contrast (a 40 or 64px headline against 16px body), bold only for what matters, and `text-muted` for secondary text. Tight negative letter-spacing on large headlines and uppercase 12px labels with positive letter-spacing give Inter more character. Do not fake a second font.
+**Inter is the default font.** Add another with `install_font` only when the brief calls for it. Hierarchy has to come from size, weight, color and space. Use real scale contrast (a 40 or 64px headline against 16px body), bold only for what matters, and `text-muted` for secondary text. Tight negative letter-spacing on large headlines and uppercase 12px labels with positive letter-spacing give Inter more character. Do not fake a second font.
 
 ## 1. Spacing: a 4/8pt scale
 

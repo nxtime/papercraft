@@ -123,16 +123,16 @@ impl Host for SessionHost {
 
 // ------------------------------------------------------------------------------ arguments
 
-struct Args<'a>(&'a Map<String, Value>);
+pub(super) struct Args<'a>(pub(super) &'a Map<String, Value>);
 
 impl<'a> Args<'a> {
-    fn get(&self, k: &str) -> Option<&'a Value> {
+    pub(super) fn get(&self, k: &str) -> Option<&'a Value> {
         self.0.get(k).filter(|v| !v.is_null())
     }
-    fn str(&self, k: &str) -> Option<&'a str> {
+    pub(super) fn str(&self, k: &str) -> Option<&'a str> {
         self.get(k).and_then(Value::as_str).map(str::trim)
     }
-    fn req_str(&self, k: &str) -> Result<&'a str, String> {
+    pub(super) fn req_str(&self, k: &str) -> Result<&'a str, String> {
         self.str(k)
             .ok_or_else(|| format!("missing required string argument `{k}`"))
     }
@@ -142,11 +142,13 @@ impl<'a> Args<'a> {
             Value::String(s) => s.trim().trim_end_matches("px").parse().ok(),
             _ => None,
         })
+        // "NaN" and "1e999" parse, but JSON cannot store them: a saved page would not reopen.
+        .filter(|v| v.is_finite())
     }
-    fn bool(&self, k: &str) -> Option<bool> {
+    pub(super) fn bool(&self, k: &str) -> Option<bool> {
         self.get(k).and_then(Value::as_bool)
     }
-    fn arr(&self, k: &str) -> Result<&'a Vec<Value>, String> {
+    pub(super) fn arr(&self, k: &str) -> Result<&'a Vec<Value>, String> {
         self.get(k)
             .and_then(Value::as_array)
             .ok_or_else(|| format!("missing required array argument `{k}`"))
@@ -164,7 +166,7 @@ impl<'a> Args<'a> {
     }
 }
 
-fn text(v: Value) -> ToolResult {
+pub(super) fn text(v: Value) -> ToolResult {
     Ok(vec![Out::Text(
         serde_json::to_string_pretty(&v).unwrap_or_default(),
     )])
@@ -214,7 +216,7 @@ pub(crate) fn find_page(ed: &Editor, key: &str) -> Result<usize, String> {
         })
 }
 
-fn page_arg(ed: &Editor, a: &Args) -> Result<usize, String> {
+pub(super) fn page_arg(ed: &Editor, a: &Args) -> Result<usize, String> {
     match a.str("pageId") {
         Some(p) if !p.is_empty() => find_page(ed, p),
         _ => Ok(ed.active_page),
@@ -222,7 +224,7 @@ fn page_arg(ed: &Editor, a: &Args) -> Result<usize, String> {
 }
 
 /// Resolve a node id string to (page index, node id).
-fn resolve(ed: &Editor, key: &str, default_page: usize) -> Result<(usize, NodeId), String> {
+pub(crate) fn resolve(ed: &Editor, key: &str, default_page: usize) -> Result<(usize, NodeId), String> {
     let key = key.trim().trim_start_matches('#');
     let (page, num) = match key.split_once(':') {
         Some((p, n)) => (find_page(ed, p)?, n),
@@ -296,6 +298,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
         "rename_file" => rename_file(host, &a),
         "get_font_family_info" => font_info(&a),
         "get_guide" => guide(&a),
+        "import_html" => super::import_html::run(host, args),
         "publish_library" | "list_libraries" | "enable_library" | "update_library"
         | "disable_library" => {
             check_file(host, &a)?;
@@ -322,6 +325,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "get_basic_info" => basic_info(host, &a),
                 "get_inventory" => get_inventory(ed),
                 "get_selection" => selection(ed),
+                "get_context" => super::context::get_context(ed, a.str("id")),
                 "get_node_info" => node_info(ed, &a),
                 "get_children" => children(ed, &a),
                 "get_bounds" => get_bounds(ed, &a),
@@ -346,6 +350,8 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 #[cfg(not(target_arch = "wasm32"))]
                 "design_rules" => design_rules(&a),
                 #[cfg(not(target_arch = "wasm32"))]
+                "install_font" => install_font(host, &a),
+                #[cfg(not(target_arch = "wasm32"))]
                 "fetch_reference_images" => super::refs::fetch(host.project().map(|p| p.dir.clone()).as_deref(), None, &Value::Object(a.0.clone())),
                 #[cfg(not(target_arch = "wasm32"))]
                 "generate_image" => {
@@ -358,7 +364,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "set_component_props" => set_component_props(ed, &a),
                 "set_instance_props" => set_instance_props(ed, &a),
                 "merge_variants" => merge_variants(ed, &a),
-                "set_prototype_links" => set_prototype_links(ed, &a),
+                "set_prototype_links" => super::prototype::set_prototype_links(ed, &a),
                 "set_screens" => set_screens(ed, &a),
                 "export" => export(host, &a),
                 "export_combined_pdf" => export_pdf(host, &a),
@@ -367,6 +373,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "list_handoffs" => super::handoff::list(host),
                 "get_handoff_changes" => super::handoff::get_changes(host, args),
                 "export_handoff" => export_handoff(host, args),
+                "export_site" => export_site(host, args),
                 "create_artboard" => create_artboard(ed, &a),
                 "write_html" => write_html(ed, &a),
                 "create_shape" => create_shape(ed, &a),
@@ -391,6 +398,8 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "create_instance" => create_instance(ed, &a),
                 "swap_instance" => swap_instance(ed, &a),
                 "bind_variable" => bind_variable(ed, &a),
+                "get_strings" => super::strings::get_strings(ed, &a),
+                "set_strings" => super::strings::set_strings(ed, &a),
                 "detach_instance" => detach_instance(ed, &a),
                 "diff_frames" => diff_frames(ed, &a),
                 "search_icons" => search_icons(&a),
@@ -456,6 +465,9 @@ fn make_room(ed: &mut Editor, page: usize, before: &std::collections::HashMap<No
 fn find_project(store: &Store, key: &str) -> Result<PathBuf, String> {
     let key = key.trim().trim_start_matches("/file/");
     let p = Path::new(key);
+    if p.is_absolute() {
+        check_path(key)?;
+    }
     if p.is_absolute() && crate::vfs::is_file(&p.join(crate::project::MANIFEST)) {
         return Ok(p.to_path_buf());
     }
@@ -757,7 +769,7 @@ fn node_brief(ed: &Editor, page: usize, id: NodeId) -> Value {
 }
 
 /// The top-level frame a node belongs to.
-fn artboard_of(doc: &Document, id: NodeId) -> Option<NodeId> {
+pub(super) fn artboard_of(doc: &Document, id: NodeId) -> Option<NodeId> {
     let top = doc.ancestors(id).last().copied().unwrap_or(id);
     doc.get(top).filter(|n| n.is_frame()).map(|n| n.id)
 }
@@ -826,7 +838,7 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
                    "width": n.rect.w, "height": n.rect.h, "section": section})
         }).collect::<Vec<_>>(),
         "otherTopLevelLayers": others,
-        "fontFamilies": ["Inter"],
+        "fontFamilies": std::iter::once("Inter".to_owned()).chain(crate::fonts::families()).collect::<Vec<_>>(),
         "selectionCount": if page == ed.active_page { ed.selection.len() } else { 0 },
         "openFeedback": (0..ed.pages.len())
             .map(|p| ed.page_doc(p).nodes.values().map(|n| n.open_comments()).sum::<usize>())
@@ -1138,7 +1150,7 @@ fn node_info(ed: &mut Editor, a: &Args) -> ToolResult {
     if let Some(s) = screen_json(ed, page, id) {
         v["screen"] = s;
     }
-    text(v)
+    Ok(super::budget::json_out(v, a.num("maxTokens"), "use get_children for the child ids"))
 }
 
 fn children(ed: &mut Editor, a: &Args) -> ToolResult {
@@ -1156,7 +1168,7 @@ fn children(ed: &mut Editor, a: &Args) -> ToolResult {
         .iter()
         .map(|c| node_brief(ed, page, *c))
         .collect();
-    text(json!({"children": kids}))
+    Ok(super::budget::json_out(json!({"children": kids}), a.num("maxTokens"), "ask for a deeper node or use find_nodes"))
 }
 
 fn get_bounds(ed: &mut Editor, a: &Args) -> ToolResult {
@@ -1254,7 +1266,7 @@ fn tree_summary(ed: &mut Editor, a: &Args) -> ToolResult {
     if out.is_empty() {
         out = "(empty page)".into();
     }
-    Ok(vec![Out::Text(out)])
+    Ok(super::budget::text_out(out, a.num("maxTokens"), a.num("offset"), "pass a narrower nodeId or a smaller depth"))
 }
 
 /// Largest screenshot edge, in pixels.
@@ -1310,6 +1322,20 @@ fn shot_out(img: &image::RgbaImage, scale: &mut f64) -> Result<Option<Vec<Out>>,
 }
 
 fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
+    // GPU failures (device lost, out of memory) panic inside wgpu and the readback. In the app that
+    // is the UI thread, so unsaved work dies with it; a shot only reads, so nothing is left half done.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| shoot(host, a))).unwrap_or_else(|p| {
+        let why = p
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| p.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("unknown panic");
+        log::error!("get_screenshot panicked: {why}");
+        Err(format!("the screenshot failed: {why}"))
+    })
+}
+
+fn shoot(host: &mut dyn Host, a: &Args) -> ToolResult {
     let gpu = host.gpu();
     let defer = host.defer_pixels();
     if gpu.is_none() && !defer {
@@ -1319,7 +1345,8 @@ fn screenshot(host: &mut dyn Host, a: &Args) -> ToolResult {
         .str("out")
         .or_else(|| a.str("path"))
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from);
+        .map(|p| out_file(p, "png"))
+        .transpose()?;
     let ed = host.editor();
     let def = page_arg(ed, a)?;
     let (page, roots) = match a.str("nodeId").filter(|k| !k.is_empty() && *k != ROOT) {
@@ -1619,7 +1646,7 @@ fn design_rules(a: &Args) -> ToolResult {
         (_, Some(q)) if !q.trim().is_empty() => vec!["search", "-n", "5", q.trim()],
         _ => return Err("give query or rule".into()),
     };
-    let out = std::process::Command::new(bin).args(&args).output().map_err(|e| e.to_string())?;
+    let out = crate::chat::path::no_window(std::process::Command::new(bin).args(&args)).output().map_err(|e| e.to_string())?;
     let found = String::from_utf8_lossy(&out.stdout).trim().to_owned();
     if found.is_empty() {
         return Err(format!("no playbook match: {}", String::from_utf8_lossy(&out.stderr).trim()));
@@ -1631,7 +1658,9 @@ fn design_rules(a: &Args) -> ToolResult {
 /// image when it was scaled down, else the image itself. Only files in the project's chat folder.
 fn zoom_image(host: &mut dyn Host, a: &Args) -> ToolResult {
     let dir = host.project().map(|p| p.dir.join(crate::chat::TMP_DIR)).ok_or("open a project first")?;
-    let sent = std::path::Path::new(a.req_str("path")?);
+    let sent = a.req_str("path")?;
+    check_path(sent)?;
+    let sent = std::path::Path::new(sent);
     let (Ok(root), Ok(sent)) = (std::fs::canonicalize(&dir), std::fs::canonicalize(sent)) else {
         return Err("no such attached image".into());
     };
@@ -1796,19 +1825,48 @@ fn font_info(a: &Args) -> ToolResult {
         .iter()
         .map(|f| {
             let inter = f.trim().eq_ignore_ascii_case("inter");
+            let styles = match inter {
+                true => Some(vec![(false, false), (true, false), (false, true), (true, true)]),
+                false => crate::fonts::styles(f.trim()).map(|(_, styles)| styles),
+            };
+            let note = if styles.is_some() { "" } else { "not installed; install_font adds it, until then text renders in Inter" };
             json!({
                 "family": f,
-                "available": inter,
-                "styles": if inter { json!([
-                    {"weight": 400, "style": "normal"}, {"weight": 700, "style": "normal"},
-                    {"weight": 400, "style": "italic"}, {"weight": 700, "style": "italic"}]) } else { json!([]) },
-                "note": if inter { "" } else { "not available; text renders in Inter" },
+                "available": styles.is_some(),
+                "styles": font_styles(styles.as_deref().unwrap_or_default()),
+                "note": note,
             })
         })
         .collect();
     text(
         json!({"families": fams, "weights": "fontWeight ≥ 600 renders bold, below renders regular"}),
     )
+}
+
+fn font_styles(styles: &[(bool, bool)]) -> Vec<Value> {
+    styles
+        .iter()
+        .map(|(bold, italic)| json!({"weight": if *bold { 700 } else { 400 }, "style": if *italic { "italic" } else { "normal" }}))
+        .collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_font(host: &dyn Host, a: &Args) -> ToolResult {
+    let source = a.req_str("source")?;
+    let bytes = if source.starts_with("https://") || source.starts_with("http://") {
+        super::refs::download(source, crate::fonts::MAX_FONT_BYTES)?.1
+    } else {
+        check_path(source)?;
+        let size = std::fs::metadata(source).map_err(|e| format!("{source}: {e}"))?.len();
+        if size > crate::fonts::MAX_FONT_BYTES as u64 {
+            return Err(format!("{source}: the font is over {} MB", crate::fonts::MAX_FONT_BYTES >> 20).into());
+        }
+        std::fs::read(source).map_err(|e| format!("{source}: {e}"))?
+    };
+    let assets = host.project().map(|p| p.dir.join(crate::project::ASSETS_DIR));
+    let family = crate::fonts::install(&bytes, assets.as_deref())?;
+    let styles = crate::fonts::styles(&family).map(|(_, s)| s).unwrap_or_default();
+    text(json!({"family": family, "styles": font_styles(&styles), "savedInProject": assets.is_some()}))
 }
 
 fn guide(a: &Args) -> ToolResult {
@@ -2288,6 +2346,9 @@ fn delete_annotations(ed: &mut Editor, a: &Args) -> ToolResult {
 
 // ------------------------------------------------------------------------------ jsx
 
+/// How to read the rest of a cut `get_jsx` or `get_design_spec`.
+const JSX_HINT: &str = "export a narrower nodeId (a child from get_children)";
+
 fn jsx(host: &mut dyn Host, a: &Args) -> ToolResult {
     let assets_dir = host
         .project()
@@ -2302,14 +2363,15 @@ fn jsx(host: &mut dyn Host, a: &Args) -> ToolResult {
                 out.push_str(&format!("{import}\n"));
             }
             jsx_node(doc, id, 0, true, assets_dir.as_deref(), &mut out);
-            Ok(vec![Out::Text(out)])
+            Ok(super::budget::text_out(out, a.num("maxTokens"), a.num("offset"), JSX_HINT))
         }
         Some(
             f @ ("tailwind" | "jsx" | "react" | "tsx" | "angular" | "ng" | "html" | "css" | "egui"
             | "rust"),
-        ) => Ok(vec![Out::Text(super::codegen::code_for_target_with_categories(
-            doc, id, f, &ed.design.categories(),
-        )?)]),
+        ) => {
+            let code = super::codegen::code_for_target_with_categories(doc, id, f, &ed.design.categories())?;
+            Ok(super::budget::text_out(code, a.num("maxTokens"), a.num("offset"), JSX_HINT))
+        }
         Some(f) => Err(format!(
             "unknown format `{f}` (inline, tailwind, react, angular, html, or egui)"
         )),
@@ -2323,15 +2385,15 @@ fn get_design_spec(ed: &mut Editor, a: &Args) -> ToolResult {
     match a.str("format").unwrap_or("markdown") {
         "" | "markdown" | "md" => {
             let md = super::codegen::to_ai_spec_markdown_with_categories(doc, id, target, &ed.design.categories())?;
-            Ok(vec![Out::Text(md)])
+            Ok(super::budget::text_out(md, a.num("maxTokens"), a.num("offset"), JSX_HINT))
         }
         "json" => {
             let spec = super::codegen::to_ai_spec_with_categories(doc, id, target, &ed.design.categories())?;
-            text(spec)
+            Ok(super::budget::json_out(spec, a.num("maxTokens"), JSX_HINT))
         }
         "compact" => {
             let s = super::codegen::to_ai_spec_compact_with_categories(doc, id, target, &ed.design.categories())?;
-            Ok(vec![Out::Text(s)])
+            Ok(super::budget::text_out(s, a.num("maxTokens"), a.num("offset"), JSX_HINT))
         }
         other => Err(format!(
             "unknown format `{other}` (expected markdown, json or compact)"
@@ -2354,16 +2416,6 @@ fn style_obj(m: &Map<String, Value>) -> String {
         .map(|(k, v)| format!("{k}: {}", serde_json::to_string(v).unwrap_or_default()))
         .collect();
     format!("{{{{ {} }}}}", parts.join(", "))
-}
-
-fn jsx_text(t: &str) -> String {
-    if t.chars()
-        .all(|c| !matches!(c, '{' | '}' | '<' | '>' | '\n' | '"' | '\\'))
-    {
-        t.to_string()
-    } else {
-        format!("{{{}}}", serde_json::to_string(t).unwrap_or_default())
-    }
 }
 
 fn jsx_node(
@@ -2410,7 +2462,7 @@ fn jsx_node(
             out.push_str(&format!(
                 "{ind}<span style={}>{}</span>\n",
                 style_obj(&st),
-                jsx_text(text)
+                super::codegen::escape(super::codegen::Escape::Jsx, text)
             ));
         }
         NodeKind::Rect | NodeKind::Ellipse => {
@@ -2443,7 +2495,7 @@ fn jsx_node(
             out.push_str(&format!(
                 "{ind}<div style={}>{}</div>\n",
                 style_obj(&st),
-                jsx_text(text)
+                super::codegen::escape(super::codegen::Escape::Jsx, text)
             ));
         }
         _ => {
@@ -2476,26 +2528,85 @@ fn parse_scale(s: Option<&str>, b: Rect) -> Result<f64, String> {
     let Some(s) = s.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(2.0);
     };
-    let (num, unit) = s.split_at(s.len() - 1);
-    let v: f64 = num
-        .parse()
-        .map_err(|_| format!("bad scale `{s}` (use e.g. 2x, 512w, 512h, 720p)"))?;
+    let unit_at = s.char_indices().next_back().map_or(0, |(i, _)| i);
+    let (num, unit) = s.split_at(unit_at);
+    let v = css::finite(num)
+        .ok_or_else(|| format!("bad scale `{s}` (use e.g. 2x, 512w, 512h, 720p)"))?;
     Ok(match unit {
         "x" => v,
         "w" => v / b.w.max(1.0),
         "h" => v / b.h.max(1.0),
         "p" => v / b.w.min(b.h).max(1.0),
-        _ => s.parse().map_err(|_| format!("bad scale `{s}`"))?,
+        _ => css::finite(s).ok_or_else(|| format!("bad scale `{s}`"))?,
     })
 }
 
+/// Refuses a path an agent could use to make Windows talk to another machine or hide data: a
+/// network share (`\\host\share`, `//host`, `\\?\UNC\`) sends the user's credentials to the host,
+/// a device path (`\\.\`) reaches hardware, and a `:` past the drive letter names an NTFS
+/// alternate data stream. Every path an agent supplies, to read or to write, goes through here.
+pub fn check_path(path: &str) -> Result<(), String> {
+    let s = path.trim();
+    let b = s.as_bytes();
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    let mut rest = s;
+    if b.len() >= 2 && sep(b[0]) && sep(b[1]) {
+        // `\\?\C:\x` is the long form of a local path; any other double-separator start is a
+        // share or a device, or a way to one (`\\?\UNC\`, `\\?\GLOBALROOT\Device\Mup\`).
+        let t = &b[2..];
+        let local = t.len() >= 4 && t[0] == b'?' && sep(t[1]) && t[2].is_ascii_alphabetic() && t[3] == b':';
+        if !local {
+            return Err(format!("`{path}` is a network or device path; give a local path"));
+        }
+        rest = &s[4..];
+    }
+    if rest.starts_with(r"\??\") {
+        return Err(format!("`{path}` is a device path; give a local path"));
+    }
+    let drive = rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) && rest.as_bytes().get(1) == Some(&b':');
+    if rest[if drive { 2 } else { 0 }..].contains(':') {
+        return Err(format!("`{path}`: a `:` is only allowed after the drive letter"));
+    }
+    Ok(())
+}
+
+/// The file a tool writes at the agent's `path`. Only the extension the tool produces is
+/// allowed, so a path cannot name a document to overwrite or a script to drop in a startup folder.
+fn out_file(path: &str, ext: &str) -> Result<PathBuf, String> {
+    check_path(path)?;
+    let p = PathBuf::from(path);
+    if p.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)) {
+        return Ok(p);
+    }
+    Err(format!("`{path}` must end in .{ext}: this tool only writes .{ext} files"))
+}
+
+/// Checks the folder a tool is about to fill: it is new, empty, or holds the tool's own
+/// `marker` file from an earlier export, which `is_ours` must recognise by what the tool itself writes. Any other folder may be the
+/// person's own files.
 #[cfg(not(target_arch = "wasm32"))]
-fn out_dir(a: &Args) -> PathBuf {
-    a.str("directory")
+pub(crate) fn out_folder(dir: &Path, marker: &str, is_ours: impl Fn(&[u8]) -> bool) -> Result<(), String> {
+    check_path(&dir.to_string_lossy())?;
+    let Ok(mut entries) = std::fs::read_dir(dir) else {
+        return if dir.exists() { Err(format!("{}: not a folder", dir.display())) } else { Ok(()) };
+    };
+    let ours = || std::fs::read(dir.join(marker)).is_ok_and(|bytes| is_ours(&bytes));
+    if entries.next().is_none() || ours() {
+        return Ok(());
+    }
+    Err(format!("{}: the folder is not empty and holds no earlier export of this tool; give a new or empty folder", dir.display()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn out_dir(a: &Args) -> Result<PathBuf, String> {
+    if let Some(d) = a.str("directory") {
+        check_path(d)?;
+    }
+    Ok(a.str("directory")
         .map(PathBuf::from)
         .or_else(dirs::download_dir)
         .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(|| PathBuf::from(".")))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2562,9 +2673,9 @@ fn export_presentation(host: &mut dyn Host, a: &Args) -> ToolResult {
         language,
     };
     let path = match a.str("path") {
-        Some(p) => PathBuf::from(p),
+        Some(p) => out_file(p, "pdf")?,
         None => {
-            let dir = out_dir(a);
+            let dir = out_dir(a)?;
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             unique_path(&dir, &title, "pdf")
         }
@@ -2584,6 +2695,16 @@ fn export_handoff(_: &mut dyn Host, _: &Value) -> ToolResult {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn export_site(host: &mut dyn Host, a: &Value) -> ToolResult {
+    super::site::export(host, a)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn export_site(_: &mut dyn Host, _: &Value) -> ToolResult {
+    Err(NO_DISK.into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn export(host: &mut dyn Host, a: &Args) -> ToolResult {
     use crate::io::export::{Format, Item, Scope, Spec};
     let gpu = host.gpu();
@@ -2593,7 +2714,7 @@ fn export(host: &mut dyn Host, a: &Args) -> ToolResult {
         .get("nodes")
         .and_then(Value::as_object)
         .ok_or("`nodes` must be an object of nodeId → export settings")?;
-    let dir = out_dir(a);
+    let dir = out_dir(a)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut written = Vec::new();
     for (key, settings) in nodes {
@@ -2617,17 +2738,27 @@ fn export(host: &mut dyn Host, a: &Args) -> ToolResult {
                 f => return Err(format!("format `{f}` is not supported (png, svg, pdf)")),
             };
             let scale = parse_scale(s.str("scale"), b)?;
+            // `name` overrides the file stem (node names repeat across screens); `transparent`
+            // (per node, else top-level) drops the white background for PNG and SVG.
+            let stem_base = s
+                .str("name")
+                .filter(|n| !n.trim().is_empty())
+                .map_or_else(|| name.clone(), str::to_owned);
+            let transparent = s
+                .bool("transparent")
+                .or_else(|| a.bool("transparent"))
+                .unwrap_or(false);
             let stem = if format == Format::Png && scale != 1.0 {
-                format!("{name}@{}x", (scale * 100.0).round() / 100.0)
+                format!("{stem_base}@{}x", (scale * 100.0).round() / 100.0)
             } else {
-                name.clone()
+                stem_base
             };
             let path = unique_path(&dir, &stem, format.ext());
             let spec = Spec {
                 format,
                 scope: Scope::Selection,
                 scale,
-                transparent: false,
+                transparent,
             };
             let item = Item {
                 name: name.clone(),
@@ -2666,9 +2797,9 @@ fn export_pdf(host: &mut dyn Host, a: &Args) -> ToolResult {
         })
         .collect();
     let path = match a.str("path") {
-        Some(p) => PathBuf::from(p),
+        Some(p) => out_file(p, "pdf")?,
         None => {
-            let dir = out_dir(a);
+            let dir = out_dir(a)?;
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             unique_path(&dir, project_name.as_deref().unwrap_or("papercraft"), "pdf")
         }
@@ -2836,6 +2967,7 @@ fn image_asset(src: &str) -> Result<String, String> {
             return Ok(path.to_string());
         }
         let path = percent_decode(path);
+        check_path(&path)?;
         crate::vfs::read(&path).map_err(|e| format!("{path}: {e}"))?
     };
     if bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml") {
@@ -3507,7 +3639,7 @@ impl Builder<'_, '_> {
         let self_closing = raw[..raw.find('>').unwrap_or(0)].ends_with('/');
         // The importer keeps viewBox units: fit the viewBox into width × height ourselves, as a
         // browser does (centred, aspect kept), and make the viewBox the final size.
-        let vb: Vec<f64> = el.attr("viewBox").map(|v| v.split([' ', ',']).filter_map(|n| n.trim().parse().ok()).collect()).unwrap_or_default();
+        let vb: Vec<f64> = el.attr("viewBox").map(|v| v.split([' ', ',']).filter_map(css::finite).collect()).unwrap_or_default();
         let mut fitted = None;
         if let [vx, vy, vw, vh] = vb[..]
             && vw > 0.0
@@ -3898,9 +4030,9 @@ impl Builder<'_, '_> {
                     return fail(format!("{} did not return an SVG", p.name));
                 };
                 // No viewBox (flagcdn's jp.svg has only width and height): the size is the box.
-                let px = |k: &str| svg_el.attr(k).and_then(|v| v.trim_end_matches("px").parse::<f64>().ok());
+                let px = |k: &str| svg_el.attr(k).and_then(|v| css::finite(v.trim_end_matches("px")));
                 let vb: Vec<f64> = match svg_el.attr("viewBox") {
-                    Some(v) => v.split([' ', ',']).filter_map(|n| n.parse().ok()).collect(),
+                    Some(v) => v.split([' ', ',']).filter_map(css::finite).collect(),
                     None => px("width").zip(px("height")).map(|(w, h)| vec![0.0, 0.0, w, h]).unwrap_or_default(),
                 };
                 // The importer keeps viewBox units: scale the artwork to the layer size.
@@ -3991,7 +4123,7 @@ impl Builder<'_, '_> {
         // a scale group and make the viewBox match the final size.
         let vb: Vec<f64> = svg_el
             .attr("viewBox")
-            .map(|v| v.split([' ', ',']).filter_map(|n| n.parse().ok()).collect())
+            .map(|v| v.split([' ', ',']).filter_map(css::finite).collect())
             .unwrap_or_default();
         if let [vx, vy, vw, vh] = vb[..]
             && vw > 0.0
@@ -4065,6 +4197,10 @@ impl Builder<'_, '_> {
             return None;
         };
         let same_page = page_part.is_none_or(|p| match_page_key(&self.page_id, "", p));
+        if same_page && crate::editor::structure::moves_into_cycle(self.tx.doc(), src, parent.id) {
+            self.warnings.push(format!("x-paper-clone: node `{key}` skipped, {NEST_ERR}"));
+            return None;
+        }
         let id = if same_page && self.tx.doc().get(src).is_some() {
             clone_subtree(self.tx, src, parent.id, *index, V2::ZERO).0
         } else if let Some((_, _, src_doc)) =
@@ -4453,7 +4589,7 @@ fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
         v["parentId"] = json!(parent.map_or(ROOT.into(), |p| node_key(ed, page, p)));
     }
     if !ignored.is_empty() {
-        v["ignoredStyles"] = json!(ignored);
+        v["ignoredStyles"] = json!(super::import_html::group_ignored(ignored.iter().map(String::as_str)));
     }
     if !warnings.is_empty() {
         v["warnings"] = json!(warnings);
@@ -4780,6 +4916,8 @@ fn set_text_content(ed: &mut Editor, a: &Args) -> ToolResult {
                 )
             })?;
             *node.kind.text_mut().unwrap() = t.clone();
+            // Hand-set text replaces a bound string, as a new colour replaces a `text-color` binding.
+            node.bindings.remove("text");
             crate::editor::structure::mark_overrides(tx, id, &["text"]);
             let node = tx.node_mut(id).unwrap();
             let len = t.chars().count();
@@ -4856,7 +4994,7 @@ fn get_variables(ed: &mut Editor, a: &Args) -> ToolResult {
 
 /// The project design system; a project that never went through the session reads as its first
 /// page does, like `edit_design`.
-fn design_of(ed: &Editor) -> DesignSystem {
+pub(super) fn design_of(ed: &Editor) -> DesignSystem {
     if ed.design.collections.is_empty() {
         return variables::migrate_from_document(ed.page_doc(0));
     }
@@ -4929,9 +5067,11 @@ fn parse_value(name: &str, kind: Option<Kind>, v: &Value) -> Result<(Kind, DsVal
             .trim()
             .trim_end_matches("px")
             .trim()
-            .parse()
+            .parse::<f64>()
+            .ok()
+            .filter(|n| n.is_finite())
             .map(|n| (Kind::Number, DsVal::Number(n)))
-            .map_err(|_| bad("number")),
+            .ok_or_else(|| bad("number")),
         (Some(Kind::Number), _) => Err(bad("number")),
         (Some(Kind::String), Value::String(s)) => Ok((Kind::String, DsVal::String(s.clone()))),
         (Some(Kind::String), _) => Err(bad("string")),
@@ -5333,15 +5473,19 @@ fn set_tokens(ed: &mut Editor, a: &Args) -> ToolResult {
 
 fn set_variable_mode(ed: &mut Editor, a: &Args) -> ToolResult {
     let mode = a.req_str("mode")?.to_string();
-    if !ed.page_doc(ed.active_page).modes.contains_key(&mode) {
-        let known: Vec<String> = ed.page_doc(ed.active_page).modes.keys().cloned().collect();
+    let Some((cid, mid)) = design::find_mode(&ed.design, &mode) else {
+        let known: Vec<&str> = ed
+            .design
+            .collections
+            .iter()
+            .flat_map(|c| c.modes.iter().map(|m| m.name.as_str()))
+            .collect();
         return Err(format!(
             "no mode `{mode}`; define it with set_variables {{mode}} first (modes: {})",
             known.join(", ")
         ));
-    }
+    };
     // Project-wide like before: every page switches (the Design tab switches one page).
-    let (cid, mid) = design::find_mode(&ed.design, &mode).ok_or(format!("no mode `{mode}`"))?;
     let mut fills = 0;
     for page in 0..ed.pages.len() {
         fills += ed
@@ -5401,7 +5545,7 @@ fn get_components(ed: &mut Editor, a: &Args) -> ToolResult {
             }
         }
     }
-    text(json!({"components": items}))
+    Ok(super::budget::json_out(json!({"components": items}), a.num("maxTokens"), "pass pageId to list one page"))
 }
 
 /// `color` on an icon (vector shapes with no text, e.g. an <x-paper-icon>) recolors the shapes'
@@ -5644,6 +5788,8 @@ fn find_component(ed: &Editor, a: &Args, default_page: usize) -> Result<(usize, 
     Ok((page, id))
 }
 
+const NEST_ERR: &str = "a component can't contain an instance of itself, directly or through other components";
+
 fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
     let def = page_arg(ed, a)?;
     // A componentKey that no page owns may name a component of an enabled library.
@@ -5665,6 +5811,12 @@ fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
             (pp, Some(id))
         }
     };
+    if lib.is_none() && cpage == page && crate::editor::structure::would_nest(ed.page_doc(page), comp, parent) {
+        return Err(NEST_ERR.into());
+    }
+    if lib.is_none() && cpage != page && crate::editor::structure::would_nest_across(ed, cpage, comp, page, parent) {
+        return Err(NEST_ERR.into());
+    }
     let index = a.num("index").map(|i| i.max(0.0) as usize);
     let at = a.num("x").zip(a.num("y"));
     let name = a
@@ -5736,33 +5888,6 @@ fn create_instance(ed: &mut Editor, a: &Args) -> ToolResult {
         .map(|n| json!({"id": node_key(ed, page, n.id), "name": n.name, "text": n.kind.text()}))
         .collect();
     text(json!({"id": node_key(ed, page, id), "textLayers": texts, "layers": layers}))
-}
-
-/// Prototype links: clicking `nodeId` in Present mode goes to frame `to` (same page); `to: null`
-/// removes the link.
-fn set_prototype_links(ed: &mut Editor, a: &Args) -> ToolResult {
-    let page = page_arg(ed, a)?;
-    let mut set = Vec::new();
-    for l in a.arr("links")? {
-        let l = Args(l.as_object().ok_or("each link must be an object")?);
-        let (p, from) = resolve(ed, l.req_str("nodeId")?, page)?;
-        let to = match l.str("to").filter(|t| !t.is_empty()) {
-            Some(t) => {
-                let (tp, to) = resolve(ed, t, p)?;
-                if tp != p || !ed.page_doc(p).get(to).is_some_and(|n| n.is_frame()) {
-                    return Err(format!("`{t}` must be a frame on the same page"));
-                }
-                Some(to)
-            }
-            None => None,
-        };
-        set.push((p, from, to));
-    }
-    let n = set.len();
-    for (p, from, to) in set {
-        ed.with_page(p, |ed| ed.edit("Prototype link", |tx| tx.node_mut(from).unwrap().link = to));
-    }
-    text(json!({"linked": n}))
 }
 
 /// The inspector's way to set instance properties on the page being viewed.
@@ -6398,6 +6523,11 @@ fn swap_instance(ed: &mut Editor, a: &Args) -> ToolResult {
             (d, s)
         }
     };
+    // Checked before `with_page`, which parks the other pages' documents it needs to read.
+    let under = ed.page_doc(page).get(inst).and_then(|n| n.parent);
+    if lib.is_none() && cpage != page && crate::editor::structure::would_nest_across(ed, cpage, new_main, page, under) {
+        return Err(NEST_ERR.into());
+    }
     ed.with_page(page, |ed| {
         // An instance root: linked, and not itself inside an instance. A missing main is fine,
         // so a swap restores such an instance.
@@ -6412,8 +6542,8 @@ fn swap_instance(ed: &mut Editor, a: &Args) -> ToolResult {
                 a.req_str("nodeId").unwrap_or_default()
             ));
         }
-        if cpage == page && lib.is_none() && (inst == new_main || ed.doc.is_ancestor(inst, new_main)) {
-            return Err("could not swap instance to that component".into());
+        if cpage == page && lib.is_none() && crate::editor::structure::swap_nests(&ed.doc, inst, new_main) {
+            return Err(NEST_ERR.into());
         }
         // A nested instance (inside another instance) keeps its place in it: a swap override.
         let ok = ed.edit("Swap instance", |tx| {
@@ -6500,6 +6630,7 @@ fn diff_frames(ed: &mut Editor, a: &Args) -> ToolResult {
 /// design system is project-wide, so every page gets it in one undo step.
 #[cfg(not(target_arch = "wasm32"))]
 fn import_design_system(host: &mut dyn Host, a: &Args) -> ToolResult {
+    check_path(a.req_str("path")?)?;
     let dir = PathBuf::from(a.req_str("path")?);
     let pkg = crate::design_system::import_package(&dir)?;
     let ed = host.editor();
@@ -6541,6 +6672,9 @@ fn import_design_system(_: &mut dyn Host, _: &Args) -> ToolResult {
 #[cfg(not(target_arch = "wasm32"))]
 fn export_design_system(host: &mut dyn Host, a: &Args) -> ToolResult {
     let dir = PathBuf::from(a.req_str("path")?);
+    out_folder(&dir, "manifest.json", |b| {
+        std::str::from_utf8(b).is_ok_and(|raw| crate::design_system::parse_manifest(raw).is_ok())
+    })?;
     let project = host.project().map(|p| p.manifest.name.clone());
     let ed = host.editor();
     let page = page_arg(ed, a)?;
@@ -6678,7 +6812,7 @@ fn set_code_link(ed: &mut Editor, a: &Args) -> ToolResult {
 }
 
 /// The JSON a tool call answers with (its first text block).
-fn call_json(host: &mut dyn Host, name: &str, args: Value) -> Result<Value, String> {
+pub(super) fn call_json(host: &mut dyn Host, name: &str, args: Value) -> Result<Value, String> {
     let outs = call(host, name, &args)?;
     let t = outs.iter().find_map(|o| if let Out::Text(t) = o { Some(t.as_str()) } else { None }).ok_or_else(|| format!("{name} answered no text"))?;
     serde_json::from_str(t).map_err(|e| format!("{name}: {e}"))
@@ -6903,6 +7037,11 @@ fn duplicate_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                 (pp, Some(Some(pid)))
             }
         };
+        if let Some(under) = parent
+            && crate::editor::structure::copy_nests_across(ed, src_page, id, dest_page, under)
+        {
+            return Err(NEST_ERR.into());
+        }
         jobs.push((src_page, dest_page, id, parent));
     }
     let mut out = Vec::new();
@@ -7039,6 +7178,9 @@ fn move_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                             return Err("the destination can't have children".into());
                         }
                     }
+                    if crate::editor::structure::moves_into_cycle(doc, id, target) {
+                        return Err(NEST_ERR.into());
+                    }
                     tx.reparent(id, target, None);
                     let list: Vec<NodeId> = tx
                         .doc()
@@ -7071,6 +7213,9 @@ fn move_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                 && !ddoc.get(t).unwrap().is_container()
             {
                 return Err("the destination can't have children".into());
+            }
+            if crate::editor::structure::copy_nests_across(ed, src_page, id, dest_page, target) {
+                return Err(NEST_ERR.into());
             }
             let src_doc = ed.page_doc(src_page).clone();
             let ids = (ed.pages[src_page].id.clone(), ed.pages[dest_page].id.clone());

@@ -289,3 +289,111 @@ async fn two_people_editing_one_page_keep_both_changes() {
         assert_eq!(v["nodes"][1]["x"], 20, "B's edit survived in {dir:?}");
     }
 }
+
+async fn merge_pair(label: &str, page: &str) -> (relay::Running, PathBuf, PathBuf) {
+    let running = relay::spawn_with_data(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        None,
+        Some(Data {
+            dir: temp(&format!("{label}-data")),
+            library: false,
+        }),
+    )
+    .unwrap();
+    let server = format!("http://127.0.0.1:{}", running.port());
+    let a = temp(&format!("{label}-a"));
+    std::fs::create_dir_all(a.join("pages")).unwrap();
+    std::fs::write(a.join("project.json"), r#"{"manifest":1}"#).unwrap();
+    std::fs::write(a.join("pages/p1.json"), page).unwrap();
+    let share = Share::new(&server);
+    share.save(&a).unwrap();
+    sync::sync_once(&a).await.unwrap();
+    let b = temp(&format!("{label}-b"));
+    Share::from_link(&share.link()).unwrap().save(&b).unwrap();
+    sync::sync_once(&b).await.unwrap();
+    (running, a, b)
+}
+
+fn fake_page(a: i64, b: i64) -> String {
+    format!(r#"{{"next_id":3,"root":[1,2],"nodes":[{{"id":1,"x":{a}}},{{"id":2,"x":{b}}}]}}"#)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_download_waits_for_the_save_and_then_merges() {
+    use std::sync::atomic::AtomicBool;
+    let (_relay, a, b) = merge_pair("hold", &fake_page(0, 0)).await;
+    std::fs::write(b.join("pages/p1.json"), fake_page(0, 20)).unwrap();
+    sync::sync_once(&b).await.unwrap();
+
+    // A has unsaved edits: B's change must not land in the folder yet.
+    let hold = AtomicBool::new(true);
+    assert!(!sync::sync_once_holding(&a, &hold).await.unwrap());
+    assert_eq!(read(&a, "pages/p1.json").unwrap(), fake_page(0, 0));
+
+    // A saves its edit, the hold lifts, and both edits meet in the merge.
+    std::fs::write(a.join("pages/p1.json"), fake_page(10, 0)).unwrap();
+    hold.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(sync::sync_once_holding(&a, &hold).await.unwrap());
+    let v: serde_json::Value = serde_json::from_str(&read(&a, "pages/p1.json").unwrap()).unwrap();
+    assert_eq!((v["nodes"][0]["x"].as_i64(), v["nodes"][1]["x"].as_i64()), (Some(10), Some(20)));
+}
+
+fn real_page(nodes: &str, root: &str) -> String {
+    format!(
+        r#"{{"format":"paper-rs-page","version":4,"id":"p1","name":"P","next_id":10,"root":{root},"nodes":[{nodes}]}}"#
+    )
+}
+
+fn frame(id: u64, children: &str) -> String {
+    format!(
+        r#"{{"id":{id},"name":"F{id}","type":"frame","rect":{{"x":0,"y":0,"w":50,"h":50}},"children":{children}}}"#
+    )
+}
+
+fn rect(id: u64, parent: Option<u64>) -> String {
+    let parent = parent.map(|p| format!(r#","parent":{p}"#)).unwrap_or_default();
+    format!(r#"{{"id":{id},"name":"R{id}","type":"rect","rect":{{"x":0,"y":0,"w":5,"h":5}}{parent}}}"#)
+}
+
+async fn assert_opens(dir: &Path) -> papercraft::project::format::PageData {
+    let text = read(dir, "pages/p1.json").unwrap();
+    papercraft::project::format::page_from_json(&text).expect("the merged page opens")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_layer_moved_into_two_frames_still_opens() {
+    let base = real_page(&format!("{},{},{}", frame(1, "[]"), frame(2, "[]"), rect(3, None)), "[1,2,3]");
+    let (_relay, a, b) = merge_pair("two-parents", &base).await;
+    let into = |frame_id: u64| {
+        let (f1, f2) = if frame_id == 1 { ("[3]", "[]") } else { ("[]", "[3]") };
+        real_page(
+            &format!("{},{},{}", frame(1, f1), frame(2, f2), rect(3, Some(frame_id))),
+            "[1,2]",
+        )
+    };
+    std::fs::write(a.join("pages/p1.json"), into(1)).unwrap();
+    std::fs::write(b.join("pages/p1.json"), into(2)).unwrap();
+    sync::sync_once(&b).await.unwrap();
+    sync::sync_once(&a).await.unwrap();
+    sync::sync_once(&b).await.unwrap();
+    for dir in [&a, &b] {
+        assert_opens(dir).await.doc.validate().unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_layer_added_to_a_deleted_frame_is_kept_and_the_page_opens() {
+    let base = real_page(&frame(1, "[]"), "[1]");
+    let (_relay, a, b) = merge_pair("orphan", &base).await;
+    std::fs::write(a.join("pages/p1.json"), real_page("", "[]")).unwrap();
+    let added = real_page(&format!("{},{}", frame(1, "[2]"), rect(2, Some(1))), "[1]");
+    std::fs::write(b.join("pages/p1.json"), added).unwrap();
+    sync::sync_once(&b).await.unwrap();
+    sync::sync_once(&a).await.unwrap();
+    sync::sync_once(&b).await.unwrap();
+    for dir in [&a, &b] {
+        let page = assert_opens(dir).await;
+        assert!(page.doc.nodes.contains_key(&papercraft::model::NodeId(2)), "the new layer survived");
+    }
+}

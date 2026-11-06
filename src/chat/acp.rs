@@ -3,7 +3,7 @@
 //! (or `session/load`) with PaperCraft's MCP server, `session/prompt`, then the agent's
 //! `session/update` notifications are mapped to [`Event`]s until the prompt response arrives.
 
-use super::events::{Event, Turn, TurnConfig};
+use super::events::{Event, Retry, Turn, TurnConfig};
 use super::{tools, Usage};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
@@ -33,6 +33,8 @@ const SERVER_NAME: &str = "papercraft";
 const BRIDGE: &str = "papercraft-mcp";
 /// How agents prefix MCP tool names; longest first.
 const NAME_PREFIXES: [&str; 4] = ["mcp__papercraft__", "mcp_papercraft_", "papercraft__", "papercraft_"];
+/// Where opencode puts a pending retry in a `session_info_update` (null once a call goes through).
+const RETRY_META: &str = "opencode/retry";
 /// Same keys the other backends drop: the agent must run on its own login.
 const CREDENTIAL_ENV: [&str; 4] = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"];
 
@@ -113,7 +115,7 @@ pub fn start(cfg: &TurnConfig, program: &Path, args: &[String], env: &[(String, 
 
 fn spawn(cfg: &TurnConfig, program: &Path, args: &[String], env: &[(String, String)], prompt: &str, tx: Sender<Event>, bridge: Option<PathBuf>) -> Result<AcpTurn, String> {
     let mut cmd = Command::new(program);
-    cmd.args(args).envs(env.iter().cloned()).current_dir(&cfg.project_dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    crate::chat::path::no_window(&mut cmd).args(args).envs(env.iter().cloned()).current_dir(&cfg.project_dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     for k in CREDENTIAL_ENV {
         cmd.env_remove(k);
     }
@@ -176,6 +178,9 @@ fn spawn(cfg: &TurnConfig, program: &Path, args: &[String], env: &[(String, Stri
             cost: None,
             plans: 0,
             sid: None,
+            retrying: None,
+            switch_on_retry: false,
+            cancelled_for: None,
         };
         let result = c.run(&cfg, &prompt, bridge, &session);
         c.close_open_tools();
@@ -255,6 +260,13 @@ struct Client {
     cost: Option<f64>,
     plans: u32,
     sid: Option<String>,
+    /// The provider error the agent is waiting out, while it retries.
+    retrying: Option<String>,
+    /// A fallback model is left ("Free (auto)"): a retry cancels the prompt to move on to it
+    /// instead of waiting for the same provider.
+    switch_on_retry: bool,
+    /// The prompt was cancelled for this retry; its answer becomes that error.
+    cancelled_for: Option<String>,
 }
 
 impl Client {
@@ -356,6 +368,8 @@ impl Client {
         }
         let mut fallbacks = cfg.fallbacks.iter();
         let r = loop {
+            self.switch_on_retry = models.as_ref().is_some_and(|m| fallbacks.clone().any(|f| m.options.iter().any(|(id, _)| id == f)));
+            (self.retrying, self.cancelled_for) = (None, None);
             let e = match self.call("session/prompt", json!({"sessionId": sid, "prompt": blocks}), None) {
                 Ok(r) => break r,
                 Err(e) => e,
@@ -403,8 +417,17 @@ impl Client {
                 }
             }
             match self.rx.recv_timeout(TICK) {
-                Ok(msg) if msg.get("method").is_some() => self.incoming(&msg),
+                Ok(msg) if msg.get("method").is_some() => {
+                    self.incoming(&msg);
+                    if method == "session/prompt" {
+                        self.cancel_for_retry();
+                    }
+                }
                 Ok(msg) if msg["id"] == json!(id) => {
+                    // Cancelled to move off a rate-limited model: the error is the provider's.
+                    if let Some(why) = self.cancelled_for.take() {
+                        return Err(format!("Rate limited: {why}"));
+                    }
                     return match msg.get("error") {
                         Some(e) => Err(rpc_error(e)),
                         None => Ok(msg["result"].clone()),
@@ -419,6 +442,17 @@ impl Client {
                 Err(RecvTimeoutError::Disconnected) => return Err("the agent exited".into()),
             }
         }
+    }
+
+    /// Under "Free (auto)", a retry before any tool ran cancels the prompt: the next free model
+    /// answers now instead of the agent waiting out this one's rate limit.
+    fn cancel_for_retry(&mut self) {
+        if !self.switch_on_retry || self.cancelled_for.is_some() || !self.tools.is_empty() || self.stopped.load(Ordering::SeqCst) {
+            return;
+        }
+        let (Some(why), Some(sid)) = (self.retrying.clone(), self.sid.clone()) else { return };
+        send(&self.stdin, &json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid}}));
+        self.cancelled_for = Some(why);
     }
 
     fn incoming(&mut self, msg: &Value) {
@@ -451,6 +485,13 @@ impl Client {
                 }
             }
             "plan" => self.plan(u),
+            "session_info_update" => {
+                if let Some(r) = u["_meta"].get(RETRY_META) {
+                    let retry = retry_of(r);
+                    self.retrying = retry.as_ref().map(|r| r.message.clone());
+                    self.emit(Event::Retrying(retry));
+                }
+            }
             "usage_update" => {
                 if let Some(used) = u["used"].as_u64() {
                     self.emit(Event::Context(used));
@@ -549,6 +590,45 @@ impl Client {
         };
         send(&self.stdin, &reply(rpc, json!({"outcome": outcome})));
     }
+}
+
+/// opencode's retry status: `{attempt, nextRetryAt, error: {type, message, status?}}`; None for
+/// null (the retry is over).
+fn retry_of(r: &Value) -> Option<Retry> {
+    if !r.is_object() {
+        return None;
+    }
+    let e = &r["error"];
+    let text = e["message"].as_str().filter(|m| !m.trim().is_empty()).or_else(|| e["type"].as_str()).unwrap_or("The provider failed the request");
+    let message = match e["status"].as_u64() {
+        Some(code) if !text.contains(&code.to_string()) => format!("{} (HTTP {code})", text.trim()),
+        _ => text.trim().to_owned(),
+    };
+    Some(Retry {
+        attempt: r["attempt"].as_u64().map_or(1, |a| a as u32),
+        message,
+        next_at_ms: r["nextRetryAt"].as_str().and_then(iso_ms),
+    })
+}
+
+/// Unix ms of an RFC 3339 UTC time (`2026-11-02T17:14:41.528Z`, as JavaScript's `toISOString`).
+fn iso_ms(s: &str) -> Option<u64> {
+    let s = s.strip_suffix('Z')?;
+    let (date, time) = s.split_once('T')?;
+    let mut d = date.splitn(3, '-').map(|p| p.parse::<i64>().ok());
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let (hms, frac) = time.split_once('.').unwrap_or((time, "0"));
+    let mut t = hms.splitn(3, ':').map(|p| p.parse::<i64>().ok());
+    let (h, min, sec) = (t.next()??, t.next()??, t.next()??);
+    let ms: i64 = format!("{frac:0<3}").get(..3)?.parse().ok()?;
+    // Days from civil (Howard Hinnant).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(((days * 24 + h) * 60 + min) * 60 + sec).ok().map(|secs| secs * 1000 + ms as u64)
 }
 
 fn reply(id: &Value, result: Value) -> Value {
@@ -687,6 +767,8 @@ mod tests {
     const LOAD: &str = include_str!("../../tests/fixtures/chat/acp_load.jsonl");
     const LOAD_FAILS: &str = include_str!("../../tests/fixtures/chat/acp_load_fails.jsonl");
     const ERROR: &str = include_str!("../../tests/fixtures/chat/acp_error.jsonl");
+    const RETRY: &str = include_str!("../../tests/fixtures/chat/acp_retry.jsonl");
+    const RETRY_WAIT: &str = include_str!("../../tests/fixtures/chat/acp_retry_wait.jsonl");
 
     fn cfg() -> TurnConfig {
         TurnConfig { project_dir: std::env::temp_dir(), mcp_url: "http://127.0.0.1:29991/mcp".into(), system: "SYS".into(), ..Default::default() }
@@ -839,6 +921,30 @@ mod tests {
     }
 
     #[test]
+    fn a_retrying_agent_is_shown_and_free_auto_moves_on_at_once() {
+        let mut c = cfg();
+        c.fallbacks = vec!["free/b".into()];
+        let (ev, sent) = run(RETRY, c, None, |_, _| {});
+        let retry = Retry { attempt: 1, message: "Rate limit exceeded (HTTP 429)".into(), next_at_ms: Some(1_793_639_681_528) };
+        assert!(ev.contains(&Event::Retrying(Some(retry))), "{ev:?}");
+        assert_eq!(method(&sent, "session/cancel")["params"]["sessionId"], "sess-1");
+        assert!(ev.iter().any(|e| matches!(e, Event::ModelSwitch { from, to, reason } if from == "free/a" && to == "free/b" && reason.contains("Rate limit exceeded"))), "{ev:?}");
+        assert!(matches!(ev.last(), Some(Event::TurnEnd { stop_reason: Some(r), .. }) if r == "end_turn"), "{ev:?}");
+    }
+
+    #[test]
+    fn a_chosen_model_waits_out_its_retry_and_the_notice_clears() {
+        let (ev, sent) = run(RETRY_WAIT, cfg(), None, |_, _| {});
+        assert!(ev.iter().any(|e| matches!(e, Event::Retrying(Some(r)) if r.attempt == 2 && r.message == "Overloaded")), "{ev:?}");
+        assert!(ev.contains(&Event::Retrying(None)), "{ev:?}");
+        assert!(!sent.iter().any(|v| v["method"] == "session/cancel"), "no fallback: the agent keeps trying");
+        assert!(matches!(ev.last(), Some(Event::TurnEnd { stop_reason: Some(r), .. }) if r == "end_turn"), "{ev:?}");
+        assert_eq!(iso_ms("1970-01-01T00:00:01.5Z"), Some(1500));
+        assert_eq!(iso_ms("2000-03-01T00:00:00Z"), Some(951_868_800_000));
+        assert_eq!(iso_ms("not a date"), None);
+    }
+
+    #[test]
     fn a_failure_after_a_tool_ran_is_not_retried() {
         let mut c = cfg();
         c.fallbacks = vec!["paid/b".into()];
@@ -987,7 +1093,7 @@ mod tests {
         ];
         let (tx, rx) = channel();
         let (stdin, _) = (Arc::new(Mutex::new(None)), ());
-        let mut c = Client { rx: channel().1, stdin, approvals: channel().1, stopped: Arc::new(AtomicBool::new(false)), tx, next_id: 0, replay: false, pending: HashMap::new(), tools: HashMap::new(), usage: None, cost: None, plans: 0, sid: None };
+        let mut c = Client { rx: channel().1, stdin, approvals: channel().1, stopped: Arc::new(AtomicBool::new(false)), tx, next_id: 0, replay: false, pending: HashMap::new(), tools: HashMap::new(), usage: None, cost: None, plans: 0, sid: None, retrying: None, switch_on_retry: false, cancelled_for: None };
         for u in fx {
             c.update(&serde_json::from_str(u).unwrap());
         }

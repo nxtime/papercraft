@@ -110,10 +110,19 @@ impl Share {
     }
 }
 
+/// The token is the only key to a shared project, so it comes from the OS generator
+/// (`crypto.getRandomValues` in the browser) and never from a seeded PRNG. Failing to get
+/// entropy stops the share instead of minting a guessable link.
+#[cfg(not(target_arch = "wasm32"))]
 fn new_token() -> String {
-    (0..relay_proto::MIN_TOKEN_LEN)
-        .map(|_| char::from_digit(fastrand::u32(0..16), 16).unwrap_or('0'))
-        .collect()
+    let mut bytes = [0u8; relay_proto::TOKEN_BYTES];
+    getrandom::fill(&mut bytes).expect("the operating system has no random number generator");
+    relay_proto::hex(&bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn new_token() -> String {
+    crate::web::new_token()
 }
 
 /// FNV-1a: a stable fingerprint of a file's bytes (the std hasher may change between releases,
@@ -140,29 +149,91 @@ fn base_file(dir: &Path, path: &str) -> PathBuf {
 
 /// Remembers `bytes` as what the folder and the server agreed on for `path`.
 fn remember_base(dir: &Path, path: &str, bytes: &[u8]) {
-    let file = base_file(dir, path);
-    if let Some(parent) = file.parent() {
-        vfs::create_dir_all(parent).ok();
+    write_under(&base_file(dir, path), bytes).ok();
+}
+
+/// `file`, or `file.1`, `file.2`... when that name is taken, so a later conflict never
+/// replaces the server copy an earlier one kept.
+fn unused_name(file: PathBuf) -> PathBuf {
+    let mut candidate = file.clone();
+    for n in 1.. {
+        if !vfs::exists(&candidate) {
+            break;
+        }
+        let mut name = file.as_os_str().to_owned();
+        name.push(format!(".{n}"));
+        candidate = PathBuf::from(name);
     }
-    vfs::write(file, bytes).ok();
+    candidate
+}
+
+/// Whether `file` still has the fingerprint `seen` (None: it does not exist). A round waits on
+/// the network between its scan and its writes, and the app may save a page meanwhile; such a
+/// file is left for the next round, which sees both sides changed and merges them.
+fn unchanged(file: &Path, seen: Option<u64>) -> bool {
+    vfs::read(file).ok().map(|b| fingerprint(&b)) == seen
+}
+
+/// Atomically writes `bytes`, creating the parent folder: a page is never seen half written,
+/// even if the app is killed mid-sync.
+fn write_under(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = file.parent() {
+        vfs::create_dir_all(parent)?;
+    }
+    crate::io::atomic::write(file, bytes)
+}
+
+/// What merging this folder's copy of a page with the server's gave.
+enum Merged {
+    /// Not a mergeable page: the folder's version wins.
+    No,
+    /// A valid page holding both sides' edits.
+    Page(Vec<u8>),
+    /// The merge is not a page that opens; the folder's version stays.
+    Invalid,
 }
 
 /// The merge of this folder's and the server's copy of a page, both edited from the last synced
 /// one; None when that copy or any of the three is not JSON or packed JSON (the folder's
 /// version then wins).
-fn merged_copy(dir: &Path, path: &str, local: &[u8], remote: &[u8]) -> Option<Vec<u8>> {
+fn merged_copy(dir: &Path, path: &str, local: &[u8], remote: &[u8]) -> Merged {
     use crate::project::packed;
     let is_packed = path.ends_with(&format!(".{}", packed::EXT));
     if !is_packed && !path.ends_with(".json") {
-        return None;
+        return Merged::No;
     }
-    let parse = |b: &[u8]| match is_packed {
-        true => serde_json::from_slice::<serde_json::Value>(&packed::unpack(b).ok()?).ok(),
-        false => serde_json::from_slice::<serde_json::Value>(b).ok(),
+    let json = |b: &[u8]| match is_packed {
+        true => packed::unpack(b).ok(),
+        false => Some(b.to_vec()),
     };
-    let base = parse(&vfs::read(base_file(dir, path)).ok()?)?;
-    let merged = serde_json::to_vec(&crate::merge::merge(&base, &parse(local)?, &parse(remote)?)).ok()?;
-    Some(if is_packed { packed::pack(&merged) } else { merged })
+    let parse = |b: &[u8]| serde_json::from_slice::<serde_json::Value>(&json(b)?).ok();
+    let merged = (|| {
+        let base = parse(&vfs::read(base_file(dir, path)).ok()?)?;
+        let merged = crate::merge::merge(&base, &parse(local)?, &parse(remote)?);
+        serde_json::to_vec(&merged).ok()
+    })();
+    let Some(merged) = merged else {
+        return Merged::No;
+    };
+    // Only real pages are held to the page rules; other JSON is merged as plain data.
+    let is_page = |b: &[u8]| {
+        json(b).is_some_and(|j| {
+            std::str::from_utf8(&j).is_ok_and(|s| crate::project::format::page_from_json(s).is_ok())
+        })
+    };
+    let out = merged_bytes(&merged, is_packed);
+    if is_page(local) && !is_page(&out) {
+        return Merged::Invalid;
+    }
+    Merged::Page(out)
+}
+
+fn merged_bytes(json: &[u8], is_packed: bool) -> Vec<u8> {
+    if is_packed {
+        crate::project::packed::pack(json)
+    } else {
+        json.to_vec()
+    }
 }
 
 /// Every file under `dir` that syncs, as relative `/` paths with their fingerprints.
@@ -249,6 +320,25 @@ async fn list_remote(base: &str, synced_before: bool) -> Result<BTreeMap<String,
 /// One round: reconcile the folder with the server. True when the server's version of some
 /// file was applied here, so the open project may need reloading.
 pub async fn sync_once(dir: &Path) -> Result<bool, SyncError> {
+    sync_once_holding(dir, &AtomicBool::new(false)).await
+}
+
+/// [`sync_once`] that leaves the folder's files alone while `hold` is set (the open project has
+/// unsaved edits): applying the server's copy then would be overwritten by the next autosave,
+/// which would upload without merging and drop the other side's edits. Held files stay
+/// unsynced, so the round after the save sees both sides changed and merges.
+pub async fn sync_once_holding(dir: &Path, hold: &AtomicBool) -> Result<bool, SyncError> {
+    sync_round(dir, hold).await.map(|(applied, ..)| applied)
+}
+
+/// [`sync_once_holding`] that also lists the files whose merge was not a valid page: the
+/// server's copy of each was kept under `.sync-base/conflicts` before the folder's version won,
+/// and the files that went through cleanly (so an earlier conflict on them is over).
+async fn sync_round(
+    dir: &Path,
+    hold: &AtomicBool,
+) -> Result<(bool, Vec<String>, Vec<String>), SyncError> {
+    let (mut conflicts, mut cleared) = (Vec::new(), Vec::new());
     let mut share = Share::load(dir).ok_or_else(|| "this project is not shared".to_string())?;
     let base = share.base();
     let remote = list_remote(&base, !share.synced.is_empty()).await?;
@@ -265,33 +355,57 @@ pub async fn sync_once(dir: &Path) -> Result<bool, SyncError> {
         let url = format!("{base}/f/{path}");
         let file = dir.join(path);
         if l != was.map(|s| s.local) {
-            let Some(hash) = l else {
+            if l.is_none() {
                 let (code, _) = net::request("DELETE", &url, None).await?;
                 if code != 204 && code != 404 {
                     return Err(format!("could not delete {path}: server answered {code}").into());
                 }
                 synced.remove(path);
                 continue;
-            };
+            }
             let mut bytes = vfs::read(&file).map_err(|e| format!("{path}: {e}"))?;
-            let mut hash = hash;
+            // Not the scan's hash: the file may have been saved since, and the stamp must
+            // describe the bytes uploaded.
+            let mut hash = fingerprint(&bytes);
             // The server's copy changed too since we last synced: merge instead of overwriting.
+            let mut merge_invalid = false;
             if let (Some(stamp), Some(was)) = (r, was)
                 && stamp != was.remote
-                && let (200, theirs) = net::request("GET", &url, None).await?
-                && let Some(merged) = merged_copy(dir, path, &bytes, &theirs)
             {
-                vfs::write(&file, &merged).map_err(|e| format!("{path}: {e}"))?;
-                hash = fingerprint(&merged);
-                bytes = merged;
-                applied = true;
+                if hold.load(Ordering::Relaxed) {
+                    continue;
+                }
+                if let (200, theirs) = net::request("GET", &url, None).await? {
+                    match merged_copy(dir, path, &bytes, &theirs) {
+                        Merged::Page(merged) => {
+                            if hold.load(Ordering::Relaxed) || !unchanged(&file, Some(hash)) {
+                                continue;
+                            }
+                            write_under(&file, &merged).map_err(|e| format!("{path}: {e}"))?;
+                            hash = fingerprint(&merged);
+                            bytes = merged;
+                            applied = true;
+                        }
+                        Merged::Invalid => {
+                            // The upload below replaces the server's copy, so keep it here.
+                            let kept = unused_name(dir.join(BASE_DIR).join("conflicts").join(path));
+                            write_under(&kept, &theirs).map_err(|e| format!("{path}: {e}"))?;
+                            merge_invalid = true;
+                            conflicts.push(path.clone());
+                        }
+                        Merged::No => {}
+                    }
+                }
             }
             let (code, body) = net::request("PUT", &url, Some(bytes.clone())).await?;
             if code != 200 {
                 return Err(format!("could not upload {path}: server answered {code}").into());
             }
             let remote = String::from_utf8_lossy(&body).trim().parse().unwrap_or(0);
-            remember_base(dir, path, &bytes);
+            if !merge_invalid {
+                remember_base(dir, path, &bytes);
+                cleared.push(path.clone());
+            }
             synced.insert(
                 path.clone(),
                 Stamp {
@@ -300,21 +414,26 @@ pub async fn sync_once(dir: &Path) -> Result<bool, SyncError> {
                 },
             );
         } else if r != was.map(|s| s.remote) {
-            applied = true;
+            if hold.load(Ordering::Relaxed) || !unchanged(&file, l) {
+                continue;
+            }
             let Some(stamp) = r else {
                 vfs::remove_file(&file).ok();
                 synced.remove(path);
+                applied = true;
                 continue;
             };
             let (code, bytes) = net::request("GET", &url, None).await?;
             if code != 200 {
                 return Err(format!("could not download {path}: server answered {code}").into());
             }
-            if let Some(parent) = file.parent() {
-                vfs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            if hold.load(Ordering::Relaxed) || !unchanged(&file, l) {
+                continue;
             }
-            vfs::write(&file, &bytes).map_err(|e| format!("{path}: {e}"))?;
+            write_under(&file, &bytes).map_err(|e| format!("{path}: {e}"))?;
+            applied = true;
             remember_base(dir, path, &bytes);
+            cleared.push(path.clone());
             synced.insert(
                 path.clone(),
                 Stamp {
@@ -328,7 +447,7 @@ pub async fn sync_once(dir: &Path) -> Result<bool, SyncError> {
         share.synced = synced;
         share.save(dir)?;
     }
-    Ok(applied)
+    Ok((applied, conflicts, cleared))
 }
 
 /// What the shell shows and acts on for one shared project.
@@ -337,6 +456,8 @@ pub struct Status {
     /// What to send a collaborator.
     pub link: String,
     stop: AtomicBool,
+    /// Set by the shell while the open project holds unsaved edits: see [`sync_once_holding`].
+    hold: AtomicBool,
     inner: Mutex<Inner>,
 }
 
@@ -346,11 +467,28 @@ struct Inner {
     gone: Option<Gone>,
     synced_once: bool,
     changed: bool,
+    /// Files whose server copy was set aside because merging them gave no valid page.
+    conflicts: BTreeSet<String>,
+}
+
+impl Inner {
+    /// Files that merged or uploaded cleanly are no longer in conflict; new conflicts are added.
+    fn settle(&mut self, conflicts: Vec<String>, cleared: Vec<String>) {
+        for c in &cleared {
+            self.conflicts.remove(c);
+        }
+        self.conflicts.extend(conflicts);
+    }
 }
 
 impl Status {
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Keep the server's copy out of the folder while `on` (the project has unsaved edits).
+    pub fn hold_downloads(&self, on: bool) {
+        self.hold.store(on, Ordering::Relaxed);
     }
 
     /// The server's copy changed files in the folder since the last call.
@@ -363,10 +501,20 @@ impl Status {
         self.inner().gone
     }
 
+    /// Files whose merge failed; the server's copy of each is in `.sync-base/conflicts`.
+    pub fn conflicts(&self) -> Vec<String> {
+        self.inner().conflicts.iter().cloned().collect()
+    }
+
     pub fn label(&self) -> String {
         let i = self.inner();
+        let n = i.conflicts.len();
         match (&i.error, i.synced_once) {
             (Some(e), _) => format!("Sync error: {e}"),
+            (None, true) if n > 0 => format!(
+                "Synced, {n} conflict{} kept in .sync-base/conflicts",
+                if n == 1 { "" } else { "s" }
+            ),
             (None, true) => "Synced".into(),
             (None, false) => "Connecting".into(),
         }
@@ -375,14 +523,20 @@ impl Status {
 
 async fn run(dir: PathBuf, status: Arc<Status>) {
     while !status.stop.load(Ordering::Relaxed) {
-        let round = sync_once(&dir).await;
+        let round = sync_round(&dir, &status.hold).await;
         {
             let mut i = status.inner();
             match round {
-                Ok(changed) => {
+                Ok((changed, conflicts, cleared)) => {
                     i.error = None;
                     i.synced_once = true;
                     i.changed |= changed;
+                    for c in &conflicts {
+                        log::warn!(
+                            "sync: {c} could not be merged; the server's copy is in .sync-base/conflicts"
+                        );
+                    }
+                    i.settle(conflicts, cleared);
                 }
                 Err(SyncError::Gone(g)) => {
                     i.gone = Some(g);
@@ -672,6 +826,101 @@ mod tests {
         ] {
             assert!(safe_path(bad).is_none(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_status_names_merge_conflicts() {
+        let status = Status::default();
+        status.inner().synced_once = true;
+        assert_eq!(status.label(), "Synced");
+        status.inner().conflicts.insert("pages/a.json".into());
+        assert_eq!(status.conflicts(), vec!["pages/a.json".to_string()]);
+        assert!(
+            status.label().contains("1 conflict kept"),
+            "{}",
+            status.label()
+        );
+        status.inner().conflicts.insert("pages/b.json".into());
+        assert!(status.label().contains("2 conflicts"), "{}", status.label());
+        status
+            .inner()
+            .settle(Vec::new(), vec!["pages/a.json".into()]);
+        assert_eq!(status.conflicts(), vec!["pages/b.json".to_string()]);
+        status
+            .inner()
+            .settle(vec!["pages/c.json".into()], vec!["pages/b.json".into()]);
+        assert_eq!(status.conflicts(), vec!["pages/c.json".to_string()]);
+    }
+
+    #[test]
+    fn a_second_conflict_keeps_the_first_copy() {
+        let dir = std::env::temp_dir().join(format!("pc-sync-unused-{}", std::process::id()));
+        let file = dir.join("pages/a.json");
+        let mut names = Vec::new();
+        for _ in 0..3 {
+            let kept = unused_name(file.clone());
+            write_under(&kept, b"x").unwrap();
+            names.push(kept);
+        }
+        let distinct: BTreeSet<_> = names.iter().collect();
+        assert_eq!(distinct.len(), 3, "{names:?}");
+        assert_eq!(names[0], file);
+        assert!(names[1].ends_with("a.json.1"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The server reports `page.json` changed, and the app saves the page while its download
+    /// is in flight: the save must survive, for the next round to merge.
+    #[test]
+    fn a_page_saved_while_its_download_is_in_flight_is_not_overwritten() {
+        use std::io::{Read, Write};
+        let dir = std::env::temp_dir().join(format!("pc-sync-race-{}", std::process::id()));
+        let page = dir.join("page.json");
+        write_under(&page, b"old").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut share = Share::new(&format!("http://{}", listener.local_addr().unwrap()));
+        let stamp = Stamp {
+            remote: 1,
+            local: fingerprint(b"old"),
+        };
+        share.synced.insert("page.json".into(), stamp);
+        share.save(&dir).unwrap();
+        let saved = page.clone();
+        std::thread::spawn(move || {
+            for mut conn in listener.incoming().flatten() {
+                let (mut req, mut buf) = (Vec::new(), [0u8; 1024]);
+                while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let Ok(n @ 1..) = conn.read(&mut buf) else {
+                        break;
+                    };
+                    req.extend_from_slice(&buf[..n]);
+                }
+                let body: &[u8] =
+                    if req.starts_with(b"GET") && req.windows(7).any(|w| w == b"/files ") {
+                        br#"[{"path":"page.json","mtime":2}]"#
+                    } else {
+                        std::fs::write(&saved, b"saved meanwhile").unwrap();
+                        b"server copy"
+                    };
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                conn.write_all(head.as_bytes())
+                    .and_then(|()| conn.write_all(body))
+                    .ok();
+            }
+        });
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(
+            !rt.block_on(sync_once(&dir)).unwrap(),
+            "nothing was applied"
+        );
+        assert_eq!(std::fs::read(&page).unwrap(), b"saved meanwhile");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

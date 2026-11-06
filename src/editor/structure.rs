@@ -132,6 +132,117 @@ fn copy_props(main: &Node, inst: &mut Node, overrides: &[String], is_root: bool)
     }
 }
 
+/// How many instance links `origin` follows: a file can hold a loop of them.
+const MAX_LINK_HOPS: usize = 64;
+
+/// The layer an instance finally derives from, following links within this document (a link
+/// to another document, or a missing main, ends the chain).
+fn origin(doc: &Document, mut id: NodeId) -> NodeId {
+    for _ in 0..MAX_LINK_HOPS {
+        let Some(link) = doc.get(id).and_then(|n| n.instance.as_ref()) else { break };
+        let (main, source) = link.swap.as_ref().map_or((link.main, &link.source), |s| (s.main, &s.source));
+        if source.is_some() || doc.get(main).is_none() {
+            break;
+        }
+        id = main;
+    }
+    id
+}
+
+/// True when an instance of `main` placed under `under` (`None` = top level) would sit inside
+/// the layers it is made from, directly or through the instances `main` contains. Such an
+/// instance would expand into itself for ever.
+pub fn would_nest(doc: &Document, main: NodeId, under: Option<NodeId>) -> bool {
+    // The layers themselves, not their mains: a layer added inside an instance stays in that
+    // instance, so an instance of X inside another instance of X is fine.
+    let hosts: HashSet<NodeId> = under.into_iter().flat_map(|u| std::iter::once(u).chain(doc.ancestors(u))).collect();
+    if hosts.is_empty() {
+        return false;
+    }
+    let mut seen = HashSet::new();
+    let mut todo = vec![main];
+    while let Some(root) = todo.pop() {
+        for n in doc.subtree(root) {
+            let o = origin(doc, n);
+            if hosts.contains(&n) || hosts.contains(&o) {
+                return true;
+            }
+            if o != n && seen.insert(o) {
+                todo.push(o);
+            }
+        }
+    }
+    false
+}
+
+/// Like [`would_nest`] for a main on page `main_page` placed under `under` on page `page`,
+/// following instance links across pages. A loop through two pages is not infinite (each sync
+/// copies from a snapshot) but nests the copies one level deeper on every edit.
+pub fn would_nest_across(ed: &Editor, main_page: usize, main: NodeId, page: usize, under: Option<NodeId>) -> bool {
+    // A page still being read has no document yet; its links cannot be followed.
+    let doc_of = |p: usize| (p == ed.active_page).then_some(&ed.doc).or_else(|| ed.pages.get(p)?.stash.as_ref().map(|s| &s.doc));
+    let Some(host_doc) = doc_of(page) else { return false };
+    let hosts: HashSet<(usize, NodeId)> = under
+        .into_iter()
+        .flat_map(|u| std::iter::once(u).chain(host_doc.ancestors(u)))
+        .map(|n| (page, n))
+        .collect();
+    if hosts.is_empty() {
+        return false;
+    }
+    let origin = |mut at: (usize, NodeId)| {
+        for _ in 0..MAX_LINK_HOPS {
+            let Some(link) = doc_of(at.0).and_then(|d| d.get(at.1)).and_then(|n| n.instance.as_ref()) else { break };
+            let (m, source) = link.target();
+            let next = match source {
+                None => at.0,
+                Some(Source::Page(id)) => match ed.pages.iter().position(|p| p.id == *id) {
+                    Some(p) => p,
+                    None => break,
+                },
+                Some(_) => break,
+            };
+            if doc_of(next).and_then(|d| d.get(m)).is_none() {
+                break;
+            }
+            at = (next, m);
+        }
+        at
+    };
+    let mut seen = HashSet::new();
+    let mut todo = vec![(main_page, main)];
+    while let Some((p, root)) = todo.pop() {
+        let Some(d) = doc_of(p) else { continue };
+        for id in d.subtree(root) {
+            let o = origin((p, id));
+            if hosts.contains(&(p, id)) || hosts.contains(&o) {
+                return true;
+            }
+            if o != (p, id) && seen.insert(o) {
+                todo.push(o);
+            }
+        }
+    }
+    false
+}
+
+/// Whether moving or pasting `id` under `under` would put an instance inside its own main.
+pub fn moves_into_cycle(doc: &Document, id: NodeId, under: Option<NodeId>) -> bool {
+    doc.subtree(id).into_iter().any(|n| doc.get(n).is_some_and(|x| x.instance.is_some()) && would_nest(doc, n, under))
+}
+
+/// [`moves_into_cycle`] for a subtree copied or moved from `src_page` under `under` on `page`.
+pub fn copy_nests_across(ed: &Editor, src_page: usize, id: NodeId, page: usize, under: Option<NodeId>) -> bool {
+    let doc = ed.page_doc(src_page);
+    doc.subtree(id).into_iter().any(|n| doc.get(n).is_some_and(|x| x.instance.is_some()) && would_nest_across(ed, src_page, n, page, under))
+}
+
+/// Whether swapping instance `inst` to `new_main` is impossible: the new main is the instance
+/// or inside it (the swap would delete it), or would nest the instance in itself.
+pub fn swap_nests(doc: &Document, inst: NodeId, new_main: NodeId) -> bool {
+    inst == new_main || doc.is_ancestor(inst, new_main) || would_nest(doc, new_main, doc.get(inst).and_then(|n| n.parent))
+}
+
 /// Copy a subtree as a new instance subtree under `parent` (ids are fresh). The main is on
 /// the same page.
 pub fn instantiate(
@@ -179,6 +290,10 @@ pub fn instantiate_from(
     }
     tx.insert(n, parent, index);
     for c in src_node.children {
+        // A child that holds this very instance (or one of its mains) would copy itself for ever.
+        if src.is_none() && would_nest(tx.doc(), c, Some(id)) {
+            continue;
+        }
         instantiate_from(tx, src, source.clone(), c, Some(id), None, None);
     }
     id
@@ -293,6 +408,9 @@ pub(super) fn sync_node(tx: &mut Tx, inst: NodeId, is_root: bool, ext: Option<&D
                 sync_node(tx, k, false, kid_ext);
             }
             None => {
+                if ext.is_none() && would_nest(tx.doc(), *mc, Some(inst)) {
+                    continue;
+                }
                 instantiate_from(tx, ext, source.clone(), *mc, Some(inst), Some(i), None);
             }
         }
@@ -763,11 +881,7 @@ impl Editor {
     /// Swap an instance root to point at `new_main` component, preserving overrides on children
     /// matched by name and kind.
     pub fn swap_instance(&mut self, inst: NodeId, new_main: NodeId) -> bool {
-        if !self.is_instance_root(inst)
-            || !self.doc.get(new_main).is_some_and(|m| m.component)
-            || inst == new_main
-            || self.doc.is_ancestor(inst, new_main)
-        {
+        if !self.is_instance_root(inst) || !self.doc.get(new_main).is_some_and(|m| m.component) || swap_nests(&self.doc, inst, new_main) {
             return false;
         }
         self.edit("Swap instance", |tx| swap_instance_tx(tx, None, None, inst, new_main));
@@ -1003,6 +1117,9 @@ pub fn swap_instance_tx(
     new_main: NodeId,
 ) -> bool {
     let src = ext.unwrap_or(tx.doc());
+    if ext.is_none() && swap_nests(tx.doc(), inst, new_main) {
+        return false;
+    }
     let Some(new_comp) = src.get(new_main).cloned() else {
         return false;
     };
@@ -1059,7 +1176,7 @@ pub fn swap_instance_tx(
 /// the outer instance, so later syncs of the outer main keep the swap.
 pub fn swap_nested_tx(tx: &mut Tx, ext: Option<&Document>, source: Option<Source>, inst: NodeId, new_main: NodeId) -> bool {
     let src = ext.unwrap_or(tx.doc());
-    if !src.get(new_main).is_some_and(|c| c.component) {
+    if !src.get(new_main).is_some_and(|c| c.component) || (ext.is_none() && swap_nests(tx.doc(), inst, new_main)) {
         return false;
     }
     let name = src.get(new_main).unwrap().name.clone();
@@ -1181,5 +1298,46 @@ mod tests {
         assert_ne!(kids[0], old_kid, "stale-source child replaced");
         let l = e.doc.get(kids[0]).unwrap().instance.clone().unwrap();
         assert_eq!((l.main, l.source), (kid, None));
+    }
+
+    #[test]
+    fn an_instance_inside_its_own_component_syncs_without_recursing() {
+        let mut e = Editor::default();
+        let comp = e.add_node(Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0., 0., 50., 50.)), None);
+        let kid = e.add_node(Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0., 0., 5., 5.)), Some(comp));
+        e.selection = vec![comp];
+        e.create_component();
+        assert!(would_nest(&e.doc, comp, Some(kid)));
+        let inst = e.edit("i", |tx| instantiate(tx, comp, Some(kid), None, None));
+        e.edit("sync", |tx| sync_node(tx, inst, true, None));
+        e.edit("sync main", |tx| sync_node(tx, inst, true, None));
+        assert!(e.doc.get(inst).unwrap().children.is_empty(), "the copy of the kid would hold the instance again");
+    }
+
+    #[test]
+    fn a_loop_of_two_components_is_a_nest() {
+        let mut e = Editor::default();
+        let a = e.add_node(Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0., 0., 50., 50.)), None);
+        let b = e.add_node(Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(100., 0., 50., 50.)), None);
+        e.selection = vec![a, b];
+        e.create_component();
+        let in_b = e.edit("i", |tx| instantiate(tx, a, Some(b), None, None));
+        assert!(e.doc.get(in_b).is_some_and(|n| n.instance.is_some()));
+        assert!(would_nest(&e.doc, b, Some(a)), "b holds an instance of a: a cannot hold b");
+        assert!(!would_nest(&e.doc, a, None));
+    }
+
+    #[test]
+    fn an_instance_can_sit_inside_another_instance_of_the_same_component() {
+        let mut e = Editor::default();
+        let comp = e.add_node(Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0., 0., 50., 50.)), None);
+        e.add_node(Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0., 0., 5., 5.)), Some(comp));
+        e.selection = vec![comp];
+        e.create_component();
+        let outer = e.edit("i", |tx| instantiate(tx, comp, None, None, None));
+        let slot = e.doc.get(outer).unwrap().children[0];
+        assert!(!would_nest(&e.doc, comp, Some(slot)), "a layer of an instance is not a layer of its main");
+        let inner = e.edit("i", |tx| instantiate(tx, comp, Some(slot), None, None));
+        assert_eq!(e.doc.get(inner).unwrap().children.len(), 1, "the nested copy keeps its layers");
     }
 }

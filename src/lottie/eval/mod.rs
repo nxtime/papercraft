@@ -244,4 +244,5 @@ fn reverse(path: &mut crate::lottie::model::Bezier) {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests;

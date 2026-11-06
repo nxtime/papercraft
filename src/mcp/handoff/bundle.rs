@@ -9,6 +9,7 @@ use super::{markdown, report_since, str_arg, text};
 use crate::model::{Color, Document, NodeId, NodeKind};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use crate::io::backup::safe_relative;
 use std::path::Path;
 
 const MANIFEST: &str = "manifest.json";
@@ -21,6 +22,7 @@ const HANDOFF_PAGE: &str = "handoff";
 
 pub fn export(host: &mut dyn Host, a: &Value) -> ToolResult {
     let dir = Path::new(str_arg(a, "dir").ok_or("`dir` is required: the folder to write the bundle into")?).to_path_buf();
+    exec::out_folder(&dir, MANIFEST, is_bundle_manifest)?;
     let images = a.get("images").and_then(Value::as_bool).unwrap_or(true);
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
 
@@ -96,6 +98,13 @@ pub fn export(host: &mut dyn Host, a: &Value) -> ToolResult {
     text(out)
 }
 
+/// Whether `bytes` is a manifest this tool wrote: its exact `format` and a `files` map of
+/// entries that each carry a content `hash`. A foreign manifest.json with a `format` key is not.
+fn is_bundle_manifest(bytes: &[u8]) -> bool {
+    let Ok(m) = serde_json::from_slice::<Value>(bytes) else { return false };
+    m["format"] == FORMAT && m["files"].as_object().is_some_and(|f| f.values().all(|e| e["hash"].is_string()))
+}
+
 fn call(host: &mut dyn Host, tool: &str, args: Value) -> Result<String, String> {
     exec::call(host, tool, &args)?
         .into_iter()
@@ -159,10 +168,8 @@ fn write(dir: &Path, mut files: BTreeMap<String, Vec<u8>>) -> Result<(usize, usi
     }
     let mut removed = 0;
     for rel in old["files"].as_object().into_iter().flat_map(|m| m.keys()).filter(|k| !files.contains_key(*k)) {
-        // Only paths this tool wrote: never climb out of the folder.
-        if rel.split('/').any(|p| [".", ".."].contains(&p) || p.is_empty()) {
-            continue;
-        }
+        // The manifest is read back from disk: only plain relative paths inside the folder.
+        let Some(rel) = safe_relative(rel) else { continue };
         if std::fs::remove_file(dir.join(rel)).is_ok() {
             removed += 1;
         }

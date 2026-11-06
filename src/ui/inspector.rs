@@ -543,7 +543,10 @@ fn prototype_tab(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId]) {
     let opts: Vec<(Option<NodeId>, &str)> = frames.iter().map(|(i, n)| (*i, n.as_str())).collect();
     row(ui, "On click", |ui| {
         if let Some(v) = combo(ui, "link", first.link, &opts, 140.0) {
-            apply(ed, "link", ids, |n| n.link = v);
+            apply(ed, "link", ids, |n| {
+                n.link = v;
+                n.link_action = None;
+            });
         }
     });
 }
@@ -1673,6 +1676,49 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     });
 }
 
+/// The font of the selected text. Fonts live on the layer, not on a character range.
+fn font_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
+    const ADD_FONT: usize = usize::MAX;
+    let families = crate::fonts::families();
+    let current = first.text_style.font.as_ref().and_then(|f| families.iter().position(|x| x == f)).map_or(0, |i| i + 1);
+    let mut options = vec![(0, "Inter")];
+    options.extend(families.iter().enumerate().map(|(i, f)| (i + 1, f.as_str())));
+    if cfg!(not(target_arch = "wasm32")) {
+        options.push((ADD_FONT, "Add font…"));
+    }
+    let chosen = row(ui, "Font", |ui| combo(ui, "font", current, &options, ui.available_width()));
+    let font = match chosen {
+        None => return,
+        Some(0) => None,
+        Some(ADD_FONT) => match add_font(ed) {
+            Some(family) => Some(family),
+            None => return,
+        },
+        Some(i) => Some(families[i - 1].clone()),
+    };
+    apply(ed, "font", ids, |n| n.text_style.font = font.clone());
+}
+
+/// Asks for a font file and installs it, returning its family.
+#[cfg(not(target_arch = "wasm32"))]
+fn add_font(ed: &mut Editor) -> Option<String> {
+    let path = rfd::FileDialog::new().add_filter("Fonts", &["ttf", "otf"]).pick_file()?;
+    let assets = ed.project_dir.as_ref().map(|d| d.join(crate::project::ASSETS_DIR));
+    let installed = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| crate::fonts::install(&b, assets.as_deref()));
+    match installed {
+        Ok(family) => Some(family),
+        Err(error) => {
+            ed.status = format!("Could not add the font: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn add_font(_: &mut Editor) -> Option<String> {
+    None
+}
+
 fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     let NodeKind::Text {
         font_size, align, ..
@@ -1691,6 +1737,7 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             );
         }
     });
+    font_row(ui, ed, ids, first);
     let cs = ed.current_char_style();
     ui.horizontal(|ui| {
         let size = cs.map_or(*font_size, |c| c.size);
@@ -1776,6 +1823,7 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     bind_row(ui, ed, ids, "font-size", "Size", Kind::Number, &fmt_num(*font_size));
     bind_row(ui, ed, ids, "line-height", "Line height", Kind::Number, &fmt_num(first.text_style.line_height.unwrap_or(0.0)));
     bind_row(ui, ed, ids, "text-color", "Color", Kind::Color, "");
+    bind_row(ui, ed, ids, "text", "Text", Kind::String, "");
     if ids.len() == 1 && ed.text_edit.is_none() {
         let NodeKind::Text { text, .. } = &first.kind else {
             return;
@@ -1793,6 +1841,7 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
                     *text = t.clone();
                 }
                 n.text_style.spans.retain(|s| s.end <= t.chars().count());
+                n.bindings.remove("text");
             });
         }
         seal_on_release(ed, &r);

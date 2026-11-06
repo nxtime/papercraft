@@ -1,5 +1,6 @@
 //! Settings dialog: appearance, canvas, chat agents and keys, updates.
 
+use crate::editor::Editor;
 use crate::theme::Surface as _;
 use super::{UiState, kit, motion};
 use crate::chat::BackendKind;
@@ -291,7 +292,7 @@ impl Default for SettingsUi {
 }
 
 
-pub fn show(ctx: &egui::Context, st: &mut UiState) {
+pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     let t = motion::progress(
         ctx,
         "settings-open",
@@ -358,7 +359,7 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
                             // its own offset. Chat scrolls its columns itself: nested, its fixed
                             // height collapsed.
                             if st.settings.page == Page::Chat {
-                                content(ui, ctx, st);
+                                content(ui, ctx, ed, st);
                             } else {
                                 // Inside a horizontal row the area would shrink to the row's
                                 // height: it takes the dialog's.
@@ -368,7 +369,7 @@ pub fn show(ctx: &egui::Context, st: &mut UiState) {
                                     .auto_shrink([false, false])
                                     .max_height(height)
                                     .min_scrolled_height(height)
-                                    .show(ui, |ui| content(ui, ctx, st));
+                                    .show(ui, |ui| content(ui, ctx, ed, st));
                             }
                         });
                     });
@@ -439,12 +440,12 @@ fn plugin_icon(id: &str) -> Icon {
     }
 }
 
-fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
+fn content(ui: &mut Ui, ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
         let (title, sub) = match st.settings.page {
             Page::Appearance => ("Appearance", "Theme, accent, material, corners, font, scale and motion."),
-            Page::Canvas => ("Canvas", "How the canvas looks."),
+            Page::Canvas => ("Canvas", "How the canvas looks and moves."),
             Page::Chat => ("Chat", "Agents, API endpoints and defaults for design by conversation."),
             Page::Plugins => ("Plugins", "Assets the agent can place in a design. Fetched from each service once, then cached."),
             Page::Performance => ("Performance", "Frame rate, memory, CPU and GPU, and a warning when frames get slow."),
@@ -568,6 +569,17 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
                 }
             });
             ui.add_space(8.0);
+            kit::setting_row(ui, "Snapping", "Align moved and resized objects to each other and to whole pixels.", |ui| {
+                kit::toggle(ui, &mut ed.snapping);
+            });
+            ui.add_space(8.0);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                kit::setting_row(ui, "Zoom with the mouse wheel", "Scroll to zoom, and hold Shift to pan. Trackpads keep panning on macOS and Linux.", |ui| {
+                    kit::toggle(ui, &mut st.wheel_zooms);
+                });
+                ui.add_space(8.0);
+            }
             kit::setting_row(
                 ui,
                 "Keyboard shortcuts",
@@ -609,6 +621,13 @@ fn content(ui: &mut Ui, ctx: &egui::Context, st: &mut UiState) {
             );
             #[cfg(not(target_arch = "wasm32"))]
             {
+                ui.add_space(8.0);
+                let mut auto = super::update::auto_enabled();
+                kit::setting_row(ui, "Download updates automatically", "Checks GitHub at launch, then asks you to restart when an update is ready.", |ui| {
+                    if kit::toggle(ui, &mut auto).changed() {
+                        super::update::set_auto_enabled(auto);
+                    }
+                });
                 ui.add_space(16.0);
                 kit::section_header(ui, "Issues", None);
                 ui.label(RichText::new("Where \"Report a PaperCraft issue\" and the agent's issue drafts go. Nothing is sent without your Send.").color(theme::pal(ui).secondary));

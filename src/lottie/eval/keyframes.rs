@@ -157,6 +157,7 @@ fn ease(progress: f32, outgoing: [f32; 2], incoming: [f32; 2]) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use crate::lottie::model::{Key, Track};
 

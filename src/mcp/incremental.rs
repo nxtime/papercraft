@@ -80,7 +80,7 @@ fn variable_names(name: &str, args: &Value) -> Option<Option<BTreeSet<String>>> 
         "set_variables" => Some(keys("variables")),
         "set_tokens" => Some(keys("tokens")),
         "delete_variables" => Some(keys("names")),
-        "set_variable_mode" | "import_design_system" => Some(None),
+        "set_variable_mode" | "set_strings" | "import_design_system" => Some(None),
         _ => None,
     }
 }

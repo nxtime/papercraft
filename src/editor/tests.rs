@@ -493,6 +493,24 @@ fn copy_paste_frame_with_children_and_undo() {
 }
 
 #[test]
+fn pasting_an_instance_into_its_own_component_is_skipped() {
+    let mut e = ed();
+    let main = e.add_node(Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0.0, 0.0, 100.0, 100.0)), None);
+    let kid = e.add_node(Node::new(NodeId(0), NodeKind::Frame { clip: false }, Rect::new(0.0, 0.0, 10.0, 10.0)), Some(main));
+    e.select(vec![main]);
+    e.create_component();
+    let inst = e.edit("i", |tx| crate::editor::structure::instantiate(tx, main, None, None, None));
+    // A stale clipboard: the copy's recorded parent is now a layer of the component.
+    let mut node = e.doc.get(inst).unwrap().clone();
+    node.parent = Some(kid);
+    let before = e.doc.nodes.len();
+    let made = e.insert_subtrees("Paste", &[node], &[inst], &[Rect::new(0.0, 0.0, 100.0, 100.0)], V2::ZERO, true);
+    assert!(made.is_empty());
+    assert_eq!(e.doc.nodes.len(), before);
+    e.doc.validate().unwrap();
+}
+
+#[test]
 fn dragging_into_and_out_of_frames_reparents() {
     let mut e = ed();
     let f = e.add_node(
@@ -653,4 +671,52 @@ fn restore_snapshot_restores_design_system_in_one_undo() {
     assert_eq!(e.doc.tokens["gap"], "16px");
     assert_eq!(e.doc.modes["Light"]["accent"], Color::rgb(0, 200, 0));
     assert_eq!(rect_of(&e, a).min(), v2(300.0, 100.0));
+}
+
+#[test]
+fn abort_rolls_back_a_half_finished_edit_and_keeps_the_history() {
+    let mut e = ed();
+    let (a, _) = two_rects(&mut e);
+    e.undo();
+    e.redo();
+    let (undo, redo, doc) = (e.history.undo_len(), e.history.redo_len(), e.doc.nodes.clone());
+    e.begin("Move");
+    e.tx().node_mut(a).unwrap().rect = Rect::new(0.0, 0.0, 9.0, 9.0);
+    e.abort();
+    assert_eq!(e.doc.nodes, doc, "the partial change is gone");
+    assert_eq!((e.history.undo_len(), e.history.redo_len()), (undo, redo));
+    assert!(e.rec.is_none(), "no transaction stays open");
+    e.undo();
+    assert_eq!(e.history.undo_len(), undo - 1, "the next undo steps back the last real edit");
+}
+
+#[test]
+fn a_panic_inside_with_page_leaves_the_active_page_intact() {
+    let mut e = ed();
+    let (a, _) = two_rects(&mut e);
+    e.select(vec![a]);
+    e.add_page_in_background(None);
+    let (doc, sel, undo) = (e.doc.nodes.clone(), e.selection.clone(), e.history.undo_len());
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        e.with_page(1, |e| {
+            e.begin("half");
+            panic!("tool bug");
+        })
+    }));
+    assert!(r.is_err(), "the panic still propagates");
+    assert_eq!(e.doc.nodes, doc, "the active page keeps its own document");
+    assert_eq!((e.selection.clone(), e.history.undo_len()), (sel, undo));
+    assert!(e.edit_page.is_none() && e.rec.is_none() && !e.cross_busy);
+    assert!(e.pages[1].stash.is_some(), "the other page is parked again");
+}
+
+#[test]
+fn ancestors_and_validate_stop_on_a_parent_loop() {
+    let mut e = ed();
+    let (a, b) = two_rects(&mut e);
+    e.doc.nodes.get_mut(&a).unwrap().parent = Some(b);
+    e.doc.nodes.get_mut(&b).unwrap().parent = Some(a);
+    assert_eq!(e.doc.ancestors(a), vec![b]);
+    assert!(e.doc.is_ancestor(b, a));
+    assert!(e.doc.validate().is_err(), "a loop is reported, not followed");
 }

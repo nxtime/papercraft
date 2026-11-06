@@ -241,6 +241,7 @@ fn component_nodes(doc: &Document, root: NodeId, key: &str) -> Vec<Node> {
             n.parent = n.parent.filter(|p| inside.contains(p)).map(|p| snapshot_id(key, p));
             n.children = n.children.iter().map(|c| snapshot_id(key, *c)).collect();
             n.link = None;
+            n.link_action = None;
             n.comments.clear();
             match &mut n.instance {
                 Some(l) if l.source.is_none() && inside.contains(&l.main) => l.main = snapshot_id(key, l.main),
@@ -745,5 +746,27 @@ mod tests {
         let NodeKind::Connector { start, end, .. } = &by(3).kind else { panic!() };
         assert_eq!(start.unwrap().node, snapshot_id("k", NodeId(2)));
         assert!(end.is_none());
+    }
+
+    #[test]
+    fn a_published_component_never_holds_an_instance_of_another_component() {
+        // A's main holds an instance of B and B's holds one of A: both are published as plain
+        // copies, so a library can't form a loop however the projects are linked.
+        let frame = |id: u64| Node::new(NodeId(id), NodeKind::Frame { clip: false }, Rect::new(0., 0., 10., 10.));
+        let link = |main: u64, source: Option<Source>| Some(InstanceLink { main: NodeId(main), overrides: vec![], source, swap: None });
+        let mut doc = Document::default();
+        let (mut a, mut a_in, mut b, mut b_in) = (frame(1), frame(2), frame(3), frame(4));
+        a_in.instance = link(3, None);
+        b_in.instance = link(1, Some(Source::Library("other".into())));
+        a.children = vec![NodeId(2)];
+        a_in.parent = Some(NodeId(1));
+        b.children = vec![NodeId(4)];
+        b_in.parent = Some(NodeId(3));
+        for n in [a, a_in, b, b_in] {
+            doc.nodes.insert(n.id, n);
+        }
+        for (root, key) in [(1, "a"), (3, "b")] {
+            assert!(component_nodes(&doc, NodeId(root), key).iter().all(|n| n.instance.is_none()), "{key}");
+        }
     }
 }

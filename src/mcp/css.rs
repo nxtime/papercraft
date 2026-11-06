@@ -142,7 +142,7 @@ pub fn split_ws(s: &str) -> Vec<String> {
 /// (use [`percent`]).
 pub fn length(s: &str, font_size: f64) -> Option<f64> {
     let s = s.trim();
-    let num = |t: &str| t.trim().parse::<f64>().ok().filter(|v| v.is_finite());
+    let num = |t: &str| finite(t);
     if s == "0" {
         return Some(0.0);
     }
@@ -150,21 +150,26 @@ pub fn length(s: &str, font_size: f64) -> Option<f64> {
         return num(t);
     }
     if let Some(t) = s.strip_suffix("rem") {
-        return num(t).map(|v| v * 16.0);
+        return num(t).map(|v| v * 16.0).filter(|v| v.is_finite());
     }
     if let Some(t) = s.strip_suffix("em") {
-        return num(t).map(|v| v * font_size);
+        return num(t).map(|v| v * font_size).filter(|v| v.is_finite());
     }
     if let Some(t) = s.strip_suffix("pt") {
-        return num(t).map(|v| v * 4.0 / 3.0);
+        return num(t).map(|v| v * 4.0 / 3.0).filter(|v| v.is_finite());
     }
     num(s)
+}
+
+/// A number that JSON can store: "NaN" and "1e999" parse as f64 but would make a saved page unopenable.
+pub fn finite(s: &str) -> Option<f64> {
+    s.trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 pub fn percent(s: &str) -> Option<f64> {
     s.trim()
         .strip_suffix('%')
-        .and_then(|t| t.trim().parse::<f64>().ok())
+        .and_then(finite)
         .map(|v| v / 100.0)
 }
 
@@ -239,7 +244,7 @@ fn channel(s: &str, scale: f64) -> Option<f64> {
     let s = s.trim();
     match percent(s) {
         Some(p) => Some(p * scale),
-        None => s.parse::<f64>().ok(),
+        None => finite(s),
     }
 }
 
@@ -342,18 +347,15 @@ pub fn color(s: &str) -> Option<Color> {
             channel(&a[2], 255.0)? / 255.0,
         ],
         "hsl" | "hsla" if a.len() >= 3 => {
-            let h = a[0].trim_end_matches("deg").parse::<f64>().ok()?;
-            let sat = percent(&a[1]).or_else(|| a[1].parse::<f64>().ok().map(|v| v / 100.0))?;
-            let l = percent(&a[2]).or_else(|| a[2].parse::<f64>().ok().map(|v| v / 100.0))?;
+            let h = finite(a[0].trim_end_matches("deg"))?;
+            let sat = percent(&a[1]).or_else(|| finite(&a[1]).map(|v| v / 100.0))?;
+            let l = percent(&a[2]).or_else(|| finite(&a[2]).map(|v| v / 100.0))?;
             hsl(h, sat, l)
         }
         "oklch" if a.len() >= 3 => {
             let l = channel(&a[0], 1.0)?;
             let c = channel(&a[1], 0.4)?;
-            let h = a[2]
-                .trim_end_matches("deg")
-                .parse::<f64>()
-                .ok()?
+            let h = finite(a[2].trim_end_matches("deg"))?
                 .to_radians();
             oklab_to_srgb(l, c * h.cos(), c * h.sin())
         }
@@ -399,7 +401,7 @@ pub fn gradient(s: &str) -> Option<Paint> {
     if name == "linear-gradient" {
         let first = args.first()?.to_ascii_lowercase();
         if let Some(d) = first.strip_suffix("deg") {
-            angle = d.trim().parse().ok()?;
+            angle = finite(d)?;
             stops_src = &args[1..];
         } else if let Some(dir) = first.strip_prefix("to ") {
             let (mut x, mut y) = (0.0f64, 0.0f64);
@@ -924,11 +926,18 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
     }
     let is_text = n.kind.text().is_some();
     let fs = n.kind.font_size().unwrap_or(16.0);
+    let mut shift = (0.0, 0.0);
     for (k, v) in styles {
         let v = v.trim();
         let lower = v.to_ascii_lowercase();
         let ok = match k.as_str() {
             "fontSize" => true, // applied above; inherited by text children
+            "transform" => {
+                let (by, lost) = transform(v, fs);
+                shift = (shift.0 + by.0, shift.1 + by.1);
+                a.ignored.extend(lost.into_iter().map(|f| format!("transform: {f}")));
+                true
+            }
             "width" => {
                 set_size(n, 0, v, ctx, &mut a, k);
                 true
@@ -1098,7 +1107,7 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 let parts = split_ws(v);
                 let grow = parts
                     .first()
-                    .and_then(|g| g.parse::<f64>().ok())
+                    .and_then(|g| finite(g))
                     .unwrap_or(0.0);
                 match ctx.parent_layout {
                     Some(pl) => {
@@ -1170,6 +1179,10 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 }
             }
             "textTransform" if is_text => {
+                if matches!(lower.as_str(), "uppercase" | "lowercase" | "capitalize") {
+                    // Changed text replaces a bound string, as in `set_text_content`.
+                    n.bindings.remove("text");
+                }
                 if let Some(t) = n.kind.text_mut() {
                     match lower.as_str() {
                         "uppercase" => *t = t.to_uppercase(),
@@ -1243,8 +1256,14 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 true
             }
             "flexShrink" | "flexBasis" | "boxSizing" | "zIndex" | "cursor" | "whiteSpace"
-            | "fontFamily" | "wordBreak" | "overflowWrap" => {
-                // Accepted without an equivalent; harmless. fontFamily: Inter is the only face.
+            | "wordBreak" | "overflowWrap" => {
+                // Accepted without an equivalent; harmless.
+                true
+            }
+            "fontFamily" => {
+                if let Some(font) = crate::fonts::pick(v) {
+                    n.text_style.font = font;
+                }
                 true
             }
             "overflow" | "overflowY" if n.is_frame() => {
@@ -1304,7 +1323,7 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 let w = match lower.as_str() {
                     "bold" | "bolder" => 700.0,
                     "normal" | "lighter" => 400.0,
-                    _ => v.parse().unwrap_or(400.0),
+                    _ => finite(v).unwrap_or(400.0),
                 };
                 n.text_style.bold = w >= 600.0;
                 true
@@ -1321,7 +1340,7 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 } else if v.ends_with("px") || v.ends_with("em") || v.ends_with("rem") {
                     length(v, fs).map(|px| px / fs)
                 } else {
-                    v.parse::<f64>().ok()
+                    finite(v)
                 };
                 n.text_style.line_height = lh.filter(|x| *x > 0.0);
                 lh.is_some() || lower == "normal"
@@ -1514,7 +1533,7 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 }
                 None => false,
             },
-            "opacity" => match v.parse::<f64>().ok().or(percent(v)) {
+            "opacity" => match finite(v).or(percent(v)) {
                 Some(o) => {
                     n.style.opacity = o.clamp(0.0, 1.0);
                     true
@@ -1542,7 +1561,7 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                     "architect" => Some(0.0),
                     "artist" => Some(1.0),
                     "cartoonist" => Some(2.0),
-                    _ => v.parse::<f64>().ok(),
+                    _ => finite(v),
                 };
                 match r {
                     Some(r) => {
@@ -1569,7 +1588,7 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                     None => false,
                 }
             }
-            "bowing" => match v.parse::<f64>() {
+            "bowing" => match finite(v).ok_or(()) {
                 Ok(b) => {
                     rough_mut(n).bowing = b;
                     true
@@ -1589,7 +1608,47 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
             a.ignored.push(k.clone());
         }
     }
+    if shift != (0.0, 0.0) {
+        if ctx.parent_layout.is_some() && !n.layout_child.absolute {
+            // Auto layout places the box again on every pass, so an offset would not stay.
+            a.ignored.push("transform: translate (inside auto layout; use margin or gap)".into());
+        } else {
+            n.rect.x += shift.0;
+            n.rect.y += shift.1;
+        }
+    }
     a
+}
+
+/// The offset of a `transform`'s translate functions, and the functions the model cannot hold
+/// (there is no rotation, scale or skew on a layer).
+fn transform(v: &str, font_size: f64) -> ((f64, f64), Vec<String>) {
+    let (mut by, mut lost) = ((0.0, 0.0), Vec::new());
+    let mut rest = v.trim();
+    while let Some(open) = rest.find('(') {
+        let name = rest[..open].trim().to_ascii_lowercase();
+        let Some(close) = rest[open..].find(')') else { break };
+        let args: Vec<&str> = rest[open + 1..open + close].split(',').map(str::trim).collect();
+        rest = &rest[open + close + 1..];
+        let len = |i: usize| args.get(i).map(|t| length(t, font_size));
+        let (x, y) = match name.as_str() {
+            "translate" | "translate3d" => (len(0), len(1).or(Some(Some(0.0)))),
+            "translatex" => (len(0), Some(Some(0.0))),
+            "translatey" => (Some(Some(0.0)), len(0)),
+            _ => {
+                lost.push(name);
+                continue;
+            }
+        };
+        match (x.flatten(), y.flatten()) {
+            (Some(x), Some(y)) => {
+                by.0 += x;
+                by.1 += y;
+            }
+            _ => lost.push(format!("{name} (needs px)")),
+        }
+    }
+    (by, lost)
 }
 
 fn set_dash(n: &mut Node, style: &str) {
@@ -1837,7 +1896,7 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
         NodeKind::Text {
             font_size, align, ..
         } => {
-            put("fontFamily", "Inter".into());
+            put("fontFamily", n.text_style.font.clone().unwrap_or_else(|| "Inter".into()));
             put("fontSize", px(*font_size));
             put(
                 "fontWeight",
@@ -2042,6 +2101,28 @@ mod tests {
         let back = computed(&n, None, true);
         assert_eq!(back["flexDirection"], "column");
         assert_eq!(back["borderRadius"], "12px");
+    }
+
+    #[test]
+    fn text_transform_unbinds_the_text_it_changes() {
+        let kind = NodeKind::Text { text: "hi".into(), font_size: 14.0, auto_width: true, align: Default::default() };
+        let mut n = Node::new(NodeId(4), kind, Rect::new(0.0, 0.0, 10.0, 10.0));
+        n.bindings.insert("text".into(), "greeting".into());
+        apply(&mut n, &parse_inline("text-transform: uppercase"), &Context::default());
+        assert_eq!(n.kind.text().map(String::as_str), Some("HI"));
+        assert!(!n.bindings.contains_key("text"));
+    }
+
+    #[test]
+    fn translate_moves_a_free_layer_and_the_rest_of_transform_is_reported() {
+        let mut n = Node::new(NodeId(3), NodeKind::Rect, Rect::new(0.0, 0.0, 10.0, 10.0));
+        let a = apply(&mut n, &parse_inline("transform: translate(10px, -4px) rotate(5deg) scale(2); left: 20px"), &Context::default());
+        assert_eq!((n.rect.x, n.rect.y), (30.0, -4.0));
+        assert_eq!(a.ignored, ["transform: rotate", "transform: scale"]);
+        let ctx = Context { parent_layout: Some(AutoLayout::default()), parent_size: None };
+        let a = apply(&mut n, &parse_inline("transform: translateX(8px)"), &ctx);
+        assert_eq!(n.rect.x, 30.0);
+        assert_eq!(a.ignored.len(), 1, "{:?}", a.ignored);
     }
 
     #[test]

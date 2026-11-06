@@ -151,7 +151,7 @@ fn tea_login(host: &str) -> Option<String> {
 
 fn tea(args: &[&str]) -> Result<String, String> {
     let bin = crate::chat::path::which("tea").ok_or("no issue token in Settings and no `tea` CLI: add a token in Settings, Updates, Issues")?;
-    let out = Command::new(bin).args(args).env("PATH", crate::chat::path::resolved_path()).output().map_err(|e| e.to_string())?;
+    let out = crate::chat::path::apply(Command::new(bin).args(args)).output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(format!("tea: {}", err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("failed")));

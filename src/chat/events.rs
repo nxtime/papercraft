@@ -31,6 +31,22 @@ pub enum Event {
     /// The turn moved from model `from` to `to` because `from` failed with `reason` before doing
     /// anything ("Free (auto)").
     ModelSwitch { from: String, to: String, reason: String },
+    /// The agent's provider failed the model call (rate limit, overload) and the agent waits to
+    /// try again on its own; None once a call goes through. Without this a rate-limited turn just
+    /// sat on "Working" with no message.
+    Retrying(Option<Retry>),
+}
+
+/// An agent waiting out a failed model call (opencode's `session_info_update` with
+/// `_meta["opencode/retry"]`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Retry {
+    /// 1 for the first retry.
+    pub attempt: u32,
+    /// The provider's error, e.g. "Rate limit exceeded (HTTP 429)".
+    pub message: String,
+    /// Unix ms of the next attempt, when the agent says.
+    pub next_at_ms: Option<u64>,
 }
 
 /// Sends a tool call to the UI thread (the app's MCP dispatch), so runs, undo and the agent log

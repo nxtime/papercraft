@@ -90,35 +90,48 @@ impl Editor {
         }
         // Variables whose CSS name changed (rename, group rename): bound fields follow.
         let renames = css_renames(&before, &next);
-        let mut fills = Fills::new();
-        for i in 0..self.pages.len() {
-            let old = self.pages[i].modes.clone();
-            let modes = match (&active_modes, i == active) {
-                (Some(m), true) => m.clone(),
-                _ => old.clone(),
-            };
-            let cache = next.cache_for(&modes);
-            let carry = Some((before.clone(), next.clone()));
-            let page_modes = (modes != old).then(|| (old, modes.clone()));
-            let extra = if i == active { on_active.take() } else { None };
-            let n = self.with_page(i, |ed| {
-                ed.rebuild_cache(
-                    label,
-                    &cache,
-                    &renames,
-                    pre,
-                    extra.map(|o| o.apply),
-                    |rec| {
-                        rec.design = carry;
-                        rec.page_modes = page_modes;
-                    },
-                    true,
-                )
-            });
-            self.pages[i].modes = modes;
-            add_fills(&mut fills, n);
-        }
+        // A panic part way (a tool call the app survives) would leave the pages already rebuilt
+        // on `next` and `self.design` on `before`. Roll forward to `next` so they agree again.
+        let rebuilt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut fills = Fills::new();
+            for i in 0..self.pages.len() {
+                let old = self.pages[i].modes.clone();
+                let modes = match (&active_modes, i == active) {
+                    (Some(m), true) => m.clone(),
+                    _ => old.clone(),
+                };
+                let cache = next.cache_for(&modes);
+                let carry = Some((before.clone(), next.clone()));
+                let page_modes = (modes != old).then(|| (old, modes.clone()));
+                let extra = if i == active { on_active.take() } else { None };
+                let n = self.with_page(i, |ed| {
+                    ed.rebuild_cache(
+                        label,
+                        &cache,
+                        &renames,
+                        pre,
+                        extra.map(|o| o.apply),
+                        |rec| {
+                            rec.design = carry;
+                            rec.page_modes = page_modes;
+                        },
+                        true,
+                    )
+                });
+                self.pages[i].modes = modes;
+                add_fills(&mut fills, n);
+            }
+            fills
+        }));
         self.design = next;
+        let fills = match rebuilt {
+            Ok(f) => f,
+            Err(panic) => {
+                self.abort();
+                self.rebuild_all_silently(&renames);
+                std::panic::resume_unwind(panic)
+            }
+        };
         Ok((r, fills))
     }
 
@@ -128,7 +141,11 @@ impl Editor {
         self.finish_loading();
         for i in 0..self.pages.len() {
             let cache = self.design.cache_for(&self.pages[i].modes);
-            self.with_page(i, |ed| ed.rebuild_cache("", &cache, renames, None, None, |_| {}, false));
+            // Recovery from a panic runs through here: a page that panics again is left as it is
+            // so the pages after it still get rebuilt (with_page restores its own state).
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.with_page(i, |ed| ed.rebuild_cache("", &cache, renames, None, None, |_| {}, false))
+            }));
             self.pages[i].saved_gen = u64::MAX;
         }
     }
@@ -184,16 +201,21 @@ impl Editor {
     // re-running layout (fit_text/fixup need the editor).
     pub fn page_doc_in_mode(&mut self, page: usize, mode: &str) -> Result<crate::model::Document, String> {
         let (cid, mid) = find_mode(&self.design, mode).ok_or(format!("no mode `{mode}`"))?;
+        Ok(self.page_doc_in(page, &cid, &mid))
+    }
+
+    /// [`Self::page_doc_in_mode`] for a mode picked by collection and mode id.
+    pub fn page_doc_in(&mut self, page: usize, cid: &str, mid: &str) -> crate::model::Document {
         self.ensure_loaded(page);
         let mut modes = self.pages[page].modes.clone();
-        modes.insert(cid, mid);
+        modes.insert(cid.into(), mid.into());
         let cache = self.design.cache_for(&modes);
         let mut doc = self.page_doc(page).clone();
         let mut rec = crate::history::Recording::new("Preview mode", &doc);
         let mut tx = crate::history::Tx::new(&mut doc, &mut rec);
         tx.set_cache(&cache, &BTreeMap::new());
         apply_bindings(&mut tx, &cache, &BTreeMap::new());
-        Ok(doc)
+        doc
     }
 
     /// Switch the active page to `mode_id` of `collection_id`: that page's modes, cache and bound
@@ -281,6 +303,7 @@ impl Editor {
                 "gap" | "padding" | "padding-top" | "padding-right" | "padding-bottom"
                 | "padding-left" => n.layout.is_some(),
                 "font-size" | "line-height" | "text-color" => n.kind.font_size().is_some(),
+                "text" => n.kind.text().is_some(),
                 _ => true,
             };
             if want.is_some() && !ok {
@@ -364,6 +387,7 @@ fn field_kind(field: &str) -> Option<Kind> {
         | "padding-bottom" | "padding-left" | "radius" | "font-size" | "line-height"
         | "opacity" => Kind::Number,
         "visible" => Kind::Boolean,
+        "text" => Kind::String,
         _ => return None,
     })
 }
@@ -375,6 +399,25 @@ const LINE_HEIGHT_PX_FROM: f64 = 4.0;
 fn token_number(cache: &variables::Cache, name: &str) -> Option<f64> {
     let t = cache.tokens.get(name)?.trim();
     t.strip_suffix("px").unwrap_or(t).trim().parse().ok()
+}
+
+/// Replace a text layer's content with a bound string, keeping whole-text spans whole and
+/// clamping the others, as `set_text_content` does.
+fn set_bound_text(n: &mut Node, new: &str) {
+    let Some(old) = n.kind.text().filter(|t| *t != new) else { return };
+    let old_len = old.chars().count();
+    let len = new.chars().count();
+    if let Some(slot) = n.kind.text_mut() {
+        *slot = new.into();
+    }
+    for s in &mut n.text_style.spans {
+        if s.start == 0 && s.end >= old_len {
+            s.end = len;
+        }
+        s.start = s.start.min(len);
+        s.end = s.end.min(len);
+    }
+    n.text_style.spans.retain(|s| s.end > s.start);
 }
 
 /// Set `field` of `n` from variable `name` in `cache`. An unresolved variable leaves the value.
@@ -396,6 +439,11 @@ fn apply_field(n: &mut Node, field: &str, name: &str, cache: &variables::Cache) 
         "visible" => {
             if let Some(b) = cache.bools.get(name) {
                 n.visible = *b;
+            }
+        }
+        "text" => {
+            if let Some(t) = cache.tokens.get(name) {
+                set_bound_text(n, t);
             }
         }
         _ => {
@@ -918,6 +966,27 @@ mod tests {
 
     fn accent(e: &Editor, page: usize) -> Color {
         e.page_doc(page).variables["accent"]
+    }
+
+    #[test]
+    fn a_panic_part_way_through_a_design_edit_leaves_every_page_on_the_new_design() {
+        let (mut e, ids) = two_pages();
+        let green = Color::rgb(0, 255, 0);
+        let calls = std::cell::Cell::new(0);
+        let boom = |_: &mut crate::history::Tx| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                panic!("second page");
+            }
+        };
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.edit_design_each("Change", |ds| set_color(ds, &PageModes::new(), "accent", None, green), &boom)
+        }));
+        assert!(r.is_err());
+        for (page, &id) in ids.iter().enumerate() {
+            assert_eq!(accent(&e, page), green);
+            assert_eq!(fill(&e, page, id).0, green);
+        }
     }
 
     #[test]

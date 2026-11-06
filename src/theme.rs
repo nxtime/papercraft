@@ -1144,6 +1144,38 @@ pub enum Icon {
     Tailwind,
     Angular,
     Rust,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    Duplicate,
+    Save,
+    Ungroup,
+    FlipH,
+    FlipV,
+    Magnet,
+    Flatten,
+    Zoom100,
+    ZoomSelection,
+    PageNext,
+    PagePrev,
+    Union,
+    Subtract,
+    Intersect,
+    Exclude,
+    LayoutAdd,
+    LayoutRemove,
+    Forward,
+    Backward,
+    ToFront,
+    ToBack,
+    CopyProps,
+    PasteProps,
+    Presentation,
+    Bold,
+    Italic,
+    Underline,
+    Strikethrough,
 }
 
 /// Every Lucide name [`icon_by_name`] knows.
@@ -1191,6 +1223,8 @@ pub fn icon_by_name(name: &str) -> Option<Icon> {
         _ => return None,
     })
 }
+
+mod menu_glyphs;
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
     let s = rect.width().min(rect.height());
@@ -1627,6 +1661,38 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             line(&[pt(5.4, 11.0), pt(8.0, 4.5), pt(10.6, 11.0)]);
             line(&[pt(6.4, 8.7), pt(9.6, 8.7)]);
         }
+        Icon::Redo
+        | Icon::Cut
+        | Icon::Copy
+        | Icon::Paste
+        | Icon::Duplicate
+        | Icon::Save
+        | Icon::Ungroup
+        | Icon::FlipH
+        | Icon::FlipV
+        | Icon::Magnet
+        | Icon::Flatten
+        | Icon::Zoom100
+        | Icon::ZoomSelection
+        | Icon::PageNext
+        | Icon::PagePrev
+        | Icon::Union
+        | Icon::Subtract
+        | Icon::Intersect
+        | Icon::Exclude
+        | Icon::LayoutAdd
+        | Icon::LayoutRemove
+        | Icon::Forward
+        | Icon::Backward
+        | Icon::ToFront
+        | Icon::ToBack
+        | Icon::CopyProps
+        | Icon::PasteProps
+        | Icon::Presentation
+        | Icon::Bold
+        | Icon::Italic
+        | Icon::Underline
+        | Icon::Strikethrough => menu_glyphs::paint(painter, rect, icon, color),
         Icon::Rust => {
             painter.circle_stroke(c, 5.0 * u, st);
             for i in 0..8 {

@@ -1,0 +1,9 @@
+> "method":"initialize"
+< {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{}}}
+> "method":"session/new"
+< {"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-1"}}
+> "method":"session/prompt"
+< {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"session_info_update","_meta":{"opencode/retry":{"attempt":2,"nextRetryAt":"2026-11-02T17:14:41Z","error":{"type":"provider.overloaded","message":"Overloaded"}}}}}}
+< {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"session_info_update","_meta":{"opencode/retry":null}}}}
+< {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}}}
+< {"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}

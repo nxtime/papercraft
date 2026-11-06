@@ -55,8 +55,10 @@ impl Session {
 
     /// Open a project folder into the editor.
     pub fn open(&mut self, ed: &mut Editor, dir: &Path) -> Result<(), FormatError> {
+        self.hold_sync_downloads(false);
         let p = Project::open(dir)?;
         crate::assets::load_dir(&dir.join(crate::project::ASSETS_DIR));
+        crate::fonts::load_dir(&dir.join(crate::project::ASSETS_DIR));
         let loaded = p.load_first(p.manifest.active_page.as_deref())?;
         ed.open_pages(loaded.pages, p.manifest.active_page.as_deref());
         ed.design = loaded.design;
@@ -103,12 +105,25 @@ impl Session {
 
     /// Note that time passed; returns true when a save is due now.
     pub fn autosave_due(&mut self, ed: &Editor, now: Instant) -> bool {
-        if self.project.is_none() || !ed.project_dirty() {
+        let dirty = self.project.is_some() && ed.project_dirty();
+        self.hold_sync_downloads(dirty);
+        if !dirty {
             self.dirty_since = None;
             return false;
         }
         let since = *self.dirty_since.get_or_insert(now);
         now.duration_since(since) >= AUTOSAVE_DELAY && !ed.is_busy()
+    }
+
+    /// While the open project has unsaved edits its shared copy must not take the server's
+    /// version of its files: the autosave would overwrite it and then upload without merging.
+    fn hold_sync_downloads(&self, on: bool) {
+        let Some(p) = &self.project else {
+            return;
+        };
+        if let Some(status) = self.sync.status(&p.dir) {
+            status.hold_downloads(on);
+        }
     }
 
     /// When the sync engines should next be looked at (None while nothing is shared).
@@ -245,6 +260,7 @@ impl Session {
                 &p.dir.join(crate::project::ASSETS_DIR),
                 crate::assets::used_by(&data.doc),
             )?;
+            crate::fonts::save_to_dir(&p.dir.join(crate::project::ASSETS_DIR), &crate::fonts::used_by(&data.doc))?;
             p.save_page_modes(&data, &ed.pages[i].modes)?;
             ed.mark_page_saved(i);
         }
@@ -347,6 +363,8 @@ impl Session {
     /// Close the project: final save; the caller then shows the home screen.
     pub fn close(&mut self, ed: &mut Editor) -> Result<(), FormatError> {
         let r = self.save_all(ed);
+        // A closed project has no unsaved edits left to protect; autosave_due only sees the open one.
+        self.hold_sync_downloads(false);
         self.project = None;
         self.dirty_since = None;
         r

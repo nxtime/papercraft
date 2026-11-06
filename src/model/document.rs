@@ -133,7 +133,8 @@ impl Document {
     pub fn ancestors(&self, id: NodeId) -> Vec<NodeId> {
         let mut out = Vec::new();
         let mut cur = self.nodes.get(&id).and_then(|n| n.parent);
-        while let Some(p) = cur {
+        // A file can hold a parent loop: stop when a node repeats.
+        while let Some(p) = cur.filter(|p| !out.contains(p) && *p != id) {
             out.push(p);
             cur = self.nodes.get(&p).and_then(|n| n.parent);
         }

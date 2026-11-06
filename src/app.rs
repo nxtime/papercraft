@@ -57,6 +57,24 @@ fn release_freed_memory() {
 
 /// Shortest gap between frames drawn for an agent's edits alone (20 FPS).
 const AGENT_FRAME: Duration = Duration::from_millis(50);
+/// How long agent calls wait for a drag to end before running anyway, so a stuck gesture
+/// cannot block them for good.
+const GESTURE_HOLD: Duration = Duration::from_secs(10);
+
+/// Whether agent calls should keep waiting: a gesture is in progress and has not held them
+/// longer than `GESTURE_HOLD`. `since` is when the wait began; it is cleared once they may run.
+fn hold_for_gesture(busy: bool, since: &mut Option<Instant>, now: Instant) -> bool {
+    if !busy {
+        *since = None;
+        return false;
+    }
+    let start = *since.get_or_insert(now);
+    if now.duration_since(start) >= GESTURE_HOLD {
+        *since = None;
+        return false;
+    }
+    true
+}
 
 pub struct App {
     gfx: Option<Gfx>,
@@ -89,6 +107,9 @@ pub struct App {
     )>,
     /// Groups the agent's editing calls into reviewable runs.
     runs: crate::runs::Tracker,
+    /// Tool calls waiting for the person's drag to end, and since when.
+    held: Vec<crate::mcp::Call>,
+    held_since: Option<Instant>,
     /// Claims and what each agent last saw; shared with delegate threads, which release their
     /// helper's claims when it ends.
     swarm: std::sync::Arc<std::sync::Mutex<crate::mcp::swarm::Swarm>>,
@@ -143,10 +164,13 @@ impl App {
             menu: None,
             mcp: None,
             runs: Default::default(),
+            held: Vec::new(),
+            held_since: None,
             swarm: Default::default(),
         };
         app.st.library.library = library;
         app.st.perf.prefs = crate::ui::perf::PerfPrefs::load();
+        crate::ui::canvas_prefs::CanvasPrefs::load().apply(&mut app.ed, &mut app.st);
         app.st.menu_bar_hidden = crate::ui::menu_toggle::load_hidden();
         app.ed.clipboard_io = crate::io::clipboard::System::new()
             .map(|c| Box::new(c) as Box<dyn crate::io::clipboard::Provider>);
@@ -300,6 +324,10 @@ impl App {
         self.st.save_state.clear();
     }
 
+    fn release_unused_images(&self, dir: &std::path::Path) {
+        crate::assets::release_unused(&dir.join(crate::project::ASSETS_DIR), self.ed.images_held_outside_pages());
+    }
+
     fn open_project(&mut self, dir: &std::path::Path) {
         if self.session.project.is_some() {
             self.save_project(true);
@@ -309,6 +337,7 @@ impl App {
         match self.session.open(&mut self.ed, dir) {
             Ok(()) => {
                 self.runs.end_counted(crate::project::format::now_ms(), counts, None);
+                self.release_unused_images(dir);
                 self.st.home = None;
                 self.st.project_name = self.session.project_name();
                 self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
@@ -745,6 +774,8 @@ impl App {
         }
         if self.confirm_discard() {
             event_loop.exit();
+        } else {
+            self.st.updater.restart = None;
         }
     }
 
@@ -1123,6 +1154,7 @@ impl ApplicationHandler<UserEvent> for App {
         );
         window.request_redraw();
         self.st.perf.gpu = format!("{} ({:?})", adapter_info.name, adapter_info.backend);
+        self.st.perf.display_hz = display_hz(&window);
         self.gfx = Some(Gfx {
             window,
             surface,
@@ -1160,6 +1192,11 @@ impl ApplicationHandler<UserEvent> for App {
                     crate::macos::hide_traffic_lights(&g.window);
                 }
                 redraw = true;
+            }
+            WindowEvent::Moved(_) => {
+                if let Some(g) = &self.gfx {
+                    self.st.perf.display_hz = display_hz(&g.window);
+                }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 // Moved between Retina and non-Retina displays. egui-winit has already picked
@@ -1277,10 +1314,15 @@ impl ApplicationHandler<UserEvent> for App {
                     } else {
                         d
                     };
-                    self.ed.handle(InputEvent::Scroll {
-                        delta: -d,
-                        pos: self.to_canvas(p),
-                    });
+                    let pos = self.to_canvas(p);
+                    // Only a notched wheel: a trackpad's pixel scrolling stays a pan.
+                    let notched = matches!(delta, MouseScrollDelta::LineDelta(..));
+                    if self.st.wheel_zooms && notched && !self.ed.mods.shift {
+                        let factor = (d.y * crate::editor::ZOOM_PER_SCROLL_PX).exp();
+                        self.ed.handle(InputEvent::Zoom { factor, pos });
+                    } else {
+                        self.ed.handle(InputEvent::Scroll { delta: -d, pos });
+                    }
                     redraw = true;
                 }
             }
@@ -1447,7 +1489,7 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if std::mem::take(&mut self.close_requested) {
+        if std::mem::take(&mut self.close_requested) || self.st.updater.restart.is_some() {
             self.try_exit(event_loop);
         }
         // Autosave runs off a timer so it also fires while the window sits idle.
@@ -1462,6 +1504,9 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         self.tick_sync();
+        if !self.held.is_empty() {
+            self.run_mcp_calls();
+        }
         let wake = [
             self.next_repaint,
             self.session.next_deadline(),
@@ -1573,11 +1618,23 @@ impl App {
 
     /// Run the MCP tool calls that arrived since the last wake-up, then repaint.
     fn run_mcp_calls(&mut self) {
-        let calls: Vec<crate::mcp::Call> = match &self.mcp {
-            Some((rx, _, _)) => rx.try_iter().collect(),
-            None => return,
+        let Some((rx, _, _)) = &self.mcp else {
+            // No server to answer for: fail held calls rather than leave their callers waiting.
+            for c in std::mem::take(&mut self.held) {
+                let _ = c.reply.send(Err("PaperCraft's MCP server is not running".into()));
+            }
+            return;
         };
+        let mut calls = std::mem::take(&mut self.held);
+        calls.extend(rx.try_iter());
         if calls.is_empty() {
+            return;
+        }
+        // A call landing mid-drag would commit the half-made drag as its own undo step and
+        // the rest of the drag would overwrite it; wait for the gesture to end instead.
+        if hold_for_gesture(self.ed.is_busy(), &mut self.held_since, Instant::now()) {
+            self.held = calls;
+            self.next_repaint = Some(Instant::now() + AGENT_FRAME);
             return;
         }
         for c in calls {
@@ -1620,7 +1677,13 @@ impl App {
             }
             let mut runs = std::mem::take(&mut self.runs);
             let swarm = self.swarm.clone();
-            let r = swarm.lock().unwrap().call(&mut runs, self, &c.client, &c.name, &c.args, crate::project::format::now_ms());
+            let called = catch_call(&c.name, || swarm.lock().unwrap_or_else(|p| p.into_inner()).call(&mut runs, self, &c.client, &c.name, &c.args, crate::project::format::now_ms()));
+            let r = called.unwrap_or_else(|e| {
+                // The panic may have left an edit half done; drop it before the next call commits it.
+                self.ed.abort();
+                swarm.clear_poison();
+                Err(e)
+            });
             let touched = runs.take_touched();
             if r.is_ok() {
                 let who = runs.label(&c.client);
@@ -1676,6 +1739,7 @@ impl crate::mcp::exec::Host for App {
         self.session
             .open(&mut self.ed, dir)
             .map_err(|e| format!("could not open {}: {e}", dir.display()))?;
+        self.release_unused_images(dir);
         self.st.home = None;
         self.st.project_name = self.session.project_name();
         self.st.project_dir = self.session.project.as_ref().map(|p| p.dir.clone());
@@ -1768,13 +1832,62 @@ pub fn run(start: Start) -> Result<(), String> {
     let mut app = App::new(start, store);
     app.mcp = start_mcp(event_loop.create_proxy());
     app.st.agent_endpoint = app.mcp.as_ref().map(|(_, r, _)| r.url()).unwrap_or_default();
-    event_loop.run_app(&mut app).map_err(|e| e.to_string())
+    if let Some(dir) = std::env::current_exe().ok().as_deref().and_then(std::path::Path::parent) {
+        crate::update::remove_replaced(dir);
+    }
+    if !cfg!(debug_assertions) && ui::update::auto_enabled() {
+        app.st.updater.check_quietly();
+    }
+    event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
+    match app.st.updater.restart.take() {
+        Some(ui::update::Restart::Relaunch) => crate::update::relaunch(None),
+        Some(ui::update::Restart::Install(msi)) => crate::update::relaunch(Some(&msi)),
+        None => Ok(()),
+    }
+}
+
+/// The window's monitor's refresh rate, rounded to whole Hz.
+fn display_hz(window: &Window) -> Option<u32> {
+    window.current_monitor()?.refresh_rate_millihertz().map(|mhz| (mhz + 500) / 1000)
+}
+
+/// Runs one tool call so that a panic in it becomes an error for that call instead of ending
+/// the app (calls run on the UI thread). Release builds unwind; the web build aborts.
+/// Err: the panic, described.
+fn catch_call(tool: &str, call: impl FnOnce() -> crate::mcp::ToolResult) -> Result<crate::mcp::ToolResult, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).map_err(|p| {
+        let why = p.downcast_ref::<&str>().copied().or_else(|| p.downcast_ref::<String>().map(String::as_str)).unwrap_or("unknown cause");
+        format!("{tool} crashed ({why}); PaperCraft kept the document consistent, but part of the call may have been applied: check the state before retrying. This is a PaperCraft bug.")
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::prefer_x11;
+    use super::{catch_call, hold_for_gesture, prefer_x11, GESTURE_HOLD};
+    use std::time::Instant;
     use std::ffi::OsStr;
+
+    #[test]
+    fn a_panicking_tool_call_becomes_an_error() {
+        let err = catch_call("write_html", || panic!("boom")).unwrap_err();
+        assert!(err.contains("write_html") && err.contains("boom") && err.contains("check the state"), "{err}");
+        assert!(catch_call("x", || Ok(Vec::new())).unwrap().is_ok());
+    }
+
+    #[test]
+    fn agent_calls_wait_for_a_drag_but_not_forever() {
+        let t0 = Instant::now();
+        let mut since = None;
+        assert!(!hold_for_gesture(false, &mut since, t0));
+        assert!(hold_for_gesture(true, &mut since, t0));
+        assert!(hold_for_gesture(true, &mut since, t0 + GESTURE_HOLD / 2));
+        // A stuck gesture releases them.
+        assert!(!hold_for_gesture(true, &mut since, t0 + GESTURE_HOLD));
+        // The gesture ending clears the wait.
+        assert!(hold_for_gesture(true, &mut since, t0 + GESTURE_HOLD));
+        assert!(!hold_for_gesture(false, &mut since, t0 + GESTURE_HOLD));
+        assert!(since.is_none());
+    }
 
     #[test]
     fn wsl_prefers_x11_when_a_display_is_available() {

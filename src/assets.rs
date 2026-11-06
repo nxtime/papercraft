@@ -6,7 +6,7 @@
 //! their assets as `assets/<id>.<ext>`; copy/paste between projects carries only the id, and
 //! the destination project writes the file on its next save.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -108,6 +108,22 @@ pub fn load_dir(dir: &Path) {
     }
 }
 
+/// After a project opens, forget the images of the one that was open before: the registry is
+/// process-wide and would otherwise only grow. Kept are the images in the new project's `dir`
+/// (including pages still loading), and `extra` (the clipboard and library documents, which can
+/// hold ids that are not in the folder).
+pub fn release_unused(dir: &Path, extra: impl IntoIterator<Item = String>) {
+    let mut keep: HashSet<String> = extra.into_iter().collect();
+    if let Ok(rd) = crate::vfs::read_dir(dir) {
+        keep.extend(rd.flatten().filter_map(|e| Some(e.path().file_stem()?.to_string_lossy().into_owned())));
+    }
+    prune(&mut registry().lock().unwrap(), &keep);
+}
+
+fn prune(map: &mut HashMap<String, Arc<ImageAsset>>, keep: &HashSet<String>) {
+    map.retain(|id, _| keep.contains(id));
+}
+
 /// Write the given assets into `dir` (skipping ones already there).
 pub fn save_to_dir(dir: &Path, ids: impl IntoIterator<Item = String>) -> std::io::Result<()> {
     for id in ids {
@@ -203,6 +219,14 @@ mod tests {
             assert_eq!(base64_decode(&base64(s)).unwrap(), s);
         }
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn prune_drops_images_nobody_keeps() {
+        let asset = |id: &str| Arc::new(ImageAsset { id: id.into(), width: 1, height: 1, bytes: Vec::new(), ext: "png" });
+        let mut map: HashMap<String, Arc<ImageAsset>> = ["a", "b"].iter().map(|id| (id.to_string(), asset(id))).collect();
+        prune(&mut map, &HashSet::from(["a".to_string()]));
+        assert_eq!(map.keys().collect::<Vec<_>>(), ["a"]);
     }
 
     #[test]

@@ -217,12 +217,13 @@ fn walk(g: &usvg::Group, opacity: f32, out: &mut Vec<Node>) {
 fn raster(node: &usvg::Node, g: &usvg::Group, opacity: f32) -> Option<Node> {
     use resvg::tiny_skia::{Pixmap, Transform};
     let b = node.abs_layer_bounding_box()?;
-    let (w, h) = ((b.width() * RASTER_SCALE).ceil() as u32, (b.height() * RASTER_SCALE).ceil() as u32);
-    let mut pixmap = Pixmap::new(w.max(1), h.max(1))?;
+    // A huge group would ask for gigabytes of pixels: lower the scale until it fits the budget.
+    let (scale, w, h) = raster_size(b.width(), b.height());
+    let mut pixmap = Pixmap::new(w, h)?;
     // render_node applies the group's own transform after the root one and shifts by the bounds,
     // so the root carries the parent's absolute transform, between that shift and its undo.
     let parent = g.abs_transform().pre_concat(g.transform().invert()?);
-    let root = Transform::from_scale(RASTER_SCALE, RASTER_SCALE).pre_translate(-b.x(), -b.y()).pre_concat(parent).pre_translate(b.x(), b.y());
+    let root = Transform::from_scale(scale, scale).pre_translate(-b.x(), -b.y()).pre_concat(parent).pre_translate(b.x(), b.y());
     resvg::render_node(node, root, &mut pixmap.as_mut())?;
     let asset = crate::assets::register(&pixmap.encode_png().ok()?).ok()?;
     let mut n = Node::new(NodeId(0), NodeKind::Rect, Rect::new(b.x() as f64, b.y() as f64, b.width() as f64, b.height() as f64));
@@ -232,13 +233,28 @@ fn raster(node: &usvg::Node, g: &usvg::Group, opacity: f32) -> Option<Node> {
     Some(n)
 }
 
+/// The scale and pixel size a group of this size is drawn at: capped by total pixels and by each
+/// side, since a very long thin group still rounds every side up to a whole pixel.
+fn raster_size(width: f32, height: f32) -> (f32, u32, u32) {
+    let scale = RASTER_SCALE
+        .min((MAX_RASTER_PIXELS / (width * height)).sqrt())
+        .min(MAX_RASTER_SIDE / width)
+        .min(MAX_RASTER_SIDE / height);
+    let side = |v: f32| ((v * scale).ceil().clamp(1.0, MAX_RASTER_SIDE)) as u32;
+    (scale, side(width), side(height))
+}
+
+/// Most pixels along one side of a masked group's image.
+const MAX_RASTER_SIDE: f32 = 16_384.0;
 /// Pixels per SVG unit for a masked group drawn as an image: sharp at 3x zoom.
 const RASTER_SCALE: f32 = 3.0;
+/// Most pixels a masked group's image may have (64 MB of RGBA).
+const MAX_RASTER_PIXELS: f32 = 16_000_000.0;
 
 fn options() -> usvg::Options<'static> {
     let mut o = usvg::Options::default();
     let db = o.fontdb_mut();
-    for i in 0..4u8 {
+    for i in 0..crate::text::BUILT_IN_FACES {
         db.load_font_data(crate::text::face_bytes(i).to_vec());
     }
     db.load_font_data(crate::theme::INTER_MEDIUM.to_vec());
@@ -310,6 +326,14 @@ mod tests {
     </svg>"##;
 
     #[test]
+    fn raster_size_caps_each_side_not_only_the_total() {
+        let (scale, w, h) = raster_size(4e8, 0.01);
+        assert!(w <= 16_384 && h >= 1, "{w}x{h} at {scale}");
+        assert!((w as u64) * (h as u64) < 20_000_000);
+        assert_eq!(raster_size(100.0, 50.0), (RASTER_SCALE, 300, 150));
+    }
+
+    #[test]
     fn imports_shapes_gradients_strokes_and_text() {
         let nodes = parse(SVG).unwrap();
         assert!(nodes.len() >= 3, "{}", nodes.len());
@@ -331,6 +355,20 @@ mod tests {
         let doc = import_page(SVG, "logo").unwrap();
         doc.validate().unwrap();
         assert_eq!(doc.root.len(), 1);
+    }
+
+    #[test]
+    fn a_huge_masked_group_is_drawn_at_a_capped_size() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+          <mask id="m"><rect width="60000" height="60000" fill="#fff"/></mask>
+          <g mask="url(#m)"><rect width="60000" height="60000" fill="#f00"/></g>
+        </svg>"##;
+        let nodes = parse(svg).unwrap();
+        let Some(Paint::Image { asset, .. }) = nodes.iter().find_map(|n| n.style.fills.first()) else {
+            panic!("masked group was not rastered");
+        };
+        let img = crate::assets::get(asset).unwrap();
+        assert!(u64::from(img.width) * u64::from(img.height) <= 16_100_000, "{}x{}", img.width, img.height);
     }
 
     #[test]

@@ -50,7 +50,7 @@ fn reach(name: &str, args: &Value) -> Reach {
 /// The shared resource a tool changes, which a claim can hold for one agent.
 fn resource_of(name: &str) -> Option<&'static str> {
     match name {
-        "set_variables" | "delete_variables" | "create_collection" | "set_variable_mode" | "set_tokens" | "import_design_system"
+        "set_variables" | "set_strings" | "delete_variables" | "create_collection" | "set_variable_mode" | "set_tokens" | "import_design_system"
         | "enable_library" | "update_library" | "disable_library" => Some("variables"),
         "create_component" | "import_components" | "merge_variants" | "set_component_props" | "apply_ui_kit" => Some("components"),
         "create_page" | "rename_pages" | "delete_pages" => Some("pages"),

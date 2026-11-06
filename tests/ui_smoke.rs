@@ -21,6 +21,41 @@ fn frame(ctx: &egui::Context, mut f: impl FnMut(&mut egui::Ui)) {
 }
 
 #[test]
+fn home_window_buttons_sit_inside_the_header_and_take_clicks() {
+    let ctx = egui::Context::default();
+    ui::setup_style(&ctx);
+    let mut ed = Editor::default();
+    let mut st = UiState::default();
+    st.custom_titlebar = true;
+    st.home = Some(home::HomeView::default());
+    frame(&ctx, |ui| {
+        ui::draw(ui, &mut ed, &mut st);
+    });
+    let slot = st.home.as_ref().and_then(|hv| hv.window_slot).expect("header reserves a slot");
+    assert!(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0)).shrink(8.0).contains_rect(slot));
+
+    let middle_button = slot.center();
+    let button = |pressed| egui::Event::PointerButton {
+        pos: middle_button,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    for events in [vec![egui::Event::PointerMoved(middle_button)], vec![button(true)], vec![button(false)], vec![]] {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            ui::draw(ui, &mut ed, &mut st);
+        });
+        out.textures_delta.clear();
+    }
+    assert!(matches!(st.win_cmd, Some(ui::WinCmd::ToggleMaximize)));
+}
+
+#[test]
 fn redesigned_surfaces_draw_in_every_theme() {
     for choice in [
         Choice::Dark,
@@ -131,7 +166,7 @@ fn present_click_follows_prototype_link() {
     let mut st = UiState::default();
     ed.selection = vec![a];
     ui::start_present(&mut ed, &mut st);
-    assert_eq!(st.present_index, 0);
+    assert_eq!(st.present_nav.index, 0);
     let at = ed
         .camera
         .world_to_screen(papercraft::geom::v2(100.0, 100.0));
@@ -158,7 +193,7 @@ fn present_click_follows_prototype_link() {
     run(&ctx, &mut ed, &mut st, vec![Event::PointerMoved(pos)]);
     run(&ctx, &mut ed, &mut st, vec![btn_ev(true)]);
     run(&ctx, &mut ed, &mut st, vec![btn_ev(false)]);
-    assert_eq!(st.present_index, 1, "click on linked layer opens its frame");
+    assert_eq!(st.present_nav.index, 1, "click on linked layer opens its frame");
 }
 
 #[test]

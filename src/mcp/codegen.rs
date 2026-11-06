@@ -6,14 +6,15 @@ use crate::model::{
 };
 use crate::variables::{DesignSystem, Kind, PageModes, Value as DsValue};
 use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
 
-fn parent_layout(doc: &Document, n: &Node) -> Option<AutoLayout> {
+pub(crate) fn parent_layout(doc: &Document, n: &Node) -> Option<AutoLayout> {
     n.parent.and_then(|p| doc.get(p)).and_then(|p| p.layout)
 }
 
 /// `(set, name)` of an icon frame: a frame called `Icon / <set>:<name>` whose children are all vector
 /// geometry (what `<x-paper-icon>` and the icon tools create).
-fn icon_of(doc: &Document, n: &Node) -> Option<(String, String)> {
+pub(crate) fn icon_of(doc: &Document, n: &Node) -> Option<(String, String)> {
     if !matches!(n.kind, NodeKind::Frame { .. }) || n.children.is_empty() {
         return None;
     }
@@ -65,7 +66,7 @@ fn icon_tint(doc: &Document, n: &Node) -> (Option<String>, Option<String>) {
 
 /// Inline SVG of exactly this node (and its descendants), without the XML prolog. The export is in
 /// world coordinates; the result is shifted so its `viewBox` starts at 0 0 and can be placed anywhere.
-fn inline_svg(doc: &Document, id: NodeId) -> String {
+pub(crate) fn inline_svg(doc: &Document, id: NodeId) -> String {
     let svg = crate::io::svg::export(doc, Some(&[id]), None)
         .unwrap_or_default()
         .lines()
@@ -227,7 +228,7 @@ fn tw_font_size(s: f64) -> String {
     }
 }
 
-fn tw_classes(doc: &Document, n: &Node, is_root: bool) -> String {
+pub(crate) fn tw_classes(doc: &Document, n: &Node, is_root: bool) -> String {
     let mut c: Vec<String> = Vec::new();
     let pl = parent_layout(doc, n);
     let in_flow = pl.is_some() && !n.layout_child.absolute;
@@ -319,6 +320,9 @@ fn tw_classes(doc: &Document, n: &Node, is_root: bool) -> String {
             font_size, align, ..
         } => {
             c.push(tw_font_size(*font_size));
+            if let Some(font) = &n.text_style.font {
+                c.push(format!("font-['{}']", font.replace(' ', "_")));
+            }
             if n.text_style.bold {
                 c.push("font-bold".into());
             }
@@ -378,22 +382,88 @@ fn tw_classes(doc: &Document, n: &Node, is_root: bool) -> String {
     c.join(" ")
 }
 
-fn jsx_text(t: &str) -> String {
-    if t.chars()
-        .all(|c| !matches!(c, '{' | '}' | '<' | '>' | '\n' | '"' | '\\'))
-    {
-        t.to_string()
-    } else {
-        format!("{{{}}}", serde_json::to_string(t).unwrap_or_default())
+/// Where escaped text is going; each target has its own characters that mean something.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Escape {
+    /// HTML text or a double-quoted attribute value.
+    Html,
+    /// JSX text: anything JSX would parse becomes a string expression.
+    Jsx,
+    /// Inside an Angular component's template literal, text or attribute value.
+    Angular,
+}
+
+/// The one escaper every exporter uses, so a layer's text or name reads back as written.
+pub(crate) fn escape(mode: Escape, t: &str) -> String {
+    match mode {
+        Escape::Html => escape_with(t, false),
+        // `&` too: JSX decodes `&amp;` in text, so "Fish &amp; Chips" must not stay bare.
+        Escape::Jsx if !t.contains(['{', '}', '<', '>', '&', '\n', '"', '\\']) => t.to_string(),
+        Escape::Jsx => format!("{{{}}}", serde_json::to_string(t).unwrap_or_default()),
+        Escape::Angular => escape_with(t, true),
     }
 }
 
-fn instance_comp_attr(doc: &Document, n: &Node) -> String {
+/// HTML escaping; `template` also makes the result safe inside a TypeScript template literal
+/// (`\`, backtick) and inert for Angular (`{{ x }}` interpolation and `{`/`}` blocks).
+fn escape_with(t: &str, template: bool) -> String {
+    let mut out = String::with_capacity(t.len());
+    for c in t.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\\' if template => out.push_str(r"\\"),
+            '`' if template => out.push_str(r"\`"),
+            '{' if template => out.push_str("&#123;"),
+            '}' if template => out.push_str("&#125;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A CSS identifier piece (variable key, mode name) with everything but letters, digits, `-` and
+/// `_` written as a hex escape, so a name can never end the rule or the `<style>` block.
+pub(crate) fn css_ident(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c.to_string() } else { format!("\\{:x} ", c as u32) })
+        .collect()
+}
+
+/// A quoted CSS string; `<` is escaped too so `</style>` cannot appear.
+pub(crate) fn css_string(s: &str) -> String {
+    let body: String = s
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' | '<' | '\n' | '\r' => format!("\\{:x} ", c as u32),
+            c => c.to_string(),
+        })
+        .collect();
+    format!("\"{body}\"")
+}
+
+/// The CSS text of a computed style value; font names are user text, so each family is quoted
+/// (generic keywords stay bare).
+pub(crate) fn css_value(prop: &str, val: &str) -> String {
+    if prop != "fontFamily" {
+        return val.to_string();
+    }
+    const GENERIC: [&str; 8] = ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-monospace", "ui-sans-serif"];
+    let family = |f: &str| {
+        let f = f.trim().trim_matches(['"', '\'']);
+        if GENERIC.contains(&f) { f.to_string() } else { css_string(f) }
+    };
+    val.split(',').map(family).collect::<Vec<_>>().join(", ")
+}
+
+fn instance_comp_attr(doc: &Document, n: &Node, mode: Escape) -> String {
     n.instance
         .as_ref()
         .and_then(|l| doc.get(l.main))
         .filter(|m| m.component)
-        .map(|m| format!(" data-component=\"{}\"", m.name.replace('"', "'")))
+        .map(|m| format!(" data-component=\"{}\"", escape(mode, &m.name)))
         .unwrap_or_default()
 }
 
@@ -430,7 +500,7 @@ fn fill_template(doc: &Document, id: NodeId, template: &str, escape: fn(&str) ->
 /// A linked component's JSX, filled in from the instance (None when it has no React link).
 pub(crate) fn linked_react(doc: &Document, id: NodeId) -> Option<String> {
     let n = doc.get(id)?;
-    code_link(doc, n).filter(|l| !l.react.is_empty()).map(|l| fill_template(doc, id, &l.react, jsx_text))
+    code_link(doc, n).filter(|l| !l.react.is_empty()).map(|l| fill_template(doc, id, &l.react, |t| escape(Escape::Jsx, t)))
 }
 
 /// The distinct import lines of the linked components under `root`, in order of first use.
@@ -459,13 +529,14 @@ fn tailwind_node(doc: &Document, id: NodeId, depth: usize, is_root: bool, out: &
     let ind = "  ".repeat(depth);
     // A linked component is written as its library usage, not rebuilt from its layers.
     if let Some(link) = code_link(doc, n).filter(|l| !l.react.is_empty()) {
-        push_indented(out, &ind, &fill_template(doc, id, &link.react, jsx_text));
+        push_indented(out, &ind, &fill_template(doc, id, &link.react, |t| escape(Escape::Jsx, t)));
         return;
     }
     let cls = tw_classes(doc, n, is_root);
-    let name = n.name.replace('"', "'");
-    let comp_attr = instance_comp_attr(doc, n);
+    let name = escape(Escape::Html, &n.name);
+    let comp_attr = instance_comp_attr(doc, n, Escape::Html);
     if let Some((set, icon)) = icon_of(doc, n) {
+        let (set, icon) = (escape(Escape::Html, &set), escape(Escape::Html, &icon));
         out.push_str(&format!(
             "{ind}<div data-name=\"{name}\" data-icon=\"{set}:{icon}\"{comp_attr} className=\"{cls}\">{}</div>\n",
             inline_svg(doc, id)
@@ -491,7 +562,7 @@ fn tailwind_node(doc: &Document, id: NodeId, depth: usize, is_root: bool, out: &
         NodeKind::Text { text, .. } => {
             out.push_str(&format!(
                 "{ind}<span{comp_attr} className=\"{cls}\">{}</span>\n",
-                jsx_text(text)
+                escape(Escape::Jsx, text)
             ));
         }
         NodeKind::Rect | NodeKind::Ellipse => {
@@ -514,7 +585,7 @@ fn tailwind_node(doc: &Document, id: NodeId, depth: usize, is_root: bool, out: &
         NodeKind::Sticky { text, .. } => {
             out.push_str(&format!(
                 "{ind}<div data-name=\"{name}\"{comp_attr} className=\"{cls} p-4\">{}</div>\n",
-                jsx_text(text)
+                escape(Escape::Jsx, text)
             ));
         }
         _ => {
@@ -539,7 +610,7 @@ pub fn to_tailwind_jsx(doc: &Document, root: NodeId) -> String {
     out
 }
 
-fn camel_to_kebab(s: &str) -> String {
+pub(crate) fn camel_to_kebab(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
         if c.is_ascii_uppercase() {
@@ -552,19 +623,41 @@ fn camel_to_kebab(s: &str) -> String {
     out
 }
 
-fn escape_html(t: &str) -> String {
-    t.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
+/// Prototype links the page can honour: layer link target -> the href to use.
+pub(crate) type Hrefs = BTreeMap<NodeId, String>;
 
+/// A layer with a prototype link whose target has a page becomes a real anchor around it;
+/// `display: contents` keeps the anchor out of layout, so the design does not move.
+#[allow(clippy::too_many_arguments)]
 fn html_node(
     doc: &Document,
     id: NodeId,
     depth: usize,
     is_root: bool,
+    hrefs: &Hrefs,
     styles: &mut String,
     markup: &mut String,
+    in_link: bool,
+) {
+    let href = doc.get(id).and_then(|n| n.link).and_then(|t| hrefs.get(&t));
+    // An anchor inside an anchor is invalid HTML and browsers close the outer one early.
+    let Some(href) = href.filter(|_| !in_link) else { return html_node_inner(doc, id, depth, is_root, hrefs, styles, markup, in_link) };
+    let ind = "  ".repeat(depth);
+    markup.push_str(&format!("{ind}<a class=\"pc-link\" href=\"{}\">\n", escape(Escape::Html, href)));
+    html_node_inner(doc, id, depth + 1, is_root, hrefs, styles, markup, true);
+    markup.push_str(&format!("{ind}</a>\n"));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn html_node_inner(
+    doc: &Document,
+    id: NodeId,
+    depth: usize,
+    is_root: bool,
+    hrefs: &Hrefs,
+    styles: &mut String,
+    markup: &mut String,
+    in_link: bool,
 ) {
     let Some(n) = doc.get(id) else { return };
     let cls = format!("node-{}", id.0);
@@ -580,15 +673,16 @@ fn html_node(
     styles.push_str(&format!(".{cls} {{\n"));
     for (k, v) in &st {
         if let Some(val) = v.as_str() {
-            styles.push_str(&format!("  {}: {val};\n", camel_to_kebab(k)));
+            styles.push_str(&format!("  {}: {};\n", camel_to_kebab(k), css_value(k, val)));
         }
     }
     styles.push_str("}\n");
 
     let ind = "  ".repeat(depth);
-    let name = n.name.replace('"', "'");
-    let comp_attr = instance_comp_attr(doc, n);
+    let name = escape(Escape::Html, &n.name);
+    let comp_attr = instance_comp_attr(doc, n, Escape::Html);
     if let Some((set, icon)) = icon_of(doc, n) {
+        let (set, icon) = (escape(Escape::Html, &set), escape(Escape::Html, &icon));
         markup.push_str(&format!(
             "{ind}<div class=\"{cls}\" data-name=\"{name}\" data-icon=\"{set}:{icon}\"{comp_attr}>{}</div>\n",
             inline_svg(doc, id)
@@ -606,7 +700,7 @@ fn html_node(
                     "{ind}<div class=\"{cls}\" data-name=\"{name}\"{comp_attr}>\n"
                 ));
                 for c in &n.children {
-                    html_node(doc, *c, depth + 1, false, styles, markup);
+                    html_node(doc, *c, depth + 1, false, hrefs, styles, markup, in_link);
                 }
                 markup.push_str(&format!("{ind}</div>\n"));
             }
@@ -614,13 +708,13 @@ fn html_node(
         NodeKind::Text { text, .. } => {
             markup.push_str(&format!(
                 "{ind}<span class=\"{cls}\"{comp_attr}>{}</span>\n",
-                escape_html(text)
+                escape(Escape::Html, text)
             ));
         }
         NodeKind::Sticky { text, .. } => {
             markup.push_str(&format!(
                 "{ind}<div class=\"{cls}\" data-name=\"{name}\"{comp_attr}>{}</div>\n",
-                escape_html(text)
+                escape(Escape::Html, text)
             ));
         }
         _ => {
@@ -634,25 +728,32 @@ fn html_node(
 
 /// Generate a self-contained `<style>...</style>` + HTML block for `root`.
 pub fn to_html_css(doc: &Document, root: NodeId) -> String {
+    let (css, markup) = html_css_parts(doc, root, &Hrefs::new());
+    format!("<style>\n{css}</style>\n{markup}")
+}
+
+/// The stylesheet and the markup of `root` apart, for a caller that builds the page around them
+/// (`export_site`), with links to the frames in `hrefs` written as anchors.
+pub(crate) fn html_css_parts(doc: &Document, root: NodeId, hrefs: &Hrefs) -> (String, String) {
     let mut css_out = String::new();
     css_out.push_str(":root {\n");
     for (k, c) in &doc.variables {
-        css_out.push_str(&format!("  --{k}: {};\n", c.to_hex()));
+        css_out.push_str(&format!("  --{}: {};\n", css_ident(k), c.to_hex()));
     }
     for (k, v) in &doc.tokens {
-        css_out.push_str(&format!("  --{k}: {v};\n"));
+        css_out.push_str(&format!("  --{}: {};\n", css_ident(k), v.replace(['{', '}', ';', '<'], " ")));
     }
     css_out.push_str("}\n");
     for (mode, vars) in &doc.modes {
-        css_out.push_str(&format!("[data-mode=\"{mode}\"] {{\n"));
+        css_out.push_str(&format!("[data-mode={}] {{\n", css_string(mode)));
         for (k, c) in vars {
-            css_out.push_str(&format!("  --{k}: {};\n", c.to_hex()));
+            css_out.push_str(&format!("  --{}: {};\n", css_ident(k), c.to_hex()));
         }
         css_out.push_str("}\n");
     }
     let mut markup = String::new();
-    html_node(doc, root, 0, true, &mut css_out, &mut markup);
-    format!("<style>\n{css_out}</style>\n{markup}")
+    html_node(doc, root, 0, true, hrefs, &mut css_out, &mut markup, false);
+    (css_out, markup)
 }
 
 /// Variables and tokens as `:root` custom properties plus one `[data-theme]` block per mode.
@@ -915,14 +1016,6 @@ pub fn to_react_tsx(doc: &Document, root: NodeId) -> String {
     out
 }
 
-fn escape_ng_template(t: &str) -> String {
-    escape_html(t)
-        .replace('`', "\\`")
-        .replace("${", "\\${")
-        .replace('{', "&#123;")
-        .replace('}', "&#125;")
-}
-
 fn angular_node(
     doc: &Document,
     id: NodeId,
@@ -945,22 +1038,23 @@ fn angular_node(
     styles.push_str(&format!("    .{cls} {{\n"));
     for (k, v) in &st {
         if let Some(val) = v.as_str() {
-            styles.push_str(&format!("      {}: {val};\n", camel_to_kebab(k)));
+            styles.push_str(&format!("      {}: {};\n", camel_to_kebab(k), css_value(k, val)));
         }
     }
     styles.push_str("    }\n");
 
     let ind = "  ".repeat(depth + 2);
-    let name = n.name.replace('"', "'");
-    let comp_attr = instance_comp_attr(doc, n);
+    let name = escape(Escape::Angular, &n.name);
+    let comp_attr = instance_comp_attr(doc, n, Escape::Angular);
     let attrs = format!(
         "class=\"{cls}\" data-node=\"{}\" data-name=\"{name}\"{comp_attr}",
         id.0
     );
     if let Some((set, icon)) = icon_of(doc, n) {
+        let (set, icon) = (escape(Escape::Angular, &set), escape(Escape::Angular, &icon));
         markup.push_str(&format!(
             "{ind}<div {attrs} data-icon=\"{set}:{icon}\">{}</div>\n",
-            escape_ng_template(&inline_svg(doc, id))
+            escape(Escape::Angular, &inline_svg(doc, id))
         ));
         return;
     }
@@ -979,19 +1073,19 @@ fn angular_node(
         NodeKind::Text { text, .. } => {
             markup.push_str(&format!(
                 "{ind}<span {attrs}>{}</span>\n",
-                escape_ng_template(text)
+                escape(Escape::Angular, text)
             ));
         }
         NodeKind::Sticky { text, .. } => {
             markup.push_str(&format!(
                 "{ind}<div {attrs}>{}</div>\n",
-                escape_ng_template(text)
+                escape(Escape::Angular, text)
             ));
         }
         _ => {
             markup.push_str(&format!(
                 "{ind}<div {attrs}>{}</div>\n",
-                escape_ng_template(&inline_svg(doc, id))
+                escape(Escape::Angular, &inline_svg(doc, id))
             ));
         }
     }
@@ -1391,7 +1485,7 @@ fn build_spec_tree(
         return Some(json!({
             "id": n.id.0, "name": n.name, "kind": "library",
             "library": {"kit": link.kit, "import": link.import, "react": link.react, "egui": link.egui,
-                "usage": fill_template(doc, id, &link.react, jsx_text), "eguiUsage": fill_template(doc, id, &link.egui, |t| format!("{t:?}"))},
+                "usage": fill_template(doc, id, &link.react, |t| escape(Escape::Jsx, t)), "eguiUsage": fill_template(doc, id, &link.egui, |t| format!("{t:?}"))},
             "bounds": {"width": n.rect.w, "height": n.rect.h},
             "sizing": {"horizontal": "fixed", "vertical": "fixed", "inFlow": in_flow},
         }));
@@ -1495,7 +1589,7 @@ fn build_spec_tree(
             Some(json!({
                 "content": text,
                 "fontSize": font_size,
-                "fontFamily": "Inter",
+                "fontFamily": n.text_style.font.as_deref().unwrap_or("Inter"),
                 "fontWeight": if n.text_style.bold { 700 } else { 400 },
                 "lineHeight": n.text_style.line_height.map(|m| m * font_size),
                 "letterSpacing": n.text_style.letter_spacing,
@@ -2210,6 +2304,90 @@ mod tests {
     use super::*;
     use crate::geom::Rect;
     use crate::model::{Color, InstanceLink};
+
+    fn hostile_doc() -> (Document, NodeId) {
+        let mut doc = Document::default();
+        let root = doc.alloc_id();
+        let mut frame = Node::new(root, NodeKind::Frame { clip: true }, Rect::new(0.0, 0.0, 200.0, 100.0));
+        frame.name = "Home".into();
+        let icon = doc.alloc_id();
+        let mut icon_node = Node::new(icon, NodeKind::Frame { clip: true }, Rect::new(0.0, 0.0, 24.0, 24.0));
+        icon_node.name = "Icon / a\" onmouseover=\"alert(1):b".into();
+        icon_node.parent = Some(root);
+        let shape = doc.alloc_id();
+        let mut shape_node = Node::new(shape, NodeKind::Rect, Rect::new(0.0, 0.0, 4.0, 4.0));
+        shape_node.parent = Some(icon);
+        icon_node.children.push(shape);
+        let txt = doc.alloc_id();
+        let mut txt_node = Node::new(
+            txt,
+            NodeKind::Text { text: "hi".into(), font_size: 12.0, auto_width: true, align: TextAlign::Left },
+            Rect::new(0.0, 30.0, 40.0, 20.0),
+        );
+        txt_node.text_style.font = Some("x}</style><script>alert(1)</script>".into());
+        txt_node.parent = Some(root);
+        frame.children = vec![icon, txt];
+        for (id, n) in [(root, frame), (icon, icon_node), (shape, shape_node), (txt, txt_node)] {
+            doc.nodes.insert(id, n);
+        }
+        doc.root.push(root);
+        doc.variables.insert("a}</style><script>1</script>".into(), Color::WHITE);
+        doc.modes.insert("m\"]{}</style><script>2</script>".into(), BTreeMap::from([("k;}".to_owned(), Color::WHITE)]));
+        (doc, root)
+    }
+
+    #[test]
+    fn html_export_keeps_hostile_names_inside_their_attributes_and_the_style_block() {
+        let (doc, root) = hostile_doc();
+        let (css, markup) = html_css_parts(&doc, root, &Hrefs::new());
+        let tree = crate::mcp::html::parse(&markup);
+        fn walk<'a>(nodes: &'a [crate::mcp::html::Html], out: &mut Vec<&'a crate::mcp::html::Element>) {
+            for n in nodes {
+                if let crate::mcp::html::Html::Element(e) = n {
+                    out.push(e);
+                    walk(&e.children, out);
+                }
+            }
+        }
+        let mut els = Vec::new();
+        walk(&tree, &mut els);
+        assert!(els.iter().all(|e| e.tag != "script"), "{markup}");
+        let icon = els.iter().find(|e| e.attr("data-icon").is_some()).expect("icon element");
+        assert_eq!(icon.attr("data-icon"), Some("a\" onmouseover=\"alert(1):b"), "{markup}");
+        assert!(icon.attrs.iter().all(|(k, _)| k == "class" || k == "data-name" || k == "data-icon"), "{markup}");
+        assert!(!css.contains("</style>") && !css.contains("<script"), "{css}");
+        assert!(css.contains("font-family: \"x}"), "{css}");
+    }
+
+    #[test]
+    fn html_export_does_not_nest_anchors() {
+        let (mut doc, root) = hostile_doc();
+        let inner = doc.get(root).unwrap().children[0];
+        let target = NodeId(999);
+        doc.nodes.get_mut(&root).unwrap().link = Some(target);
+        doc.nodes.get_mut(&inner).unwrap().link = Some(target);
+        let (_, markup) = html_css_parts(&doc, root, &Hrefs::from([(target, "t.html".to_owned())]));
+        assert_eq!(markup.matches("<a ").count(), 1, "{markup}");
+    }
+
+    #[test]
+    fn html_escape_covers_markup_and_quotes() {
+        assert_eq!(escape(Escape::Html, r#"a & <b> "c" {{x}}"#), "a &amp; &lt;b&gt; &quot;c&quot; {{x}}");
+    }
+
+    #[test]
+    fn jsx_escape_keeps_entities_literal() {
+        assert_eq!(escape(Escape::Jsx, "Plain text"), "Plain text");
+        assert_eq!(escape(Escape::Jsx, "Fish &amp; Chips"), r#"{"Fish &amp; Chips"}"#);
+        assert_eq!(escape(Escape::Jsx, "a {b}\n"), r#"{"a {b}\n"}"#);
+    }
+
+    #[test]
+    fn angular_escape_defuses_bindings_and_template_literals() {
+        assert_eq!(escape(Escape::Angular, "{{ total }}"), "&#123;&#123; total &#125;&#125;");
+        assert_eq!(escape(Escape::Angular, r"a\b`c"), r"a\\b\`c");
+        assert_eq!(escape(Escape::Angular, r#"say "hi" & <go>"#), "say &quot;hi&quot; &amp; &lt;go&gt;");
+    }
 
     fn sample_card_doc() -> (Document, NodeId) {
         let mut doc = Document::default();
