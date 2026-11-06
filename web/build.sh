@@ -11,3 +11,7 @@ wasm-bindgen --target web --no-typescript --out-dir web/pkg "$TARGET_DIR/wasm32-
 if command -v wasm-opt >/dev/null 2>&1; then
     wasm-opt -Oz -o web/pkg/papercraft_bg.wasm web/pkg/papercraft_bg.wasm
 fi
+# The home-screen app: the manifest and its icons sit next to index.html.
+mkdir -p web/icons
+cp assets/app-icon/papercraft-1024.png assets/app-icon/papercraft.svg web/icons/
+cp assets/app-icon/papercraft-macos-512.png web/icons/papercraft-512.png

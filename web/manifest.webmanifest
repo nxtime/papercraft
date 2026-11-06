@@ -1,0 +1,15 @@
+{
+  "name": "PaperCraft",
+  "short_name": "PaperCraft",
+  "description": "Design and whiteboard canvas",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#1b1b1d",
+  "theme_color": "#2b2b2d",
+  "icons": [
+    { "src": "icons/papercraft-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/papercraft-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" },
+    { "src": "icons/papercraft.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

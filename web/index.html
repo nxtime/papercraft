@@ -2,14 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2b2b2d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icons/papercraft-512.png">
 <title>PaperCraft</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1e20; }
+  /* Read at startup for the safe-area insets (notch, home bar). */
+  #safe-area { position: fixed; visibility: hidden; pointer-events: none; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
   canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
 </style>
 </head>
 <body>
+<div id="safe-area"></div>
 <canvas id="papercraft"></canvas>
 <script type="module">
   import init from "./pkg/papercraft.js";
