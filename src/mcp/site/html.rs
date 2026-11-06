@@ -84,7 +84,7 @@ fn stylesheet(site: &Site, out: &mut Output) -> Result<String, String> {
                 "package.json".into(),
                 package_json(
                     "tailwindcss -i src/input.css -o assets/site.css --minify",
-                    &[("@tailwindcss/cli", "^4.0.0"), ("tailwindcss", "^4.0.0")],
+                    &[("@tailwindcss/cli", "4.3.4"), ("tailwindcss", "4.3.4")],
                 )?,
             );
             out.next_steps.push("Run `npm install`, then `npm run build` in the output folder: Tailwind scans the pages and writes assets/site.css, which every page links. Run it again after changing a page.".into());
