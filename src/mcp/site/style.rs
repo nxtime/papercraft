@@ -46,6 +46,8 @@ pub struct Class {
     pub decls: Decls,
     /// Only the declarations a locale changes (a removed one is `initial`).
     pub overrides: Vec<(usize, Decls)>,
+    /// `(max-width px, declarations)` a narrower frame of the same screen changes, widest first.
+    pub media: Vec<(u32, Decls)>,
     /// Pages whose markup uses the class.
     pub pages: BTreeSet<usize>,
     /// The class of that page's root frame (holds the responsive rule).
@@ -71,7 +73,7 @@ pub struct StyleModel {
 }
 
 /// What makes two classes the same: declarations, per-locale overrides and the page root.
-type Signature = (Decls, Vec<(usize, Decls)>, Option<usize>);
+type Signature = (Decls, Vec<(usize, Decls)>, Vec<(u32, Decls)>, Option<usize>);
 
 /// Collects classes while the pages are built.
 #[derive(Default)]
@@ -96,9 +98,10 @@ impl Classes {
         page: usize,
         decls: Decls,
         overrides: Vec<(usize, Decls)>,
+        media: Vec<(u32, Decls)>,
         root_of: Option<usize>,
     ) -> String {
-        let key = (decls.clone(), overrides.clone(), root_of);
+        let key = (decls.clone(), overrides.clone(), media.clone(), root_of);
         if let Some(&i) = self.by_sig.get(&key) {
             self.list[i].pages.insert(page);
             return self.list[i].name.clone();
@@ -109,6 +112,7 @@ impl Classes {
             name: name.clone(),
             decls,
             overrides,
+            media,
             pages: BTreeSet::from([page]),
             root_of,
         });
@@ -252,7 +256,7 @@ impl StyleModel {
         out
     }
 
-    /// Only the locale overrides of the classes `keep` accepts.
+    /// Only the locale and breakpoint overrides of the classes `keep` accepts.
     pub fn overrides_css(&self, prefix: &str, keep: impl Fn(&Class) -> bool) -> String {
         let mut out = String::new();
         for c in self.classes.iter().filter(|c| keep(c)) {
@@ -266,6 +270,18 @@ impl StyleModel {
                         &mut out,
                     );
                 }
+            }
+            for (max, decls) in &c.media {
+                // `:root` out-ranks a Tailwind utility on the same element, whatever the sheet order.
+                out.push_str(&format!(
+                    "@media (max-width: {max}px) {{
+"
+                ));
+                block(&format!(":root .{}", c.name), decls, prefix, "  ", &mut out);
+                out.push_str(
+                    "}
+",
+                );
             }
         }
         out
@@ -396,9 +412,33 @@ mod tests {
     #[test]
     fn identical_declarations_share_a_class_named_after_the_first_layer() {
         let mut c = Classes::default();
-        let a = c.get("Card Title", None, 0, d(&[("color", "red")]), vec![], None);
-        let b = c.get("Other", None, 1, d(&[("color", "red")]), vec![], None);
-        let other = c.get("Card Title", None, 0, d(&[("color", "blue")]), vec![], None);
+        let a = c.get(
+            "Card Title",
+            None,
+            0,
+            d(&[("color", "red")]),
+            vec![],
+            vec![],
+            None,
+        );
+        let b = c.get(
+            "Other",
+            None,
+            1,
+            d(&[("color", "red")]),
+            vec![],
+            vec![],
+            None,
+        );
+        let other = c.get(
+            "Card Title",
+            None,
+            0,
+            d(&[("color", "blue")]),
+            vec![],
+            vec![],
+            None,
+        );
         assert_eq!(
             (a.as_str(), b.as_str(), other.as_str()),
             ("card-title", "card-title", "card-title-2")
@@ -422,17 +462,26 @@ mod tests {
     #[test]
     fn scss_nests_page_rules_under_the_root_and_guards_interpolation() {
         let mut c = Classes::default();
-        c.get("Home", None, 0, d(&[("width", "100%")]), vec![], Some(0));
+        c.get(
+            "Home",
+            None,
+            0,
+            d(&[("width", "100%")]),
+            vec![],
+            vec![],
+            Some(0),
+        );
         c.get(
             "Title",
             None,
             0,
             d(&[("content", "\"#{x}\"")]),
             vec![(1, d(&[("color", "red")]))],
+            vec![],
             None,
         );
-        c.get("Shared", None, 0, d(&[("a", "b")]), vec![], None);
-        c.get("Shared", None, 1, d(&[("a", "b")]), vec![], None);
+        c.get("Shared", None, 0, d(&[("a", "b")]), vec![], vec![], None);
+        c.get("Shared", None, 1, d(&[("a", "b")]), vec![], vec![], None);
         let m = StyleModel {
             classes: c.list,
             scopes: vec![String::new(), ":root:lang(pt-BR)".into()],

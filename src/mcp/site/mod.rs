@@ -5,6 +5,7 @@
 
 mod angular;
 mod astro;
+mod breakpoints;
 mod contrast;
 mod fluid;
 mod fontsub;
@@ -88,11 +89,12 @@ pub fn export(host: &mut dyn Host, a: &Value) -> ToolResult {
     };
     let ids = pick_frames(ed, page, a)?;
     let (locales, docs) = variants(ed, page, a, lang)?;
-    let frames = name_frames(&docs[0], ids);
+    let (groups, group_warnings) = breakpoints::group(&docs[0], ids);
+    let frames = name_frames(&docs[0], groups);
     let titles = localized(a, "title", &locales)?;
     let descriptions = localized(a, "description", &locales)?;
 
-    let built = tree::build(tree::Params {
+    let mut built = tree::build(tree::Params {
         docs: &docs,
         frames: &frames,
         locales: &locales,
@@ -100,6 +102,14 @@ pub fn export(host: &mut dyn Host, a: &Value) -> ToolResult {
         title: &titles,
         description: &descriptions,
     });
+    built.warnings.splice(0..0, group_warnings);
+    if matches!(
+        options.styling,
+        Styling::VanillaExtract | Styling::StyledComponents | Styling::Emotion
+    ) && built.style.classes.iter().any(|c| !c.media.is_empty())
+    {
+        built.warnings.push("breakpoint frames (` @`) are not written for CSS-in-JS stylings: every page uses its widest frame; use css, scss or tailwind for responsive rules".into());
+    }
     let site = Site {
         options,
         site_title: titles[0]
@@ -249,12 +259,12 @@ fn pick_frames(ed: &Editor, page: usize, a: &Value) -> Result<Vec<NodeId>, Strin
 
 /// File and component names from frame names: the first page is `index`, the rest slugs, made
 /// unique.
-fn name_frames(doc: &Document, ids: Vec<NodeId>) -> Vec<Frame> {
+fn name_frames(doc: &Document, ids: Vec<(NodeId, Vec<breakpoints::Variant>)>) -> Vec<Frame> {
     let mut taken = BTreeSet::from(["index".to_owned()]);
     let mut components = BTreeSet::new();
     ids.into_iter()
         .enumerate()
-        .map(|(i, id)| {
+        .map(|(i, (id, variants))| {
             let name = doc.get(id).map(|n| n.name.clone()).unwrap_or_default();
             let stem = if i == 0 {
                 "index".to_owned()
@@ -267,6 +277,7 @@ fn name_frames(doc: &Document, ids: Vec<NodeId>) -> Vec<Frame> {
                 name,
                 stem,
                 component,
+                variants,
             }
         })
         .collect()

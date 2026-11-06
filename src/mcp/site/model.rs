@@ -127,6 +127,8 @@ pub struct Frame {
     pub stem: String,
     /// PascalCase, unique, valid as a TypeScript, Vue, Angular or Astro identifier.
     pub component: String,
+    /// Narrower designs of this screen, widest first (see `breakpoints`).
+    pub variants: Vec<super::breakpoints::Variant>,
 }
 
 /// One language or mode of the site.

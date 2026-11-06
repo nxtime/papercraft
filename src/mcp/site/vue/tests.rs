@@ -82,6 +82,7 @@ fn site(render: Render, styling: Styling, multi: bool) -> Site {
         0,
         vec![("width".into(), "100%".into())],
         vec![],
+        vec![],
         Some(0),
     );
     let style = StyleModel {
@@ -369,6 +370,7 @@ fn css_in_a_style_block_cannot_end_it() {
             None,
             0,
             vec![("content".into(), "\"</style><script>${x}`\"".into())],
+            vec![],
             vec![],
             Some(0),
         );

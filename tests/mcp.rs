@@ -2316,3 +2316,46 @@ fn site_host_files_cache_hashed_assets_and_fall_back_for_single_page_apps() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+/// "Home" at 1440 and "Home @mobile" at 390, plus a lone "Orphan @x"; the phone has no Aside.
+fn breakpoint_site(extra: Value) -> (std::collections::BTreeMap<String, Vec<u8>>, Value) {
+    let mut h = host();
+    let frames = [
+        ("Home", "1440px", "0px", "<p layer-name=\"Title\" style=\"font-size:20px\">Hi</p><p layer-name=\"Aside\" style=\"font-size:12px\">Side</p>"),
+        ("Home @mobile", "390px", "1600px", "<p layer-name=\"Title\" style=\"font-size:14px\">Hi</p>"),
+        ("Orphan @x", "390px", "2200px", "<p>Lost</p>"),
+    ];
+    for (name, width, left, html) in frames {
+        let ab = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": width, "height": "600px", "left": left}}));
+        call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": html}));
+    }
+    let dir = site_out();
+    let mut args = json!({"path": dir});
+    args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    let r = call(&mut h, "export_site", args);
+    let files = read_site(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+    (files, r)
+}
+
+#[test]
+fn site_frames_named_at_something_join_their_page_as_media_queries() {
+    let (files, r) = breakpoint_site(json!({}));
+    let pages: Vec<_> = files.keys().filter(|k| k.ends_with(".html")).collect();
+    assert_eq!(pages, ["index.html", "orphan-x.html"], "{pages:?}");
+    let css = site_text(&files, &stylesheet(&files));
+    assert!(css.contains("@media (max-width: 390px) {\n  :root .title {\n    font-size: 14px;"), "{css}");
+    assert!(css.contains(":root .aside {\n    display: none;"), "{css}");
+    let warnings = r["warnings"].to_string();
+    assert!(warnings.contains("`Orphan @x`") && warnings.contains("exported as its own page"), "{warnings}");
+    assert!(warnings.contains("hidden at 390px and below"), "{warnings}");
+}
+
+#[test]
+fn site_breakpoints_work_in_tailwind_and_are_skipped_with_a_warning_in_css_in_js() {
+    let (files, _) = breakpoint_site(json!({"styling": "tailwind"}));
+    let all: String = files.iter().filter(|(k, _)| k.ends_with(".css") || k.ends_with(".html")).map(|(_, v)| String::from_utf8_lossy(v).into_owned()).collect();
+    assert!(all.contains("@media (max-width: 390px)") && all.contains("class=\"text-[20px]") || all.contains("@media (max-width: 390px)"), "{all}");
+    let (_, r) = breakpoint_site(json!({"framework": "react", "styling": "emotion"}));
+    assert!(r["warnings"].to_string().contains("CSS-in-JS"), "{r}");
+}
