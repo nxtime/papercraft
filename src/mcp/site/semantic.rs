@@ -92,6 +92,13 @@ fn in_action(doc: &Document, root: NodeId, id: NodeId) -> bool {
     false
 }
 
+/// A short amount or number ("$29", "R$ 49/mês"): a figure, never a heading.
+fn price_like(text: &str) -> bool {
+    let has_digit = text.chars().any(|c| c.is_ascii_digit());
+    let money = text.chars().any(|c| matches!(c, '$' | '€' | '£' | '¥'));
+    text.chars().count() <= 20 && has_digit && (money || !text.chars().any(char::is_alphabetic))
+}
+
 /// Whether a layer below `root` sits in a header or nav: its text is the brand, not a heading.
 fn in_chrome(doc: &Document, root: NodeId, id: NodeId) -> bool {
     let mut cur = doc.get(id).and_then(|n| n.parent);
@@ -165,7 +172,10 @@ pub fn semantics(doc: &Document, root: NodeId) -> Sem {
         } else if words(&n.name).any(|w| w == "heading") && explicit_h1.is_none() {
             explicit_h1 = Some(*id);
             sem.heads.insert(*id, 1);
-        } else if text_name(&n.name).is_none() && !in_action(doc, root, *id) {
+        } else if text_name(&n.name).is_none()
+            && !in_action(doc, root, *id)
+            && !price_like(text)
+        {
             let y = doc.world_rect(*id).map_or(0.0, |r| r.y) - top;
             candidates.push(T {
                 id: *id,
@@ -230,15 +240,27 @@ pub fn semantics(doc: &Document, root: NodeId) -> Sem {
             sem.subtitles.insert(id);
         }
     }
-    // The outline never skips a level downward: h1 then h3 becomes h1 then h2.
+    // The outline never skips a level downward: h1 then h3 becomes h1 then h2. Guessed headings
+    // of one size share one level, so identical siblings do not drift down one by one.
+    let sizes_of: HashMap<NodeId, i64> = order
+        .iter()
+        .map(|(id, size, _)| (*id, (size * 100.0).round() as i64))
+        .collect();
+    let mut settled: HashMap<i64, u8> = HashMap::new();
     let mut above = None;
     for (id, ..) in &order {
-        if let Some(level) = sem.heads.get_mut(id) {
-            if let Some(a) = above {
-                *level = (*level).min(a + 1);
-            }
-            above = Some(*level);
+        let Some(level) = sem.heads.get_mut(id) else {
+            continue;
+        };
+        let cap = above.map_or(6, |a: u8| a + 1);
+        if guessed.contains(id) {
+            let size = sizes_of[id];
+            let settled_level = *settled.entry(size).or_insert((*level).min(cap));
+            *level = settled_level.min(cap);
+        } else {
+            *level = (*level).min(cap);
         }
+        above = Some(*level);
     }
     explicit(doc, &layers, &mut sem);
     sem
