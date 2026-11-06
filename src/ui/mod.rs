@@ -1736,7 +1736,12 @@ fn layers_body(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             let roots = ed.doc.root.clone();
             if roots.is_empty() {
                 ui.label(
-                    RichText::new("Nothing here yet. Pick a tool below\nand draw on the canvas.")
+                    RichText::new(if phone::is_phone(ui.ctx().content_rect().width()) {
+                        // On a phone this list is a sheet: the tools are on the Canvas tab, not below.
+                        "Nothing here yet. Pick a tool on the Canvas\ntab, or ask the agent in Chat."
+                    } else {
+                        "Nothing here yet. Pick a tool below\nand draw on the canvas."
+                    })
                         .size(theme::SECONDARY)
                         .color(theme::pal(ui).secondary),
                 );
