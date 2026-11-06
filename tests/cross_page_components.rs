@@ -443,3 +443,62 @@ fn a_component_loop_across_pages_is_refused() {
     // The same component twice, one inside the other, is not a loop.
     call(&mut h, "create_instance", json!({"pageId": b, "componentId": pill, "parentId": boxc["id"]}));
 }
+
+#[test]
+fn moving_layers_to_another_page_remaps_links_and_clears_what_cannot_follow() {
+    use papercraft::geom::{Rect, V2, v2};
+    use papercraft::model::{Binding, Head, Node, NodeKind, Route};
+    let mut h = host();
+    let a = call(&mut h, "get_basic_info", json!({}))["pages"][0]["id"].clone();
+    let b = call(&mut h, "create_page", json!({"name": "B"}))["pageId"].clone();
+    let mk = |h: &mut exec::SessionHost, name: &str| call(h, "create_artboard", json!({"pageId": a, "name": name,
+        "styles": {"width": "50px", "height": "50px"}}));
+    let (one, two, stay) = (mk(&mut h, "One"), mk(&mut h, "Two"), mk(&mut h, "Stay"));
+    // One -> Two stays valid; One -> Stay and Stay -> Two cannot cross pages.
+    call(&mut h, "set_prototype_links", json!({"links": [{"nodeId": one["id"], "to": two["id"]}, {"nodeId": stay["id"], "to": two["id"]}]}));
+    let bind = |n: &Value| Binding { node: num(n), fixed: V2::ZERO, inside: false };
+    let conn = |h: &mut exec::SessionHost, s: &Value, e: &Value| {
+        let kind = NodeKind::Connector { points: vec![V2::ZERO, v2(10.0, 10.0)], start: Some(bind(s)), end: Some(bind(e)),
+            route: Route::default(), start_head: Head::None, end_head: Head::Arrow };
+        h.ed.add_node(Node::new(NodeId(0), kind, Rect::new(0.0, 0.0, 10.0, 10.0)), None)
+    };
+    let inner = conn(&mut h, &one["id"], &two["id"]);
+    let outer = conn(&mut h, &two["id"], &stay["id"]);
+    let res = call(&mut h, "move_nodes", json!({"moves": [
+        {"nodeId": one["id"], "parentId": "root", "toPageId": b},
+        {"nodeId": two["id"], "parentId": "root", "toPageId": b}]}));
+    assert!(res["warnings"].as_array().unwrap().len() >= 2, "{res}");
+    let (da, db) = (h.ed.page_doc(0), h.ed.page_doc(1));
+    let find = |d: &papercraft::model::Document, n: &str| d.nodes.values().find(|x| x.name == n).unwrap().clone();
+    let (nb_one, nb_two) = (find(db, "One"), find(db, "Two"));
+    assert_eq!(nb_one.link, None, "One was moved before Two, so its link had to be cleared");
+    assert_eq!(nb_two.link, None);
+    assert_eq!(find(da, "Stay").link, None, "a link to a moved layer is cleared");
+    for d in [da, db] {
+        for n in d.nodes.values() {
+            if let NodeKind::Connector { start, end, .. } = &n.kind {
+                for x in [start, end].into_iter().flatten() {
+                    assert!(d.get(x.node).is_some(), "no dangling connector end: {n:?}");
+                }
+            }
+        }
+    }
+    let _ = (inner, outer);
+}
+
+#[test]
+fn moving_a_linked_subtree_in_one_call_keeps_internal_links() {
+    let mut h = host();
+    let a = call(&mut h, "get_basic_info", json!({}))["pages"][0]["id"].clone();
+    let b = call(&mut h, "create_page", json!({"name": "B"}))["pageId"].clone();
+    let frame = call(&mut h, "create_artboard", json!({"pageId": a, "name": "Wrap", "styles": {"width": "200px", "height": "100px", "display": "flex"}}));
+    call(&mut h, "write_html", json!({"pageId": a, "targetNodeId": frame["id"], "html": "<div layer-name=\"Target\" style=\"width:40px;height:40px\"></div><div layer-name=\"Btn\" style=\"width:40px;height:40px\"></div>"}));
+    let doc = h.ed.page_doc(0);
+    let find = |d: &papercraft::model::Document, n: &str| d.nodes.values().find(|x| x.name == n).unwrap().id;
+    let (t, btn) = (find(doc, "Target"), find(doc, "Btn"));
+    h.ed.with_page(0, |ed| ed.edit("link", |tx| { tx.node_mut(btn).unwrap().link = Some(t); }));
+    call(&mut h, "move_nodes", json!({"moves": [{"nodeId": frame["id"], "parentId": "root", "toPageId": b}]}));
+    let db = h.ed.page_doc(1);
+    let (nt, nbtn) = (find(db, "Target"), find(db, "Btn"));
+    assert_eq!(db.get(nbtn).unwrap().link, Some(nt), "the link follows the copy");
+}

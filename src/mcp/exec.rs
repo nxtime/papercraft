@@ -285,6 +285,8 @@ fn resolve_all(
 /// Run one tool. Errors are returned as messages for the agent.
 pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
     let r = dispatch(host, name, args);
+    #[cfg(not(target_arch = "wasm32"))]
+    super::remote_image::end_call();
     super::incremental::after_call(host.editor(), name, args, r)
 }
 
@@ -2944,7 +2946,7 @@ impl Parent {
 
 /// Resolve an image reference (paper-asset://, file://, absolute path, data: URI) to a
 /// registered asset id.
-fn image_asset(src: &str) -> Result<String, String> {
+pub(super) fn image_asset(src: &str) -> Result<String, String> {
     let src = src.trim();
     let bytes = if let Some(data) = src.strip_prefix("data:") {
         let (meta, payload) = data.split_once(',').ok_or("malformed data: URI")?;
@@ -2954,9 +2956,11 @@ fn image_asset(src: &str) -> Result<String, String> {
             payload.as_bytes().to_vec()
         }
     } else if src.starts_with("http://") || src.starts_with("https://") {
-        return Err(format!(
-            "{src}: remote images aren't fetched; download it and use paper-asset:///absolute/path"
-        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        let fetched = super::remote_image::fetch(src);
+        #[cfg(target_arch = "wasm32")]
+        let fetched = Err(format!("{src}: remote images can't be fetched in the browser; use a data: URI"));
+        fetched?
     } else {
         let path = src
             .strip_prefix("paper-asset://")
@@ -7158,6 +7162,7 @@ fn move_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
     };
     let moves = a.arr("moves")?;
     let mut done = 0;
+    let mut warnings: Vec<String> = Vec::new();
     for m in moves {
         let m = Args(m.as_object().ok_or("each move must be an object")?);
         let (src_page, id) = resolve(ed, m.req_str("nodeId")?, def)?;
@@ -7259,14 +7264,17 @@ fn move_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
             // Notes on the moved nodes go with them instead of staying behind detached.
             let sub: HashSet<NodeId> = src_doc.subtree(id).into_iter().collect();
             let notes: Vec<u64> = src_doc.annotations.iter().filter(|n| n.target.is_some_and(|t| sub.contains(&t))).map(|n| n.id).collect();
-            ed.with_page(src_page, |ed| {
-                ed.edit("Move", |tx| {
+            let mut cleared = ed.with_page(src_page, |ed| {
+                let cleared = ed.edit("Move", |tx| {
                     for n in &notes {
                         tx.delete_annotation(*n);
                     }
+                    let cleared = super::move_refs::clear_incoming(tx, &sub);
                     tx.remove(id);
+                    cleared
                 });
                 ed.selection.retain(|s| ed.doc.get(*s).is_some());
+                cleared
             });
             let pairs = ed.with_page(dest_page, |ed| {
                 ed.edit("Move", |tx| {
@@ -7291,15 +7299,20 @@ fn move_nodes(ed: &mut Editor, a: &Args) -> ToolResult {
                     let (new_root, pairs) =
                         clone_subtree_from_doc(tx, &src_doc, id, target, idx, offset, Some((&ids.0, &ids.1)), true);
                     copy_annotations(tx, &src_doc.annotations, &pairs);
+                    let out = super::move_refs::remap_outgoing(tx, &pairs.iter().copied().collect());
                     relayout(tx, target.or(Some(new_root)));
-                    pairs
+                    (pairs, out)
                 })
             });
+            let (pairs, out) = pairs;
+            cleared.links += out.links;
+            cleared.connector_ends += out.connector_ends;
+            warnings.extend(cleared.warning(&node_key(ed, src_page, id)));
             relink_moved(ed, src_page, dest_page, &pairs.into_iter().collect());
         }
         done += 1;
     }
-    text(json!({"moved": done}))
+    text(if warnings.is_empty() { json!({"moved": done}) } else { json!({"moved": done, "warnings": warnings}) })
 }
 
 /// After nodes moved from `src` to `dest` page (`moved`: old id to new id), instances anywhere

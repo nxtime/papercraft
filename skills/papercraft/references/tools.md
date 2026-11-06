@@ -357,7 +357,7 @@ Parse HTML with inline styles into layers. Write incrementally: each call should
 - Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, align-items, justify-content, align-self, flex-grow, flex-wrap) is the layout model; block elements stack vertically. position:absolute with left/top is supported. Margins become gaps or spacers, display:grid becomes rows of cells, text inputs show their placeholder (each reported in warnings). No tables.
 - Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, letter-spacing, text-align, text-decoration (including wavy and text-decoration-color); <b>/<i>/<u>/<s>/<span style> make rich text. font-family applies to a whole text layer: the first installed family in the list, Inter by default.
 - Boxes: background(-color/-image: colors, linear/radial gradients, url()), border (and border-top/right/bottom/left), border-radius, opacity, overflow:hidden, mix-blend-mode, width/height (px, %, fit-content), min-width/max-width/min-height/max-height.
-- <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths or data: URIs. <svg> markup is imported as vector layers.
+- <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths, data: URIs or public http(s) URLs (PNG, JPEG, GIF or WebP up to 10 MB; private and loopback addresses are refused and a failed download is a warning). <svg> markup is imported as vector layers.
 - <x-paper-icon name="set:name" size="20" color="var(--accent)"/> places an installed icon (search_icons); <x-paper-instance component="Name" component-id="ID" layer-name="..."/> places a component instance; colors may be var(--name) of set_variables.
 - layer-name="..." names layers; <x-paper-clone node-id="ID" style="..."/> clones an existing node (supports cross-page `<page>:<id>`).
 Returns the ids of the created top-level layers and the styles that were ignored.
@@ -425,7 +425,7 @@ Deep-clone nodes, including across pages (via `toPageId` or a cross-page `parent
 
 ### `move_nodes`
 
-Move nodes keeping their ids (or onto another page via `toPageId` or a cross-page `parentId` / `before` / `after`). Each move is {nodeId, before: siblingId}, {nodeId, after: siblingId} or {nodeId, parentId, toPageId?, index?} (parentId "root" = the page root). Moves apply in order. In auto-layout parents this changes the visual order; in free parents it changes stacking and keeps the world position.
+Move nodes keeping their ids (or onto another page via `toPageId` or a cross-page `parentId` / `before` / `after`). Each move is {nodeId, before: siblingId}, {nodeId, after: siblingId} or {nodeId, parentId, toPageId?, index?} (parentId "root" = the page root). Moves apply in order. In auto-layout parents this changes the visual order; in free parents it changes stacking and keeps the world position. Moving to another page copies the layers there (new ids; each page has its own undo history) and keeps component links and links between the moved layers; prototype links and connector ends that would cross pages are cleared and reported in `warnings`.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|

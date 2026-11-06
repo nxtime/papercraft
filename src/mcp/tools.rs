@@ -854,7 +854,8 @@ pub fn definitions() -> Vec<Value> {
              - Boxes: background(-color/-image: colors, linear/radial gradients, url()), border \
              (and border-top/right/bottom/left), border-radius, opacity, overflow:hidden, \
              mix-blend-mode, width/height (px, %, fit-content), min-width/max-width/min-height/max-height.\n\
-             - <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths or data: URIs. \
+             - <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths, data: URIs or public http(s) URLs (PNG, JPEG, GIF or WebP up to 10 MB; \
+             private and loopback addresses are refused and a failed download is a warning). \
              <svg> markup is imported as vector layers.\n\
              - <x-paper-icon name=\"set:name\" size=\"20\" color=\"var(--accent)\"/> places an installed icon (search_icons); \
              <x-paper-instance component=\"Name\" component-id=\"ID\" layer-name=\"...\"/> places a component instance; \
@@ -1426,7 +1427,10 @@ pub fn definitions() -> Vec<Value> {
              `parentId` / `before` / `after`). Each move is {nodeId, before: siblingId}, {nodeId, \
              after: siblingId} or {nodeId, parentId, toPageId?, index?} (parentId \"root\" = the \
              page root). Moves apply in order. In auto-layout parents this changes the visual \
-             order; in free parents it changes stacking and keeps the world position.",
+             order; in free parents it changes stacking and keeps the world position. Moving to another page \
+             copies the layers there (new ids; each page has its own undo history) and keeps \
+             component links and links between the moved layers; prototype links and connector \
+             ends that would cross pages are cleared and reported in `warnings`.",
             json!({"moves": {"type": "array", "minItems": 1, "items": {
                 "type": "object",
                 "properties": {

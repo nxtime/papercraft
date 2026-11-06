@@ -27,7 +27,10 @@ pub mod import_html;
 pub mod incremental;
 pub mod lint;
 pub mod lint_overflow;
+mod move_refs;
 mod prototype;
+#[cfg(not(target_arch = "wasm32"))]
+mod remote_image;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod imagegen;
 #[cfg(not(target_arch = "wasm32"))]
