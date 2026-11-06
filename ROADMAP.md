@@ -20,9 +20,9 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 5 | Lint in the UI | **done** | Live Lint section in Design tab; click issue to select & zoom, or click `Fix` / `Fix all`. |
 | 6 | Variable modes | **done** | Mode selector + create/delete modes in Design tab and via `set_variables {mode}` / `set_variable_mode`. |
 | 7 | Number variables (spacing, radius, font size) | **done** | Typed number, string and boolean variables in collections with groups and aliases; fields bind (size, gap, padding, radius, font size, line height, opacity, visible) in the inspector and `bind_variable`. |
-| 8 | Stroke and gradient variables | partial | Strokes and text color bind to variables. Gradients keep fixed colors. |
-| 9 | Text styles | todo | Named type styles (Heading / L, Body / M) that update every text layer using them. |
-| 10 | Component variants and properties | partial | Main components carry text, bool, icon and enum properties; `merge_variants` folds per-state components into one. Multi-axis variant sets todo. |
+| 8 | Stroke and gradient variables | **done** | Strokes, text color and gradient stops (`bind_variable` `gradient-stop-N`) bind to variables. |
+| 9 | Text styles | **done** | `set_text_style`: named type styles (Heading / L, Body / M) that update every text layer using them, in one undo step. |
+| 10 | Component variants and properties | **done** | Main components carry text, bool, icon and enum properties; `merge_variants` folds per-state components into one, with one enum per axis for names like `Size=M, State=hover`. |
 | 11 | Swap instance, detach by tool | **done** | `swap_instance` and `detach_instance` MCP tools + UI controls in Design tab and Inspector. |
 | 12 | Cross-page and shared libraries | **done** | Instances of a main on any page; publish a project as a library, enable, update and disable it in other projects (Libraries modal, `*_library` tools). |
 | 13 | Export design tokens | **done** | `get_variables` with `format: "css"`, `"json"` (W3C DTCG + modes), or `"tailwind"` (`@theme`), plus Copy CSS / Copy JSON in Design tab. |
@@ -32,14 +32,14 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 15 | MCP and CLI tool surface | **done** | 104 tools, one undo step per call, `papercraft-cli list / schema / call`. |
+| 15 | MCP and CLI tool surface | **done** | 106 tools, one undo step per call, `papercraft-cli list / schema / call`. |
 | 16 | Agent skills | **done** | `skills/papercraft` and `skills/papercraft-design`. |
-| 17 | Accessibility annotations | todo | Reading order, roles and alt text on layers, checked by the linter. |
+| 17 | Accessibility annotations | **done** | `set_accessibility`: alt text, decorative, roles, heading levels and reading order on layers, checked by `lint_design` and used by `export_site`. |
 | 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |
 | 19 | Plugin and skill marketplace | todo | Skills are copied by hand today. |
 | 20 | Screenshot diffing | **done** | `diff_frames` tool (`src/mcp/diff.rs`) for structural/property frame diffing + `diff_rgba` pixel diffing with highlight PNG. |
-| 21 | Moving nodes between pages | todo | `move_nodes` stays on one page. |
-| 22 | Remote images in `write_html` | todo | Only local paths and `data:` URIs. |
+| 21 | Moving nodes between pages | **done** | `move_nodes {toPageId}` keeps instances linked, notes attached, and remaps prototype links and connectors. |
+| 22 | Remote images in `write_html` | **done** | http(s) images are fetched from public addresses only, with redirects re-checked, a 10 MB cap and a 15 s deadline. |
 | 46 | Design from the CLI without the app | **done** | `papercraft-cli call --offline` and `shell` run the tools in-process on the project store; screenshots use a GPU or the software adapter. |
 
 ## 3. Design features
@@ -47,10 +47,10 @@ Agents can already build a design system through the tools; people cannot yet ma
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 23 | Prototyping links and flows | **done** | Prototype tab in the inspector; Present mode follows links with a camera glide. Smart transitions and hover states todo. |
-| 24 | Responsive constraints and breakpoint preview | partial | Constraints (left, right, stretch, center, scale) exist in the editor; there is no breakpoint preview or per-size variants. |
+| 24 | Responsive constraints and breakpoint preview | partial | Constraints exist in the editor; `export_site` merges frames named `Home @mobile` or `Home @768` into one page with media queries. No breakpoint preview in the editor. |
 | 25 | Shadows, blur and effects | partial | Drop shadow is an inspector effect. Layer and background blur todo (needs a renderer pass). |
 | 26 | Margin and grid layout | partial | Wrapped-line cross alignment, per-line fill/align, and `layout_grid` track layout (`src/layout.rs`) implemented; CSS margin still ignored. |
-| 27 | Font choice | todo | Inter only. |
+| 27 | Font choice | **done** | `install_font` adds a .ttf or .otf to the project; `font-family` applies it to a text layer. |
 | 28 | Rotation | todo | Nodes are axis-aligned. |
 | 29 | Overlay, dodge, burn, light blend modes on the canvas | todo | Exact in SVG and PDF export, approximated as Normal on the canvas. |
 | 30 | Rounded frame clipping | todo | Clipping is a rectangle. |
@@ -63,7 +63,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 32 | Version history | **done** | Named and automatic saved versions per page: rename, restore, delete (`src/versions.rs`). Restore now includes variables and tokens; compare todo. |
 | 33 | Figma import | **done** | `.fig` binary (Kiwi wire decoder + zip container) and Figma REST API JSON import in `src/io/fig.rs`. |
 | 34 | Multiplayer and cloud sync | partial | Optional shared projects through the relay, with merge of concurrent edits to one page. Presence (cursors, selections) todo. Stays optional. |
-| 35 | Release builds for Windows and Linux | partial | Windows x86_64 zips are released and `packaging/windows` builds an MSI; Linux x86_64 is not in the current releases. |
+| 35 | Release builds for Windows and Linux | **done** | Releases ship Windows (MSI and portable zip), macOS and Linux builds. |
 
 ## 5. Quality
 
@@ -81,7 +81,7 @@ Spec: [specs/agent-runs/spec.md](specs/agent-runs/spec.md), tasks: [specs/agent-
 |---|---|---|---|
 | 39 | Agent runs and auto-versions | **done** | Editing calls group into runs; edited pages get auto-versions; runs persist, revert per page, and prune to 50. |
 | 40 | Review agent changes | **done** | Id-paired diff, grouped review, canvas overlay, per-change revert and accept all; version compare UI remains todo. |
-| 41 | Agent presence on the canvas | todo | Outline the node a tool call touches, label it, pause or stop the run. |
+| 41 | Agent presence on the canvas | partial | Layers an agent touches get a fading outline and a cursor labelled with the verb and client; the chat can stop its own run. Pausing an external MCP client is todo. |
 | 42 | `get_context` tool | **done** | Selection, outline with token estimates, variables, components and lint summary in one call, so an agent orients in one round trip. Big reads take `maxTokens` and report `estimatedTokens` and `truncated`. |
 | 43 | Comments assigned to agents | todo | `@agent` in a thread triggers an edit and a reply. Needs threaded comments. |
 | 44 | In-app prompt bar | **done** | Chat mode: Claude Code, Codex or your own Anthropic key; see `docs/chat.md`. |
