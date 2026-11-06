@@ -25,6 +25,7 @@ pub mod menus;
 pub mod panel_handle;
 pub mod motion;
 pub mod pages;
+pub mod phone;
 pub mod present;
 pub mod perf;
 pub mod palette;
@@ -188,6 +189,8 @@ pub struct UiState {
     pub side_extra: Option<panels::SideView>,
     /// The browser's remote-agent link (Agent menu); None everywhere but the web shell.
     pub agent_link: Option<agent::AgentUi>,
+    /// Phone layout (windows under 600 px): tabs, bottom sheet, touch mode.
+    pub phone: phone::PhoneState,
     /// A message shown over the home screen and the canvas (text, is_error); the shell that
     /// sets it also clears it. Only the web shell uses it: native shows errors in dialogs.
     pub toast: Option<(String, bool)>,
@@ -875,6 +878,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         palette::draw(ui.ctx(), ed, st, canvas);
         return canvas;
     }
+    if phone::is_phone(ui.max_rect().width()) {
+        return phone::draw(ui, ed, st);
+    }
     let p = theme::pal(ui);
     let sidebar_fill = theme::sidebar_fill(st.translucent_sidebar, p);
     let floating = is_floating(st.translucent_sidebar);
@@ -1034,7 +1040,15 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             }
         });
     }
-    toolbar(ui.ctx(), ed, canvas);
+    overlays(ui, ed, st, canvas, true);
+    canvas
+}
+
+/// Everything drawn over the canvas: tool palette, overlays, popovers and dialogs.
+fn overlays(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect, floating_toolbar: bool) {
+    if floating_toolbar {
+        toolbar(ui.ctx(), ed, canvas);
+    }
     annotations::overlays(ui.ctx(), ed, st, canvas);
     chat::chat_pick::overlay(ui.ctx(), ed, st, canvas);
     chat::chat_pick::ask_popover(ui.ctx(), ed, st, canvas);
@@ -1067,7 +1081,6 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     #[cfg(not(target_arch = "wasm32"))]
     st.updater.show(ui.ctx());
     confirm::show(ui.ctx(), ed, st);
-    canvas
 }
 
 fn menu_item(ui: &mut Ui, ed: &mut Editor, label: &str, action: Action) {
@@ -1655,6 +1668,11 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     pages::panel(ui, ed, st);
     ui.add_space(8.0);
     side_tabs(ui, st);
+    layers_body(ui, ed, st);
+}
+
+/// The layer list (or the library, design or side view picked in the side tabs).
+fn layers_body(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     if !(st.show_library || st.show_design || st.side_extra.is_some()) {
         ui.add_space(6.0);
         ui.horizontal(|ui| {

@@ -11,6 +11,7 @@
 mod dom;
 mod files;
 mod relay;
+mod touch;
 pub(crate) use relay::new_token;
 
 use crate::editor::shortcuts::Action;
@@ -59,6 +60,7 @@ struct Web {
     mods: Modifiers,
     pointer: Option<egui::Pos2>,
     captured: bool,
+    touch: touch::Touch,
     canvas_rect: egui::Rect,
     start_ms: f64,
     /// Another frame is needed (input arrived, or egui asked for a repaint).
@@ -208,6 +210,7 @@ impl Web {
             mods: Modifiers::NONE,
             pointer: None,
             captured: false,
+            touch: touch::Touch::default(),
             canvas_rect: egui::Rect::NOTHING,
             start_ms: now_ms(),
             dirty: true,
@@ -259,6 +262,10 @@ impl Web {
     }
 
     fn pointer_event(&mut self, e: &PointerEvent, pressed: Option<bool>) {
+        if e.pointer_type() == "touch" {
+            self.touch_event(e, pressed);
+            return;
+        }
         let p = egui::pos2(e.offset_x() as f32, e.offset_y() as f32);
         self.set_mods(e.ctrl_key(), e.shift_key(), e.alt_key(), e.meta_key());
         self.pointer = Some(p);
@@ -743,6 +750,7 @@ impl Web {
         if self.relay.tick(now) {
             self.dirty = true;
         }
+        self.touch_tick(now);
         let due = self.repaint_at.is_some_and(|t| now >= t);
         if !self.dirty && !due && !crate::vfs::has_persist_error() {
             return;
@@ -771,6 +779,7 @@ impl Web {
             self.surface.configure(&self.device, &self.config);
         }
         self.ctx.set_pixels_per_point(ppp);
+        self.read_insets();
         self.ed.tick(now - self.start_ms);
         let dark = w
             .match_media("(prefers-color-scheme: dark)")
@@ -1038,6 +1047,29 @@ fn run(web: Shared) {
             }
         }),
     );
+    let w = web.clone();
+    on(
+        "pointercancel",
+        Box::new(move |e| {
+            if let Ok(e) = e.dyn_into::<PointerEvent>() {
+                w.borrow_mut().touch_cancel(&e);
+            }
+        }),
+    );
+    // The soft keyboard and rotation change the visible area without a canvas event.
+    let resized = |w: Shared| -> Closure<dyn FnMut(web_sys::Event)> {
+        Closure::new(move |_| w.borrow_mut().dirty = true)
+    };
+    let cb = resized(web.clone());
+    let _ = window().add_event_listener_with_callback("resize", cb.as_ref().unchecked_ref());
+    cb.forget();
+    if let Some(vv) = window().visual_viewport() {
+        for name in ["resize", "scroll"] {
+            let cb = resized(web.clone());
+            let _ = vv.add_event_listener_with_callback(name, cb.as_ref().unchecked_ref());
+            cb.forget();
+        }
+    }
     on("contextmenu", Box::new(|e| e.prevent_default()));
     // Keys and paste go to the window; the canvas never holds DOM focus.
     let doc = window();
