@@ -12,12 +12,13 @@ const tabCentre = (name) => [(VIEW.width * (TABS.indexOf(name) + 0.5)) / TABS.le
 // the mobile-ui branch is merged; PAPERCRAFT_E2E_PHONE=1 removes the mark so they must pass.
 const phone = (info) => info.fail(!PHONE, 'needs the mobile-ui branch (run with PAPERCRAFT_E2E_PHONE=1 once merged)');
 
-/** A 200x200 red layer named "Box" on a 400x400 artboard; returns its id. */
+/** A 200x200 red layer named "Box" on a 400x400 artboard; returns its id. Absolutely placed:
+ * the artboard has auto layout, where a drag reorders children instead of moving them. */
 async function makeBox(mcp) {
   const ab = await mcp.call('create_artboard', { name: 'Phone', styles: { width: '400px', height: '400px' } });
   const abId = findDeep(ab, (o) => typeof o.id === 'string')?.id ?? ab.nodeId ?? ab.id;
   await mcp.call('write_html', { mode: 'insert-children', targetNodeId: abId,
-    html: '<div layer-name="Box" style="width:200px;height:200px;background:#e53935"></div>' });
+    html: '<div layer-name="Box" style="position:absolute;left:0;top:0;width:200px;height:200px;background:#e53935"></div>' });
   const kids = await mcp.call('get_children', { nodeId: abId });
   const box = findDeep(kids, (o) => o.name === 'Box' && typeof o.id === 'string');
   if (!box) throw new Error('Box layer not found: ' + JSON.stringify(kids).slice(0, 500));
@@ -87,12 +88,13 @@ test.describe('phone UI (expected to fail until mobile-ui is merged)', () => {
     const bar = { x: 0, y: (VIEW.height - BAR_H) * S, w: VIEW.width * S, h: BAR_H * S };
     // Five icons and labels: far more colours than a flat canvas strip, and more than the canvas above it.
     expect(colourCount(buf, bar)).toBeGreaterThan(12);
-    expect(colourCount(buf, { ...bar, y: bar.y - bar.h })).toBeLessThan(colourCount(buf, bar));
-    // The desktop build also has a floating tool strip down there, so the bar must also work: Layers opens a sheet.
+    // The Canvas tab's tool strip sits just above, and the desktop build has one down there too,
+    // so colours alone prove little: the bar must work, and Layers opens a sheet.
     await app.touch.tap([tabCentre('Layers')]);
     await sleep(500);
-    const mid = { x: 0, y: 400 * S, w: VIEW.width * S, h: 200 * S };
-    expect(diffFraction(buf, await app.shot('01-layers-sheet'), mid)).toBeGreaterThan(0.2);
+    // The sheet's fill is close to the empty canvas, so look where it differs: its top edge and grip.
+    const grip = { x: 165 * S, y: 405 * S, w: 60 * S, h: 50 * S };
+    expect(diffFraction(buf, await app.shot('01-layers-sheet'), grip)).toBeGreaterThan(0.05);
   });
 
   test('2. pinch zoom changes the zoom', async ({ app }) => {
@@ -154,7 +156,8 @@ test.describe('phone UI (expected to fail until mobile-ui is merged)', () => {
     const open = await shot('07-open');
     const mid = { x: 0, y: 400 * S, w: VIEW.width * S, h: 200 * S };
     expect(diffFraction(closed, open, mid)).toBeGreaterThan(0.2);
-    await touch.gesture([[VIEW.width / 2, 470]], [[VIEW.width / 2, 830]], { steps: 15 });
+    // The grip is the sheet's top 44 px: about 416-460 at the half height on this screen.
+    await touch.gesture([[VIEW.width / 2, 436]], [[VIEW.width / 2, 830]], { steps: 15 });
     await sleep(500);
     expect(diffFraction(closed, await shot('07-dragged-down'), mid)).toBeLessThan(0.05);
   });
