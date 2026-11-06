@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 const ASTRO_RANGE: &str = "^7.4.7";
 const SASS_RANGE: &str = "^1.107.1";
 const TAILWIND_RANGES: [(&str, &str); 2] =
-    [("@tailwindcss/vite", "^4.3.4"), ("tailwindcss", "^4.3.4")];
+    [("@tailwindcss/vite", "4.3.4"), ("tailwindcss", "4.3.4")];
 const NODE_RANGE: &str = ">=22.23.4";
 /// Key of the only locale of a single-language site in `src/site.ts`.
 const SINGLE_KEY: &str = "site";

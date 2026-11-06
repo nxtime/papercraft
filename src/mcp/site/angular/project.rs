@@ -136,9 +136,9 @@ fn package_json(site: &Site) -> Value {
         "typescript": "~6.0.2"
     });
     if site.options.styling == Styling::Tailwind {
-        dev["@tailwindcss/postcss"] = json!("^4.3.4");
+        dev["@tailwindcss/postcss"] = json!("4.3.4");
         dev["postcss"] = json!("^8.5.32");
-        dev["tailwindcss"] = json!("^4.3.4");
+        dev["tailwindcss"] = json!("4.3.4");
     }
     json!({
         "name": PROJECT,

@@ -1963,6 +1963,25 @@ fn site_scss_and_tailwind_write_sources_a_package_json_and_next_steps() {
     }
 }
 
+#[test]
+fn site_tailwind_packages_are_pinned_to_an_exact_version_in_every_framework() {
+    let (mut h, _) = two_frame_site();
+    for (framework, render) in [("html", "static"), ("react", "static"), ("react", "spa"), ("vue", "static"), ("vue", "spa"), ("angular", "static"), ("astro", "static")] {
+        let dir = site_out();
+        call(&mut h, "export_site", json!({"path": dir, "framework": framework, "render": render, "styling": "tailwind"}));
+        let pkg: Value = serde_json::from_str(&site_text(&read_site(&dir), "package.json")).unwrap();
+        let mut seen = 0;
+        for section in ["dependencies", "devDependencies"] {
+            for (name, ver) in pkg[section].as_object().into_iter().flatten().filter(|(n, _)| n.contains("tailwindcss")) {
+                seen += 1;
+                assert!(ver.as_str().is_some_and(|v| v.chars().all(|c| c.is_ascii_digit() || c == '.')), "{framework} {render}: {name} {ver}");
+            }
+        }
+        assert!(seen >= 2, "{framework} {render}: {pkg}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
 /// Exports "Headline" bound to a string with `pt` as its pt-BR text; returns the stylesheet and
 /// the font files `(path, bytes)` of the export.
 fn site_with_pt_text(pt: &str) -> (String, Vec<(String, usize)>) {

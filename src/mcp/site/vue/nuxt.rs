@@ -14,7 +14,7 @@ pub(super) fn write(cx: &Cx, out: &mut Output) -> Result<(), String> {
     match styling {
         Styling::Scss => dev.push(("sass", "^1.107.1")),
         Styling::Tailwind => {
-            dev.extend([("@tailwindcss/vite", "^4.3.4"), ("tailwindcss", "^4.3.4")])
+            dev.extend([("@tailwindcss/vite", "4.3.4"), ("tailwindcss", "4.3.4")])
         }
         _ => {}
     }

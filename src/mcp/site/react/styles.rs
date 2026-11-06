@@ -710,11 +710,11 @@ impl<'a> Kit<'a> {
                 vec![],
                 vec![
                     if next {
-                        ("@tailwindcss/postcss", "^4.3.4")
+                        ("@tailwindcss/postcss", "4.3.4")
                     } else {
-                        ("@tailwindcss/vite", "^4.3.4")
+                        ("@tailwindcss/vite", "4.3.4")
                     },
-                    ("tailwindcss", "^4.3.4"),
+                    ("tailwindcss", "4.3.4"),
                 ],
             ),
             Styling::VanillaExtract if next => (
