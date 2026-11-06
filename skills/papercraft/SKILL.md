@@ -137,6 +137,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Design rules (design-playbook) | `design_rules` (`query` or `rule` id; needs the `playbook` CLI; cite ids in the report) |
 | Report a PaperCraft problem | `report_issue` (a draft the user sends; synthetic repro only) |
 | Check quality | `lint_design` (`changedOnly: true` or `since` between edits, a full pass at the end; `overflow` flags layers past their artboard or clipping parent) |
+| Type scale | `set_text_style {action: "set", name: "Heading / L", fontSize, bold, lineHeight, letterSpacing, font}` once per step of the scale, then `{action: "apply", name, nodeIds}` on the text layers; changing a style later updates every layer that follows it (one undo step). `get_variables` lists them as `textStyles` |
 | Accessibility | `set_accessibility {items:[{nodeId, alt, decorative, role, level, order}]}` on images, icon buttons, headings and nav; `lint_design` then checks `image-alt`, `interactive-name`, `heading-skip` and `reading-order`, and `export_site` uses them |
 | Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf`, `export_presentation` (a client deck: cover, contents, a slide per screen) |
 | Translate | `get_strings` reads a page's text; `set_strings` moves it into a string collection with a mode per language, fills a language or a pseudo-locale; `set_variable_mode` previews it |
@@ -148,7 +149,7 @@ Full flows: [recipes.md](references/recipes.md).
 
 ## 6. Known limits (design around them)
 
-* **Font is Inter** unless the brief needs another typeface: `install_font` adds a .ttf or .otf to the project and `font-family` applies it to a whole text layer. Each family has regular and bold plus italic at most, no weights between. Build hierarchy from size, weight, color and space.
+* **Font is Inter** unless the brief needs another typeface: `install_font` adds a .ttf or .otf to the project and `font-family` applies it to a whole text layer. Each family has regular and bold plus italic at most, no weights between. Build hierarchy from size, weight, color and space, and keep the sizes as named text styles (`set_text_style`).
 * **Variables** are typed (`color`, `number`, `string`, `boolean`), live in collections with modes, group with `/` (`space/md`, `color/brand/primary`) and can alias each other. Colors work as `var(--name)` on fills and text; every other field binds with `bind_variable` (stroke, text-color, width, height, gap, padding, radius, font-size, line-height, opacity, visible). Numbers bind as px; line-height below 4 is a multiplier. Gradients keep fixed colors.
 * **No margin, grid or tables; no shadows, filters or transforms** (reported under `ignoredStyles`). Fake elevation with a border or a lighter surface.
 * **No rotation.** Nodes are axis-aligned.
