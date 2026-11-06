@@ -57,7 +57,7 @@ spec:
           emptyDir: {sizeLimit: 256Mi}
       containers:
         - name: web
-          image: localhost:32000/papercraft-web:0.2.0-ea6f1b3
+          image: localhost:32000/papercraft-web:0.10.0-dev-20261106
           args: ["--library", "--agents", "claude,opencode", "--allow-origin", "https://papercraft.marcospaulo.dev.br"]
           # Agent credentials come from Secret papercraft-agents (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, opencode's
           # provider keys). Optional, so the pod starts without it; the agents then report that they are not signed in.
