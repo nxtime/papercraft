@@ -104,3 +104,41 @@ pub fn paths(doc: &Document, root: NodeId) -> HashMap<String, NodeId> {
         .map(|id| (path(doc, root, id), id))
         .collect()
 }
+
+/// Layers of the wide frame with no layer at their path in the narrow one, paired with the
+/// narrow layer of the same name when that name is unique in both frames (and the narrow layer
+/// is not already matched by path). Covers a card wrapped in a `Row` on the desktop and a direct
+/// child on the phone. The value is the narrow layer and its path.
+pub fn by_name(doc: &Document, wide: NodeId, narrow: NodeId) -> HashMap<NodeId, (NodeId, String)> {
+    let wide_paths = paths(doc, wide);
+    let narrow_paths = paths(doc, narrow);
+    let names = |root: NodeId| {
+        let mut m: HashMap<String, Vec<NodeId>> = HashMap::new();
+        for id in doc.subtree(root).into_iter().filter(|i| *i != root) {
+            if let Some(n) = doc.get(id) {
+                m.entry(n.name.clone()).or_default().push(id);
+            }
+        }
+        m
+    };
+    let (in_wide, in_narrow) = (names(wide), names(narrow));
+    let mut out = HashMap::new();
+    for (name, w) in &in_wide {
+        let ([w], Some([n])) = (&w[..], in_narrow.get(name).map(Vec::as_slice)) else { continue };
+        let (wp, np) = (path(doc, wide, *w), path(doc, narrow, *n));
+        if !narrow_paths.contains_key(&wp) && !wide_paths.contains_key(&np) {
+            out.insert(*w, (*n, np));
+        }
+    }
+    out
+}
+
+/// "`A`, `B`, `C` and 4 more": the first few layer names for a warning.
+pub fn name_list(names: &[String]) -> String {
+    const SHOWN: usize = 3;
+    let shown: Vec<String> = names.iter().take(SHOWN).map(|n| format!("`{n}`")).collect();
+    match names.len().saturating_sub(SHOWN) {
+        0 => shown.join(", "),
+        more => format!("{} and {more} more", shown.join(", ")),
+    }
+}

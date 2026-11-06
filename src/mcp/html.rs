@@ -35,6 +35,41 @@ const VOID: &[&str] = &[
     "wbr",
 ];
 
+/// Named references common in pasted pages; there is no entity-table crate in the tree, and the
+/// full HTML5 list (2000+) is not worth carrying.
+const NAMED: &[(&str, char)] = &[
+    ("amp", '&'), ("lt", '<'), ("gt", '>'), ("quot", '"'), ("apos", '\''), ("nbsp", '\u{a0}'),
+    ("ensp", '\u{2002}'), ("emsp", '\u{2003}'), ("thinsp", '\u{2009}'), ("shy", '\u{ad}'),
+    ("middot", '·'), ("bull", '•'), ("hellip", '…'), ("mdash", '—'), ("ndash", '–'),
+    ("lsquo", '‘'), ("rsquo", '’'), ("sbquo", '‚'), ("ldquo", '“'), ("rdquo", '”'), ("bdquo", '„'),
+    ("laquo", '«'), ("raquo", '»'), ("lsaquo", '‹'), ("rsaquo", '›'), ("prime", '′'), ("Prime", '″'),
+    ("copy", '©'), ("reg", '®'), ("trade", '™'), ("times", '×'), ("divide", '÷'), ("minus", '−'),
+    ("plusmn", '±'), ("deg", '°'), ("micro", 'µ'), ("para", '¶'), ("sect", '§'), ("dagger", '†'),
+    ("euro", '€'), ("pound", '£'), ("yen", '¥'), ("cent", '¢'), ("curren", '¤'),
+    ("iexcl", '¡'), ("iquest", '¿'), ("frac12", '½'), ("frac14", '¼'), ("frac34", '¾'),
+    ("sup1", '¹'), ("sup2", '²'), ("sup3", '³'), ("ne", '≠'), ("le", '≤'), ("ge", '≥'),
+    ("asymp", '≈'), ("infin", '∞'), ("sum", '∑'), ("radic", '√'), ("larr", '←'), ("rarr", '→'),
+    ("uarr", '↑'), ("darr", '↓'), ("harr", '↔'), ("hearts", '♥'), ("star", '☆'), ("check", '✓'),
+    ("Agrave", 'À'), ("Aacute", 'Á'), ("Acirc", 'Â'), ("Atilde", 'Ã'), ("Auml", 'Ä'), ("Aring", 'Å'),
+    ("AElig", 'Æ'), ("Ccedil", 'Ç'), ("Egrave", 'È'), ("Eacute", 'É'), ("Ecirc", 'Ê'), ("Euml", 'Ë'),
+    ("Igrave", 'Ì'), ("Iacute", 'Í'), ("Icirc", 'Î'), ("Iuml", 'Ï'), ("Ntilde", 'Ñ'),
+    ("Ograve", 'Ò'), ("Oacute", 'Ó'), ("Ocirc", 'Ô'), ("Otilde", 'Õ'), ("Ouml", 'Ö'), ("Oslash", 'Ø'),
+    ("Ugrave", 'Ù'), ("Uacute", 'Ú'), ("Ucirc", 'Û'), ("Uuml", 'Ü'), ("Yacute", 'Ý'), ("szlig", 'ß'),
+    ("agrave", 'à'), ("aacute", 'á'), ("acirc", 'â'), ("atilde", 'ã'), ("auml", 'ä'), ("aring", 'å'),
+    ("aelig", 'æ'), ("ccedil", 'ç'), ("egrave", 'è'), ("eacute", 'é'), ("ecirc", 'ê'), ("euml", 'ë'),
+    ("igrave", 'ì'), ("iacute", 'í'), ("icirc", 'î'), ("iuml", 'ï'), ("ntilde", 'ñ'),
+    ("ograve", 'ò'), ("oacute", 'ó'), ("ocirc", 'ô'), ("otilde", 'õ'), ("ouml", 'ö'), ("oslash", 'ø'),
+    ("ugrave", 'ù'), ("uacute", 'ú'), ("ucirc", 'û'), ("uuml", 'ü'), ("yacute", 'ý'), ("yuml", 'ÿ'),
+];
+
+fn numeric(n: &str) -> Option<char> {
+    let code = match n.strip_prefix("#x").or_else(|| n.strip_prefix("#X")) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+        None => n.strip_prefix('#')?.parse().ok()?,
+    };
+    char::from_u32(code)
+}
+
 /// Decode character references.
 pub fn decode_entities(s: &str) -> String {
     if !s.contains('&') {
@@ -53,29 +88,7 @@ pub fn decode_entities(s: &str) -> String {
         };
         let name = &rest[1..end];
         let ch = match name {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            "nbsp" => Some('\u{a0}'),
-            "middot" => Some('·'),
-            "bull" => Some('•'),
-            "hellip" => Some('…'),
-            "mdash" => Some('—'),
-            "ndash" => Some('–'),
-            "copy" => Some('©'),
-            "reg" => Some('®'),
-            "trade" => Some('™'),
-            "times" => Some('×'),
-            "rarr" => Some('→'),
-            "larr" => Some('←'),
-            "check" => Some('✓'),
-            n if n.starts_with("#x") || n.starts_with("#X") => u32::from_str_radix(&n[2..], 16)
-                .ok()
-                .and_then(char::from_u32),
-            n if n.starts_with('#') => n[1..].parse().ok().and_then(char::from_u32),
-            _ => None,
+            n => NAMED.iter().find(|(k, _)| *k == n).map(|(_, c)| *c).or_else(|| numeric(n)),
         };
         match ch {
             Some(c) => {
@@ -313,6 +326,11 @@ mod tests {
             Html::Element(e) => e,
             _ => panic!("not an element: {h:?}"),
         }
+    }
+
+    #[test]
+    fn decodes_the_common_named_entities() {
+        assert_eq!(decode_entities("&ldquo;Hi&rdquo; &copy; caf&eacute; &#65;&#x42; &euro;5 &bogus;"), "“Hi” © café AB €5 &bogus;");
     }
 
     #[test]
