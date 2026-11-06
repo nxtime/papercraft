@@ -2323,13 +2323,16 @@ fn site_host_files_cache_hashed_assets_and_fall_back_for_single_page_apps() {
 
 /// "Home" at 1440 and "Home @mobile" at 390, plus a lone "Orphan @x"; the phone has no Aside.
 fn breakpoint_site(extra: Value) -> (std::collections::BTreeMap<String, Vec<u8>>, Value) {
-    let mut h = host();
-    let frames = [
+    breakpoint_site_of(&[
         ("Home", "1440px", "0px", "<p layer-name=\"Title\" style=\"font-size:20px\">Hi</p><p layer-name=\"Aside\" style=\"font-size:12px\">Side</p>"),
         ("Home @mobile", "390px", "1600px", "<p layer-name=\"Title\" style=\"font-size:14px\">Hi</p>"),
         ("Orphan @x", "390px", "2200px", "<p>Lost</p>"),
-    ];
-    for (name, width, left, html) in frames {
+    ], extra)
+}
+
+fn breakpoint_site_of(frames: &[(&str, &str, &str, &str)], extra: Value) -> (std::collections::BTreeMap<String, Vec<u8>>, Value) {
+    let mut h = host();
+    for (name, width, left, html) in frames.iter().copied() {
         let ab = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": width, "height": "600px", "left": left}}));
         call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": html}));
     }
@@ -2353,6 +2356,26 @@ fn site_frames_named_at_something_join_their_page_as_media_queries() {
     let warnings = r["warnings"].to_string();
     assert!(warnings.contains("`Orphan @x`") && warnings.contains("exported as its own page"), "{warnings}");
     assert!(warnings.contains("hidden at 390px and below"), "{warnings}");
+}
+
+#[test]
+fn a_phone_frame_matches_layers_by_name_when_the_desktop_wraps_them_in_rows() {
+    let card = |n: u8, size: u8| format!("<p layer-name=\"Feature {n}\" style=\"font-size:{size}px\">F{n}</p>");
+    let desktop = format!("<div layer-name=\"Row 1\">{}{}</div><div layer-name=\"Row 2\">{}</div>", card(1, 20), card(2, 20), card(3, 20));
+    let phone = format!("{}{}{}", card(1, 14), card(2, 14), card(3, 14));
+    let (files, r) = breakpoint_site_of(&[("Home", "1440px", "0px", &desktop), ("Home @mobile", "390px", "1600px", &phone)], json!({}));
+    let css = site_text(&files, &stylesheet(&files));
+    assert!(css.contains(":root .feature-1 {
+    font-size: 14px;"), "cards take their phone style: {css}");
+    assert!(css.contains("display: contents;") && !css.contains("display: none;"), "rows dissolve instead of hiding the cards: {css}");
+    let warnings = r["warnings"].to_string();
+    assert!(!warnings.contains("only in this frame") && !warnings.contains("hidden at"), "{warnings}");
+}
+
+#[test]
+fn breakpoint_warnings_name_the_layers() {
+    let (_, r) = breakpoint_site(json!({}));
+    assert!(r["warnings"].to_string().contains("(`Aside`)"), "{r}");
 }
 
 #[test]

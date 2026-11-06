@@ -162,7 +162,9 @@ struct Cx {
 struct Bp {
     max: u32,
     paths: HashMap<String, NodeId>,
-    hidden: usize,
+    /// Wide layers matched by unique name instead of path (see `breakpoints::by_name`).
+    renamed: HashMap<NodeId, (NodeId, String)>,
+    hidden: Vec<String>,
 }
 
 struct Walk<'a> {
@@ -254,7 +256,8 @@ impl<'a> Walk<'a> {
             .map(|(vid, max)| Bp {
                 max: *max,
                 paths: breakpoints::paths(doc, *vid),
-                hidden: 0,
+                renamed: breakpoints::by_name(doc, f.id, *vid),
+                hidden: Vec::new(),
             })
             .collect();
         let root = self
@@ -271,19 +274,22 @@ impl<'a> Walk<'a> {
     fn warn_breakpoints(&mut self, f: &Frame) {
         for (bp, (vid, _)) in self.bps.iter().zip(&f.variants) {
             let name = self.docs[0].get(*vid).map_or("", |n| n.name.as_str());
-            let only_there = bp
+            let mut only_there: Vec<String> = bp
                 .paths
-                .keys()
-                .filter(|k| {
+                .iter()
+                .filter(|(k, _)| {
                     !self.bp_seen.contains(*k)
+                        && !bp.renamed.values().any(|(_, p)| p == *k)
                         && (k.is_empty() || self.bp_seen.contains(breakpoints::parent_path(k)))
                 })
-                .count();
-            if bp.hidden > 0 {
-                self.warnings.push(format!("{} / {name}: {} layer(s) of the widest frame are missing here and are hidden at {}px and below", f.name, bp.hidden, bp.max));
+                .filter_map(|(_, id)| self.docs[0].get(*id).map(|n| n.name.clone()))
+                .collect();
+            only_there.sort();
+            if !bp.hidden.is_empty() {
+                self.warnings.push(format!("{} / {name}: {} of the widest frame are missing here and are hidden at {}px and below ({})", f.name, bp.hidden.len(), bp.max, breakpoints::name_list(&bp.hidden)));
             }
-            if only_there > 0 {
-                self.warnings.push(format!("{} / {name}: {only_there} layer(s) exist only in this frame and are left out; add them to the widest frame to show them", f.name));
+            if !only_there.is_empty() {
+                self.warnings.push(format!("{} / {name}: {} exist only in this frame and are left out ({}); add them to the widest frame to show them", f.name, only_there.len(), breakpoints::name_list(&only_there)));
             }
         }
     }
@@ -765,7 +771,9 @@ impl<'a> Walk<'a> {
             |bp: &Bp| key.is_empty() || bp.paths.contains_key(breakpoints::parent_path(&key));
         let mut out = Vec::new();
         for k in 0..self.bps.len() {
-            let changed = match self.bps[k].paths.get(&key).copied() {
+            let matched = (self.bps[k].paths.get(&key).copied())
+                .or_else(|| self.bps[k].renamed.get(&id).map(|(n, _)| *n));
+            let changed = match matched {
                 Some(vid) => {
                     let d = self.decls(0, vid, is_root, replaced).unwrap_or_default();
                     let mut changed = diff(base, &d);
@@ -775,9 +783,20 @@ impl<'a> Walk<'a> {
                     }
                     changed
                 }
+                // A wrapper the narrow frame lacks, around layers it has flat: dissolve it, so they
+                // lay out in its parent and take their narrow style.
                 None if parent_found(&self.bps[k]) => {
-                    self.bps[k].hidden += 1;
-                    vec![("display".to_owned(), "none".to_owned())]
+                    let wraps = self.docs[0]
+                        .subtree(id)
+                        .into_iter()
+                        .any(|d| d != id && self.bps[k].renamed.contains_key(&d));
+                    if wraps {
+                        vec![("display".to_owned(), "contents".to_owned())]
+                    } else {
+                        let name = self.docs[0].get(id).map_or_else(String::new, |n| n.name.clone());
+                        self.bps[k].hidden.push(name);
+                        vec![("display".to_owned(), "none".to_owned())]
+                    }
                 }
                 None => Vec::new(),
             };
