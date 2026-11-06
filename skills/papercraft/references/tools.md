@@ -922,7 +922,7 @@ Call when done creating or editing. Saves the project.
 Variant names of the form `Size=M, State=hover` (component names or `values`) build a variant set: one enum property per axis, each read from the variants that differ from the base in that axis alone, so axes combine additively. `set_instance_props` picks a value per axis; overrides survive the swap. The result lists `axes`.
 ### `set_accessibility`
 
-Sets or clears accessibility annotations on layers: alt text, decorative mark, role, heading level and reading order. `get_node_info` shows them as `accessibility`; `lint_design` checks them (`image-alt`, `interactive-name`, `heading-skip`, `reading-order`); `export_site` writes them instead of inferring. All items are checked before any is applied.
+Sets or clears accessibility annotations on layers: alt text, decorative mark, role, heading level and reading order. `get_node_info` shows them as `accessibility`; `lint_design` checks them (`image-alt`, `interactive-name` for a clickable or `button`/`link` layer with no visible text or alt (the layer name is not exported), `heading-skip`, `reading-order` for a disagreeing or duplicate `order`); `export_site` writes them instead of inferring. All items are checked before any is applied.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|

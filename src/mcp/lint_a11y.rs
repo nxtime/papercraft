@@ -3,7 +3,7 @@
 //! clickable layer with no text, alt or real name), `heading-skip` (explicit headings that jump
 //! a level) and `reading-order` (an explicit order that disagrees with the visual one).
 
-use super::lint::{is_default_name, Issue};
+use super::lint::Issue;
 use crate::model::{Document, LinkAction, Node, NodeId, NodeKind, Paint};
 
 /// Issues for the layers in `ids`, which must be in document order (one artboard's subtree).
@@ -23,10 +23,13 @@ pub fn a11y(doc: &Document, ids: &[NodeId]) -> Vec<Issue> {
                 "set_accessibility {alt:\"what it shows\"}, or {decorative:true} if it is only ornament",
             ));
         }
-        if (n.link.is_some() || matches!(n.link_action, Some(LinkAction::Url { .. }))) && !has_name(doc, n) {
+        let acts = n.link.is_some()
+            || matches!(n.link_action, Some(LinkAction::Url { .. }))
+            || a.and_then(|a| a.role.as_deref()).is_some_and(|r| r == "button" || r == "link");
+        if acts && !has_name(doc, n) {
             out.push(issue(
                 "interactive-name",
-                format!("`{}` is clickable but has no text, alt text or descriptive name", n.name),
+                format!("`{}` is clickable but has no visible text or alt text (the layer name is not exported)", n.name),
                 "set_accessibility {alt:\"what it does\"} (and a role such as button or link)",
             ));
         }
@@ -53,10 +56,9 @@ fn is_picture(n: &Node) -> bool {
         && matches!(n.style.fills.as_slice(), [Paint::Image { .. }])
 }
 
-/// Text inside, an alt text or a name that says something.
+/// Text inside or an alt text; the layer name does not reach the export.
 fn has_name(doc: &Document, n: &Node) -> bool {
     n.a11y.as_ref().is_some_and(|a| a.alt.as_deref().is_some_and(|t| !t.is_empty()))
-        || !(n.name.trim().is_empty() || is_default_name(&n.name))
         || doc.subtree(n.id).iter().filter_map(|c| doc.get(*c)).any(|c| c.visible && c.kind.text().is_some_and(|t| !t.trim().is_empty()))
 }
 
@@ -75,6 +77,9 @@ fn order_mismatch(doc: &Document, n: &Node) -> Option<String> {
         return None;
     }
     kids.sort_by_key(|k| k.0);
+    if let Some(w) = kids.windows(2).find(|w| w[0].0 == w[1].0) {
+        return Some(format!("two children of `{}` share `order` {}", n.name, w[0].0));
+    }
     let mut visual = kids.clone();
     visual.sort_by_key(|k| k.1);
     let (first, _) = kids.iter().zip(&visual).find(|(a, b)| a.2 != b.2)?;
@@ -146,6 +151,29 @@ mod tests {
         set(&mut d, btn, A11y::default());
         text(&mut d, btn, 0.0, "Buy");
         assert!(rules(&d).is_empty(), "text inside names it");
+    }
+
+    #[test]
+    fn a_button_role_needs_alt_or_text_whatever_the_layer_is_called() {
+        let mut d = Document::default();
+        let b = board(&mut d);
+        let btn = add(&mut d, Some(b), NodeKind::Frame { clip: false }, (0.0, 0.0), "Close button");
+        set(&mut d, btn, A11y { role: Some("button".into()), ..Default::default() });
+        assert_eq!(rules(&d), ["interactive-name"]);
+        set(&mut d, btn, A11y { role: Some("button".into()), alt: Some("Close".into()), ..Default::default() });
+        assert!(rules(&d).is_empty());
+    }
+
+    #[test]
+    fn siblings_may_not_share_a_reading_order() {
+        let mut d = Document::default();
+        let b = board(&mut d);
+        let top = text(&mut d, b, 0.0, "Top");
+        let bottom = text(&mut d, b, 100.0, "Bottom");
+        for id in [top, bottom] {
+            set(&mut d, id, A11y { order: Some(1), ..Default::default() });
+        }
+        assert_eq!(rules(&d), ["reading-order"]);
     }
 
     #[test]
