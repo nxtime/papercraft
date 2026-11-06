@@ -1978,6 +1978,13 @@ fn site_page_of(markup: &str) -> String {
 }
 
 #[test]
+fn site_a_frame_with_free_layout_is_positioned_for_its_absolute_children() {
+    let page = site_page_of("<div layer-name=\"Floating badges\" style=\"position:relative;width:400px;height:80px\"><p layer-name=\"Badge one\" style=\"position:absolute;left:0;top:0;font-size:14px\">New</p><p layer-name=\"Badge two\" style=\"position:absolute;left:120px;top:30px;font-size:14px\">Beta</p></div>");
+    let rule = page.split('}').find(|r| r.contains(".floating-badges")).unwrap_or_else(|| panic!("{page}"));
+    assert!(rule.contains("position: relative"), "{page}");
+}
+
+#[test]
 fn site_headings_of_identical_siblings_share_a_level_and_prices_are_not_headings() {
     let q = |t: &str| format!("<div style=\"display:flex;flex-direction:column\"><p style=\"font-size:20px;font-weight:700\">{t}</p><p style=\"font-size:16px\">An answer that reads like a sentence of copy.</p></div>");
     let page = site_page_of(&format!(
