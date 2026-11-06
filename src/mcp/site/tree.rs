@@ -5,6 +5,7 @@
 //! locale-scoped rules, and anything else (structure, images) keeps the first locale's version
 //! with a warning.
 
+use super::breakpoints;
 use super::fluid;
 use super::media::{self, Media};
 use super::model::{Frame, Locale, Page};
@@ -54,7 +55,7 @@ pub struct Element {
     pub link: Option<LinkTarget>,
     /// Tailwind utilities for this element, empty unless styling is Tailwind.
     pub tw: String,
-    /// The class carries per-locale rules, so Tailwind output keeps it next to `tw`.
+    /// The class carries per-locale or breakpoint rules, so Tailwind output keeps it next to `tw`.
     pub has_overrides: bool,
     pub children: Vec<Child>,
 }
@@ -157,6 +158,13 @@ struct Cx {
     in_button: bool,
 }
 
+/// A narrower frame of the page being walked.
+struct Bp {
+    max: u32,
+    paths: HashMap<String, NodeId>,
+    hidden: usize,
+}
+
 struct Walk<'a> {
     docs: &'a [Document],
     frames: &'a [Frame],
@@ -178,6 +186,10 @@ struct Walk<'a> {
     sem: Sem,
     hero_seen: bool,
     fixed_layout: usize,
+    /// The page's narrower frames, widest first.
+    bps: Vec<Bp>,
+    /// Paths of the page frame's layers that every walked layer matched against the variants.
+    bp_seen: HashSet<String>,
     /// Per page: the face `(family, bold, italic)` of its h1.
     h1_faces: Vec<Option<(String, bool, bool)>>,
 }
@@ -207,6 +219,8 @@ impl<'a> Walk<'a> {
             sem: Sem::default(),
             hero_seen: false,
             fixed_layout: 0,
+            bps: Vec::new(),
+            bp_seen: HashSet::new(),
             h1_faces: Vec::new(),
         }
     }
@@ -233,17 +247,53 @@ impl<'a> Walk<'a> {
         }));
         self.hero_seen = false;
         self.fixed_layout = 0;
+        self.bp_seen.clear();
+        self.bps = f
+            .variants
+            .iter()
+            .map(|(vid, max)| Bp {
+                max: *max,
+                paths: breakpoints::paths(doc, *vid),
+                hidden: 0,
+            })
+            .collect();
         let root = self
             .node(f.id, Cx::default(), true)
             .unwrap_or_else(|| Element::new("div"));
         if self.fixed_layout > 0 {
             self.warnings.push(format!("{}: {} frame(s) without auto layout are absolutely positioned and will not reflow on a phone", f.name, self.fixed_layout));
         }
+        self.warn_breakpoints(f);
         root
     }
 
+    /// What the variants could not express: layers only one of the frames has.
+    fn warn_breakpoints(&mut self, f: &Frame) {
+        for (bp, (vid, _)) in self.bps.iter().zip(&f.variants) {
+            let name = self.docs[0].get(*vid).map_or("", |n| n.name.as_str());
+            let only_there = bp
+                .paths
+                .keys()
+                .filter(|k| {
+                    !self.bp_seen.contains(*k)
+                        && (k.is_empty() || self.bp_seen.contains(breakpoints::parent_path(k)))
+                })
+                .count();
+            if bp.hidden > 0 {
+                self.warnings.push(format!("{} / {name}: {} layer(s) of the widest frame are missing here and are hidden at {}px and below", f.name, bp.hidden, bp.max));
+            }
+            if only_there > 0 {
+                self.warnings.push(format!("{} / {name}: {only_there} layer(s) exist only in this frame and are left out; add them to the widest frame to show them", f.name));
+            }
+        }
+    }
+
     fn finish(mut self, pages: Vec<Page>, p: &Params) -> Built {
-        let roots: Vec<NodeId> = p.frames.iter().map(|f| f.id).collect();
+        let roots: Vec<NodeId> = p
+            .frames
+            .iter()
+            .flat_map(|f| std::iter::once(f.id).chain(f.variants.iter().map(|v| v.0)))
+            .collect();
         for f in media::missing_families(&self.docs[0], &roots) {
             self.warnings.push(format!("font `{f}` is not installed, so its text is drawn in Inter; install it before exporting to keep the typeface"));
         }
@@ -366,6 +416,7 @@ impl<'a> Walk<'a> {
                         self.page,
                         vec![("display".into(), "contents".into())],
                         Vec::new(),
+                        Vec::new(),
                         None,
                     );
                 }
@@ -401,7 +452,11 @@ impl<'a> Walk<'a> {
     fn link(&mut self, n: &Node, in_link: bool) -> Option<LinkTarget> {
         let label = format!("{} / {}", self.page_name, n.name);
         let target = if let Some(to) = n.link {
-            match self.frames.iter().position(|f| f.id == to) {
+            match self
+                .frames
+                .iter()
+                .position(|f| f.id == to || f.variants.iter().any(|v| v.0 == to))
+            {
                 Some(i) => {
                     self.resolved += 1;
                     LinkTarget::Page(i)
@@ -655,7 +710,8 @@ impl<'a> Walk<'a> {
                 }
             }
         }
-        el.has_overrides = !overrides.is_empty();
+        let media = self.breakpoint_decls(id, &base, is_root, replaced);
+        el.has_overrides = !overrides.is_empty() || !media.is_empty();
         if self.tailwind {
             el.tw = self.tailwind_classes(n, is_root, replaced);
         }
@@ -666,7 +722,49 @@ impl<'a> Walk<'a> {
         let name = root.map(|p| self.roots[p].clone());
         el.class = self
             .classes
-            .get(&n.name, name, self.page, base, overrides, root);
+            .get(&n.name, name, self.page, base, overrides, media, root);
+    }
+
+    /// What each narrower frame changes on layer `id`, matched by layer path; a layer the
+    /// frame lacks is hidden at its width.
+    fn breakpoint_decls(
+        &mut self,
+        id: NodeId,
+        base: &Decls,
+        is_root: bool,
+        replaced: bool,
+    ) -> Vec<(u32, Decls)> {
+        if self.bps.is_empty() {
+            return Vec::new();
+        }
+        let root = self.frames[self.page].id;
+        let key = breakpoints::path(&self.docs[0], root, id);
+        let parent_found =
+            |bp: &Bp| key.is_empty() || bp.paths.contains_key(breakpoints::parent_path(&key));
+        let mut out = Vec::new();
+        for k in 0..self.bps.len() {
+            let changed = match self.bps[k].paths.get(&key).copied() {
+                Some(vid) => {
+                    let d = self.decls(0, vid, is_root, replaced).unwrap_or_default();
+                    let mut changed = diff(base, &d);
+                    if is_root {
+                        // The page keeps its desktop frame's width rule; a phone column is not centred on a tablet.
+                        changed.retain(|(p, _)| p != "max-width" && p != "margin");
+                    }
+                    changed
+                }
+                None if parent_found(&self.bps[k]) => {
+                    self.bps[k].hidden += 1;
+                    vec![("display".to_owned(), "none".to_owned())]
+                }
+                None => Vec::new(),
+            };
+            if !changed.is_empty() {
+                out.push((self.bps[k].max, changed));
+            }
+        }
+        self.bp_seen.insert(key);
+        out
     }
 
     fn tailwind_classes(&self, n: &Node, is_root: bool, replaced: bool) -> String {

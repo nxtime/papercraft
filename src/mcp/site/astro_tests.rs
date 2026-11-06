@@ -82,6 +82,7 @@ fn site(styling: Styling, multi: bool) -> Site {
             name: "home".into(),
             decls: vec![("color".into(), "red".into())],
             overrides: vec![],
+            media: vec![],
             pages: [0].into(),
             root_of: Some(0),
         }],

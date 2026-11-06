@@ -67,6 +67,7 @@ fn class(
             ("background".into(), "var(--brand)".into()),
         ],
         overrides,
+        media: Vec::new(),
         pages: pages.iter().copied().collect::<BTreeSet<_>>(),
         root_of,
     }

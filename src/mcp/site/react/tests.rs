@@ -50,6 +50,7 @@ fn class(name: &str, decls: &[(&str, &str)], pages: &[usize], root_of: Option<us
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect(),
         overrides: Vec::new(),
+        media: Vec::new(),
         pages: pages.iter().copied().collect::<BTreeSet<_>>(),
         root_of,
     }

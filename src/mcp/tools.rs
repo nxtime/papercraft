@@ -781,6 +781,10 @@ pub fn definitions() -> Vec<Value> {
              Prototype links to exported frames and Url links become links. With `modes` (a \
              collection whose modes are languages such as en and pt-BR) each mode is a locale: text \
              that differs becomes a message per locale, styles that differ become :lang() rules. \
+             Responsive: a frame named `Home @mobile` (or `Home @768`, the number is the largest \
+             window width it applies to; else its own width) joins the wider frame named `Home` \
+             (matched by layer names); it adds @media (max-width) rules, layers it lacks are \
+             hidden; not written for CSS-in-JS stylings. \
              A project (any framework, scss, tailwind) needs a build: follow `next_steps`. The \
              folder must be new, empty or an earlier export_site folder; a re-export removes only \
              what the previous one wrote. Per framework: references/export-site.md in the \
