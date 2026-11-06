@@ -2355,9 +2355,10 @@ fn site_frames_named_at_something_join_their_page_as_media_queries() {
 fn site_breakpoints_work_in_tailwind_and_are_skipped_with_a_warning_in_css_in_js() {
     let (files, _) = breakpoint_site(json!({"styling": "tailwind"}));
     let all: String = files.iter().filter(|(k, _)| k.ends_with(".css") || k.ends_with(".html")).map(|(_, v)| String::from_utf8_lossy(v).into_owned()).collect();
-    assert!(all.contains("@media (max-width: 390px)") && all.contains("class=\"text-[20px]") || all.contains("@media (max-width: 390px)"), "{all}");
+    assert!(all.contains("@media (max-width: 390px)") && all.contains("font-size: 14px") && all.contains("text-[20px]"), "the phone size wins under 390, the desktop utility stays: {all}");
     let (_, r) = breakpoint_site(json!({"framework": "react", "styling": "emotion"}));
     assert!(r["warnings"].to_string().contains("CSS-in-JS"), "{r}");
+}
 
 #[test]
 fn a_gradient_stop_bound_to_a_colour_variable_follows_the_mode_and_exports_as_var() {
