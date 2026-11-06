@@ -26,6 +26,10 @@ path = "src/bin/papercraft-cli.rs"
 name = "papercraft-relay"
 path = "src/bin/papercraft-relay.rs"
 
+[[test]]
+name = "relay_agents"
+harness = false
+
 [dependencies]
 egui = "0.36"
 egui-wgpu = "0.36"

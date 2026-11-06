@@ -45,6 +45,41 @@ pub struct Reply {
     pub error: Option<String>,
 }
 
+/// An agent the relay can run for the tab (`--agents`), as the tab's picker lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentInfo {
+    /// `claude-code` or `opencode`: the ids the chat panel already uses.
+    pub id: String,
+    pub name: String,
+}
+
+/// relay -> tab, besides [`Call`]: tagged by `type` (a `Call` has none).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToTab {
+    /// Sent once the socket is live: the hosted agents, empty when the relay runs none.
+    Hello { agents: Vec<AgentInfo> },
+    /// One event of the turn answering chat `chat`; the last is `TurnEnd` or `Error`.
+    Chat { chat: String, event: crate::chat::events::Event },
+}
+
+/// tab -> relay, besides [`Reply`]: tagged by `type` (a `Reply` has none).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FromTab {
+    /// A message for the hosted agent `agent` in chat `chat`; later messages of the same chat
+    /// continue its session.
+    Chat {
+        chat: String,
+        agent: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+    },
+    /// Stop the turn running in chat `chat`.
+    Cancel { chat: String },
+}
+
 impl Reply {
     pub fn ok(id: u64, out: Vec<Out>) -> Reply {
         Reply {

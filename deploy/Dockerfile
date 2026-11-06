@@ -21,9 +21,15 @@ COPY . .
 RUN sh web/build.sh && cargo build --release --locked --bin papercraft-relay
 
 FROM debian:stable-slim
-RUN apt-get update && apt-get install -y --no-install-recommends libssl3 libdbus-1-3 ca-certificates \
+# Node and the two agent CLIs `--agents` can start, at exact versions (bump them on purpose).
+ARG CLAUDE_CODE=2.1.319
+ARG OPENCODE=1.19.5
+RUN apt-get update && apt-get install -y --no-install-recommends libssl3 libdbus-1-3 ca-certificates nodejs npm \
+ && npm install -g --no-audit --no-fund @anthropic-ai/claude-code@${CLAUDE_CODE} opencode-ai@${OPENCODE} \
+ && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 papercraft
+ENV DISABLE_AUTOUPDATER=1
 COPY --from=build /src/target/release/papercraft-relay /usr/local/bin/papercraft-relay
 COPY --from=build /src/web/index.html /srv/web/index.html
 COPY --from=build /src/web/pkg /srv/web/pkg

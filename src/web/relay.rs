@@ -6,7 +6,8 @@
 //! every frame (`Web::pump_calls`) so edits and repaint stay on one code path.
 
 use super::dom;
-use crate::mcp::relay_proto::{self, Call, Reply, TOKEN_BYTES};
+use crate::chat::events::Event;
+use crate::mcp::relay_proto::{self, AgentInfo, Call, FromTab, Reply, ToTab, TOKEN_BYTES};
 use crate::ui::agent::LinkState;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -23,6 +24,9 @@ const CLOSE_NORMAL: u16 = 1000;
 #[derive(Default)]
 struct Inbox {
     calls: VecDeque<Call>,
+    /// Chat events of the relay-hosted agents, and the agents it announced.
+    chat: VecDeque<(String, Event)>,
+    agents: Option<Vec<AgentInfo>>,
     state: LinkState,
     /// Set by the callbacks for the shell's `tick` to act on.
     opened: bool,
@@ -96,6 +100,15 @@ impl Relay {
         self.inbox.borrow().state
     }
 
+    pub fn next_chat_event(&mut self) -> Option<(String, Event)> {
+        self.inbox.borrow_mut().chat.pop_front()
+    }
+
+    /// The agents the relay runs, once it has said so (on every connect).
+    pub fn take_agents(&mut self) -> Option<Vec<AgentInfo>> {
+        self.inbox.borrow_mut().agents.take()
+    }
+
     pub fn next_call(&mut self) -> Option<Call> {
         self.inbox.borrow_mut().calls.pop_front()
     }
@@ -120,6 +133,19 @@ impl Relay {
             Ok(json) => {
                 if ws.send_with_str(&json).is_err() {
                     log::warn!("papercraft relay: could not send a reply");
+                }
+            }
+            Err(e) => log::warn!("papercraft relay: {e}"),
+        }
+    }
+
+    /// Send a chat frame to the relay's hosted agent.
+    pub fn send_chat(&self, frame: &FromTab) {
+        let Some(ws) = &self.socket else { return };
+        match serde_json::to_string(frame) {
+            Ok(json) => {
+                if ws.send_with_str(&json).is_err() {
+                    log::warn!("papercraft relay: could not send a chat frame");
                 }
             }
             Err(e) => log::warn!("papercraft relay: {e}"),
@@ -187,6 +213,21 @@ impl Relay {
             let Some(text) = e.data().as_string() else {
                 return;
             };
+            // Chat frames carry a `type`; a tool call has none.
+            if let Ok(frame) = serde_json::from_str::<ToTab>(&text) {
+                let wake = {
+                    let mut i = inbox.borrow_mut();
+                    match frame {
+                        ToTab::Hello { agents } => i.agents = Some(agents),
+                        ToTab::Chat { chat, event } => i.chat.push_back((chat, event)),
+                    }
+                    i.wake.clone()
+                };
+                if let Some(wake) = wake {
+                    wake();
+                }
+                return;
+            }
             let Ok(call) = serde_json::from_str::<Call>(&text) else {
                 log::warn!("papercraft relay: ignoring a frame that is not a call");
                 return;

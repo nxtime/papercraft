@@ -112,7 +112,7 @@ It is an alpha. It is good for building screens, design systems and sketches, an
 **Sharing and platforms**
 * **Shared projects** through an optional relay (`papercraft-relay`); concurrent edits to a page are merged. Without a relay nothing leaves your machine.
 * **Themes:** System, Light, Dark and the four Catppuccin flavours (Latte, Frappé, Macchiato, Mocha).
-* **Web build** that runs the editor in the browser (`sh web/build.sh`, served by `papercraft-relay --static web`).
+* **Web build** that runs the editor in the browser (`sh web/build.sh`, served by `papercraft-relay --static web`). With `--data <dir> --agents claude,opencode` the relay also runs Claude Code or opencode for a tab, restricted to PaperCraft's tools, so the Chat panel works from a phone (see `deploy/README.md`).
 * **Import and export:** Figma `.fig` files, `.excalidraw` scenes and libraries, SVG and images in; PNG (1 to 4x), SVG and vector PDF out, for a selection, each frame, a page or the whole project.
 
 Projects live in `~/Documents/papercraft/<name>/` (`project.json`, one JSON file per page in `pages/`, plus `versions/`, `runs/` and library files). Work autosaves with atomic writes and files are versioned and migrated on load. `PAPERCRAFT_HOME` points to another folder.
