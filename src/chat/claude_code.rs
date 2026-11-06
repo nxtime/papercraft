@@ -204,7 +204,7 @@ mod process {
     const LEAN_ARGS: [&str; 5] = ["--disable-slash-commands", "--setting-sources", "project,local", "--tools", "Read,TodoWrite,ToolSearch"];
 
     /// Built-in tools a hosted turn must never run, whatever `--tools` does.
-    const HOSTED_DENY: &str = "Bash,BashOutput,KillShell,Edit,MultiEdit,Write,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Task,Agent";
+    const HOSTED_DENY: &str = "Bash,BashOutput,KillShell,Edit,Write,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Task,Agent";
 
     /// `system_file` holds the system prompt (read by the CLI, so it is not in `ps` output).
     pub fn args(cfg: &TurnConfig, system_file: Option<&Path>) -> Vec<String> {
