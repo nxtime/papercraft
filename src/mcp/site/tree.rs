@@ -917,6 +917,12 @@ impl<'a> Walk<'a> {
         if layer_text(n).contains('\n') {
             set(out, "white-space", "pre-line".into());
         }
+        // Absolute children are placed against the nearest positioned ancestor: this layer.
+        let places_children = n.layout.is_none()
+            || n.children.iter().any(|c| doc.get(*c).is_some_and(|c| c.layout_child.absolute));
+        if places_children && !n.children.is_empty() && !out.iter().any(|d| d.0 == "position") {
+            set(out, "position", "relative".into());
+        }
         if is_root && n.layout.is_some() {
             // A page takes the window's width and at least its height, so its background reaches
             // every edge, and grows instead of clipping. A screen narrower than a desktop stays a
