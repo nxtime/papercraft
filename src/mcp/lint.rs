@@ -71,6 +71,12 @@ fn solid(n: &Node) -> Option<(Color, Option<&str>)> {
     }
 }
 
+/// The gray the app gives a new shape and an image whose download failed: its own placeholder,
+/// not a colour somebody chose.
+fn is_default_shape_gray(n: &Node, c: Color) -> bool {
+    matches!(n.kind, crate::model::NodeKind::Rect | crate::model::NodeKind::Ellipse) && c == Color::rgb(0xd9, 0xd9, 0xd9)
+}
+
 /// What a node's top fill looks like behind its children: a solid's color, a gradient's stops
 /// averaged; `Some(None)` for an image, whose color is unknown.
 fn fill_color(n: &Node) -> Option<Option<Color>> {
@@ -284,6 +290,7 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
             && var.is_none()
             && !bound_text
             && c.a == 255
+            && !is_default_shape_gray(n, c)
         {
             if let Some((name, _)) = vars.iter().find(|(_, v)| **v == c) {
                 add(
@@ -627,6 +634,17 @@ mod tests {
         assert!(collapsed(&doc));
         doc.nodes.get_mut(&id).unwrap().rect.w = 32.0; // one word a line is wrapping, not collapsing
         assert!(!collapsed(&doc));
+    }
+
+    #[test]
+    fn the_apps_own_placeholder_gray_is_not_hard_coded() {
+        let mut doc = Document::default();
+        doc.variables.insert("border".into(), Color::rgb(0xd9, 0xd9, 0xd9));
+        let id = doc.alloc_id();
+        let n = Node::new(id, crate::model::NodeKind::Rect, crate::geom::Rect::new(0.0, 0.0, 40.0, 20.0));
+        doc.nodes.insert(id, n);
+        doc.root.push(id);
+        assert!(lint(&doc, &[id], &DEFAULT_SCALE).iter().all(|i| i.rule != "hard-coded-color"));
     }
 
     #[test]
