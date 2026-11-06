@@ -104,7 +104,8 @@ foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'ATTRIBU
 }
 $Zip = Join-Path $Dist "papercraft-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
-Compress-Archive -Path $Portable -DestinationPath $Zip
+# The files themselves, not their folder: the in-app updater looks for papercraft.exe at the top.
+Compress-Archive -Path (Join-Path $Portable '*') -DestinationPath $Zip
 
 # ---- cli zip -----------------------------------------------------------------------------------
 $CliPortable = Join-Path $TargetDir "windows-package\papercraft-cli-$Version-windows-$Arch"
