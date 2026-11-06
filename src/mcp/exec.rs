@@ -368,6 +368,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "merge_variants" => merge_variants(ed, &a),
                 "set_prototype_links" => super::prototype::set_prototype_links(ed, &a),
                 "set_screens" => set_screens(ed, &a),
+                "set_accessibility" => super::a11y::set_accessibility(ed, &a),
                 "export" => export(host, &a),
                 "export_combined_pdf" => export_pdf(host, &a),
                 "export_presentation" => export_presentation(host, &a),
@@ -1151,6 +1152,9 @@ fn node_info(ed: &mut Editor, a: &Args) -> ToolResult {
     v["autoLayout"] = json!(n.layout.is_some());
     if let Some(s) = screen_json(ed, page, id) {
         v["screen"] = s;
+    }
+    if let Some(a11y) = &n.a11y {
+        v["accessibility"] = json!(a11y);
     }
     Ok(super::budget::json_out(v, a.num("maxTokens"), "use get_children for the child ids"))
 }

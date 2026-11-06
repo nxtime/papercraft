@@ -435,10 +435,13 @@ impl<'a> Walk<'a> {
     /// A link or button with no text or described picture in it is announced as just "link" or
     /// "button", so the layer (or icon) name becomes its label.
     fn label(&mut self, el: &mut Element, n: &Node) {
-        let name = codegen::icon_of(&self.docs[0], n).map_or_else(
-            || n.name.trim().to_owned(),
-            |(_, icon)| icon.replace('-', " "),
-        );
+        let name = match explicit_alt(n).filter(|a| !a.is_empty()) {
+            Some(alt) => alt,
+            None => codegen::icon_of(&self.docs[0], n).map_or_else(
+                || n.name.trim().to_owned(),
+                |(_, icon)| icon.replace('-', " "),
+            ),
+        };
         if is_generic_name(&name) {
             let what = if el.tag == "button" { "button" } else { "link" };
             self.warnings.push(format!("{} / {}: a {what} with no text and a generic layer name has no accessible name; rename the layer to say what it does", self.page_name, n.name));
@@ -531,7 +534,7 @@ impl<'a> Walk<'a> {
         let tag = if self.sem.main == Some(id) {
             "main"
         } else {
-            match semantic::landmark(&n.name).filter(|_| semantic::is_container(n)) {
+            match semantic::landmark_of(n).filter(|_| semantic::is_container(n)) {
                 Some("button")
                     if !own_link
                         && !self.docs[0]
@@ -554,13 +557,30 @@ impl<'a> Walk<'a> {
         if n.is_frame() && !n.children.is_empty() && n.layout.is_none() {
             self.fixed_layout += 1;
         }
+        if let Some(r @ ("link" | "list")) = n.a11y.as_ref().and_then(|a| a.role.as_deref()) {
+            el.attrs.push(("role".into(), r.into()));
+        }
         self.style(&mut el, id, n, is_root, false);
-        for c in &n.children {
-            if let Some(child) = self.node(*c, cx, false) {
+        for c in self.reading_order(n) {
+            if let Some(child) = self.node(c, cx, false) {
                 el.children.push(Child::El(child));
             }
         }
         el
+    }
+
+    /// Children in the order a screen reader meets them. Only a frame without auto layout may
+    /// reorder: its children are placed by position, so the source order is free; elsewhere
+    /// it also decides where they sit.
+    fn reading_order(&self, n: &Node) -> Vec<NodeId> {
+        let mut kids = n.children.clone();
+        if n.layout.is_none() {
+            let doc = &self.docs[0];
+            let key = |c: &NodeId| doc.get(*c).and_then(|k| k.a11y.as_ref()).and_then(|a| a.order);
+            // Unnumbered layers keep their place after the numbered ones.
+            kids.sort_by_key(|c| key(c).unwrap_or(u32::MAX));
+        }
+        kids
     }
 
     fn text(&mut self, id: NodeId, n: &Node, cx: Cx, is_root: bool) -> Element {
@@ -647,7 +667,9 @@ impl<'a> Walk<'a> {
         let y = self.docs[0].world_rect(id).map_or(0.0, |r| r.y) - self.top;
         let hero = !self.hero_seen && y < FOLD_PX;
         self.hero_seen |= hero;
-        let alt = if is_generic_name(&n.name) {
+        let alt = if let Some(a) = explicit_alt(n) {
+            a
+        } else if is_generic_name(&n.name) {
             self.warnings.push(format!("{} / {}: the layer has a generic name, so the image has an empty `alt`; rename the layer to describe the picture", self.page_name, n.name));
             String::new()
         } else {
@@ -688,7 +710,7 @@ impl<'a> Walk<'a> {
         let mut el = Element::new("img");
         el.attrs = vec![
             ("src".into(), self.media.svg(&svg)),
-            ("alt".into(), String::new()),
+            ("alt".into(), explicit_alt(n).unwrap_or_default()),
         ];
         push_size(&mut el, n);
         self.style(&mut el, id, n, is_root, true);
@@ -936,6 +958,15 @@ impl<'a> Walk<'a> {
         out.push_str(rest);
         safe_value(&out)
     }
+}
+
+/// The author's alt text: `Some("")` for a decorative picture, `None` when nothing was set.
+fn explicit_alt(n: &Node) -> Option<String> {
+    let a = n.a11y.as_ref()?;
+    if a.decorative {
+        return Some(String::new());
+    }
+    a.alt.clone()
 }
 
 fn layer_text(n: &Node) -> String {
