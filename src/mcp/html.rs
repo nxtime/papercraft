@@ -87,9 +87,7 @@ pub fn decode_entities(s: &str) -> String {
             continue;
         };
         let name = &rest[1..end];
-        let ch = match name {
-            n => NAMED.iter().find(|(k, _)| *k == n).map(|(_, c)| *c).or_else(|| numeric(n)),
-        };
+        let ch = NAMED.iter().find(|(k, _)| *k == name).map(|(_, c)| *c).or_else(|| numeric(name));
         match ch {
             Some(c) => {
                 out.push(c);
