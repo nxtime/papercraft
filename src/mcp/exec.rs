@@ -136,7 +136,7 @@ impl<'a> Args<'a> {
         self.str(k)
             .ok_or_else(|| format!("missing required string argument `{k}`"))
     }
-    fn num(&self, k: &str) -> Option<f64> {
+    pub(super) fn num(&self, k: &str) -> Option<f64> {
         self.get(k).and_then(|v| match v {
             Value::Number(n) => n.as_f64(),
             Value::String(s) => s.trim().trim_end_matches("px").parse().ok(),
@@ -153,7 +153,7 @@ impl<'a> Args<'a> {
             .and_then(Value::as_array)
             .ok_or_else(|| format!("missing required array argument `{k}`"))
     }
-    fn strs(&self, k: &str) -> Result<Vec<String>, String> {
+    pub(super) fn strs(&self, k: &str) -> Result<Vec<String>, String> {
         Ok(self
             .arr(k)?
             .iter()
@@ -262,7 +262,7 @@ pub(crate) fn named_layers(ed: &Editor, args: &Value) -> Vec<(usize, NodeId)> {
 }
 
 /// Resolve several ids that must all live on one page.
-fn resolve_all(
+pub(super) fn resolve_all(
     ed: &Editor,
     keys: &[String],
     default_page: usize,
@@ -403,6 +403,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "bind_variable" => bind_variable(ed, &a),
                 "get_strings" => super::strings::get_strings(ed, &a),
                 "set_strings" => super::strings::set_strings(ed, &a),
+                "set_text_style" => super::text_styles::set_text_style(ed, &a),
                 "detach_instance" => detach_instance(ed, &a),
                 "diff_frames" => diff_frames(ed, &a),
                 "search_icons" => search_icons(&a),
@@ -4975,6 +4976,9 @@ fn get_variables(ed: &mut Editor, a: &Args) -> ToolResult {
     let mut v = json!({"variables": vars, "use": "var(--name) in color styles"});
     if !doc.tokens.is_empty() {
         v["tokens"] = json!(doc.tokens);
+    }
+    if !doc.text_styles.is_empty() {
+        v["textStyles"] = super::text_styles::styles_json(doc);
     }
     if !doc.modes.is_empty() {
         v["mode"] = json!(doc.mode);

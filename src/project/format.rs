@@ -8,7 +8,7 @@
 use crate::geom::Camera;
 use crate::variables::{PAGE_TEMPLATE_KEY, PageModes};
 use crate::model::annotation::Annotation;
-use crate::model::{Color, Document, Node, NodeId};
+use crate::model::{Color, Document, Node, NodeId, TypeStyle};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -27,27 +27,36 @@ pub const PROJECT_VERSION: u32 = 3;
 /// Project migrations, indexed by source version: `PROJECT_STEPS[0]` turns v1 into v2. The
 /// manifest itself does not change; the design system is built on load from the pages, and
 /// pages are packed as they are saved.
-const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v, |v| v];
+const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v, |v| v, |v| v];
 /// v1: legacy single file. v2: page file inside a project. v3: fill layers (`fills`).
 /// v4: text can name a font, and layers can carry a link action (URL, back, overlay, close); an
 /// older app would drop either on save, so it must refuse the page.
-/// v5: layers can carry accessibility annotations (`a11y`), which an older app would drop.
-pub const PAGE_VERSION: u32 = 5;
-/// What a page that uses neither is saved as, so a v4 app does not lock older ones out of pages
-/// it merely touched (see [`needs_v4`]).
+/// v5: layers can carry accessibility annotations (`a11y`). v6: named text styles (`text_styles`,
+/// a layer's `style_ref`). An older app would drop either on save.
+pub const PAGE_VERSION: u32 = 6;
+const PAGE_V5: u32 = 5;
+/// What a page that uses nothing newer is saved as, so a newer app does not lock older ones out
+/// of pages it merely touched (see [`page_version`]).
 const PAGE_BASE_VERSION: u32 = 3;
+const PAGE_V4: u32 = 4;
 
 /// Whether a page holds something an older app would drop on save: a named font or a link action.
 fn needs_v4(nodes: &[Node]) -> bool {
     nodes.iter().any(|n| n.text_style.font.is_some() || n.link_action.is_some())
 }
 
+fn needs_v6(doc: &Document) -> bool {
+    !doc.text_styles.is_empty() || doc.nodes.values().any(|n| n.text_style.style_ref.is_some())
+}
+
 /// The version a page is written as: the oldest one that can hold everything in it.
-fn page_version(nodes: &[Node]) -> u32 {
-    if nodes.iter().any(|n| n.a11y.is_some()) {
+fn page_version(doc: &Document, nodes: &[Node]) -> u32 {
+    if needs_v6(doc) {
         PAGE_VERSION
+    } else if nodes.iter().any(|n| n.a11y.is_some()) {
+        PAGE_V5
     } else if needs_v4(nodes) {
-        4
+        PAGE_V4
     } else {
         PAGE_BASE_VERSION
     }
@@ -179,6 +188,8 @@ struct PageFile {
     /// Active mode id per collection id.
     #[serde(default, rename = "collectionModes", skip_serializing_if = "BTreeMap::is_empty")]
     modes_by_collection: BTreeMap<String, String>,
+    #[serde(default, rename = "textStyles", skip_serializing_if = "BTreeMap::is_empty")]
+    text_styles: BTreeMap<String, TypeStyle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     annotations: Vec<Annotation>,
     /// This page's annotation template (overrides the project default).
@@ -187,7 +198,7 @@ struct PageFile {
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
-const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v];
+const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v, |v| v];
 /// Formats accepted as older versions of a page.
 const PAGE_ALIASES: &[&str] = &[LEGACY_FORMAT];
 
@@ -230,7 +241,7 @@ pub fn page_to_json_modes(p: &PageData, modes: &PageModes) -> String {
     nodes.sort_by_key(|n| n.id);
     let f = PageFile {
         format: PAGE_FORMAT.into(),
-        version: page_version(&nodes),
+        version: page_version(&p.doc, &nodes),
         id: p.id.clone(),
         name: p.name.clone(),
         camera: p.camera,
@@ -241,6 +252,7 @@ pub fn page_to_json_modes(p: &PageData, modes: &PageModes) -> String {
         modes: p.doc.modes.clone(),
         mode: p.doc.mode.clone(),
         tokens: p.doc.tokens.clone(),
+        text_styles: p.doc.text_styles.clone(),
         modes_by_collection: modes.iter().filter(|(k, _)| *k != PAGE_TEMPLATE_KEY).map(|(k, v)| (k.clone(), v.clone())).collect(),
         annotations: p.doc.annotations.clone(),
         annotation_template: modes.get(PAGE_TEMPLATE_KEY).cloned(),
@@ -275,7 +287,7 @@ fn is_current_page(s: &str) -> bool {
         version: Option<u32>,
     }
     serde_json::from_str::<Head>(s)
-        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | 4 | PAGE_BASE_VERSION)))
+        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | PAGE_V5 | PAGE_V4 | PAGE_BASE_VERSION)))
 }
 
 fn page_from_file(mut f: PageFile) -> Result<(PageData, PageModes), FormatError> {
@@ -293,6 +305,7 @@ fn page_from_file(mut f: PageFile) -> Result<(PageData, PageModes), FormatError>
         modes: f.modes,
         mode: f.mode,
         tokens: f.tokens,
+        text_styles: f.text_styles,
         annotations: f.annotations,
     };
     doc.validate().map_err(FormatError::Invalid)?;
@@ -492,8 +505,21 @@ mod tests {
         assert!(page_to_json(&p).contains("\"version\":4"));
         p.doc.nodes.get_mut(&NodeId(1)).unwrap().a11y = Some(crate::model::A11y { decorative: true, ..Default::default() });
         let json = page_to_json(&p);
-        assert!(json.contains("\"version\":5"), "accessibility needs the newest version");
+        assert!(json.contains("\"version\":5"), "accessibility needs v5");
         assert!(page_from_json(&json).unwrap().doc.get(NodeId(1)).unwrap().a11y.is_some());
+    }
+
+    #[test]
+    fn text_styles_make_a_v6_page_and_roundtrip() {
+        let plain = r#"{"format":"paper-rs-page","version":4,"id":"a","name":"P","next_id":2,"root":[1],"nodes":[
+            {"id":1,"name":"T","type":"rect","rect":{"x":0,"y":0,"w":5,"h":5}}]}"#;
+        let mut p = page_from_json(plain).unwrap();
+        assert!(page_to_json(&p).contains("\"version\":3"), "no styles: old format");
+        let st = TypeStyle { font_size: 32.0, font: None, bold: true, italic: false, line_height: Some(1.2), letter_spacing: 0.0 };
+        p.doc.text_styles.insert("Heading / L".into(), st.clone());
+        let json = page_to_json(&p);
+        assert!(json.contains("\"version\":6"));
+        assert_eq!(page_from_json(&json).unwrap().doc.text_styles["Heading / L"], st);
     }
 
     #[test]

@@ -43,6 +43,7 @@ pub mod shell;
 pub mod refs;
 pub mod rewrite;
 pub mod strings;
+pub mod text_styles;
 pub mod room;
 pub mod screen_fit;
 #[cfg(not(target_arch = "wasm32"))]
