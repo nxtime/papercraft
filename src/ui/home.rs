@@ -152,78 +152,93 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: 
                 bottom: b,
             })
     };
-    egui::Panel::left("home-sidebar")
-        .resizable(false)
-        .exact_size(252.0 + 2.0 * gap)
-        .frame(if floating {
-            backdrop(gap as i8, gap as i8, gap as i8, gap as i8)
-        } else {
-            egui::Frame::NONE
-                .fill(theme::sidebar_fill(translucent, p))
-                .inner_margin(egui::Margin::symmetric(10, 8))
-        })
-        .show(ui, |ui| {
-            let body = |ui: &mut Ui| {
-                ui.horizontal(|ui| {
-                    super::kit::brand_mark(ui, 30.0);
-                    ui.label(RichText::new("PaperCraft").font(theme::semibold(17.0)));
-                });
-                ui.add_space(14.0);
-                if super::kit::button_wide(
-                    ui,
-                    super::kit::ButtonKind::Primary,
-                    Some(Icon::Plus),
-                    "New design",
-                )
-                .clicked()
-                {
-                    hv.actions.push(HomeAction::New);
-                }
-                ui.add_space(10.0);
-                if sidebar_item(ui, Icon::Grid, "Recents", None, !hv.show_trash) {
-                    hv.show_trash = false;
-                }
-                let n = hv.trash.len();
-                if sidebar_item(
-                    ui,
-                    Icon::Trash,
-                    "Trash",
-                    (n > 0).then(|| n.to_string()),
-                    hv.show_trash,
-                ) {
-                    hv.show_trash = true;
-                }
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    ui.add_space(4.0);
-                    let path = RichText::new(hv.root.display().to_string())
-                        .size(theme::SECONDARY - 1.0)
-                        .color(p.tertiary);
-                    ui.label(path).on_hover_text("Projects folder");
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if sidebar_item(ui, Icon::Restore, "Check for updates", None, false) {
-                        hv.show_updates = true;
-                    }
-                    if sidebar_item(ui, Icon::Page, REVEAL_LABEL, None, false) {
-                        hv.actions.push(HomeAction::RevealRoot);
-                    }
-                });
-            };
-            if floating {
-                super::floating_panel(ui, p.sidebar, egui::Margin::symmetric(14, 14), body);
+    // Under 600 px the sidebar would leave the grid a sliver: its actions move above the grid.
+    let phone = super::phone::is_phone(ui.max_rect().width());
+    if !phone {
+        egui::Panel::left("home-sidebar")
+            .resizable(false)
+            .exact_size(252.0 + 2.0 * gap)
+            .frame(if floating {
+                backdrop(gap as i8, gap as i8, gap as i8, gap as i8)
             } else {
-                let mut body = body;
-                body(ui);
-            }
-        });
+                egui::Frame::NONE
+                    .fill(theme::sidebar_fill(translucent, p))
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+            })
+            .show(ui, |ui| {
+                let body = |ui: &mut Ui| {
+                    ui.horizontal(|ui| {
+                        super::kit::brand_mark(ui, 30.0);
+                        ui.label(RichText::new("PaperCraft").font(theme::semibold(17.0)));
+                    });
+                    ui.add_space(14.0);
+                    if super::kit::button_wide(
+                        ui,
+                        super::kit::ButtonKind::Primary,
+                        Some(Icon::Plus),
+                        "New design",
+                    )
+                    .clicked()
+                    {
+                        hv.actions.push(HomeAction::New);
+                    }
+                    ui.add_space(10.0);
+                    if sidebar_item(ui, Icon::Grid, "Recents", None, !hv.show_trash) {
+                        hv.show_trash = false;
+                    }
+                    let n = hv.trash.len();
+                    if sidebar_item(
+                        ui,
+                        Icon::Trash,
+                        "Trash",
+                        (n > 0).then(|| n.to_string()),
+                        hv.show_trash,
+                    ) {
+                        hv.show_trash = true;
+                    }
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                        ui.add_space(4.0);
+                        let path = RichText::new(hv.root.display().to_string())
+                            .size(theme::SECONDARY - 1.0)
+                            .color(p.tertiary);
+                        ui.label(path).on_hover_text("Projects folder");
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if sidebar_item(ui, Icon::Restore, "Check for updates", None, false) {
+                            hv.show_updates = true;
+                        }
+                        if sidebar_item(ui, Icon::Page, REVEAL_LABEL, None, false) {
+                            hv.actions.push(HomeAction::RevealRoot);
+                        }
+                    });
+                };
+                if floating {
+                    super::floating_panel(ui, p.sidebar, egui::Margin::symmetric(14, 14), body);
+                } else {
+                    let mut body = body;
+                    body(ui);
+                }
+            });
+    }
     egui::CentralPanel::default()
         .frame(if floating {
             backdrop(0, gap as i8, gap as i8, gap as i8)
         } else {
-            egui::Frame::NONE.fill(p.window).inner_margin(egui::Margin::same(20))
+            egui::Frame::NONE
+                .fill(p.window)
+                .inner_margin(egui::Margin::same(20))
         })
         .show(ui, |ui| {
             let body = |ui: &mut Ui| {
-                ui.horizontal(|ui| {
+                if phone {
+                    phone_nav(ui, hv);
+                    ui.add_space(8.0);
+                }
+                let header = if phone {
+                    egui::Layout::top_down(egui::Align::Min)
+                } else {
+                    egui::Layout::left_to_right(egui::Align::Center)
+                };
+                ui.with_layout(header, |ui| {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.label(
@@ -243,10 +258,16 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: 
                             .color(p.secondary),
                         );
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let actions = if phone {
+                        egui::Layout::left_to_right(egui::Align::Center)
+                    } else {
+                        egui::Layout::right_to_left(egui::Align::Center)
+                    };
+                    ui.with_layout(actions, |ui| {
                         if custom_titlebar {
                             let size = egui::vec2(3.0 * super::WIN_BTN_W, super::HOME_WIN_BTN_H);
-                            hv.window_slot = Some(ui.allocate_exact_size(size, egui::Sense::hover()).0);
+                            hv.window_slot =
+                                Some(ui.allocate_exact_size(size, egui::Sense::hover()).0);
                         }
                         if hv.show_trash {
                             ui.add_enabled_ui(!hv.trash.is_empty(), |ui| {
@@ -309,6 +330,31 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: 
         });
     share_dialog(ui, hv);
     removal_dialog(ui.ctx(), hv);
+}
+
+/// The sidebar's brand, New design and the Recents/Trash switch, in a row for a phone.
+fn phone_nav(ui: &mut Ui, hv: &mut HomeView) {
+    ui.horizontal(|ui| {
+        super::kit::brand_mark(ui, 30.0);
+        if super::kit::button(
+            ui,
+            super::kit::ButtonKind::Primary,
+            Some(Icon::Plus),
+            "New design",
+        )
+        .clicked()
+        {
+            hv.actions.push(HomeAction::New);
+        }
+        let (label, to_trash) = if hv.show_trash {
+            ("Recents", false)
+        } else {
+            ("Trash", true)
+        };
+        if super::kit::button(ui, super::kit::ButtonKind::Secondary, None, label).clicked() {
+            hv.show_trash = to_trash;
+        }
+    });
 }
 
 fn removal_dialog(ctx: &egui::Context, hv: &mut HomeView) {
@@ -387,12 +433,14 @@ fn share_dialog(ui: &mut Ui, hv: &mut HomeView) {
             ui.spacing_mut().item_spacing.y = 10.0;
             super::kit::badge(ui, Icon::Export, theme::accent(), 48.0);
             ui.label(RichText::new(title).font(theme::semibold(18.0)));
-            let r = crate::theme::lit(ui, |ui| ui.add(
-                egui::TextEdit::singleline(&mut d.text)
-                    .hint_text(hint)
-                    .desired_width(f32::INFINITY)
-                    .margin(theme::INPUT_MARGIN),
-            ));
+            let r = crate::theme::lit(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut d.text)
+                        .hint_text(hint)
+                        .desired_width(f32::INFINITY)
+                        .margin(theme::INPUT_MARGIN),
+                )
+            });
             if d.dir.is_some() {
                 ui.label(
                     RichText::new("Anyone with the link can open and edit the project.")
@@ -589,11 +637,13 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
         let renaming = hv.renaming.as_ref().is_some_and(|(d, _)| *d == e.dir);
         if renaming {
             let (_, name) = hv.renaming.as_mut().unwrap();
-            let r = crate::theme::lit(ui, |ui| ui.add(
-                egui::TextEdit::singleline(name)
-                    .margin(crate::theme::INPUT_MARGIN)
-                    .desired_width(CARD_W),
-            ));
+            let r = crate::theme::lit(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(name)
+                        .margin(crate::theme::INPUT_MARGIN)
+                        .desired_width(CARD_W),
+                )
+            });
             // Check before taking focus back: `lost_focus` reads the focus as it is now, so
             // requesting it first would hide Enter, Escape and a click elsewhere.
             if r.lost_focus() {
@@ -620,10 +670,12 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let more =
                         theme::icon_button(ui, Icon::More, 20.0, false).on_hover_text("More");
-                    egui::Popup::menu(&more).gap(crate::theme::POPUP_GAP).show(|ui| {
-            crate::theme::popup_backing(ui);
-            card_menu(ui, hv, e)
-        });
+                    egui::Popup::menu(&more)
+                        .gap(crate::theme::POPUP_GAP)
+                        .show(|ui| {
+                            crate::theme::popup_backing(ui);
+                            card_menu(ui, hv, e)
+                        });
                 });
             });
         }
