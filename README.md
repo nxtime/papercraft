@@ -287,7 +287,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 * **Sharing** has no live presence (cursors, selections) yet.
 * **Scale:** cached frames take about 3 ms at 10k visible nodes; it is not tuned for 100k.
 * **Pen pressure** is simulated from stroke velocity on macOS tablets, because winit 0.30 does not expose it for mouse-like pen events.
-* **Releases:** the GitHub releases ship Windows x86_64. macOS (Apple silicon) and Linux x86_64 builds come from the packaging scripts or from source; the Linux build is not part of the current releases.
+* **Releases** cover Windows x64, macOS on Apple silicon and Linux x86_64; other platforms build from source. The Windows downloads are unsigned and the macOS builds are not notarized.
 * **PDF** text is outlined, not selectable.
 
 ## Project layout
