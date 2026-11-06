@@ -66,7 +66,7 @@ Lessons from redesigning a 3-page, 130-screen project with up to six agents at o
 ## 3. Naming
 
 * Layers: `Noun` or `Component / Variant` (`Button / Primary`, `Tab / Today`, `Card / Task`, `Icon / gear`). Slashes group the layers panel.
-* Screens (artboards): the screen's name (`Sign in`, `Task detail`), not `Frame 12`. Add a size suffix only when you have several breakpoints (`Landing / 1440`).
+* Screens (artboards): the screen's name (`Sign in`, `Task detail`), not `Frame 12`. For another width of the same screen, name the frame `<screen> @mobile` or `<screen> @768` (the widest window it applies to) and keep its layer names identical: `export_site` merges it into the same page as media queries.
 * Variables: roles, not hues (`surface`, `text-muted`, `on-accent`), kebab-case.
 * Lint flags default names (`Frame`, `Rectangle`, `Group`) on layers that have children.
 
@@ -138,6 +138,8 @@ Full flows: [recipes.md](references/recipes.md).
 | Report a PaperCraft problem | `report_issue` (a draft the user sends; synthetic repro only) |
 | Check quality | `lint_design` (`changedOnly: true` or `since` between edits, a full pass at the end; `overflow` flags layers past their artboard or clipping parent) |
 | Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf`, `export_presentation` (a client deck: cover, contents, a slide per screen) |
+| Translate | `get_strings` reads a page's text; `set_strings` moves it into a string collection with a mode per language, fills a language or a pseudo-locale; `set_variable_mode` previews it |
+| Start from another tool's page | `import_html` opens an exported `.html` (or `.zip` with its CSS and images) as layers |
 | Publish as a website | `export_site`: ask the person for framework, render and styling first ([export-site.md](references/export-site.md)), then follow its `next_steps` |
 | Point at things for the user | `select_nodes` (`zoom: true`) |
 | Take back | `undo`, `redo` |
