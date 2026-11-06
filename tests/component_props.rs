@@ -257,3 +257,33 @@ fn merging_keeps_a_rows_own_nested_values() {
     assert_eq!(fill_hex(&h, named(&h, row, "Check")), "#0f5132", "the row's checked box stays checked");
     assert!(h.ed.doc.get(named(&h, row, "Mark")).unwrap().visible, "with its mark");
 }
+
+#[test]
+fn a_two_axis_variant_set_combines_axes_and_keeps_overrides_on_swap() {
+    let mut h = host();
+    let mut mains = Vec::new();
+    for (name, bg, radius) in [
+        ("Btn / Size=M, State=default", "#eeeeee", 8),
+        ("Btn / Size=M, State=hover", "#cccccc", 8),
+        ("Btn / Size=L, State=default", "#eeeeee", 16),
+        ("Btn / Size=L, State=hover", "#cccccc", 16),
+    ] {
+        let m = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": "100px", "height": "30px", "display": "flex", "background": bg, "borderRadius": format!("{radius}px")}}));
+        call(&mut h, "write_html", json!({"targetNodeId": m["id"], "html": "<span layer-name=\"Label\" style=\"font-size:12px\">Go</span>"}));
+        mains.push(call(&mut h, "create_component", json!({"nodeId": m["id"]}))["id"].clone());
+    }
+    let screen = call(&mut h, "create_artboard", json!({"name": "S", "styles": {"width": "400px", "height": "60px", "display": "flex"}}));
+    let corner = num(&call(&mut h, "create_instance", json!({"componentId": mains[3], "parentId": screen["id"]}))["id"]);
+    let r = call(&mut h, "merge_variants", json!({"componentIds": mains}));
+    assert_eq!(r["axes"], json!([{"name": "Size", "options": ["M", "L"]}, {"name": "State", "options": ["default", "hover"]}]), "{r}");
+    let n = h.ed.doc.get(corner).unwrap();
+    assert_eq!((n.prop_values["Size"].as_str(), n.prop_values["State"].as_str()), ("L", "hover"));
+    assert_eq!((fill_hex(&h, corner), n.style.corner_radius), ("#cccccc".into(), 16.0));
+    // Another axis value changes only its own look, and a colour override survives.
+    let key = format!("{}:{}", &h.ed.pages[0].id[..6], corner.0);
+    call(&mut h, "set_instance_props", json!({"nodeIds": [key], "values": {"Size": "M"}}));
+    let n = h.ed.doc.get(corner).unwrap();
+    assert_eq!((fill_hex(&h, corner), n.style.corner_radius), ("#cccccc".into(), 8.0));
+    call(&mut h, "set_instance_props", json!({"nodeIds": [key], "values": {"State": "default"}}));
+    assert_eq!(fill_hex(&h, corner), "#eeeeee");
+}

@@ -12,6 +12,7 @@ use crate::model::{
     Align, AutoLayout, BlendMode, Color, Direction, ImageMode, Node, NodeKind, Paint, Sizing, Stop,
     TextAlign,
 };
+use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 /// An ordered list of `(camelCaseProperty, value)` pairs.
@@ -463,10 +464,15 @@ pub fn gradient(s: &str) -> Option<Paint> {
     })
 }
 
-fn gradient_css(p: &Paint) -> Option<String> {
+/// `vars` maps a stop index to the colour variable it follows (`gradient-stop-N` bindings).
+fn gradient_css(p: &Paint, vars: &BTreeMap<usize, String>) -> Option<String> {
     let stops = |s: &[Stop]| {
         s.iter()
-            .map(|s| format!("{} {}%", color_css(s.color), (s.pos * 100.0).round()))
+            .enumerate()
+            .map(|(i, s)| {
+                let c = vars.get(&i).map_or_else(|| color_css(s.color), |v| format!("var(--{v})"));
+                format!("{c} {}%", (s.pos * 100.0).round())
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -1938,18 +1944,26 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
             }
         }
         _ => {
+            let top = n.style.fills.iter().rposition(|p| p.stops().is_some());
+            let stop_vars: BTreeMap<usize, String> = n
+                .bindings
+                .iter()
+                .filter_map(|(f, v)| Some((crate::editor::design::gradient_stop(f)?, v.trim_start_matches("--").to_owned())))
+                .collect();
+            let no_vars = BTreeMap::new();
             let layers: Vec<String> = n
                 .style
                 .fills
                 .iter()
+                .enumerate()
                 .rev()
-                .filter_map(|p| match p {
+                .filter_map(|(i, p)| match p {
                     Paint::Solid { color, var } => Some(
                         var.as_ref()
                             .map_or_else(|| color_css(*color), |v| format!("var(--{v})")),
                     ),
                     Paint::Image { asset, .. } => Some(format!("url(paper-asset://{asset})")),
-                    g => gradient_css(g),
+                    g => gradient_css(g, if Some(i) == top { &stop_vars } else { &no_vars }),
                 })
                 .collect();
             if layers.len() == 1 && matches!(n.style.fills[0], Paint::Solid { .. }) {

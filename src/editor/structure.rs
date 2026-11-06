@@ -22,6 +22,7 @@ pub fn override_key(field: &str) -> &'static str {
         "x" | "y" | "position" => "position",
         "width" | "height" | "size" => "size",
         "fill" | "fills" | "color" | "text-color" => "fills",
+        f if super::design::gradient_stop(f).is_some() => "fills",
         "stroke" | "stroke width" | "stroke align" | "dash" | "cap" | "join" => "stroke",
         "radius" | "radii" => "radius",
         "opacity" | "blend" => "opacity",

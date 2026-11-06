@@ -898,3 +898,7 @@ Call when done creating or editing. Saves the project.
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `nodeIds` | array of string |  | Optional nodes you worked on. |
+
+### `merge_variants` (variant sets)
+
+Variant names of the form `Size=M, State=hover` (component names or `values`) build a variant set: one enum property per axis, each read from the variants that differ from the base in that axis alone, so axes combine additively. `set_instance_props` picks a value per axis; overrides survive the swap. The result lists `axes`.

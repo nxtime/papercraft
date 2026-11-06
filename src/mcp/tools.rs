@@ -1305,7 +1305,7 @@ pub fn definitions() -> Vec<Value> {
              (fills, colours, borders, weight, radius, visibility, icons; texts with includeText) \
              become its option, every instance on every page moves to the base with its value, \
              the base takes the family name and the emptied variants are deleted. A variant with \
-             layers the base lacks is left out (reported).",
+             layers the base lacks is left out (reported). Variant names of the form \"Size=M, State=hover\"              (the same axes in each, via the component names or `values`) build a variant set: one              enum property per axis, read from the variants that differ from the base in that axis              alone (so the others combine additively); set_instance_props picks a value per axis.",
             json!({
                 "componentIds": {"type": "array", "items": {"type": "string"}, "description": "The variants (same page)."},
                 "name": {"type": "string", "description": "The property's name (Active, Status, State)."},
@@ -1348,7 +1348,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "bind_variable",
-            "Bind a field of layers to a variable (or detach it). `field`: stroke, text-color, \
+            "Bind a field of layers to a variable (or detach it). `field`: stroke, text-color,              gradient-stop-N (colour variable for stop N, from 0, of the layer's top gradient fill;              follows modes and exports as var(--x) inside the gradient), \
              width, height, gap, padding, padding-top/right/bottom/left, radius, font-size, \
              line-height, opacity, visible. `variable` is a name like color/brand/primary or its \
              css name; null or omitted detaches (the current value stays). The value applies at \
