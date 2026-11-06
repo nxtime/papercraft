@@ -15,6 +15,7 @@ pub mod snap;
 pub mod structure;
 pub mod text_edit;
 pub mod text_styles;
+mod touch;
 pub mod vector_ops;
 pub mod whiteboard;
 
@@ -262,6 +263,9 @@ pub struct Editor {
     rec: Option<(Recording, Option<String>)>,
     saved_marker: Option<usize>,
     last_click: Option<(V2, f64)>,
+    /// The pointer events being handled come from a finger: handles and thin shapes grow to a
+    /// 44 px target. Set by the shell around touch input only.
+    pub touch: bool,
     /// Bumps on every document or view change; drives repaints.
     pub revision: u64,
     /// Process-unique stamp of the document content: changes whenever the document may
@@ -378,6 +382,7 @@ impl Editor {
             rec: None,
             saved_marker: Some(0),
             last_click: None,
+            touch: false,
             revision: 0,
             doc_stamp: next_stamp(),
             change_log: Default::default(),
@@ -984,7 +989,7 @@ impl Editor {
                 self.erase_at(world);
             }
             Tool::Text => {
-                if let Some(id) = hit::hit_test(&self.doc, world, self.camera.zoom)
+                if let Some(id) = self.hit_at(world)
                     .filter(|id| self.doc.get(*id).unwrap().kind.text().is_some())
                 {
                     self.start_text_edit(id, Some(world));
@@ -1028,7 +1033,7 @@ impl Editor {
             Tool::Sticky => self.sticky_down(world),
             Tool::Annotate => {
                 self.end_text_edit();
-                if let Some(id) = hit::hit_test(&self.doc, world, self.camera.zoom) {
+                if let Some(id) = self.hit_at(world) {
                     self.selection = vec![id];
                     self.ui_events.push(commands::UiEvent::Annotate(id));
                 }
@@ -1139,7 +1144,7 @@ impl Editor {
             && let Some(b) = self.selection_bounds()
         {
             let bs = self.camera.world_rect_to_screen(&b);
-            if let Some(handle) = hit::handle_at(&bs, pos) {
+            if let Some(handle) = hit::handle_at_radius(&bs, pos, self.handle_radius()) {
                 let origins = self.top_selection_world();
                 if !origins.is_empty() {
                     self.begin("Resize");
@@ -1174,7 +1179,7 @@ impl Editor {
             };
             return;
         }
-        let hit = hit::hit_test(&self.doc, world, self.camera.zoom);
+        let hit = self.hit_at(world);
         // Editing text: clicks inside the text move the caret.
         if let (Some(te), Some(h)) = (&self.text_edit, hit)
             && te.id == h

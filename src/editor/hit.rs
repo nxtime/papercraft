@@ -7,6 +7,8 @@ use crate::render::draw;
 
 /// Tolerance for thin geometry, in screen pixels.
 const HIT_SLOP_PX: f64 = 4.0;
+/// Grab radius of a resize handle, in screen pixels.
+const HANDLE_RADIUS_PX: f64 = 7.0;
 
 /// Whether `p` (world) is inside the clip regions of all of the node's ancestors.
 pub fn inside_ancestor_clips(doc: &Document, id: NodeId, p: V2) -> bool {
@@ -19,11 +21,16 @@ pub fn inside_ancestor_clips(doc: &Document, id: NodeId, p: V2) -> bool {
 
 /// Shape test for a single node, ignoring children and clipping.
 pub fn node_contains(doc: &Document, id: NodeId, p: V2, zoom: f64) -> bool {
+    node_contains_slop(doc, id, p, zoom, HIT_SLOP_PX)
+}
+
+/// [`node_contains`] with the tolerance for thin geometry given in screen px (a finger needs more).
+pub fn node_contains_slop(doc: &Document, id: NodeId, p: V2, zoom: f64, slop_px: f64) -> bool {
     let Some(n) = doc.get(id) else { return false };
     let Some(r) = doc.world_rect(id) else {
         return false;
     };
-    let slop = HIT_SLOP_PX / zoom;
+    let slop = slop_px / zoom;
     match &n.kind {
         NodeKind::Frame { .. } | NodeKind::Rect | NodeKind::Text { .. } => r.contains(p),
         NodeKind::Group => false,
@@ -72,7 +79,12 @@ pub fn node_contains(doc: &Document, id: NodeId, p: V2, zoom: f64) -> bool {
 /// into subtrees that can hold the hit: hidden and locked subtrees are skipped whole, and so
 /// are clipping frames that do not contain `p`.
 pub fn hit_test(doc: &Document, p: V2, zoom: f64) -> Option<NodeId> {
-    fn walk(doc: &Document, ids: &[NodeId], p: V2, zoom: f64) -> Option<NodeId> {
+    hit_test_slop(doc, p, zoom, HIT_SLOP_PX)
+}
+
+/// [`hit_test`] with the tolerance for thin geometry given in screen px.
+pub fn hit_test_slop(doc: &Document, p: V2, zoom: f64, slop_px: f64) -> Option<NodeId> {
+    fn walk(doc: &Document, ids: &[NodeId], p: V2, zoom: f64, slop_px: f64) -> Option<NodeId> {
         for &id in ids.iter().rev() {
             let Some(n) = doc.get(id) else { continue };
             if !n.visible || n.locked {
@@ -83,16 +95,16 @@ pub fn hit_test(doc: &Document, p: V2, zoom: f64) -> Option<NodeId> {
             {
                 continue;
             }
-            if let Some(hit) = walk(doc, &n.children, p, zoom) {
+            if let Some(hit) = walk(doc, &n.children, p, zoom, slop_px) {
                 return Some(hit);
             }
-            if node_contains(doc, id, p, zoom) {
+            if node_contains_slop(doc, id, p, zoom, slop_px) {
                 return Some(id);
             }
         }
         None
     }
-    walk(doc, &doc.root, p, zoom)
+    walk(doc, &doc.root, p, zoom, slop_px)
 }
 
 /// Screen-space rectangle of a top-level frame's name label.
@@ -107,7 +119,12 @@ pub fn frame_label_rect(frame_screen: &Rect, name_width_px: f64) -> Rect {
 
 /// Which of the 8 resize handles (fractions of the bounds) is under the screen point.
 pub fn handle_at(bounds_screen: &Rect, p: V2) -> Option<(f64, f64)> {
-    const R: f64 = 7.0;
+    handle_at_radius(bounds_screen, p, HANDLE_RADIUS_PX)
+}
+
+/// [`handle_at`] with the grab radius given in screen px (a finger needs 22 for a 44 px target).
+pub fn handle_at_radius(bounds_screen: &Rect, p: V2, radius: f64) -> Option<(f64, f64)> {
+    let r = radius;
     let mut best: Option<((f64, f64), f64)> = None;
     for (hx, hy) in HANDLES {
         let hp = v2(
@@ -119,7 +136,7 @@ pub fn handle_at(bounds_screen: &Rect, p: V2) -> Option<(f64, f64)> {
         if (hx == 0.5 || hy == 0.5) && bounds_screen.w.min(bounds_screen.h) < 24.0 {
             continue;
         }
-        if d <= R && best.is_none_or(|(_, bd)| d < bd) {
+        if d <= r && best.is_none_or(|(_, bd)| d < bd) {
             best = Some(((hx, hy), d));
         }
     }
