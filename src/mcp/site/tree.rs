@@ -156,7 +156,11 @@ fn describe(doc: &Document, f: &Frame) -> String {
 struct Cx {
     in_link: bool,
     in_button: bool,
+    /// Landmark tags of the ancestors, one bit each (`LANDMARKS`): a landmark never nests in itself.
+    landmarks: u8,
 }
+
+const LANDMARKS: [&str; 4] = ["header", "nav", "footer", "aside"];
 
 /// A narrower frame of the page being walked.
 struct Bp {
@@ -395,6 +399,7 @@ impl<'a> Walk<'a> {
         let inner = Cx {
             in_link: cx.in_link || link.is_some(),
             in_button: cx.in_button || button,
+            landmarks: cx.landmarks,
         };
         let mut el = self.element(id, n, inner, is_root, link.is_some() && button)?;
         let mut out = match link {
@@ -545,7 +550,12 @@ impl<'a> Walk<'a> {
                 {
                     "button"
                 }
-                Some(t @ ("header" | "nav" | "footer" | "section" | "aside")) => t,
+                Some(t @ ("header" | "nav" | "footer" | "section" | "aside")) => {
+                    match LANDMARKS.iter().position(|l| *l == t) {
+                        Some(bit) if cx.landmarks & (1 << bit) != 0 => "div",
+                        _ => t,
+                    }
+                }
                 Some("main") => "section",
                 _ => "div",
             }
@@ -561,8 +571,12 @@ impl<'a> Walk<'a> {
             el.attrs.push(("role".into(), r.into()));
         }
         self.style(&mut el, id, n, is_root, false);
+        let mut inner = cx;
+        if let Some(bit) = LANDMARKS.iter().position(|l| *l == tag) {
+            inner.landmarks |= 1 << bit;
+        }
         for c in self.reading_order(n) {
-            if let Some(child) = self.node(c, cx, false) {
+            if let Some(child) = self.node(c, inner, false) {
                 el.children.push(Child::El(child));
             }
         }
