@@ -10,3 +10,4 @@ web/pkg/
 .export-panels.tmp.pc
 .design-work/
 tools/showcase/*.log
+web/icons/
