@@ -1433,6 +1433,20 @@ fn text_align_name(a: TextAlign) -> &'static str {
     }
 }
 
+/// A node's fills as JSON; the top gradient's bound stops (`gradient-stop-N`) carry their variable.
+fn fills_json(doc: &Document, n: &Node) -> Vec<Value> {
+    let mut fills: Vec<Value> = n.style.fills.iter().map(|f| paint_json(doc, f)).collect();
+    if let Some(top) = n.style.fills.iter().rposition(|p| p.stops().is_some()) {
+        for (field, v) in &n.bindings {
+            let Some(i) = crate::editor::design::gradient_stop(field) else { continue };
+            if let Some(stop) = fills[top]["stops"].get_mut(i) {
+                stop["var"] = json!(format!("--{}", v.trim_start_matches("--")));
+            }
+        }
+    }
+    fills
+}
+
 /// One fill layer as JSON: solid colours keep their variable, gradients keep their stops, images their asset.
 fn paint_json(doc: &Document, p: &Paint) -> Value {
     let _ = doc;
@@ -1741,7 +1755,7 @@ fn build_spec_tree(
     let mut style = json!({
         "fill": fill_hex,
         "fillVar": fill_var,
-        "fills": n.style.fills.iter().map(|f| paint_json(doc, f)).collect::<Vec<_>>(),
+        "fills": fills_json(doc, n),
         "stroke": stroke.map(|c| c.to_hex()),
         // A bound stroke (`bind_variable` field `stroke`) is written as its variable, like fills.
         "strokeVar": stroke.and(n.bindings.get("stroke")).map(|v| format!("--{}", v.trim_start_matches("--"))),
@@ -2151,6 +2165,9 @@ fn collect_tokens(n: &Value, used: &mut std::collections::BTreeSet<String>) {
     }
     for f in n["style"]["fills"].as_array().into_iter().flatten() {
         add(&f["var"]);
+        for st in f["stops"].as_array().into_iter().flatten() {
+            add(&st["var"]);
+        }
     }
     add(&n["style"]["fillVar"]);
     add(&n["style"]["strokeVar"]);

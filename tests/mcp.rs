@@ -2358,4 +2358,27 @@ fn site_breakpoints_work_in_tailwind_and_are_skipped_with_a_warning_in_css_in_js
     assert!(all.contains("@media (max-width: 390px)") && all.contains("class=\"text-[20px]") || all.contains("@media (max-width: 390px)"), "{all}");
     let (_, r) = breakpoint_site(json!({"framework": "react", "styling": "emotion"}));
     assert!(r["warnings"].to_string().contains("CSS-in-JS"), "{r}");
+
+#[test]
+fn a_gradient_stop_bound_to_a_colour_variable_follows_the_mode_and_exports_as_var() {
+    let mut h = host();
+    let ab = call(&mut h, "create_artboard", json!({"name": "Hero", "styles": {"width": "200px", "height": "100px", "background": "linear-gradient(180deg, #ff0000, #0000ff)"}}));
+    call(&mut h, "set_variables", json!({"mode": "Light", "variables": {"brand": "#112233"}}));
+    call(&mut h, "set_variables", json!({"mode": "Dark", "variables": {"brand": "#aabbcc"}}));
+    call(&mut h, "set_variable_mode", json!({"mode": "Light"}));
+    let id = num(&ab["id"]);
+    let e = exec::call(&mut h, "bind_variable", &json!({"nodeIds": [ab["id"]], "field": "gradient-stop-5", "variable": "brand"})).unwrap_err();
+    assert!(e.contains("does not apply"), "{e}");
+    call(&mut h, "bind_variable", json!({"nodeIds": [ab["id"]], "field": "gradient-stop-1", "variable": "brand"}));
+    let stop = |h: &exec::SessionHost| h.ed.doc.get(id).unwrap().style.fills[0].stops().unwrap()[1].color.to_hex();
+    assert_eq!(stop(&h), "#112233");
+    call(&mut h, "set_variable_mode", json!({"mode": "Dark"}));
+    assert_eq!(stop(&h), "#aabbcc");
+    let styles = call(&mut h, "get_computed_styles", json!({"nodeIds": [ab["id"]]}));
+    let bg = styles[ab["id"].as_str().unwrap()]["background"].as_str().unwrap().to_owned();
+    assert!(bg.contains("var(--brand"), "{bg}");
+    // Detaching keeps the current colour and exports it fixed again.
+    call(&mut h, "bind_variable", json!({"nodeIds": [ab["id"]], "field": "gradient-stop-1"}));
+    call(&mut h, "set_variable_mode", json!({"mode": "Light"}));
+    assert_eq!(stop(&h), "#aabbcc");
 }

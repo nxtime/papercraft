@@ -10,7 +10,7 @@
 //! `Editor::design` without pushing history, so design and caches cannot disagree.
 
 use super::Editor;
-use crate::model::{Color, Node, NodeId, NodeKind};
+use crate::model::{Color, Node, NodeId, NodeKind, Paint};
 use crate::variables::{
     self, COLORS_COLLECTION, DEFAULT_MODE, DesignSystem, Error, Kind, PageModes, TOKENS_COLLECTION,
     Value,
@@ -304,6 +304,11 @@ impl Editor {
                 | "padding-left" => n.layout.is_some(),
                 "font-size" | "line-height" | "text-color" => n.kind.font_size().is_some(),
                 "text" => n.kind.text().is_some(),
+                f if gradient_stop(f).is_some() => {
+                    let i = gradient_stop(f).unwrap_or(0);
+                    let mut probe = n.clone();
+                    top_stops_mut(&mut probe).is_some_and(|s| i < s.len())
+                }
                 _ => true,
             };
             if want.is_some() && !ok {
@@ -380,8 +385,22 @@ fn css_renames(before: &DesignSystem, next: &DesignSystem) -> BTreeMap<String, S
 // ------------------------------------------------------------------ field bindings
 
 /// The variable kind a bindable field takes, or None for an unknown field.
+/// `gradient-stop-2`: the third colour stop of the node's top gradient fill.
+pub fn gradient_stop(field: &str) -> Option<usize> {
+    field.strip_prefix("gradient-stop-")?.parse().ok()
+}
+
+/// The stops of the top gradient fill (the one that shows over the others).
+fn top_stops_mut(n: &mut Node) -> Option<&mut Vec<crate::model::Stop>> {
+    n.style.fills.iter_mut().rev().find_map(|p| match p {
+        Paint::Linear { stops, .. } | Paint::Radial { stops, .. } => Some(stops),
+        _ => None,
+    })
+}
+
 fn field_kind(field: &str) -> Option<Kind> {
     Some(match field {
+        f if gradient_stop(f).is_some() => Kind::Color,
         "stroke" | "text-color" => Kind::Color,
         "width" | "height" | "gap" | "padding" | "padding-top" | "padding-right"
         | "padding-bottom" | "padding-left" | "radius" | "font-size" | "line-height"
@@ -423,6 +442,14 @@ fn set_bound_text(n: &mut Node, new: &str) {
 /// Set `field` of `n` from variable `name` in `cache`. An unresolved variable leaves the value.
 fn apply_field(n: &mut Node, field: &str, name: &str, cache: &variables::Cache) {
     match field {
+        f if gradient_stop(f).is_some() => {
+            let i = gradient_stop(f).unwrap_or(0);
+            if let Some(c) = cache.variables.get(name)
+                && let Some(s) = top_stops_mut(n).and_then(|s| s.get_mut(i))
+            {
+                s.color = *c;
+            }
+        }
         "stroke" => {
             if let Some(c) = cache.variables.get(name) {
                 n.style.stroke = Some(*c);
