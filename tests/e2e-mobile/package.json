@@ -1,0 +1,13 @@
+{
+  "name": "papercraft-e2e-mobile",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:phone": "PAPERCRAFT_E2E_PHONE=1 playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "pngjs": "7.0.0"
+  }
+}
