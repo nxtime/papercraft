@@ -1998,6 +1998,13 @@ fn site_headings_of_identical_siblings_share_a_level_and_prices_are_not_headings
 }
 
 #[test]
+fn site_a_landmark_is_not_inferred_inside_the_same_landmark() {
+    let page = site_page_of("<div layer-name=\"Nav\" style=\"display:flex\"><p layer-name=\"Nav home\" style=\"font-size:14px\">Home</p></div><div layer-name=\"Footer\" style=\"display:flex\"><div layer-name=\"Footer links\" style=\"display:flex\"><p style=\"font-size:14px\">Docs</p></div></div>");
+    assert_eq!(page.matches("<nav").count(), 1, "{page}");
+    assert_eq!(page.matches("<footer").count(), 1, "{page}");
+}
+
+#[test]
 fn site_tailwind_packages_are_pinned_to_an_exact_version_in_every_framework() {
     let (mut h, _) = two_frame_site();
     for (framework, render) in [("html", "static"), ("react", "static"), ("react", "spa"), ("vue", "static"), ("vue", "spa"), ("angular", "static"), ("astro", "static")] {
