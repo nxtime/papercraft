@@ -266,7 +266,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 ## Status and known limits
 
 > [!IMPORTANT]
-> PaperCraft is an alpha (0.9.x). It is used daily on Windows, macOS and Linux, and its project format migrates forward, but expect rough edges. [ROADMAP.md](ROADMAP.md) lists what is missing, in priority order; [PROGRESS.md](PROGRESS.md) is the milestone history.
+> PaperCraft is an alpha (0.10.x). It is used daily on Windows, macOS and Linux, and its project format migrates forward, but expect rough edges. [ROADMAP.md](ROADMAP.md) lists what is missing, in priority order; [PROGRESS.md](PROGRESS.md) is the milestone history.
 
 **What works today:** local projects with pages and an infinite canvas; vector, text, auto layout, constraints, components with properties and variants, variables with modes, shared libraries and screens; annotations, lint and Present mode with prototype links; PNG, SVG and PDF export, Figma, Excalidraw and SVG import; the MCP server, CLI (online and offline) and in-app Chat mode; versions, agent runs with review and revert; optional relay sync.
 
