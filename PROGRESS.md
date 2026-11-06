@@ -76,6 +76,15 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-11-06: 0.10.0 (websites, languages, Present mode, safety)
+
+* `export_site` turns frames into a website in one call: plain HTML, Astro, Vue (Nuxt or Vite), React (Next or Vite) or Angular; css, scss or tailwind, and vanilla-extract, styled-components or emotion for React; static pages or a single-page app; a folder per language. Fonts are subset to WOFF2 with metric-matched fallbacks, pages reflow below the designed width, and the host files cache hashed assets for a year.
+* Languages as variable modes: `get_strings` reads a page's text for translation, `set_strings` fills a language or a pseudo-locale.
+* Present mode plays a page's frames as a clickable prototype: links jump to frames, open overlays, go back or open an address.
+* `get_context` orients an agent in one call and big reads take `maxTokens`; `import_html` opens pages from prompt-to-design tools; `install_font` adds fonts on top of Inter. 104 tools.
+* Safety: agent paths are checked, `delegate` and `imagegen` never pass values as shell syntax, a panic in a tool fails only that call, sync no longer overwrites a page saved mid-download and repairs merged trees, share tokens come from the OS generator, imports have a memory cap, and the updater checks the published SHA-256.
+* Panics are kept in `crash.log`; Settings > Canvas persists; a keyboard shortcuts sheet.
+
 ### 2026-10-28: overflow lint rule and `get_bounds`
 
 * `lint_design` has an `overflow` rule (`src/mcp/lint_overflow.rs`): layers past their artboard or clipping parent, and text taller than its box. Scrolling frames and what is pinned in them are exempt; it is never auto-fixed. It is a pure function over a node set, so a scope filter can pass any subset.
