@@ -290,10 +290,10 @@ impl<'a> Walk<'a> {
                 .collect();
             only_there.sort();
             if !bp.hidden.is_empty() {
-                self.warnings.push(format!("{} / {name}: {} of the widest frame are missing here and are hidden at {}px and below ({})", f.name, bp.hidden.len(), bp.max, breakpoints::name_list(&bp.hidden)));
+                self.warnings.push(format!("{} / {name}: {} layer(s) of the widest frame are missing here and are hidden at {}px and below ({})", f.name, bp.hidden.len(), bp.max, breakpoints::name_list(&bp.hidden)));
             }
             if !only_there.is_empty() {
-                self.warnings.push(format!("{} / {name}: {} exist only in this frame and are left out ({}); add them to the widest frame to show them", f.name, only_there.len(), breakpoints::name_list(&only_there)));
+                self.warnings.push(format!("{} / {name}: {} layer(s) exist only in this frame and are left out ({}); add them to the widest frame to show them", f.name, only_there.len(), breakpoints::name_list(&only_there)));
             }
         }
     }
