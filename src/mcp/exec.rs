@@ -6367,7 +6367,7 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
     let mut record = |key: String, prop: &str, at: usize, v: Value| {
         tbl.entry((key, prop.to_owned())).or_insert_with(|| vec![Value::Null; n])[at] = v;
     };
-    for (at, (_, id)) in subset.iter().map(|&k| kept[k]).enumerate().map(|(a, k)| (a, k)) {
+    for (at, (_, id)) in subset.iter().map(|&k| kept[k]).enumerate() {
         let id = &id;
         let paths = variant_paths(&doc, *id);
         let mut pairs: Vec<(String, NodeId, Option<NodeId>)> = vec![("$root".into(), base, Some(*id))];

@@ -64,7 +64,7 @@ pub fn group(doc: &Document, ids: Vec<NodeId>) -> (Vec<(NodeId, Vec<Variant>)>, 
         groups[g].1.push((id, max));
     }
     for g in &mut groups {
-        g.1.sort_by(|a, b| b.1.cmp(&a.1));
+        g.1.sort_by_key(|b| std::cmp::Reverse(b.1));
     }
     (groups, warnings)
 }
