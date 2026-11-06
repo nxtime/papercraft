@@ -1963,6 +1963,33 @@ fn site_scss_and_tailwind_write_sources_a_package_json_and_next_steps() {
     }
 }
 
+/// Exports one artboard filled with `markup` as html and returns its page.
+fn site_page_of(markup: &str) -> String {
+    let mut h = host();
+    let board = call(&mut h, "create_artboard", json!({"name": "Home", "styles": {"width": "1200px", "height": "900px"}}));
+    call(&mut h, "write_html", json!({"targetNodeId": board["id"], "mode": "insert-children", "html": markup}));
+    let dir = site_out();
+    call(&mut h, "export_site", json!({"path": dir}));
+    let files = read_site(&dir);
+    let page = format!("{}
+{}", site_text(&files, "index.html"), site_text(&files, &stylesheet(&files)));
+    std::fs::remove_dir_all(&dir).unwrap();
+    page
+}
+
+#[test]
+fn site_headings_of_identical_siblings_share_a_level_and_prices_are_not_headings() {
+    let q = |t: &str| format!("<div style=\"display:flex;flex-direction:column\"><p style=\"font-size:20px;font-weight:700\">{t}</p><p style=\"font-size:16px\">An answer that reads like a sentence of copy.</p></div>");
+    let page = site_page_of(&format!(
+        "<div><p style=\"font-size:48px;font-weight:700\">Title</p></div><div><p style=\"font-size:40px\">Questions</p></div>{}{}{}{}<p style=\"font-size:32px\">$29</p><p style=\"font-size:32px\">R$ 49/mês</p>",
+        q("One?"), q("Two?"), q("Three?"), q("Four?")
+    ));
+    for t in ["One?", "Two?", "Three?", "Four?"] {
+        assert!(page.contains(&format!(">{t}</h3>")), "{t} in {page}");
+    }
+    assert!(!page.contains(">$29</h") && !page.contains(">R$ 49/mês</h"), "{page}");
+}
+
 #[test]
 fn site_tailwind_packages_are_pinned_to_an_exact_version_in_every_framework() {
     let (mut h, _) = two_frame_site();
