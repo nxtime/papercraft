@@ -123,7 +123,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Tokens | `get_variables` (`format` css, json or tailwind), `set_variables` (`collection`, `type`, `mode`, `alias`), `create_collection`, `delete_variables`, `set_variable_mode`, `bind_variable` |
 | Reuse | `create_component`, `create_instance`, `swap_instance` (also a nested badge inside a row instance: a swap that survives main edits), `get_components`, `<x-paper-instance>` |
 | Component properties | One component with properties instead of one per state: `set_component_props` (`text`, `bool`, `icon`, `enum` options in the overrides format; templates `text`, `active` for tab bars and navs, `status` with [{value, color}]), then `set_instance_props {nodeIds, values}` or `<x-paper-instance component="Badge" props='{"Status":"Rejeitada"}'/>`; `get_components` lists them |
-| Merge per-state components | `merge_variants {componentIds, name}` turns `Tab bar / Hoje`, `Tab bar / Lojas`... into one `Tab bar` with an enum, moves every instance and deletes the emptied variants |
+| Merge per-state components | `merge_variants {componentIds, name}` turns `Tab bar / Hoje`, `Tab bar / Lojas`... into one `Tab bar` with an enum, moves every instance and deletes the emptied variants. Names like `Button / Size=M, State=hover` make one enum per axis (Size, State); `set_instance_props` then picks a value per axis |
 | Prototype | `set_prototype_links {links:[{nodeId, to}]}`: back arrows, rows and tabs go to their screens in Present mode; or one of `overlay` (frame opened as a dimmed, scrollable overlay), `url` (https, http, mailto, tel), `action` `back` / `close` |
 | Screens | Fixed size (390x844, 1440x900...); content longer than the screen scrolls by itself (the main column under a fixed sidebar and header, else the screen), or set `overflow: auto` on the frame that should scroll; it keeps its size and the overflow scrolls on the canvas and in Present (inspector: Scroll overflow; page: Screens scroll) |
 | Project | `rename_file {name}` (open project stays open), `move_nodes {toPageId}` keeps instances linked and notes attached |
@@ -137,6 +137,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Design rules (design-playbook) | `design_rules` (`query` or `rule` id; needs the `playbook` CLI; cite ids in the report) |
 | Report a PaperCraft problem | `report_issue` (a draft the user sends; synthetic repro only) |
 | Check quality | `lint_design` (`changedOnly: true` or `since` between edits, a full pass at the end; `overflow` flags layers past their artboard or clipping parent) |
+| Accessibility | `set_accessibility {items:[{nodeId, alt, decorative, role, level, order}]}` on images, icon buttons, headings and nav; `lint_design` then checks `image-alt`, `interactive-name`, `heading-skip` and `reading-order`, and `export_site` uses them |
 | Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf`, `export_presentation` (a client deck: cover, contents, a slide per screen) |
 | Translate | `get_strings` reads a page's text; `set_strings` moves it into a string collection with a mode per language, fills a language or a pseudo-locale; `set_variable_mode` previews it |
 | Start from another tool's page | `import_html` opens an exported `.html` (or `.zip` with its CSS and images) as layers |
@@ -152,8 +153,8 @@ Full flows: [recipes.md](references/recipes.md).
 * **No margin, grid or tables; no shadows, filters or transforms** (reported under `ignoredStyles`). Fake elevation with a border or a lighter surface.
 * **No rotation.** Nodes are axis-aligned.
 * **Components work across pages**: `create_instance` takes a main from any page or enabled library (`componentId` or `componentKey` from `get_components`) and follows later edits. To share with other projects, `publish_library` there and `enable_library` here; `update_library` pulls a newer publish.
-* **No variants or properties**: one component per variant (`Button / Primary`, `Button / Secondary`). `swap_instance` and `detach_instance` exist.
-* **Remote images are not fetched.** Use a local path or `data:` URI.
+* **Variants** are enum properties on one main component (`merge_variants`, one enum per axis). Each axis needs at least two variants that differ from the base in that axis alone; a corner variant (`L` + `hover`) is assumed to be the sum of its axes.
+* **Remote images**: `write_html` fetches public http(s) PNG, JPEG, GIF or WebP (up to 10 MB; private and local addresses are refused). A failed fetch is a warning, not an error: check `warnings`.
 * **One project open at a time**; moving layers between pages is not supported.
 * **Text boxes with fixed widths can wrap earlier than in a browser.** Check headlines in the screenshot and widen.
 * **Instances are skipped by lint**; lint the main component.
@@ -161,7 +162,7 @@ Full flows: [recipes.md](references/recipes.md).
 * **An instance keeps the size of its main.** Overriding text with a longer string clips it (a `Saved` chip made from a `Chip` main loses its right padding; a `Share` button from a wider/narrower main sits off-centre). After `set_text_content` on instance text, `update_styles {width:"fit-content"}` on the instance root and on its text layers, or pass `style="width:fit-content;justify-content:center"` on `<x-paper-instance>`.
 * **Text inside nested frames**: `set_text_content` needs the Text node id. Walk `get_children` down from the instance; instances copy the main's structure (`Meta > Label`, not a flat list).
 * **No icon-colour follow for stroke sets** (Lucide, Tabler): the colour is frozen at write time, so a mode switch (Mocha to Latte) leaves icons as they were. Use a fill set (Phosphor, Material) when a design must switch modes.
-* **Pages**: `create_page`, `rename_pages`, `delete_pages` (needs `confirm: true` when the page has layers; the last page stays). `move_nodes` accepts `toPageId` to copy between pages.
+* **Pages**: `create_page`, `rename_pages`, `delete_pages` (needs `confirm: true` when the page has layers; the last page stays). `move_nodes` accepts `toPageId` to move between pages: links and connectors among the moved layers follow them, references across pages are cleared (listed in `warnings`), and undo is one step per page.
 * **`get_screenshot` of `root` on a wide page** is scaled to fit and unreadable. Screenshot one artboard (or one screen slot) at a time. Hoisted components are not inside an artboard screenshot.
 * **CLI saves images to the cwd** as `<tool>.png`, or to `-o FILE`. The CLI writes the file itself; on older builds an `out` path made the app write it and could freeze the app behind a macOS privacy prompt, so update the CLI with the app (`tools/install-local.sh` installs both).
 * **`swap_instance` renames the instance root to the new main's name** unless the name was overridden. Re-apply custom layer names after a batch swap (`rename_nodes`).
@@ -175,7 +176,7 @@ Full flows: [recipes.md](references/recipes.md).
 | `write_html` reports `ignoredStyles` | You used a CSS property that has no equivalent (`margin`, `box-shadow`, `transform`...). Replace it, see [html-subset.md](references/html-subset.md). |
 | Content is cut off | A frame inside the screen clips it (`overflow: hidden`, or a fixed height under a hugging parent). Give the column that should scroll `overflow: auto`; for a board that should grow, `overflow: "visible"` and `height: "fit-content"`. |
 | Tempted to show a second theme next to the first | Don't copy the artboards. Give the variables a value in each mode and switch with `set_variable_mode`; screenshot one mode, switch, screenshot again. |
-| A color did not change with the theme | It was written as hex, or it is a stroke or gradient. Use `var(--name)` on fills and text; strokes need `update_styles` after a mode switch. |
+| A color did not change with the theme | It was written as hex. Use `var(--name)` on fills and text; bind strokes and gradient stops with `bind_variable` (`field: "stroke"`, `"gradient-stop-N"`). |
 | `create_instance` fails | Wrong `componentId` / `componentKey` (read `get_components`). Mains on other pages and enabled libraries work; no import needed. |
 | A page is full of copied components at y=0 | Something imported mains onto the page (`import_components`, or old `write_html` builds). Swap their instances to the design-system mains (`swap_instance {componentKey}`), check a screenshot, then delete the unused copies. |
 | `papercraft-cli --online` says "did not answer in time" | The app is blocked: look for a macOS dialog or an in-app modal and ask the user to answer it. Don't retry in a loop and don't restart the app. |

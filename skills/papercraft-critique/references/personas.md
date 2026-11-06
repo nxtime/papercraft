@@ -93,6 +93,9 @@ Per screen and component, pass, fail or n/a:
 **Robust**
 * Controls are named for their role (layer names, code links to real components), so the code
   hand-off keeps them buttons and inputs, not divs.
+* Images have alt text or are marked decorative, icon buttons have a name, heading levels do not
+  skip, and the reading order matches the visual one. Evidence: `lint_design` rules `image-alt`,
+  `interactive-name`, `heading-skip`, `reading-order`; the fix is `set_accessibility`.
 
 ## copy
 
