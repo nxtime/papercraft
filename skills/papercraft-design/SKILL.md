@@ -91,7 +91,7 @@ Sizes: **12, 14, 16, 20, 24, 32, 40, 48, 64.** `lint_design` flags anything else
   * Error: message under the field in `danger`, with an icon or text, not color alone.
   * Loading: skeleton blocks in `surface-2` in the shape of the content.
 * Variants are separate components in PaperCraft (`Button / Primary`, `Button / Disabled`); keep the names parallel so they sort together.
-* Keep a design-system page (swatches from the variables, the type scale, every component with its states). See the recipe in the `papercraft` skill.
+* Keep a design-system page (swatches from the variables, the type scale as text styles, every component with its states). See the recipe in the `papercraft` skill.
 
 ## 8. Naming
 
