@@ -2392,7 +2392,7 @@ fn breakpoint_site(extra: Value) -> (std::collections::BTreeMap<String, Vec<u8>>
 
 fn breakpoint_site_of(frames: &[(&str, &str, &str, &str)], extra: Value) -> (std::collections::BTreeMap<String, Vec<u8>>, Value) {
     let mut h = host();
-    for (name, width, left, html) in frames.iter().copied() {
+    for &(name, width, left, html) in frames {
         let ab = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": width, "height": "600px", "left": left}}));
         call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": html}));
     }
