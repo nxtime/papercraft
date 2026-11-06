@@ -116,7 +116,8 @@ pub fn start(cfg: &TurnConfig, program: &Path, args: &[String], env: &[(String, 
 fn spawn(cfg: &TurnConfig, program: &Path, args: &[String], env: &[(String, String)], prompt: &str, tx: Sender<Event>, bridge: Option<PathBuf>) -> Result<AcpTurn, String> {
     let mut cmd = Command::new(program);
     crate::chat::path::no_window(&mut cmd).args(args).envs(env.iter().cloned()).current_dir(&cfg.project_dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    for k in CREDENTIAL_ENV {
+    // A hosted turn runs on the server's provider keys, which a desktop turn never inherits.
+    for k in CREDENTIAL_ENV.iter().filter(|_| !cfg.hosted) {
         cmd.env_remove(k);
     }
     super::path::apply(&mut cmd);

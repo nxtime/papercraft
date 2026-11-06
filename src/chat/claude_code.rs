@@ -203,6 +203,9 @@ mod process {
     /// the web tools need a permission `-p` never grants, so they only cost tokens.
     const LEAN_ARGS: [&str; 5] = ["--disable-slash-commands", "--setting-sources", "project,local", "--tools", "Read,TodoWrite,ToolSearch"];
 
+    /// Built-in tools a hosted turn must never run, whatever `--tools` does.
+    const HOSTED_DENY: &str = "Bash,BashOutput,KillShell,Edit,MultiEdit,Write,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Task,Agent";
+
     /// `system_file` holds the system prompt (read by the CLI, so it is not in `ps` output).
     pub fn args(cfg: &TurnConfig, system_file: Option<&Path>) -> Vec<String> {
         let mcp = serde_json::json!({"mcpServers": {"papercraft": {"type": "http", "url": cfg.mcp_url}}});
@@ -213,6 +216,18 @@ mod process {
         ]
         .map(String::from)
         .into();
+        if cfg.hosted {
+            // `--tools ""` removes every built-in; the deny list repeats the dangerous ones so a
+            // CLI that ignores the empty value still cannot run them. No sub-agents either.
+            a.push("mcp__papercraft__*".into());
+            a.extend(["--permission-mode", "dontAsk", "--tools", "", "--disallowedTools", HOSTED_DENY, "--disable-slash-commands", "--setting-sources", "project,local"].map(String::from));
+            for (flag, v) in [("--append-system-prompt-file", system_file.map(|f| f.display().to_string())), ("--model", cfg.model.clone()), ("--effort", cfg.effort.clone()), ("--resume", cfg.session.clone())] {
+                if let Some(v) = v {
+                    a.extend([flag.into(), v]);
+                }
+            }
+            return a;
+        }
         let mut agents = serde_json::json!({"qa": serde_json::from_str::<Value>(QA).unwrap()});
         let extra = if cfg.research {
             agents["researcher"] = serde_json::from_str(RESEARCHER).unwrap();
@@ -330,7 +345,9 @@ mod process {
                 let _ = std::fs::remove_file(f);
             }
         };
-        let mut child = clean_env(&mut Command::new(bin))
+        let mut cmd = Command::new(bin);
+        // A hosted turn runs on the server's own credentials (CLAUDE_CODE_OAUTH_TOKEN, API key).
+        let mut child = if cfg.hosted { crate::chat::path::apply(&mut cmd) } else { clean_env(&mut cmd) }
             .args(args(cfg, system_file.as_deref()))
             .current_dir(&cfg.project_dir)
             .stdin(Stdio::piped())
@@ -429,6 +446,22 @@ mod process {
         let ev = parse_line_partial(call);
         assert!(matches!(ev.as_slice(), [Event::ToolStart { name, .. }] if name == "fetch_reference_images"), "{ev:?}");
     }
+
+    #[test]
+        fn hosted_args_allow_only_the_mcp_server() {
+            let cfg = TurnConfig { hosted: true, mcp_url: "http://127.0.0.1:1/s/t/mcp".into(), research: true, session: Some("sid".into()), ..Default::default() };
+            let a = args(&cfg, Some(Path::new("/tmp/sys.txt")));
+            let at = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].as_str();
+            assert_eq!(at("--allowedTools"), "mcp__papercraft__*", "research does not add web tools");
+            assert_eq!(at("--tools"), "");
+            assert_eq!(at("--permission-mode"), "dontAsk");
+            assert_eq!(at("--resume"), "sid");
+            let denied: Vec<&str> = at("--disallowedTools").split(',').collect();
+            for t in ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Read", "Agent"] {
+                assert!(denied.contains(&t), "{t} is denied");
+            }
+            assert!(!a.iter().any(|x| x == "--agents"), "no sub-agents");
+        }
 
     #[test]
         fn args_shape() {

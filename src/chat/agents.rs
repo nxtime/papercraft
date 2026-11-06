@@ -286,6 +286,23 @@ pub fn base_env(id: &str) -> Vec<(String, String)> {
     }
 }
 
+/// opencode for a tab on the relay: no shell, file or web tools and every permission prompt
+/// denied, so only the MCP server's tools can run. `base_env`'s MCP timeout is kept.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn hosted_env() -> Vec<(String, String)> {
+    let ms = crate::mcp::server::CALL_TIMEOUT.as_millis() + 30_000;
+    let off = ["bash", "edit", "write", "patch", "read", "grep", "glob", "list", "webfetch", "websearch", "todowrite", "todoread", "task", "skill"];
+    let tools: serde_json::Map<String, serde_json::Value> = off.iter().map(|t| ((*t).to_owned(), false.into())).collect();
+    let cfg = serde_json::json!({
+        "experimental": {"mcp_timeout": ms},
+        "tools": tools,
+        "permission": {"bash": "deny", "edit": "deny", "webfetch": "deny", "external_directory": "deny", "doom_loop": "deny"},
+        "share": "disabled",
+        "autoupdate": false,
+    });
+    vec![("OPENCODE_CONFIG_CONTENT".into(), cfg.to_string())]
+}
+
 /// Environment that starts agent `id` without the user's own setup (config, plugins, rules,
 /// skills), so a lean turn carries only PaperCraft's instructions. `home` is an empty folder
 /// PaperCraft owns. Empty for agents whose sign-in would not survive it, and where `real_home` is
