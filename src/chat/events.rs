@@ -1,9 +1,11 @@
 //! The one event stream every chat backend (Claude Code, Codex, API endpoints) is turned into.
 
 use super::Usage;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq)]
+/// Serialized as is when the relay streams a hosted agent's turn to its tab.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Event {
     Text(String),
     Thinking(String),
@@ -39,7 +41,7 @@ pub enum Event {
 
 /// An agent waiting out a failed model call (opencode's `session_info_update` with
 /// `_meta["opencode/retry"]`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Retry {
     /// 1 for the first retry.
     pub attempt: u32,
@@ -109,6 +111,9 @@ pub struct TurnConfig {
     pub research: bool,
     /// Override for the CLI binary path.
     pub binary: Option<std::path::PathBuf>,
+    /// The relay runs this turn for a tab: the agent gets only PaperCraft's MCP tools (no shell,
+    /// files or web) and keeps the server's own credentials, which a desktop turn strips.
+    pub hosted: bool,
     /// API backend: where tool calls run (see [`ToolDispatch`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub tools: Option<ToolDispatch>,

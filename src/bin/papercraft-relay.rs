@@ -5,6 +5,7 @@
 //! built web app (`web/index.html` + `web/pkg`) from the same origin, so one process hosts it.
 
 use papercraft::mcp::relay;
+use papercraft::mcp::relay_agents::AgentsConfig;
 use papercraft::mcp::store::Data;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ const USAGE: &str = "\
 papercraft-relay — MCP relay for a PaperCraft tab in a browser
 
 USAGE:
-  papercraft-relay [--listen 0.0.0.0:8787] [--static <dir>] [--allow-origin <origin>] [--data <dir>] [--library]
+  papercraft-relay [--listen 0.0.0.0:8787] [--static <dir>] [--allow-origin <origin>] [--data <dir>] [--library] [--agents claude,opencode]
 
 OPTIONS:
   --listen <addr>       address to serve on (default: $PAPERCRAFT_RELAY_LISTEN or 0.0.0.0:8787)
@@ -24,6 +25,10 @@ OPTIONS:
   --library             with --data: a personal library. Every project in <dir> is listed at
                         /library and synced to every device that opens this server, with no
                         link needed, so only run it where the network is the boundary
+  --agents <list>       with --data: run agents for tabs. claude, opencode or both. Each chat
+                        gets an empty folder under <dir>/agents and only the PaperCraft tools.
+                        Credentials come from the environment: CLAUDE_CODE_OAUTH_TOKEN or
+                        ANTHROPIC_API_KEY for claude, opencode's own provider setup (off by default)
   --help                print this text
 
 The tab picks a 32..64 hex character token and shows the agent URL
@@ -40,6 +45,7 @@ struct Args {
     allow_origin: Option<String>,
     data_dir: Option<PathBuf>,
     library: bool,
+    agents: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -48,6 +54,7 @@ fn parse_args() -> Result<Args, String> {
     let mut allow_origin = None;
     let mut data_dir = None;
     let mut library = false;
+    let mut agents = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -57,6 +64,7 @@ fn parse_args() -> Result<Args, String> {
             "--allow-origin" => allow_origin = Some(value()?),
             "--data" => data_dir = Some(PathBuf::from(value()?)),
             "--library" => library = true,
+            "--agents" => agents = Some(value()?),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
     }
@@ -66,6 +74,7 @@ fn parse_args() -> Result<Args, String> {
         allow_origin,
         data_dir,
         library,
+        agents,
     })
 }
 
@@ -86,6 +95,30 @@ fn main() -> ExitCode {
         eprintln!("papercraft-relay: --library needs --data <dir>");
         return ExitCode::FAILURE;
     }
+    let agents = match (&args.agents, &args.data_dir) {
+        (None, _) => None,
+        (Some(_), None) => {
+            eprintln!("papercraft-relay: --agents needs --data <dir>");
+            return ExitCode::FAILURE;
+        }
+        (Some(list), Some(dir)) => match AgentsConfig::new(list, dir.join("agents")) {
+            Ok(a) => {
+                // The agents keep their config under HOME; a read-only image points it at a volume,
+                // and the folder has to exist for them to write into.
+                if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+                    && let Err(e) = std::fs::create_dir_all(&home)
+                {
+                    eprintln!("papercraft-relay: cannot create HOME {}: {e}", home.display());
+                    return ExitCode::FAILURE;
+                }
+                Some(a)
+            }
+            Err(e) => {
+                eprintln!("papercraft-relay: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
     let listen: SocketAddr = match args.listen.parse() {
         Ok(a) => a,
         Err(_) => {
@@ -96,7 +129,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let running = match relay::spawn_with_data(
+    let running = match relay::spawn_full(
         listen,
         args.static_dir.clone(),
         args.allow_origin.clone(),
@@ -104,6 +137,7 @@ fn main() -> ExitCode {
             dir,
             library: args.library,
         }),
+        agents,
     ) {
         Ok(r) => r,
         Err(e) => {

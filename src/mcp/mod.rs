@@ -51,6 +51,8 @@ pub mod site;
 pub mod swarm;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod relay;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod relay_agents;
 pub mod relay_proto;
 pub mod core_tools;
 #[cfg(not(target_arch = "wasm32"))]

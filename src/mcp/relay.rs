@@ -9,7 +9,8 @@
 //! desktop server and forwards each call to the tab as a [`relay_proto::Call`] frame. The token
 //! in the path is the only credential, so it is never logged and never appears in an error.
 
-use super::relay_proto::{self, Call as CallFrame, Reply};
+use super::relay_agents::{Agents, AgentsConfig, Push, Session};
+use super::relay_proto::{self, Call as CallFrame, FromTab, Reply};
 use super::server::{CALL_TIMEOUT, Dispatch, PaperServer};
 use super::{Call, ToolResult};
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
@@ -58,6 +59,8 @@ type Service = StreamableHttpService<PaperServer, LocalSessionManager>;
 enum ToTab {
     /// A tool call to run.
     Call(String),
+    /// Any other frame, already encoded (hello, a chat event).
+    Text(String),
     /// Close the socket with this reason.
     Close(&'static str),
 }
@@ -89,11 +92,14 @@ struct Shared {
     tab: tokio::sync::Mutex<Option<Arc<Tab>>>,
     calls: Arc<tokio::sync::Semaphore>,
     next_id: AtomicU64,
+    /// The agents hosted for this link; None when the relay runs none.
+    session: Option<Arc<Session>>,
 }
 
 impl Shared {
-    fn new() -> Shared {
+    fn new(session: Option<Arc<Session>>) -> Shared {
         Shared {
+            session,
             tab: tokio::sync::Mutex::new(None),
             calls: Arc::new(tokio::sync::Semaphore::new(MAX_INFLIGHT_CALLS)),
             next_id: AtomicU64::new(1),
@@ -175,6 +181,8 @@ struct Relay {
     allow_origin: Option<String>,
     static_dir: Option<PathBuf>,
     ct: CancellationToken,
+    agents: Option<Arc<Agents>>,
+    port: u16,
 }
 
 impl Relay {
@@ -187,7 +195,9 @@ impl Relay {
         if let Some(link) = links.get(token) {
             return Some(link.clone());
         }
-        let link = Arc::new(Link::new(Arc::new(Shared::new()), self.ct.child_token()));
+        // The hosted agent talks to this same relay over loopback, with this link's token.
+        let session = self.agents.as_ref().map(|a| a.session(relay_proto::agent_url(&format!("http://127.0.0.1:{}", self.port), token)));
+        let link = Arc::new(Link::new(Arc::new(Shared::new(session)), self.ct.child_token()));
         links.insert(token.to_string(), link.clone());
         Some(link)
     }
@@ -296,6 +306,23 @@ fn handle_reply(tab: &Tab, text: &str) {
     }
 }
 
+/// A chat frame goes to the link's hosted agents; anything else is a reply to a tool call.
+fn handle_text(tab: &Arc<Tab>, link: &Link, text: &str) {
+    let Ok(frame) = serde_json::from_str::<FromTab>(text) else {
+        return handle_reply(tab, text);
+    };
+    let out = tab.clone();
+    let push: Push = Arc::new(move |f| serde_json::to_string(&f).is_ok_and(|j| out.out.send(ToTab::Text(j)).is_ok()));
+    match (&link.shared.session, frame) {
+        (Some(session), frame) => session.on_frame(frame, push),
+        (None, FromTab::Chat { chat, .. }) => {
+            let error = crate::chat::events::Event::Error("This server does not run agents. Connect one from the desktop app instead.".into());
+            push(relay_proto::ToTab::Chat { chat, event: error });
+        }
+        (None, FromTab::Cancel { .. }) => {}
+    }
+}
+
 /// One tab's socket: forwards tool calls out, routes replies back to their calls, pings to
 /// keep the connection (and any proxy in front of it) alive.
 async fn serve_tab(mut socket: WebSocket, link: Arc<Link>) {
@@ -312,18 +339,22 @@ async fn serve_tab(mut socket: WebSocket, link: Arc<Link>) {
     // The tab is live as of here: say so with a ping, so a client that waits for one never
     // races this registration.
     let _ = socket.send(Message::Ping(axum::body::Bytes::new())).await;
+    let agents = link.shared.session.as_ref().map_or_else(Vec::new, |s| s.infos());
+    if let Ok(hello) = serde_json::to_string(&relay_proto::ToTab::Hello { agents }) {
+        let _ = socket.send(Message::Text(hello.into())).await;
+    }
     let mut ping = tokio::time::interval_at(Instant::now() + PING_INTERVAL, PING_INTERVAL);
     let mut last_pong = Instant::now();
     loop {
         match next_event(&mut socket, &mut out_rx, &mut ping).await {
             Event::Closed | Event::Frame(Err(_)) => break,
             Event::Frame(Ok(Message::Close(_))) => break,
-            Event::Frame(Ok(Message::Text(t))) => handle_reply(&tab, &t),
+            Event::Frame(Ok(Message::Text(t))) => handle_text(&tab, &link, &t),
             Event::Frame(Ok(Message::Pong(_))) => last_pong = Instant::now(),
             // Ping replies are sent by the protocol layer; other frame types are not ours.
             Event::Frame(Ok(_)) => {}
             Event::Outgoing(None) => break,
-            Event::Outgoing(Some(ToTab::Call(json))) => {
+            Event::Outgoing(Some(ToTab::Call(json) | ToTab::Text(json))) => {
                 if socket.send(Message::Text(json.into())).await.is_err() {
                     break;
                 }
@@ -357,6 +388,9 @@ async fn serve_tab(mut socket: WebSocket, link: Arc<Link>) {
         && Arc::ptr_eq(t, &tab)
     {
         *current = None;
+        if let Some(s) = &link.shared.session {
+            s.stop_all();
+        }
     }
     drop(current);
     tab.fail_all(NO_TAB_ERROR);
@@ -481,6 +515,18 @@ pub fn spawn_with_data(
     allow_origin: Option<String>,
     data: Option<super::store::Data>,
 ) -> Result<Running, String> {
+    spawn_full(listen, static_dir, allow_origin, data, None)
+}
+
+/// [`spawn_with_data`], plus `agents`: the agents the relay runs for tabs (off without it).
+pub fn spawn_full(
+    listen: SocketAddr,
+    static_dir: Option<PathBuf>,
+    allow_origin: Option<String>,
+    data: Option<super::store::Data>,
+    agents: Option<AgentsConfig>,
+) -> Result<Running, String> {
+    let agents = agents.map(Agents::new).transpose()?;
     let listener = std::net::TcpListener::bind(listen)
         .map_err(|e| format!("cannot listen on {listen}: {e}"))?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -509,6 +555,8 @@ pub fn spawn_with_data(
                     allow_origin,
                     static_dir,
                     ct: thread_ct.child_token(),
+                    agents,
+                    port,
                 });
                 if let Err(e) =
                     axum::serve(listener, router(relay, data.map(super::store::Store::new)))

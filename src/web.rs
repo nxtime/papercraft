@@ -729,9 +729,29 @@ impl Web {
         }
     }
 
+    /// Move chat frames between the relay socket and the chat panel (agents the relay hosts).
+    fn pump_chat(&mut self) {
+        if let Some(agents) = self.relay.take_agents() {
+            self.st.chat.set_hosted_agents(agents);
+            self.dirty = true;
+        }
+        while let Some((chat, event)) = self.relay.next_chat_event() {
+            self.st.chat.hosted_event(&chat, event);
+            self.dirty = true;
+        }
+        if self.relay.state() != crate::ui::agent::LinkState::Connected {
+            self.st.chat.hosted_lost();
+        }
+        for frame in self.st.chat.take_hosted_frames() {
+            self.relay.send_chat(&frame);
+            self.dirty = true;
+        }
+    }
+
     fn frame(&mut self) {
         let now = now_ms();
         self.pump_calls();
+        self.pump_chat();
         if let Some((act, keys)) = self.st.pending_action.take() {
             let mut runs = std::mem::take(&mut self.runs);
             crate::ui::actions::run(self, &mut runs, act, &keys, crate::project::format::now_ms());
