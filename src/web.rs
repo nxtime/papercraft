@@ -114,7 +114,9 @@ pub fn start() {
 
 impl Web {
     async fn new(canvas: HtmlCanvasElement) -> Result<Web, String> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        // A browser can expose WebGPU with no usable adapter (blocklisted phone GPUs, headless):
+        // detect that up front so the WebGL2 backend takes over instead of failing to start.
+        let instance = wgpu::util::new_instance_with_webgpu_detection(wgpu::InstanceDescriptor::new_without_display_handle()).await;
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|e| format!("create surface: {e}"))?;
