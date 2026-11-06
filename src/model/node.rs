@@ -461,6 +461,9 @@ pub struct Node {
     /// An instance root's property values, by property name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub prop_values: BTreeMap<String, String>,
+    /// Alt text, role and reading order for assistive tech (`set_accessibility`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a11y: Option<super::A11y>,
 }
 
 /// One property of a component. `kind`: `text` (the text of `layer`), `bool` (shows `layer`),
@@ -614,6 +617,7 @@ impl Node {
             scroll_y: 0.0,
             props: Vec::new(),
             prop_values: BTreeMap::new(),
+            a11y: None,
         }
     }
 

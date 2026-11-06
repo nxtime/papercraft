@@ -31,7 +31,8 @@ const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v, |v| v];
 /// v1: legacy single file. v2: page file inside a project. v3: fill layers (`fills`).
 /// v4: text can name a font, and layers can carry a link action (URL, back, overlay, close); an
 /// older app would drop either on save, so it must refuse the page.
-pub const PAGE_VERSION: u32 = 4;
+/// v5: layers can carry accessibility annotations (`a11y`), which an older app would drop.
+pub const PAGE_VERSION: u32 = 5;
 /// What a page that uses neither is saved as, so a v4 app does not lock older ones out of pages
 /// it merely touched (see [`needs_v4`]).
 const PAGE_BASE_VERSION: u32 = 3;
@@ -39,6 +40,17 @@ const PAGE_BASE_VERSION: u32 = 3;
 /// Whether a page holds something an older app would drop on save: a named font or a link action.
 fn needs_v4(nodes: &[Node]) -> bool {
     nodes.iter().any(|n| n.text_style.font.is_some() || n.link_action.is_some())
+}
+
+/// The version a page is written as: the oldest one that can hold everything in it.
+fn page_version(nodes: &[Node]) -> u32 {
+    if nodes.iter().any(|n| n.a11y.is_some()) {
+        PAGE_VERSION
+    } else if needs_v4(nodes) {
+        4
+    } else {
+        PAGE_BASE_VERSION
+    }
 }
 
 #[derive(Debug)]
@@ -175,7 +187,7 @@ struct PageFile {
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
-const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v];
+const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v];
 /// Formats accepted as older versions of a page.
 const PAGE_ALIASES: &[&str] = &[LEGACY_FORMAT];
 
@@ -218,7 +230,7 @@ pub fn page_to_json_modes(p: &PageData, modes: &PageModes) -> String {
     nodes.sort_by_key(|n| n.id);
     let f = PageFile {
         format: PAGE_FORMAT.into(),
-        version: if needs_v4(&nodes) { PAGE_VERSION } else { PAGE_BASE_VERSION },
+        version: page_version(&nodes),
         id: p.id.clone(),
         name: p.name.clone(),
         camera: p.camera,
@@ -263,7 +275,7 @@ fn is_current_page(s: &str) -> bool {
         version: Option<u32>,
     }
     serde_json::from_str::<Head>(s)
-        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | PAGE_BASE_VERSION)))
+        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | 4 | PAGE_BASE_VERSION)))
 }
 
 fn page_from_file(mut f: PageFile) -> Result<(PageData, PageModes), FormatError> {
@@ -478,6 +490,10 @@ mod tests {
         assert!(page_to_json(&p).contains("\"version\":3"), "an older app can still read it");
         p.doc.nodes.get_mut(&NodeId(1)).unwrap().text_style.font = Some("Varela Round".into());
         assert!(page_to_json(&p).contains("\"version\":4"));
+        p.doc.nodes.get_mut(&NodeId(1)).unwrap().a11y = Some(crate::model::A11y { decorative: true, ..Default::default() });
+        let json = page_to_json(&p);
+        assert!(json.contains("\"version\":5"), "accessibility needs the newest version");
+        assert!(page_from_json(&json).unwrap().doc.get(NodeId(1)).unwrap().a11y.is_some());
     }
 
     #[test]

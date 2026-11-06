@@ -2383,3 +2383,50 @@ fn a_gradient_stop_bound_to_a_colour_variable_follows_the_mode_and_exports_as_va
     call(&mut h, "set_variable_mode", json!({"mode": "Light"}));
     assert_eq!(stop(&h), "#aabbcc");
 }
+
+#[test]
+fn a11y_annotations_are_set_read_linted_and_exported() {
+    let (mut h, _) = two_frame_site();
+    let key = |h: &exec::SessionHost, name: &str| {
+        let id = h.ed.doc.nodes.values().find(|n| n.name == name).unwrap().id;
+        exec::node_key(&h.ed, 0, id)
+    };
+    let (hero, head, go) = (key(&h, "Hero"), key(&h, "Headline"), key(&h, "Go"));
+    let lint = |h: &mut exec::SessionHost| call(h, "lint_design", json!({}))["issues"].to_string();
+    assert!(lint(&mut h).contains("image-alt"), "a picture without alt text is flagged");
+
+    call(&mut h, "set_accessibility", json!({"items": [
+        {"nodeId": hero, "alt": "A bowl of fish and chips"},
+        {"nodeId": head, "role": "heading", "level": 3},
+        {"nodeId": go, "order": 0},
+    ]}));
+    assert!(!lint(&mut h).contains("image-alt"));
+    let info = call(&mut h, "get_node_info", json!({"nodeId": head}));
+    assert_eq!(info["accessibility"], json!({"role": "heading", "level": 3}), "{info}");
+
+    // Only a frame placed by position (no auto layout) may reorder its children.
+    let board = h.ed.doc.nodes.values().find(|n| n.name == "Home").unwrap().id;
+    h.ed.doc.nodes.get_mut(&board).unwrap().layout = None;
+    let dir = site_out();
+    call(&mut h, "export_site", json!({"path": dir}));
+    let home = site_text(&read_site(&dir), "index.html");
+    assert!(home.contains("alt=\"A bowl of fish and chips\""), "{home}");
+    assert!(home.contains("<h3") && home.contains("Fish &amp; Chips"), "{home}");
+    assert!(home.find("href=\"pricing.html\"") < home.find("<h3"), "explicit order puts the link first: {home}");
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Decorative replaces alt text; clearing removes the annotation (and the key from the node).
+    call(&mut h, "set_accessibility", json!({"items": [{"nodeId": hero, "alt": null, "decorative": true}]}));
+    assert!(!lint(&mut h).contains("image-alt"));
+    call(&mut h, "set_accessibility", json!({"items": [{"nodeId": hero, "clear": true}]}));
+    assert!(call(&mut h, "get_node_info", json!({"nodeId": hero})).get("accessibility").is_none());
+
+    for bad in [
+        json!({"nodeId": hero, "role": "banner"}),
+        json!({"nodeId": hero, "level": 7, "role": "heading"}),
+        json!({"nodeId": hero, "level": 2}),
+        json!({"nodeId": hero, "alt": "x", "decorative": true}),
+    ] {
+        assert!(exec::call(&mut h, "set_accessibility", &json!({"items": [bad.clone()]})).is_err(), "{bad}");
+    }
+}

@@ -1283,6 +1283,24 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "set_accessibility",
+            "Set or clear accessibility annotations on layers: `alt` (text alternative of a              picture, or the accessible name of an icon button), `decorative` (true: ornament, no              alt needed), `role` (button, link, heading, list, nav, main, header, footer, aside,              section; overrides what the layer name suggests), `level` (1-6, with role heading) and              `order` (reading position among siblings, lower first; applies to frames without              auto layout). A field set to null is cleared; `clear: true` removes every annotation              first. get_node_info shows them as `accessibility`. lint_design checks them              (image-alt, interactive-name, heading-skip, reading-order) and export_site writes them              instead of inferring. All items are checked before any is applied; one undo step.",
+            json!({
+                "items": {"type": "array", "items": {"type": "object", "properties": {
+                    "nodeId": {"type": "string"},
+                    "alt": {"type": ["string", "null"]},
+                    "decorative": {"type": "boolean"},
+                    "role": {"type": ["string", "null"], "enum": ["button", "link", "heading", "list", "nav", "main", "header", "footer", "aside", "section", null]},
+                    "level": {"type": ["integer", "null"], "minimum": 1, "maximum": 6},
+                    "order": {"type": ["integer", "null"], "minimum": 0},
+                    "clear": {"type": "boolean"},
+                }, "required": ["nodeId"]}},
+                "pageId": page_id(),
+            }),
+            &["items"],
+            false,
+        ),
+        tool(
             "set_screens",
             "Declare frames as screens (one device viewport of the product, not a section, slot or \
              component), as overlays (a drawer, modal or sheet inside a screen) or as sections (a \
@@ -1601,7 +1619,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
         | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "apply_ui_kit" | "set_code_link"
-        | "set_component_props" | "set_instance_props" | "merge_variants" | "set_prototype_links" | "set_screens"
+        | "set_component_props" | "set_instance_props" | "merge_variants" | "set_prototype_links" | "set_accessibility" | "set_screens"
         | "duplicate_nodes" | "move_nodes" | "undo" | "redo" => true,
         _ => return None,
     })

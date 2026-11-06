@@ -1,3 +1,4 @@
+pub mod a11y;
 pub mod annotation;
 pub mod annotation_layout;
 pub mod document;
@@ -6,6 +7,7 @@ pub mod node;
 pub mod paint;
 pub mod rough;
 
+pub use a11y::A11y;
 pub use document::{Document, VarState};
 pub use link::LinkAction;
 pub use node::{

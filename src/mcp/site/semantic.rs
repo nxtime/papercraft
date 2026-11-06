@@ -62,8 +62,18 @@ pub fn is_container(n: &Node) -> bool {
     matches!(n.kind, NodeKind::Frame { .. } | NodeKind::Group)
 }
 
+/// The landmark or button of a frame or group: the author's role when set, else its name's.
+pub fn landmark_of(n: &Node) -> Option<&'static str> {
+    match n.a11y.as_ref().and_then(|a| a.role.as_deref()) {
+        Some(r @ ("button" | "nav" | "main" | "header" | "footer" | "aside" | "section")) => {
+            landmark(r)
+        }
+        _ => landmark(&n.name),
+    }
+}
+
 pub fn is_button(n: &Node) -> bool {
-    is_container(n) && landmark(&n.name) == Some("button")
+    is_container(n) && landmark_of(n) == Some("button")
 }
 
 pub fn has_link(n: &Node) -> bool {
@@ -86,7 +96,7 @@ fn in_action(doc: &Document, root: NodeId, id: NodeId) -> bool {
 fn in_chrome(doc: &Document, root: NodeId, id: NodeId) -> bool {
     let mut cur = doc.get(id).and_then(|n| n.parent);
     while let Some(n) = cur.and_then(|p| doc.get(p)) {
-        if is_container(n) && matches!(landmark(&n.name), Some("header" | "nav")) {
+        if is_container(n) && matches!(landmark_of(n), Some("header" | "nav")) {
             return true;
         }
         cur = if n.id == root { None } else { n.parent };
@@ -230,7 +240,28 @@ pub fn semantics(doc: &Document, root: NodeId) -> Sem {
             above = Some(*level);
         }
     }
+    explicit(doc, &layers, &mut sem);
     sem
+}
+
+/// The author's role and heading level win over every guess above.
+fn explicit(doc: &Document, layers: &[NodeId], sem: &mut Sem) {
+    for id in layers {
+        let Some(a) = doc.get(*id).and_then(|n| n.a11y.as_ref()) else {
+            continue;
+        };
+        match a.role.as_deref() {
+            Some("heading") => {
+                sem.subtitles.remove(id);
+                sem.heads.insert(*id, a.level.unwrap_or(2).clamp(1, 6));
+            }
+            Some(_) => {
+                sem.subtitles.remove(id);
+                sem.heads.remove(id);
+            }
+            None => {}
+        }
+    }
 }
 
 /// A layer named `main`, else the root when no header or footer is split off, else the tallest
@@ -238,7 +269,7 @@ pub fn semantics(doc: &Document, root: NodeId) -> Sem {
 fn main_of(doc: &Document, root: NodeId, layers: &[NodeId]) -> Option<NodeId> {
     let named = |id: &&NodeId| {
         doc.get(**id)
-            .is_some_and(|n| is_container(n) && landmark(&n.name) == Some("main"))
+            .is_some_and(|n| is_container(n) && landmark_of(n) == Some("main"))
     };
     if let Some(id) = layers.iter().skip(1).find(named) {
         return Some(*id);
@@ -252,13 +283,13 @@ fn main_of(doc: &Document, root: NodeId, layers: &[NodeId]) -> Option<NodeId> {
         .collect();
     let chrome = |n: &&Node| {
         matches!(
-            landmark(&n.name),
+            landmark_of(n),
             Some("header" | "footer" | "nav" | "aside")
         )
     };
     if !kids
         .iter()
-        .any(|n| matches!(landmark(&n.name), Some("header" | "footer")))
+        .any(|n| matches!(landmark_of(n), Some("header" | "footer")))
     {
         return Some(root);
     }
