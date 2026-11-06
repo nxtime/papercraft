@@ -18,14 +18,15 @@ enum State {
         received: u64,
         total: u64,
     },
-    Ready(PathBuf),
+    /// `ready` is an unpacked bundle (a folder) or an installer (a file).
+    Ready { version: String, ready: PathBuf },
     Failed(String),
 }
 
 enum Message {
     Checked(Result<Option<Release>, String>),
     Progress(u64, u64),
-    Downloaded(Result<PathBuf, String>),
+    Downloaded(Result<(String, PathBuf), String>),
 }
 
 #[derive(Default)]
@@ -33,10 +34,46 @@ pub struct UpdaterUi {
     pub open: bool,
     state: State,
     events: Option<mpsc::Receiver<Message>>,
+    /// A check nobody asked for: it stays out of sight until an update is ready.
+    quiet: bool,
+    /// Set by "Restart to update"; the app acts on it once it has closed.
+    pub restart: Option<Restart>,
+}
+
+/// What happens as the app closes to update.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Restart {
+    /// The files are already replaced: start again.
+    Relaunch,
+    /// Run this installer, then start again.
+    Install(PathBuf),
+}
+
+/// Whether updates download on their own. Stored as `0` or `1`, on by default.
+pub fn auto_enabled() -> bool {
+    pref_path().and_then(|p| std::fs::read_to_string(p).ok()).is_none_or(|s| s.trim() != "0")
+}
+
+pub fn set_auto_enabled(on: bool) {
+    let Some(path) = pref_path() else { return };
+    if let Err(e) = std::fs::write(path, if on { "1" } else { "0" }) {
+        log::warn!("could not save the update setting: {e}");
+    }
+}
+
+fn pref_path() -> Option<PathBuf> {
+    Some(crate::project::config_dir()?.join("auto-update"))
 }
 
 impl UpdaterUi {
+    /// Looks for an update at launch and, if there is one, downloads it without asking.
+    pub fn check_quietly(&mut self) {
+        self.check();
+        self.quiet = self.events.is_some();
+    }
+
     pub fn check(&mut self) {
+        self.quiet = false;
         if self.events.is_some() {
             return;
         }
@@ -50,9 +87,10 @@ impl UpdaterUi {
     }
 
     fn download(&mut self, release: &Release) {
-        let Some(asset) = release.asset.clone() else {
+        let Some(asset) = release.package().cloned() else {
             return;
         };
+        let version = release.version.clone();
         let (tx, rx) = mpsc::channel();
         self.events = Some(rx);
         self.state = State::Downloading {
@@ -65,6 +103,7 @@ impl UpdaterUi {
                     let _ = tx.send(Message::Progress(received, total));
                 }))
             });
+            let result = result.and_then(|path| update::unpack(&path)).map(|ready| (version, ready));
             let _ = tx.send(Message::Downloaded(result));
         });
     }
@@ -74,12 +113,18 @@ impl UpdaterUi {
             self.check();
         }
         let mut finished = false;
+        let mut fetch = None;
         if let Some(rx) = &self.events {
             for event in rx.try_iter() {
                 match event {
                     Message::Checked(result) => {
                         self.state = match result {
-                            Ok(Some(release)) => State::Available(release),
+                            Ok(Some(release)) => {
+                                if self.quiet && release.package().is_some() {
+                                    fetch = Some(release.clone());
+                                }
+                                State::Available(release)
+                            }
                             Ok(None) => State::Current,
                             Err(error) => State::Failed(error),
                         };
@@ -90,7 +135,10 @@ impl UpdaterUi {
                     }
                     Message::Downloaded(result) => {
                         self.state = match result {
-                            Ok(path) => State::Ready(path),
+                            Ok((version, ready)) => {
+                                self.open = true;
+                                State::Ready { version, ready }
+                            }
                             Err(error) => State::Failed(error),
                         };
                         finished = true;
@@ -100,6 +148,17 @@ impl UpdaterUi {
         }
         if finished {
             self.events = None;
+            // Nobody is waiting on a quiet check, so a failure just waits for the next launch.
+            if self.quiet && !self.open && fetch.is_none() {
+                if let State::Failed(error) = &self.state {
+                    log::warn!("update check failed: {error}");
+                }
+                self.state = State::Idle;
+                self.quiet = false;
+            }
+        }
+        if let Some(release) = fetch {
+            self.download(&release);
         }
         if self.events.is_some() {
             ctx.request_repaint_after(POLL_INTERVAL);
@@ -119,6 +178,7 @@ impl UpdaterUi {
         let mut check = false;
         let mut download = None;
         let mut installer = None;
+        let mut restart = None;
         let frame = egui::Frame::new()
             .fill(theme::pal_from_ctx(ctx).sidebar)
             .corner_radius(crate::theme::r(24.0))
@@ -137,8 +197,8 @@ impl UpdaterUi {
                     State::Current => (theme::Icon::Star, theme::accent(), "PaperCraft is up to date".to_string(), format!("You have version {version}.")),
                     State::Available(r) => (theme::Icon::Export, theme::accent(), format!("PaperCraft {} is ready", r.version), format!("You have {version}.")),
                     State::Downloading { .. } => (theme::Icon::Export, theme::accent(), "Downloading the update…".to_string(), String::new()),
-                    State::Ready(_) => (theme::Icon::Export, theme::accent(), "Update downloaded".to_string(), "Save your work before installing.".to_string()),
-                    State::Failed(_) => (theme::Icon::Question, ui.visuals().error_fg_color, "Could not check for updates".to_string(), "Your work is safe.".to_string()),
+                    State::Ready { version: new, .. } => (theme::Icon::Export, theme::accent(), format!("PaperCraft {new} is ready to install"), "Restart to finish. Your work is saved first.".to_string()),
+                    State::Failed(_) => (theme::Icon::Question, ui.visuals().error_fg_color, "Could not update".to_string(), "Your work is safe.".to_string()),
                 };
                 ui.horizontal(|ui| {
                     super::kit::badge(ui, icon, tint, 48.0);
@@ -165,7 +225,7 @@ impl UpdaterUi {
                             egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| { ui.label(&release.notes); });
                         }
                         ui.hyperlink_to("View release", &release.url);
-                        if release.asset.is_none() {
+                        if release.package().is_none() {
                             ui.label(egui::RichText::new("No installer is published for this platform yet. Open the release page or update from your local checkout.").color(p.secondary));
                         }
                     }
@@ -176,9 +236,13 @@ impl UpdaterUi {
                         let mut fill = r;
                         fill.set_width(r.width() * progress.clamp(0.0, 1.0));
                         ui.painter().rect_filled(fill, crate::theme::r(4.0), theme::accent());
-                        ui.label(egui::RichText::new(format!("Downloaded {received} of {total} bytes")).size(theme::SECONDARY).color(p.secondary));
+                        let mb = |bytes: u64| bytes as f64 / (1024.0 * 1024.0);
+                        ui.label(egui::RichText::new(format!("{:.0} of {:.0} MB", mb(*received), mb(*total))).size(theme::SECONDARY).color(p.secondary));
                     }
-                    State::Ready(_) => {}
+                    State::Ready { ready, .. } if !ready.is_dir() && cfg!(windows) => {
+                        ui.label(egui::RichText::new("Windows will ask for permission to install.").size(theme::SECONDARY).color(p.secondary));
+                    }
+                    State::Ready { .. } => {}
                     State::Failed(error) => {
                         ui.label(egui::RichText::new(error).color(ui.visuals().error_fg_color));
                     }
@@ -186,19 +250,27 @@ impl UpdaterUi {
                 ui.add_space(6.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     match &self.state {
-                        State::Available(release) if release.asset.is_some() => {
+                        State::Available(release) if release.package().is_some() => {
                             if super::kit::button(ui, super::kit::ButtonKind::Primary, None, "Download update").clicked() {
                                 download = Some(release.clone());
                             }
                         }
-                        State::Ready(path) => {
+                        State::Ready { ready, .. } if cfg!(windows) => {
+                            if super::kit::button(ui, super::kit::ButtonKind::Primary, None, "Restart to update").clicked() {
+                                restart = Some(ready.clone());
+                            }
+                            if super::kit::button(ui, super::kit::ButtonKind::Secondary, None, "Later").clicked() {
+                                close = true;
+                            }
+                        }
+                        State::Ready { ready, .. } => {
                             if super::kit::button(ui, super::kit::ButtonKind::Primary, None, "Open installer").clicked() {
-                                installer = Some(path.clone());
+                                installer = Some(ready.clone());
                             }
                         }
                         _ => {}
                     }
-                    if self.events.is_none() && super::kit::button(ui, super::kit::ButtonKind::Secondary, None, "Check again").clicked() {
+                    if self.events.is_none() && !matches!(self.state, State::Ready { .. }) && super::kit::button(ui, super::kit::ButtonKind::Secondary, None, "Check again").clicked() {
                         check = true;
                     }
                 });
@@ -218,7 +290,24 @@ impl UpdaterUi {
         {
             self.state = State::Failed(error);
         }
+        if let Some(ready) = restart {
+            match prepare_restart(&ready) {
+                Ok(next) => self.restart = Some(next),
+                Err(error) => self.state = State::Failed(error),
+            }
+        }
     }
+}
+
+/// Swaps the files now, not as the app closes, so a failure can still be shown.
+fn prepare_restart(ready: &std::path::Path) -> Result<Restart, String> {
+    if !ready.is_dir() {
+        return Ok(Restart::Install(ready.to_path_buf()));
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("could not find the app: {e}"))?;
+    let dir = exe.parent().ok_or("the app has no folder")?;
+    update::install(ready, dir)?;
+    Ok(Restart::Relaunch)
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime, String> {
@@ -265,6 +354,38 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_quiet_check_stays_out_of_sight() {
+        let (tx, rx) = mpsc::channel();
+        let mut updater = UpdaterUi {
+            state: State::Checking,
+            events: Some(rx),
+            quiet: true,
+            ..Default::default()
+        };
+        tx.send(Message::Checked(Err("offline".into()))).unwrap();
+        updater.show(&egui::Context::default());
+        assert!(!updater.open);
+        assert!(matches!(updater.state, State::Idle));
+    }
+
+    #[test]
+    fn a_finished_download_opens_the_prompt() {
+        let (tx, rx) = mpsc::channel();
+        let mut updater = UpdaterUi {
+            state: State::Downloading { received: 0, total: 1 },
+            events: Some(rx),
+            quiet: true,
+            ..Default::default()
+        };
+        tx.send(Message::Downloaded(Ok(("9.9.9".into(), PathBuf::from("x.msi"))))).unwrap();
+        let ctx = egui::Context::default();
+        theme::install_fonts(&ctx);
+        ctx.run_ui(egui::RawInput::default(), |ui| updater.show(ui.ctx())).textures_delta.clear();
+        assert!(updater.open);
+        assert!(matches!(updater.state, State::Ready { .. }));
+    }
+
+    #[test]
     fn unopened_updater_does_not_start_network_requests() {
         let mut updater = UpdaterUi::default();
         updater.show(&egui::Context::default());
@@ -282,8 +403,9 @@ mod tests {
             ("papercraft-updater-available.png", State::Available(Release {
                 version: "0.4.0".into(),
                 notes: "Page folders, safer deletion, and restored design themes.".into(),
-                url: "https://git.marcospaulo.dev.br/masi/papercraft/releases/tag/v0.4.0".into(),
-                asset: Some(update::Asset { name: "papercraft-0.4.0-macos-aarch64.dmg".into(), url: "https://git.marcospaulo.dev.br/masi/papercraft/releases/download/v0.4.0/papercraft-0.4.0-macos-aarch64.dmg".into(), size: 1234 }),
+                url: "https://github.com/nxtime/papercraft/releases/tag/v0.4.0".into(),
+                asset: Some(update::Asset { name: "papercraft-0.4.0-macos-aarch64.dmg".into(), url: "https://github.com/nxtime/papercraft/releases/download/v0.4.0/papercraft-0.4.0-macos-aarch64.dmg".into(), size: 1234, digest: String::new() }),
+                portable: None,
             })),
         ];
         for (name, state) in cases {
@@ -292,7 +414,7 @@ mod tests {
                 updater: UpdaterUi {
                     open: true,
                     state,
-                    events: None,
+                    ..Default::default()
                 },
                 ..Default::default()
             };

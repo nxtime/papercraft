@@ -11,6 +11,7 @@
 mod dom;
 mod files;
 mod relay;
+pub(crate) use relay::new_token;
 
 use crate::editor::shortcuts::Action;
 use crate::editor::{AppRequest, Button, Editor, InputEvent, Key, Modifiers};

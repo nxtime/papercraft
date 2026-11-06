@@ -4,8 +4,9 @@
 
 use papercraft::update::{Asset, parse_release, validate_asset};
 
-const HOST: &str = "https://git.marcospaulo.dev.br";
-const DOWNLOAD: &str = "https://git.marcospaulo.dev.br/masi/papercraft/releases/download";
+const HOST: &str = "https://github.com";
+const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const DOWNLOAD: &str = "https://github.com/nxtime/papercraft/releases/download";
 
 /// A release feed with the given assets.
 fn feed(version: &str, assets: &[(&str, &str)]) -> String {
@@ -15,11 +16,11 @@ fn feed(version: &str, assets: &[(&str, &str)]) -> String {
             list.push(',');
         }
         list.push_str(&format!(
-            r#"{{"name":"{name}","browser_download_url":"{url}","size":1024}}"#
+            r#"{{"name":"{name}","browser_download_url":"{url}","size":1024,"digest":"sha256:{DIGEST}"}}"#
         ));
     }
     format!(
-        r#"{{"tag_name":"{version}","body":"notes","draft":false,"prerelease":false,"html_url":"{HOST}/masi/papercraft/releases/tag/{version}","assets":[{list}]}}"#
+        r#"{{"tag_name":"{version}","body":"notes","draft":false,"prerelease":false,"html_url":"{HOST}/nxtime/papercraft/releases/tag/{version}","assets":[{list}]}}"#
     )
 }
 
@@ -52,7 +53,7 @@ fn newer_release_is_offered() {
     assert_eq!(release.notes, "notes");
     assert_eq!(
         release.url,
-        format!("{HOST}/masi/papercraft/releases/tag/v0.4.0")
+        format!("{HOST}/nxtime/papercraft/releases/tag/v0.4.0")
     );
 }
 
@@ -205,19 +206,38 @@ fn cli_and_web_archives_are_never_selected() {
 }
 
 #[test]
-fn portable_archives_are_never_selected() {
-    let name = "papercraft-0.4.0-windows-x64-portable.zip";
-    let json = feed("v0.4.0", &[(name, &url("0.4.0", name))]);
+fn windows_offers_the_installer_and_the_portable_bundle_separately() {
+    let (msi, msi_url) = windows_asset("0.4.0", "x64");
+    let zip = "papercraft-0.4.0-windows-x64-portable.zip";
+    let exe = "papercraft-0.4.0-windows-x64-portable.exe";
+    let json = feed(
+        "v0.4.0",
+        &[(msi.as_str(), msi_url.as_str()), (zip, &url("0.4.0", zip)), (exe, &url("0.4.0", exe))],
+    );
     let release = parse_release(&json, "0.3.1", "windows", "x86_64")
         .expect("feed parses")
         .expect("a newer release exists");
-    assert!(release.asset.is_none());
+    assert_eq!(release.asset.expect("the installer").name, msi);
+    let portable = release.portable.expect("the bundle");
+    assert_eq!(portable.name, zip);
+    assert!(validate_asset(&portable).is_ok());
+}
+
+#[test]
+fn a_release_without_a_checksum_cannot_be_downloaded() {
+    let asset = Asset {
+        name: "papercraft-0.4.0-macos-aarch64.dmg".into(),
+        url: url("0.4.0", "papercraft-0.4.0-macos-aarch64.dmg"),
+        size: 1024,
+        digest: String::new(),
+    };
+    assert!(validate_asset(&asset).is_err());
 }
 
 #[test]
 fn foreign_hosts_are_refused() {
     let name = "papercraft-0.4.0-macos-aarch64.dmg";
-    let evil = format!("https://evil.example.com/masi/papercraft/releases/download/v0.4.0/{name}");
+    let evil = format!("https://evil.example.com/nxtime/papercraft/releases/download/v0.4.0/{name}");
     let json = feed("v0.4.0", &[(name, &evil)]);
     assert!(parse_release(&json, "0.3.1", "macos", "aarch64").is_err());
 }
@@ -226,7 +246,7 @@ fn foreign_hosts_are_refused() {
 fn plain_http_is_refused() {
     let name = "papercraft-0.4.0-macos-aarch64.dmg";
     let plain =
-        format!("http://git.marcospaulo.dev.br/masi/papercraft/releases/download/v0.4.0/{name}");
+        format!("http://github.com/nxtime/papercraft/releases/download/v0.4.0/{name}");
     let json = feed("v0.4.0", &[(name, &plain)]);
     assert!(parse_release(&json, "0.3.1", "macos", "aarch64").is_err());
 }
@@ -235,13 +255,13 @@ fn plain_http_is_refused() {
 fn credentials_and_ports_are_refused() {
     let name = "papercraft-0.4.0-macos-aarch64.dmg";
     let creds = format!(
-        "https://user:pass@git.marcospaulo.dev.br/masi/papercraft/releases/download/v0.4.0/{name}"
+        "https://user:pass@github.com/nxtime/papercraft/releases/download/v0.4.0/{name}"
     );
     let json = feed("v0.4.0", &[(name, &creds)]);
     assert!(parse_release(&json, "0.3.1", "macos", "aarch64").is_err());
 
     let port = format!(
-        "https://git.marcospaulo.dev.br:8443/masi/papercraft/releases/download/v0.4.0/{name}"
+        "https://github.com:8443/nxtime/papercraft/releases/download/v0.4.0/{name}"
     );
     let json = feed("v0.4.0", &[(name, &port)]);
     assert!(parse_release(&json, "0.3.1", "macos", "aarch64").is_err());
@@ -258,8 +278,8 @@ fn fragments_are_refused() {
 #[test]
 fn release_pages_of_other_repositories_are_refused() {
     let json = feed("v0.4.0", &[]).replace(
-        &format!("{HOST}/masi/papercraft/releases/tag/v0.4.0"),
-        "https://git.marcospaulo.dev.br/other/repo/releases/tag/v0.4.0",
+        &format!("{HOST}/nxtime/papercraft/releases/tag/v0.4.0"),
+        "https://github.com/other/repo/releases/tag/v0.4.0",
     );
     assert!(parse_release(&json, "0.3.1", "macos", "aarch64").is_err());
 }
@@ -286,6 +306,7 @@ fn validate_asset_accepts_an_official_installer() {
         name: "papercraft-0.4.0-macos-aarch64.dmg".into(),
         url: url("0.4.0", "papercraft-0.4.0-macos-aarch64.dmg"),
         size: 1024,
+        digest: DIGEST.into(),
     };
     assert!(validate_asset(&asset).is_ok());
 }
@@ -296,6 +317,7 @@ fn validate_asset_refuses_archives_and_foreign_urls() {
         name: "papercraft-cli-0.4.0-macos-aarch64.zip".into(),
         url: url("0.4.0", "papercraft-cli-0.4.0-macos-aarch64.zip"),
         size: 1024,
+        digest: DIGEST.into(),
     };
     assert!(validate_asset(&archive).is_err());
 
@@ -303,6 +325,7 @@ fn validate_asset_refuses_archives_and_foreign_urls() {
         name: "papercraft-0.4.0-macos-aarch64.dmg".into(),
         url: "https://evil.example.com/papercraft-0.4.0-macos-aarch64.dmg".into(),
         size: 1024,
+        digest: DIGEST.into(),
     };
     assert!(validate_asset(&foreign).is_err());
 
@@ -310,6 +333,7 @@ fn validate_asset_refuses_archives_and_foreign_urls() {
         name: "../papercraft-0.4.0-macos-aarch64.dmg".into(),
         url: url("0.4.0", "../papercraft-0.4.0-macos-aarch64.dmg"),
         size: 1024,
+        digest: DIGEST.into(),
     };
     assert!(validate_asset(&traversal).is_err());
 
@@ -317,6 +341,7 @@ fn validate_asset_refuses_archives_and_foreign_urls() {
         name: "papercraft-0.4.0-macos-aarch64.dmg".into(),
         url: url("0.4.0", "papercraft-0.4.0-macos-aarch64.dmg"),
         size: 512 * 1024 * 1024,
+        digest: DIGEST.into(),
     };
     assert!(validate_asset(&huge).is_err());
 }

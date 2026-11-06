@@ -20,6 +20,9 @@ const END_LEN: usize = 22;
 const METHOD_STORED: u16 = 0;
 const METHOD_DEFLATE: u16 = 8;
 const MAX_ENTRY: usize = 256 << 20;
+/// Largest total inflated across the wanted entries of one archive; entries may overlap in the
+/// file, so the per-entry limit alone does not bound memory.
+const MAX_ZIP_TOTAL: usize = 1 << 30;
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 // ---------------------------------------------------------------------------------- detection
@@ -99,10 +102,21 @@ fn zip_has_entry(bytes: &[u8], target: &str) -> bool {
     false
 }
 
+/// Canvas bytes, the file name from `meta.json`, and the `images/*` entries.
+type FigZip = (Vec<u8>, Option<String>, HashMap<String, Vec<u8>>);
+
 /// Extract `canvas.fig`, optional `meta.json`, and any `images/*` entries from a `.fig` ZIP.
 fn read_fig_zip(
     bytes: &[u8],
-) -> Result<(Vec<u8>, Option<String>, HashMap<String, Vec<u8>>), String> {
+) -> Result<FigZip, String> {
+    read_fig_zip_capped(bytes, MAX_ZIP_TOTAL)
+}
+
+fn read_fig_zip_capped(
+    bytes: &[u8],
+    max_total: usize,
+) -> Result<FigZip, String> {
+    let mut total = 0usize;
     let end = (0..=bytes.len().saturating_sub(END_LEN))
         .rev()
         .find(|&i| u32_at(bytes, i) == Some(END_SIG))
@@ -138,12 +152,23 @@ fn read_fig_zip(
         let l_extra = u16_at(bytes, local + 28).ok_or("truncated zip")? as usize;
         let start = local + LOCAL_LEN + l_name + l_extra;
         let raw = bytes.get(start..start + csize).ok_or("truncated zip")?;
+        let budget = max_total - total;
+        let too_big = || format!("{name}: archive expands past {} MiB", max_total >> 20);
         let data = match method {
+            METHOD_STORED if raw.len() > budget => return Err(too_big()),
             METHOD_STORED => raw.to_vec(),
-            METHOD_DEFLATE => miniz_oxide::inflate::decompress_to_vec_with_limit(raw, MAX_ENTRY)
-                .map_err(|e| format!("cannot inflate {name}: {e:?}"))?,
+            METHOD_DEFLATE => {
+                miniz_oxide::inflate::decompress_to_vec_with_limit(raw, MAX_ENTRY.min(budget))
+                    .map_err(|e| match e.status {
+                        miniz_oxide::inflate::TINFLStatus::HasMoreOutput if budget < MAX_ENTRY => {
+                            too_big()
+                        }
+                        _ => format!("cannot inflate {name}: {:?}", e.status),
+                    })?
+            }
             m => return Err(format!("{name}: unsupported zip compression method {m}")),
         };
+        total += data.len();
         if name == "canvas.fig" {
             canvas = Some(data);
         } else if name == "meta.json" {
@@ -2161,6 +2186,17 @@ fn parse_svg_path_data(d: &str) -> Option<VPath> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fig_zip_refuses_entries_past_the_total_cap() {
+        let z = crate::io::zip::write(&[
+            ("canvas.fig".into(), vec![1; 600]),
+            ("images/a".into(), vec![2; 600]),
+        ]);
+        let err = read_fig_zip_capped(&z, 1000).unwrap_err();
+        assert!(err.contains("expands past"), "{err}");
+        assert_eq!(read_fig_zip_capped(&z, 1200).unwrap().2.len(), 1);
+    }
 
     #[test]
     fn rest_json_imports_frames_autolayout_shapes_and_text() {

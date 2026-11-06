@@ -37,7 +37,7 @@ pub fn is_zip(bytes: &[u8]) -> bool {
 }
 
 /// A relative path made only of normal components, so an archive cannot write outside `root`.
-fn safe_relative(name: &str) -> Option<PathBuf> {
+pub(crate) fn safe_relative(name: &str) -> Option<PathBuf> {
     let p = Path::new(name);
     p.components()
         .all(|c| matches!(c, Component::Normal(_)))

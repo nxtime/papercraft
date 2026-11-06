@@ -168,6 +168,7 @@ pub(crate) fn ellipse([x, y]: [f32; 2], [width, height]: [f32; 2]) -> Bezier {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::{ellipse, estimate, path, rectangle};
     use crate::lottie::model::{Bezier, Matrix};

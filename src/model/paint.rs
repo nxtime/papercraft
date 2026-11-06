@@ -317,6 +317,9 @@ pub struct TextSpan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct TextStyle {
+    /// An added font family (None = Inter). Inter stands in while it is not installed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
     pub bold: bool,
     pub italic: bool,
     /// Line height as a multiple of the font size (None = font default).

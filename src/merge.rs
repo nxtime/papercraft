@@ -21,7 +21,82 @@ const CHILD_LISTS: [&str; 2] = ["children", "root"];
 pub fn merge(base: &Value, local: &Value, remote: &Value) -> Value {
     let mut remote = remote.clone();
     renumber_clashes(base, local, &mut remote);
-    merge_value(Some(base), Some(local), Some(&remote)).unwrap_or(Value::Null)
+    let mut merged = merge_value(Some(base), Some(local), Some(&remote)).unwrap_or(Value::Null);
+    repair_tree(&mut merged);
+    merged
+}
+
+/// Child lists merge as sets, so a node moved to different parents on the two sides ends up in
+/// both lists, and a node added inside a deleted frame points at nothing. Each node's `parent`
+/// field is the truth: lists keep only their own children, and orphans move to the page root
+/// so the other side's work is not lost.
+fn repair_tree(page: &mut Value) {
+    let Some(nodes) = page.get(NODES).and_then(Value::as_array) else {
+        return;
+    };
+    let ids: BTreeSet<u64> = nodes.iter().filter_map(|n| n.get("id")?.as_u64()).collect();
+    let parent_of = |n: &Value| n.get("parent").and_then(Value::as_u64);
+    // A parent that is gone, or a missing parent field, puts the node at the root.
+    let mut parents: BTreeMap<u64, Option<u64>> = nodes
+        .iter()
+        .filter_map(|n| Some((n.get("id")?.as_u64()?, parent_of(n).filter(|p| ids.contains(p)))))
+        .collect();
+    // Two sides can parent each other's nodes into a loop cut off from the root: the nodes on
+    // a loop go to the root, so both sides' layers stay reachable.
+    for start in parents.keys().copied().collect::<Vec<_>>() {
+        let mut path = vec![start];
+        while let Some(Some(p)) = parents.get(path.last().unwrap_or(&start)).copied() {
+            if let Some(at) = path.iter().position(|n| *n == p) {
+                for n in path.split_off(at) {
+                    parents.insert(n, None);
+                }
+                break;
+            }
+            path.push(p);
+        }
+    }
+    let listed = |v: Option<&Value>, owner: Option<u64>| -> Vec<u64> {
+        let mut seen = BTreeSet::new();
+        let kept = v.and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64);
+        kept.filter(|id| parents.get(id) == Some(&owner) && seen.insert(*id)).collect()
+    };
+    let mut lists: BTreeMap<Option<u64>, Vec<u64>> = BTreeMap::new();
+    lists.insert(None, listed(page.get("root"), None));
+    for n in nodes {
+        if let Some(id) = n.get("id").and_then(Value::as_u64) {
+            lists.insert(Some(id), listed(n.get("children"), Some(id)));
+        }
+    }
+    for (id, parent) in &parents {
+        let list = lists.entry(*parent).or_default();
+        if !list.contains(id) {
+            list.push(*id);
+        }
+    }
+    let Some(nodes) = page.get_mut(NODES).and_then(Value::as_array_mut) else {
+        return;
+    };
+    for n in nodes {
+        let Some(id) = n.get("id").and_then(Value::as_u64) else {
+            continue;
+        };
+        let Some(obj) = n.as_object_mut() else {
+            continue;
+        };
+        match parents.get(&id) {
+            Some(Some(p)) => obj.insert("parent".into(), Value::from(*p)),
+            _ => obj.remove("parent"),
+        };
+        let children = &lists[&Some(id)];
+        if children.is_empty() {
+            obj.remove("children");
+        } else {
+            obj.insert("children".into(), Value::from(children.clone()));
+        }
+    }
+    if let Some(root) = page.as_object_mut() {
+        root.insert("root".into(), Value::from(lists[&None].clone()));
+    }
 }
 
 fn merge_value(b: Option<&Value>, l: Option<&Value>, r: Option<&Value>) -> Option<Value> {
@@ -255,11 +330,76 @@ mod tests {
         assert_eq!(m["root"], json!([1]));
     }
 
+    fn tree(nodes: Value, root: Value) -> Value {
+        page(nodes, root, 10)
+    }
+
+    fn children(m: &Value, id: u64) -> Value {
+        let n = m["nodes"].as_array().unwrap().iter().find(|n| n["id"] == id).unwrap();
+        n.get("children").cloned().unwrap_or(json!([]))
+    }
+
+    #[test]
+    fn a_layer_moved_into_different_frames_stays_in_one_parent() {
+        let base = tree(
+            json!([{"id": 1, "children": []}, {"id": 2, "children": []}, {"id": 3}]),
+            json!([1, 2, 3]),
+        );
+        let local = tree(
+            json!([{"id": 1, "children": [3]}, {"id": 2, "children": []}, {"id": 3, "parent": 1}]),
+            json!([1, 2]),
+        );
+        let remote = tree(
+            json!([{"id": 1, "children": []}, {"id": 2, "children": [3]}, {"id": 3, "parent": 2}]),
+            json!([1, 2]),
+        );
+        let m = merge(&base, &local, &remote);
+        assert_eq!(m["nodes"][2]["parent"], 1, "local wins the clash");
+        assert_eq!(children(&m, 1), json!([3]));
+        assert_eq!(children(&m, 2), json!([]), "the other frame no longer lists it");
+    }
+
+    #[test]
+    fn a_layer_added_in_a_frame_deleted_by_the_other_side_moves_to_the_root() {
+        let base = tree(json!([{"id": 1, "children": []}]), json!([1]));
+        let local = tree(json!([]), json!([]));
+        let remote = tree(
+            json!([{"id": 1, "children": [2]}, {"id": 2, "parent": 1}]),
+            json!([1]),
+        );
+        let m = merge(&base, &local, &remote);
+        let nodes = m["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1, "the frame stays deleted, the new layer survives");
+        assert_eq!(nodes[0]["id"], 2);
+        assert!(nodes[0].get("parent").is_none());
+        assert_eq!(m["root"], json!([2]));
+    }
+
     #[test]
     fn the_same_property_changed_on_both_sides_keeps_the_local_value() {
         let base = page(json!([{"id": 1, "x": 0}]), json!([1]), 2);
         let local = page(json!([{"id": 1, "x": 1}]), json!([1]), 2);
         let remote = page(json!([{"id": 1, "x": 2}]), json!([1]), 2);
         assert_eq!(merge(&base, &local, &remote)["nodes"][0]["x"], 1);
+    }
+
+    #[test]
+    fn parents_set_to_each_other_on_the_two_sides_do_not_form_a_loop() {
+        let base = page(json!([{"id": 1}, {"id": 2}]), json!([1, 2]), 3);
+        let local = page(
+            json!([{"id": 1, "parent": 2}, {"id": 2, "children": [1]}]),
+            json!([2]),
+            3,
+        );
+        let remote = page(
+            json!([{"id": 1, "children": [2]}, {"id": 2, "parent": 1}]),
+            json!([1]),
+            3,
+        );
+        let m = merge(&base, &local, &remote);
+        let nodes = m["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes.iter().all(|n| n.get("parent").is_none()), "{m}");
+        assert_eq!(m["root"], json!([1, 2]));
     }
 }

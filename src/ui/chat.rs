@@ -43,6 +43,9 @@ const CONTEXT_WINDOW: u64 = 1_000_000;
 /// A free model that failed a "Free (auto)" turn is left out of the next ones for this long.
 #[cfg(not(target_arch = "wasm32"))]
 const FREE_RETRY_AFTER: Duration = Duration::from_secs(15 * 60);
+/// A running turn silent this long (no text, tool or status) gets the "No reply" card: an agent
+/// whose provider is rate limiting may retry quietly for minutes.
+const QUIET_AFTER: Duration = Duration::from_secs(90);
 /// Past this a CLI chat's next message starts a fresh agent session with a recap: every step
 /// re-reads the whole context, and answers get worse well before the window is full.
 const FRESH_SESSION_AT: u64 = 120_000;
@@ -206,6 +209,8 @@ pub struct Detect {
     pub hidden: Vec<String>,
     /// Model listings read from agents' CLIs during the scan (agent id, models).
     pub catalogs: Vec<(String, Vec<crate::chat::models::AgentModel>)>,
+    /// A scan is still running: what is shown may change (the panel says "Detecting agents").
+    pub scanning: bool,
 }
 
 impl Detect {
@@ -274,8 +279,11 @@ impl Detect {
     }
 }
 
+/// Scans in two steps, each sent on `tx`: which agents and endpoints can run, then (seconds later)
+/// the Codex plan and the model listings. The picker fills as soon as the first step lands
+/// instead of waiting for `opencode models` and `codex login status`.
 #[cfg(not(target_arch = "wasm32"))]
-fn scan(prefs: &super::settings::ChatPrefs) -> Detect {
+fn scan(prefs: &super::settings::ChatPrefs, tx: &std::sync::mpsc::Sender<Detect>) {
     use crate::chat::{claude_code, codex, endpoint};
     use std::path::Path;
     let endpoints = prefs
@@ -286,21 +294,33 @@ fn scan(prefs: &super::settings::ChatPrefs) -> Detect {
             EndpointState { id: e.id.clone(), key, ready: e.is_complete() && (key || !e.needs_key()) }
         })
         .collect();
-    let codex = codex::detect(cli_path(prefs, "codex").map(Path::new));
-    // `codex login status` prints "Logged in using ChatGPT" (to stderr in 0.162).
-    let codex_plan = codex.as_ref().is_some_and(|(bin, _)| {
-        std::process::Command::new(bin).args(["login", "status"]).env_remove("OPENAI_API_KEY").env_remove("CODEX_API_KEY").output().is_ok_and(|o| [&o.stdout, &o.stderr].iter().any(|b| String::from_utf8_lossy(b).contains("ChatGPT")))
+    // The CLIs are probed side by side with the registry: each can wait out its own timeout.
+    let (claude, codex, agents) = std::thread::scope(|s| {
+        let claude = s.spawn(|| claude_code::detect(cli_path(prefs, "claude-code").map(Path::new)));
+        let codex = s.spawn(|| codex::detect(cli_path(prefs, "codex").map(Path::new)));
+        let agents = agents::detect_all(prefs);
+        (claude.join().ok().flatten(), codex.join().ok().flatten(), agents)
     });
-    Detect {
-        claude: claude_code::detect(cli_path(prefs, "claude-code").map(Path::new)),
+    let mut d = Detect {
+        claude,
         codex,
-        codex_plan,
         endpoints,
         default_endpoint: prefs.default_endpoint.clone(),
-        agents: agents::detect_all(prefs),
+        agents,
         hidden: prefs.agents.iter().filter(|(_, a)| a.hidden).map(|(id, _)| id.clone()).collect(),
-        catalogs: [("opencode", opencode_catalog(prefs)), ("pi", pi_catalog(prefs))].into_iter().filter_map(|(id, m)| Some((id.to_owned(), m?))).collect(),
+        scanning: true,
+        ..Default::default()
+    };
+    if tx.send(d.clone()).is_err() {
+        return;
     }
+    // `codex login status` prints "Logged in using ChatGPT" (to stderr in 0.162).
+    d.codex_plan = d.codex.as_ref().is_some_and(|(bin, _)| {
+        crate::chat::path::no_window(std::process::Command::new(bin).args(["login", "status"]).env_remove("OPENAI_API_KEY").env_remove("CODEX_API_KEY")).output().is_ok_and(|o| [&o.stdout, &o.stderr].iter().any(|b| String::from_utf8_lossy(b).contains("ChatGPT")))
+    });
+    d.catalogs = [("opencode", opencode_catalog(prefs)), ("pi", pi_catalog(prefs))].into_iter().filter_map(|(id, m)| Some((id.to_owned(), m?))).collect();
+    d.scanning = false;
+    let _ = tx.send(d);
 }
 
 /// opencode's models, listed the way a turn would start it (lean or not).
@@ -419,6 +439,10 @@ pub struct ChatState {
     live_context: Option<u64>,
     /// Free models that failed a "Free (auto)" turn, and when; skipped for `FREE_RETRY_AFTER`.
     free_failed: Vec<(String, web_time::Instant)>,
+    /// The running turn's agent is waiting out a failed model call (rate limit, overload).
+    pub retry: Option<crate::chat::events::Retry>,
+    /// When the running turn last sent anything: a long silence gets the "No reply" card.
+    last_event: Option<web_time::Instant>,
     /// Actual model last reported for each open chat, including Free (auto) selections.
     active_models: HashMap<String, String>,
     /// Models agents offered (agent id, list): from the scan or a session, for `keep_models`.
@@ -616,6 +640,12 @@ impl ChatState {
         on
     }
 
+    /// Seconds the running turn has sent nothing, once that passes `QUIET_AFTER`.
+    pub fn quiet_secs(&self) -> Option<u64> {
+        let secs = self.last_event.filter(|_| self.is_running() && !self.stopping)?.elapsed().as_secs();
+        (secs >= QUIET_AFTER.as_secs()).then_some(secs)
+    }
+
     /// Asks the backend to stop. The turn stays running (and its chat busy) until the backend
     /// sends its last event; `pump` then folds the rest in, saves and ends it like any turn.
     pub fn stop(&mut self) {
@@ -698,6 +728,7 @@ impl ChatState {
     pub fn apply(&mut self, ev: Event) -> bool {
         let Some(chat) = self.chat.as_mut() else { return false };
         let now = now_ms();
+        self.last_event = Some(web_time::Instant::now());
         match ev {
             Event::Text(d) => text_target(chat, now).text.push_str(&d),
             Event::Thinking(d) => {
@@ -781,7 +812,9 @@ impl ChatState {
                 let line = format!("\n\n*Switched to {}: {} failed ({reason})*\n\n", names(&to), names(&from));
                 text_target(chat, now).text.push_str(&line);
                 self.free_failed.push((from, web_time::Instant::now()));
+                self.retry = None;
             }
+            Event::Retrying(r) => self.retry = r,
             Event::Context(n) => {
                 self.live_context = Some(n);
                 self.turn_read += n;
@@ -904,6 +937,12 @@ impl ChatState {
         self.turn = None;
         self.rx = None;
         self.stopped = std::mem::take(&mut self.stopping);
+        // Stopped while the provider kept failing: say why, so Retry (after picking another model
+        // or agent) reads as the way on.
+        if let Some(r) = self.retry.take().filter(|_| self.stopped && self.error.is_none()) {
+            self.error = Some(format!("Stopped while the provider kept failing: {}. Pick another model or agent, then Retry.", r.message));
+        }
+        self.last_event = None;
         self.approvals.clear();
         self.save();
         // The agent run does not wait for its 30 s idle timeout once the turn that made it is over.
@@ -1056,6 +1095,7 @@ impl ChatState {
                 (self.thinking_since, self.thought_secs) = (None, None);
                 self.save();
                 self.stopping = false;
+                (self.retry, self.last_event) = (None, Some(web_time::Instant::now()));
                 self.live_context = None;
                 (self.turn_read, self.budget_hit) = (0, false);
                 self.window = Some(TurnWindow { chat: turn_chat.clone(), start: now_ms(), edits: None });
@@ -1176,15 +1216,26 @@ impl ChatState {
             self.prefs.clone_from(prefs);
         }
         if let Some(rx) = &self.detect_rx {
-            match rx.try_recv() {
-                Ok(mut d) => {
-                    self.seen_models.append(&mut d.catalogs);
-                    self.detect = Some(d);
-                    self.detect_rx = None;
+            // The scan sends what can run first, then the model listings; the channel closes after.
+            loop {
+                match rx.try_recv() {
+                    Ok(mut d) => {
+                        self.seen_models.append(&mut d.catalogs);
+                        self.detect = Some(d);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        ctx.request_repaint_after(REPAINT);
+                        return;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        if let Some(d) = &mut self.detect {
+                            d.scanning = false;
+                        }
+                        self.detect_rx = None;
+                        return;
+                    }
                 }
-                Err(_) => ctx.request_repaint_after(REPAINT),
             }
-            return;
         }
         if self.detect.is_none() {
             self.rescan(ctx, prefs);
@@ -1198,9 +1249,13 @@ impl ChatState {
             let (tx, rx) = std::sync::mpsc::channel();
             let (prefs, ctx) = (prefs.clone(), ctx.clone());
             std::thread::spawn(move || {
-                let _ = tx.send(scan(&prefs));
+                scan(&prefs, &tx);
                 ctx.request_repaint();
             });
+            // What is on screen stays until the new answer lands, marked as being refreshed.
+            if let Some(d) = &mut self.detect {
+                d.scanning = true;
+            }
             self.detect_rx = Some(rx);
         }
         #[cfg(target_arch = "wasm32")]
@@ -1974,11 +2029,14 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, backdrop: egui::Rect) 
             issues: &st.chat.issues,
             signin: signin.as_ref(),
             live_run: st.run_open.iter().find(|r| r.client.split(" \u{b7} ").next() == Some(crate::mcp::CHAT_CLIENT)),
+            retry: st.chat.retry.as_ref().filter(|_| st.chat.turn_chat.as_ref() == Some(&chat.id)),
+            quiet_secs: st.chat.quiet_secs().filter(|_| st.chat.turn_chat.as_ref() == Some(&chat.id)),
         };
         chat_msgs::list(ui, chat, &view, &mut acts);
     }
     if let Some(chip) = chip.filter(|_| st.chat.picker_open) {
-        let (d, backend) = (st.chat.detect.clone().unwrap_or_default(), st.chat.chat.as_ref().map(|c| c.backend.clone()).unwrap_or_default());
+        let d = st.chat.detect.clone().unwrap_or(Detect { scanning: true, ..Default::default() });
+        let backend = st.chat.chat.as_ref().map(|c| c.backend.clone()).unwrap_or_default();
         let input = PanelIn { detect: &d, prefs: &st.settings.chat, backend: &backend, running: st.chat.is_running(), column: column_rect, backdrop, chip, composer_top };
         if let Some(a) = chat_agents::panel(&ctx, &mut st.chat.panel, &input) {
             st.chat.act(&ctx, a, &mut st.settings);
@@ -2035,6 +2093,10 @@ fn apply_acts(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, acts: Acts
     }
     if let Some(id) = acts.restore {
         st.pending_restore = Some(id);
+    }
+    if acts.stop_and_switch {
+        st.chat.stop();
+        (st.chat.picker_open, st.chat.panel.fresh) = (true, true);
     }
     if let Some(id) = acts.review {
         st.review_run = Some(id);

@@ -157,7 +157,7 @@ pub fn parse_pi(out: &str) -> Vec<AgentModel> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_pi(program: &std::path::Path, env: &[(String, String)]) -> Option<Vec<AgentModel>> {
     let mut cmd = std::process::Command::new(program);
-    cmd.args(["--list-models", "--offline"]).envs(env.iter().cloned()).stdin(std::process::Stdio::null());
+    crate::chat::path::no_window(&mut cmd).args(["--list-models", "--offline"]).envs(env.iter().cloned()).stdin(std::process::Stdio::null());
     super::path::apply(&mut cmd);
     let out = cmd.output().map_err(|e| log::warn!("models: could not run {}: {e}", program.display())).ok()?;
     let models = parse_pi(&String::from_utf8_lossy(&out.stdout));
@@ -169,7 +169,7 @@ pub fn fetch_pi(program: &std::path::Path, env: &[(String, String)]) -> Option<V
 #[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_opencode(program: &std::path::Path, env: &[(String, String)]) -> Option<Vec<AgentModel>> {
     let mut cmd = std::process::Command::new(program);
-    cmd.args(["models", "--verbose"]).envs(env.iter().cloned()).stdin(std::process::Stdio::null());
+    crate::chat::path::no_window(&mut cmd).args(["models", "--verbose"]).envs(env.iter().cloned()).stdin(std::process::Stdio::null());
     super::path::apply(&mut cmd);
     let out = cmd.output().map_err(|e| log::warn!("models: could not run {}: {e}", program.display())).ok()?;
     let models = parse_opencode(&String::from_utf8_lossy(&out.stdout));

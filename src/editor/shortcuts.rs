@@ -407,12 +407,15 @@ pub fn category(a: Action) -> &'static str {
         | A::SaveAs
         | A::ExportPng
         | A::ExportSvg
+        | A::ExportPdf
         | A::ExportPresentation
         | A::PlaceImage
         | A::Home => "File",
         A::Undo
         | A::Redo
         | A::Copy
+        | A::CopyAsPng
+        | A::CopyAsSvg
         | A::Cut
         | A::Paste
         | A::Duplicate

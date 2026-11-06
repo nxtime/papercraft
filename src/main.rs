@@ -1,3 +1,6 @@
+// A launched app must not open a terminal window; `main` re-attaches to one it was run from.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use papercraft::app::Start;
 use papercraft::editor::Editor;
 use papercraft::io::{export, file, import, png, svg};
@@ -62,7 +65,16 @@ fn load_editor(path: Option<&str>, demo: bool) -> Result<Editor, String> {
 }
 
 fn main() -> ExitCode {
+    // Fails when no terminal started us, which is the normal launch and needs no handling.
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    if let Some(path) = papercraft::crash_log::path() {
+        papercraft::crash_log::install(path);
+    }
     match run(std::env::args().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

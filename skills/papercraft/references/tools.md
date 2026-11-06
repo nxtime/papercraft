@@ -70,12 +70,22 @@ Essential context about the open project: project name, the page, node count, ar
 The selected layers on the page the user is viewing: ids, names, types, sizes, positions and the artboard each belongs to, plus `viewport` ({pageId, rect: [x, y, w, h] world, zoom}).
 
 
-### `get_node_info` (read-only)
+### `get_context` (read-only)
 
-Details of one node: type, name, size, visibility, lock state, parent, children ids, text content, x/y (relative to parent) and worldX/worldY. Errors if it doesn't exist.
+The one compact read to make before editing (about 2k tokens): the `page`, the `target` (`id`, else the first selected layer, else the whole page) and its `screen`, the `selection`, an `outline` of the target two levels deep with child counts and an `estimatedTokens` per layer (what a `get_tree_summary` of it costs, so you know what is cheap to read next), the `variables` used inside it (value in the active mode, collection), every collection with its modes and the active one, the `components` used with instance counts, and a `lint` summary of the target only (counts per rule and the first 5 findings). Read deeper nodes afterwards, one at a time.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
+| `id` | string |  | A layer or screen to describe; omit for the selection, else the page. |
+
+
+### `get_node_info` (read-only)
+
+Details of one node: type, name, size, visibility, lock state, parent, children ids, text content, x/y (relative to parent) and worldX/worldY. Errors if it doesn't exist. Reports `estimatedTokens`; over `maxTokens` the child ids are cut (`truncated`).
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `maxTokens` | number |  | Token budget of the result (default 20000). Over it the result is cut at a whole node or line, `truncated` is true and the result says how to read the rest. |
 | `nodeId` | string | yes | The node to inspect. |
 
 
@@ -92,22 +102,25 @@ Rects of a whole subtree in one read, instead of one get_node_info per layer. Re
 
 ### `get_children` (read-only)
 
-Direct children of a node (or of the page root when nodeId is "root"), with ids, names, types, child counts and positions.
+Direct children of a node (or of the page root when nodeId is "root"), with ids, names, types, child counts and positions. Reports `estimatedTokens`; over `maxTokens` the list is cut (`truncated`).
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
+| `maxTokens` | number |  | Token budget of the result (default 20000). Over it the result is cut at a whole node or line, `truncated` is true and the result says how to read the rest. |
 | `nodeId` | string | yes | The parent node, or "root". |
 
 
 ### `get_tree_summary` (read-only)
 
-Compact indented text tree of a subtree: type, name, id and size per node. Much cheaper than get_jsx for orientation. nodeId "root" summarizes the whole page.
+Compact indented text tree of a subtree: type, name, id and size per node. Much cheaper than get_jsx for orientation. nodeId "root" summarizes the whole page. A second result block reports `estimatedTokens`; over `maxTokens` the tree is cut at a whole line and the block carries `truncated`, `nextOffset` (pass it as `offset`) and a hint.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
+| `maxTokens` | number |  | Token budget of the result (default 20000). Over it the result is cut at a whole node or line, `truncated` is true and the result says how to read the rest. |
 | `depth` | number |  | Levels shown, counting nodeId (or each top-level layer for "root") as level 1 (default 3, max 10). Deeper levels collapse to "… N children". |
 | `fullText` | boolean |  | Show each text layer's complete text instead of its first 40 characters (for copy review). |
 | `nodeId` | string | yes | Root of the summary, or "root". |
+| `offset` | number |  | Line to start at: the `nextOffset` of a truncated result. |
 
 Depth counts from the node you pass, not from the page. For an artboard `Home` with a `Screens` frame holding rows, `{"nodeId": "<Home id>", "depth": 2}` stops at `Screens`:
 
@@ -122,22 +135,26 @@ The rows inside `Screens` are level 3, so they need `depth: 3` from `Home` (the 
 
 ### `get_jsx` (read-only)
 
-Export a node and its descendants to code: "inline" (default, React JSX with inline styles), "tailwind" (React JSX with Tailwind CSS utility classes), "react" (React TSX component), "angular" (Angular v17+ standalone component), "html" (self-contained <style> + HTML markup), or "egui" (Rust egui 0.36 code with tokens).
+Export a node and its descendants to code: "inline" (default, React JSX with inline styles), "tailwind" (React JSX with Tailwind CSS utility classes), "react" (React TSX component), "angular" (Angular v17+ standalone component), "html" (self-contained <style> + HTML markup), or "egui" (Rust egui 0.36 code with tokens). A second result block reports `estimatedTokens`; over `maxTokens` the code is cut at a whole line and the block carries `truncated`, `nextOffset` (pass it as `offset`) and a hint to export a narrower node.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
+| `maxTokens` | number |  | Token budget of the result (default 20000). Over it the result is cut at a whole node or line, `truncated` is true and the result says how to read the rest. |
 | `format` | `inline` \| `inline-styles` \| `tailwind` \| `react` \| `angular` \| `html` \| `egui` |  | Output format: "inline" (default), "tailwind", "react", "angular", "html", or "egui". |
 | `nodeId` | string | yes | The node to convert. |
+| `offset` | number |  | Line to start at: the `nextOffset` of a truncated result. |
 
 
 ### `get_design_spec` (read-only)
 
-Export a deterministic AI Design-to-Code specification for a frame or subtree. Includes all design tokens/variables, component instances, exact auto-layout tree (sizing, flex/grid/egui flow, gaps, paddings, bound `--var` colors), mandatory enforcement rules, and reference target code. Always call this before implementing a design in React, Tailwind, Angular, HTML/CSS, or Rust egui instead of guessing from a screenshot.
+Export a deterministic AI Design-to-Code specification for a frame or subtree. Includes all design tokens/variables, component instances, exact auto-layout tree (sizing, flex/grid/egui flow, gaps, paddings, bound `--var` colors), mandatory enforcement rules, and reference target code. Always call this before implementing a design in React, Tailwind, Angular, HTML/CSS, or Rust egui instead of guessing from a screenshot. Reports `estimatedTokens` (json format: a field; other formats: a second result block); over `maxTokens` the output is cut at a whole line (json: whole array elements) and flagged `truncated` with how to read the rest.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
+| `maxTokens` | number |  | Token budget of the result (default 20000). Over it the result is cut at a whole node or line, `truncated` is true and the result says how to read the rest. |
 | `format` | `markdown` \| `json` |  | Output format: "markdown" (default) or "json". |
 | `nodeId` | string | yes | Root frame or node id to export. |
+| `offset` | number |  | Line to start at: the `nextOffset` of a truncated result. |
 | `target` | `react` \| `tailwind` \| `angular` \| `html` \| `egui` |  | Target UI framework (default "react"). |
 
 
@@ -191,9 +208,17 @@ The image used by a node's image fill, as image content.
 | `nodeId` | string | yes | A node with an image fill. |
 
 
+### `install_font`
+
+Add a font and keep it in the open project, so it travels with the project. Takes one .ttf or .otf per call (one style of a family; a variable font gives its default style); call again for its bold and italic files. Returns the family; use it as font-family in write_html and update_styles. Check the font's licence allows the use.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `source` | string | yes | A local file path, or an http(s) URL of the font file itself (not a web page, zip or WOFF). |
+
 ### `get_font_family_info` (read-only)
 
-Whether font families are available and their weights/styles. papercraft renders text with Inter (400, 700, normal and italic); other families fall back to Inter.
+Whether font families are available and their weights/styles. Inter (400, 700, normal and italic) is built in and families added with install_font follow; others fall back to Inter.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
@@ -294,6 +319,25 @@ Write the handoff bundle a code base builds from into a folder: index.md (one li
 | `since` | string |  | Handoff point to report changes against. |
 
 
+### `export_site`
+
+Write frames of a page as a website in one call; returns a short summary, never the markup. Before the first export ASK THE PERSON which `framework`, `render` and `styling` they want, and recommend from what they have: the framework their repo or team uses (read package.json), else html for a finished site nobody will develop or astro for a content site they will grow. Client JavaScript per page (gzip): html and astro 0; static vue ~71 KB, angular ~77 KB, react ~135 KB; spa vue ~40 KB, angular ~63 KB, react ~97 KB. render static (prerendered) for anything public that needs search or link previews, spa only for an app behind a login. styling: what their project uses, else css; scss and tailwind work everywhere; CSS-in-JS is react only: vanilla-extract (recommended, zero runtime), styled-components or emotion. Defaults html, static, css. One page per frame (the first is the home page) with semantic tags and one h1, <img> alt and link labels from layer names, self-hosted fonts, Open Graph and robots.txt; `base_url` makes canonical and hreflang absolute and adds sitemap.xml. Prototype links to exported frames and Url links become links. With `modes` (a collection whose modes are languages such as en and pt-BR) each mode is a locale: text that differs becomes a message per locale, styles that differ become :lang() rules. A project (any framework, scss, tailwind) needs a build: follow `next_steps`. The folder must be new, empty or an earlier export_site folder; a re-export removes only what the previous one wrote. Per framework: [export-site.md](export-site.md). Returns {dir, framework, render, styling, pages, files, bytes, written, removed, links: {resolved, unresolved}, urls, next_steps, warnings}.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `path` | string | yes | Folder to write into (created if missing). |
+| `frames` | array |  | Frame ids, in page order. Default: the page's screens (set_screens), else its top-level frames. |
+| `modes` | object |  | `{collection, modes: [..]}`: collection name or id and the mode names to export, e.g. ["en", "pt-BR"]. |
+| `base_url` | string |  | Where the site will be served (https://example.com): absolute hreflang and canonical URLs, and sitemap.xml. |
+| `framework` | string |  | Output: html (static pages, no build step), or a project for react, vue, angular or astro. Ask the person; default html. |
+| `render` | string |  | static: pages pre-rendered for search (landing, marketing, docs). spa: client-rendered app (behind a login). Only for react, vue and angular. Ask the person; default static. |
+| `styling` | string |  | css (default, no build step), scss, tailwind, or CSS-in-JS for react only: vanilla-extract (recommended, zero runtime), styled-components, emotion. Ask the person; use what their project uses. |
+| `lang` | string |  | Language tag of a single-language site (en, pt-BR): `<html lang>` and og:locale. |
+| `title` | string or object |  | Site title: the home page title and the suffix of the others. Default: the frame names. With `modes`, an object keyed by mode name (`{"en": "...", "pt-BR": "..."}`) gives each language its own; a language without an entry takes the base language's. |
+| `description` | string or object |  | Meta description for every page. Default: each page's first line of copy. With `modes`, an object keyed by mode name gives each language its own, as for `title`. |
+| `pageId` | string |  | Page to export from (default the active page). |
+
+
 ## Write
 
 ### `create_artboard`
@@ -311,7 +355,7 @@ Creates an artboard (top-level frame) and returns its id; then add content with 
 Parse HTML with inline styles into layers. Write incrementally: each call should add one visual group (a header, one list row, a card) so the user sees progress.
 - mode "insert-children" appends the HTML inside targetNodeId ("root" = the page); "replace" replaces targetNodeId with it.
 - Inline styles only. Flexbox (display:flex, flex-direction, gap, padding, align-items, justify-content, align-self, flex-grow, flex-wrap) is the layout model; block elements stack vertically. position:absolute with left/top is supported. Margins become gaps or spacers, display:grid becomes rows of cells, text inputs show their placeholder (each reported in warnings). No tables.
-- Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, letter-spacing, text-align, text-decoration (including wavy and text-decoration-color); <b>/<i>/<u>/<s>/<span style> make rich text. Font family is always Inter.
+- Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, letter-spacing, text-align, text-decoration (including wavy and text-decoration-color); <b>/<i>/<u>/<s>/<span style> make rich text. font-family applies to a whole text layer: the first installed family in the list, Inter by default.
 - Boxes: background(-color/-image: colors, linear/radial gradients, url()), border (and border-top/right/bottom/left), border-radius, opacity, overflow:hidden, mix-blend-mode, width/height (px, %, fit-content), min-width/max-width/min-height/max-height.
 - <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths or data: URIs. <svg> markup is imported as vector layers.
 - <x-paper-icon name="set:name" size="20" color="var(--accent)"/> places an installed icon (search_icons); <x-paper-instance component="Name" component-id="ID" layer-name="..."/> places a component instance; colors may be var(--name) of set_variables.
@@ -323,6 +367,15 @@ Returns the ids of the created top-level layers and the styles that were ignored
 | `html` | string | yes | HTML to parse into layers. |
 | `mode` | `insert-children` \| `replace` | yes |  |
 | `targetNodeId` | string | yes | Target node id, or "root" for the page. |
+
+### `import_html`
+
+Open an HTML page exported by a prompt-to-design tool as layers: a .html file or a .zip with its stylesheets and images. `<style>` blocks and linked stylesheets are inlined (tag, .class and #id selectors; media queries and combinators are reported), images in the zip become assets, and each HTML file is written with write_html into its own new top-level frame on the page (side by side, named after the file). Returns the frames per file, `ignoredStyles` grouped by property and `warnings`.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `path` | string | yes | A local .html or .zip file. |
+| `pageId` | string | no | The page for the frames. Default: the active page. |
 
 
 ### `update_styles`
@@ -414,6 +467,17 @@ Variables of the page's project. Default JSON: `variables` (name -> hex), `token
 | `format` | `css` \| `json` \| `tailwind` |  |  |
 
 
+### `get_strings` (read-only)
+
+The page text for translation, with no styles or geometry. Returns `strings` (text layers bound to a string variable, by variable name, with the value per mode name), `unbound` (layer id -> text of text layers bound to nothing; set_strings {extract} binds them), `missing` (per mode name, the keys with no value of their own, which show the base text) and `collections`. `missing` set to a mode name returns only {mode, base, missing: {key: base text}}, so a translation is done in steps. Scope: `frame` (a layer id; default every layer of the page), `pageId`; `collection` keeps one collection.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `collection` | string |  | Collection name or id to keep. |
+| `frame` | string |  | Layer id to read inside. Omitted = the whole page. |
+| `missing` | string |  | A mode name: only the keys that mode lacks, with their base text. |
+
+
 ### `set_variables`
 
 Define or change variables (names like `surface`, `accent-text`, or grouped `color/brand/primary`), on every page. Plain {"name": "#hex"} defines a color. An entry may be an object {value, type, collection, mode, alias, description, hidden}: `type` color|number|string|boolean (numbers bind as px), `collection` a name or id (created if missing), `alias` the name of another variable of the same type. Use them as `var(--name)` in write_html / update_styles / create_artboard colors (backgroundColor, background, color) instead of hex literals, so a theme change is one call. Fills already following a changed variable are updated. Variables apply to fills and text color; strokes and gradients keep fixed colors.
@@ -457,13 +521,27 @@ Define non-color design tokens (spacing, radius, font size, shadows, widths), on
 
 ### `bind_variable`
 
-Bind a field of layers to a variable (or detach it). `field`: stroke, text-color, width, height, gap, padding, padding-top/right/bottom/left, radius, font-size, line-height, opacity, visible. `variable` is a name like color/brand/primary or its css name; null or omitted detaches (the current value stays). The value applies at once; on an instance the field becomes an override.
+Bind a field of layers to a variable (or detach it). `field`: stroke, text-color, width, height, gap, padding, padding-top/right/bottom/left, radius, font-size, line-height, opacity, visible, text (a text layer's content, from a string variable; typing into the layer detaches it). `variable` is a name like color/brand/primary or its css name; null or omitted detaches (the current value stays). The value applies at once; on an instance the field becomes an override.
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
 | `field` | string | yes |  |
 | `nodeIds` | array of string | yes | Layers to bind. |
 | `variable` | string \| null |  |  |
+
+
+### `set_strings`
+
+Translate a page in one undoable call; languages are modes of a string collection, never copies. Does not switch the active mode (set_variable_mode does). One of: (a) `extract` true with `frame` (default the page) and `collection` (default `Strings`, created with a base mode named `mode`, default `Default`): every unbound text layer gets a string variable named from its layer path (`hero/title`, repeats numbered), holding its text in the base mode, and is bound to it; returns the keys with their texts. (b) `collection`, `mode` and `strings` {key: text}: sets those values, creating the mode if missing; an unknown key, a non-string variable or an unknown collection is an error that lists the offenders and changes nothing. (c) `collection`, `mode` and `pseudo` true: fills the mode with the base text accented, about 35% longer and in brackets, to show overflow before a real translation. Bound text re-fits when the mode is switched, so run lint_design and get_screenshot per mode.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `collection` | string |  | Collection name or id. |
+| `extract` | boolean |  |  |
+| `frame` | string |  | extract: layer id to read inside. Omitted = the whole page. |
+| `mode` | string |  | Mode name (the language); extract: the base mode's name when the collection is created. |
+| `pseudo` | boolean |  |  |
+| `strings` | object |  | {key: text}, keys as returned by get_strings. |
 
 
 ### `set_variable_mode`
@@ -495,7 +573,11 @@ Write the page's variables, modes and tokens as an OpenDesign design-system pack
 
 ### `get_components` (read-only)
 
-Main components of every page (or one with `pageId`): id, name, `componentKey` (stable), `pageId`, `pageName`, size, and `uses` (instances across all pages).
+Main components of every page (or one with `pageId`): id, name, `componentKey` (stable), `pageId`, `pageName`, size, and `uses` (instances across all pages). Reports `estimatedTokens`; over `maxTokens` the list is cut (`truncated`).
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `maxTokens` | number |  | Token budget of the result (default 20000). Over it the result is cut at a whole node or line, `truncated` is true and the result says how to read the rest. |
 
 
 ### `import_components`
@@ -552,6 +634,14 @@ Detach one or more component instances into plain frames, breaking their link to
 |---|---|---|---|
 | `nodeIds` | array of string | yes | Instance root nodes to detach. |
 
+
+### `set_prototype_links`
+
+Sets what clicking a layer does in Present mode. Per link give at most one of `to`, `overlay`, `url` or `action`; none clears the layer's link. Every link is checked before any is applied. Links never cross pages.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `links` | array | yes | Objects `{nodeId, to?, overlay?, url?, action?}`. `to`: a frame on the same page to go to (null removes). `overlay`: a frame opened centred over the current one with a dimmed backdrop (taller than the viewport scrolls; backdrop click or Escape closes). `url`: https, http, mailto or tel only. `action`: `back` (previous frame) or `close` (close the overlay). |
 
 ### `search_icons` (read-only)
 

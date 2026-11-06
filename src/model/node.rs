@@ -421,6 +421,10 @@ pub struct Node {
     /// Prototype link: clicking this layer in Present mode jumps to this frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<NodeId>,
+    /// Another click action (URL, back, overlay, close). Exclusive with `link`: setting one clears
+    /// the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_action: Option<super::LinkAction>,
     /// Variable bindings by field name (`stroke`, `text-color`, `width`, `height`, `gap`,
     /// `padding`, `padding-top`/`right`/`bottom`/`left`, `radius`, `font-size`, `line-height`,
     /// `opacity`, `visible`) mapped to the variable's CSS name.
@@ -599,6 +603,7 @@ impl Node {
             instance: None,
             comments: Vec::new(),
             link: None,
+            link_action: None,
             bindings: BTreeMap::new(),
             component_key: None,
             code: None,

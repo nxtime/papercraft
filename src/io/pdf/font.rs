@@ -1,4 +1,4 @@
-//! Text as real PDF text: each Inter face a text uses is embedded once per file (a Type0 font
+//! Text as real PDF text: each face a text uses is embedded once per file (a Type0 font
 //! over a CIDFontType2, glyph ids as character codes) with a ToUnicode map, so a reader can
 //! select, search, copy and edit it in any language the font covers.
 
@@ -35,12 +35,19 @@ impl Fonts {
                 .into_iter()
                 .find(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
                 .and_then(|n| n.to_string())
-                .unwrap_or_else(|| "Inter".into());
-            let file = objs.stream(&format!("/Length1 {}", bytes.len()), bytes);
+                .filter(|n| n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+                .unwrap_or_else(|| format!("Font{face}"));
+            // OpenType outlines are embedded whole; their glyph ids are not TrueType's map.
+            let cff = f.tables().cff.is_some();
+            let (file, file_key, cid_font) = if cff {
+                (objs.stream("/Subtype /OpenType", bytes), "FontFile3", "/CIDFontType0")
+            } else {
+                (objs.stream(&format!("/Length1 {}", bytes.len()), bytes), "FontFile2", "/CIDFontType2 /CIDToGIDMap /Identity")
+            };
             let b = f.global_bounding_box();
             let descriptor = objs.add(
                 format!(
-                    "<< /Type /FontDescriptor /FontName /{name} /Flags {} /FontBBox [{} {} {} {}] /ItalicAngle {} /Ascent {} /Descent {} /CapHeight {} /StemV 80 /FontFile2 {file} 0 R >>",
+                    "<< /Type /FontDescriptor /FontName /{name} /Flags {} /FontBBox [{} {} {} {}] /ItalicAngle {} /Ascent {} /Descent {} /CapHeight {} /StemV 80 /{file_key} {file} 0 R >>",
                     if f.is_italic() { 32 | 64 } else { 32 },
                     num(f64::from(b.x_min) * k),
                     num(f64::from(b.y_min) * k),
@@ -60,7 +67,7 @@ impl Fonts {
                 .join(" ");
             let cid = objs.add(
                 format!(
-                    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {descriptor} 0 R /CIDToGIDMap /Identity /W [{widths}] >>"
+                    "<< /Type /Font /Subtype {cid_font} /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {descriptor} 0 R /W [{widths}] >>"
                 )
                 .into_bytes(),
             );

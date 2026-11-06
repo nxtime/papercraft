@@ -428,3 +428,18 @@ fn a_legacy_nested_replacement_becomes_a_swap_instead_of_being_lost() {
     let l = h.ed.doc.get(h.ed.doc.get(row_inst).unwrap().children[0]).unwrap().instance.clone().unwrap();
     assert_eq!(l.swap.map(|s| s.main), Some(amber));
 }
+
+#[test]
+fn a_component_loop_across_pages_is_refused() {
+    let mut h = host();
+    let (a, b, pill) = setup(&mut h);
+    let boxc = call(&mut h, "create_artboard", json!({"pageId": b, "name": "Box",
+        "styles": {"width": "200px", "height": "80px"}}));
+    call(&mut h, "create_component", json!({"pageId": b, "nodeId": boxc["id"]}));
+    call(&mut h, "create_instance", json!({"pageId": b, "componentId": pill, "parentId": boxc["id"]}));
+    let e = try_call(&mut h, "create_instance", json!({"pageId": a, "componentId": boxc["id"], "parentId": pill}))
+        .unwrap_err();
+    assert!(e.contains("can't contain an instance of itself"), "{e}");
+    // The same component twice, one inside the other, is not a loop.
+    call(&mut h, "create_instance", json!({"pageId": b, "componentId": pill, "parentId": boxc["id"]}));
+}

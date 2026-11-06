@@ -175,8 +175,15 @@ fn detect_def(def: &AgentDef, prefs: &ChatPrefs, path: &std::ffi::OsStr) -> Agen
     let version = probe(&bin, "--version", path, PROBE_TIMEOUT);
     if let Some(want) = def.identity {
         let hit = |o: &Option<String>| o.as_ref().is_some_and(|o| o.to_lowercase().contains(want));
-        if !hit(&version) && !hit(&probe(&bin, "--help", path, HELP_TIMEOUT)) {
-            return AgentState::WrongProgram { path: shown };
+        if !hit(&version) {
+            // Only a `--help` that answered without the name proves a different program. One that
+            // did not answer in time (a cold start or an antivirus scan while the app launches,
+            // usual on Windows where node CLIs start through a `.cmd` shim) keeps the agent: its
+            // turn fails with its own error if it is not the agent after all.
+            let help = probe(&bin, "--help", path, HELP_TIMEOUT);
+            if help.is_some() && !hit(&help) {
+                return AgentState::WrongProgram { path: shown };
+            }
         }
     }
     AgentState::Ready { path: shown, version: version.as_deref().and_then(|v| v.lines().find(|l| !l.trim().is_empty())).unwrap_or_default().trim().to_owned() }
@@ -209,7 +216,7 @@ fn probe(bin: &std::path::Path, arg: &str, path: &std::ffi::OsStr, timeout: std:
     use std::io::Read;
     use std::process::{Command, Stdio};
     let mut cmd = Command::new(bin);
-    cmd.arg(arg).env("PATH", path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    crate::chat::path::no_window(&mut cmd).arg(arg).env("PATH", path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     for k in super::path::CREDENTIAL_ENV {
         cmd.env_remove(k);
     }
@@ -423,6 +430,16 @@ mod tests {
     }
 
     use std::ffi::OsStr;
+
+    #[test]
+    fn a_program_too_slow_to_answer_is_still_detected() {
+        // `opencode --version` prints only the number, so `--help` decides; at app launch it can
+        // miss the timeout, which used to file the agent under "Different program".
+        let (dir, path) = fake_dir(&[("opencode", r#"if [ "$1" = --version ]; then echo 1.18.30; else /bin/sleep 30; fi"#)]);
+        let def = find("opencode").unwrap();
+        assert_eq!(detect_def(def, &ChatPrefs::default(), &path), AgentState::Ready { path: dir.join("opencode").display().to_string(), version: "1.18.30".into() });
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn path_override_wins_and_hung_program_times_out() {

@@ -6,7 +6,7 @@ use crate::editor::shortcuts::Action;
 use crate::editor::vector_ops::BoolOp;
 use crate::theme::{self, Icon};
 use egui::{Atom, Button, Id, InnerResponse, Popup, UiKind, UiStackInfo, Ui, Vec2};
-use egui::containers::menu::MenuConfig;
+use egui::containers::menu::{MenuConfig, SubMenuButton};
 
 /// Room kept for an item's icon, with or without one, so the labels line up.
 const ICON_SLOT: f32 = 16.0;
@@ -41,42 +41,82 @@ pub fn item(ui: &mut Ui, label: &str, shortcut: String, icon: Option<Icon>) -> e
     out.response
 }
 
+/// A submenu, with the same icon slot as [`item`] so its label lines up with theirs.
+pub fn submenu(ui: &mut Ui, label: &str, icon: Option<Icon>, content: impl FnOnce(&mut Ui)) {
+    let (response, _) = SubMenuButton::new((Atom::custom(Id::new(("menu-icon", label)), Vec2::splat(ICON_SLOT)), label)).ui(ui, content);
+    if let Some(icon) = icon {
+        let left = response.rect.left() + ui.spacing().button_padding.x;
+        let rect = egui::Rect::from_center_size(egui::pos2(left + ICON_SLOT / 2.0, response.rect.center().y), Vec2::splat(ICON_SLOT));
+        theme::paint_icon(ui.painter(), rect, icon, ui.style().interact(&response).fg_stroke.color);
+    }
+}
+
 /// The icon an action's menu item wears, where there is a fitting one.
 pub fn icon_of(action: Action) -> Option<Icon> {
     use Action as A;
     Some(match action {
         A::Tool(t) => tool_icon(t),
         A::Undo => Icon::Restore,
+        A::Redo => Icon::Redo,
+        A::Cut => Icon::Cut,
+        A::Copy => Icon::Copy,
+        A::Paste => Icon::Paste,
+        A::Duplicate | A::SaveAs => Icon::Duplicate,
+        A::Save => Icon::Save,
+        A::CopyProps => Icon::CopyProps,
+        A::PasteProps => Icon::PasteProps,
+        A::Forward => Icon::Forward,
+        A::Backward => Icon::Backward,
+        A::ToFront => Icon::ToFront,
+        A::ToBack => Icon::ToBack,
+        A::FlipH => Icon::FlipH,
+        A::FlipV => Icon::FlipV,
+        A::Flatten => Icon::Flatten,
+        A::ToggleSnapping => Icon::Magnet,
+        A::ExportPresentation => Icon::Presentation,
         A::Delete => Icon::Trash,
         A::SelectAll => Icon::Pointer,
-        A::Group | A::Ungroup | A::WrapInFrame => Icon::Group,
+        A::Group => Icon::Group,
+        A::Ungroup => Icon::Ungroup,
+        A::WrapInFrame => Icon::Frame,
         A::CreateComponent => Icon::Component,
         A::DetachInstance => Icon::Instance,
         A::PlaceImage => Icon::Image,
-        A::ExportPng | A::ExportSvg | A::ExportPdf | A::CopyAsPng | A::CopyAsSvg => Icon::Export,
+        A::ExportPng | A::ExportSvg | A::ExportPdf => Icon::Export,
+        A::CopyAsPng => Icon::Image,
+        A::CopyAsSvg => Icon::PenTool,
         A::Home => Icon::Grid,
         A::New => Icon::Plus,
-        A::Open | A::SaveAs => Icon::Page,
+        A::Open => Icon::Page,
         A::Align(0, v) => align_x(v),
         A::Align(_, v) => align_y(v),
         A::Distribute(0) => Icon::DistributeH,
         A::Distribute(_) => Icon::DistributeV,
         A::ToggleVisible => Icon::Eye,
         A::ToggleLock => Icon::Lock,
-        A::AddAutoLayout | A::RemoveAutoLayout => Icon::Wrap,
+        A::AddAutoLayout => Icon::LayoutAdd,
+        A::RemoveAutoLayout => Icon::LayoutRemove,
         A::Boolean(op) => bool_icon(op),
-        A::Bold | A::Italic | A::Underline | A::Strikethrough | A::Rename => Icon::Text,
+        A::Bold => Icon::Bold,
+        A::Italic => Icon::Italic,
+        A::Underline => Icon::Underline,
+        A::Strikethrough => Icon::Strikethrough,
+        A::Rename => Icon::Pencil,
         A::ToggleSketch => Icon::Sketch,
         A::CommandPalette | A::Ask => Icon::Search,
-        A::ToggleUi | A::TogglePanels => Icon::Sidebar,
+        A::ToggleUi => Icon::Eye,
+        A::TogglePanels => Icon::Sidebar,
         A::ToggleGrid => Icon::Grid,
         A::ToggleAnnotations => Icon::Note,
         A::OpenVariables => Icon::Database,
         A::ToggleHelp => Icon::Question,
         A::ZoomIn => Icon::Plus,
         A::ZoomOut => Icon::Minus,
-        A::Zoom100 | A::ZoomFit | A::ZoomSelection => Icon::Scale,
-        A::NextPage | A::PrevPage => Icon::Page,
+        A::Zoom100 => Icon::Zoom100,
+        A::ZoomFit => Icon::Corners,
+        A::ZoomSelection => Icon::ZoomSelection,
+        A::NextPage => Icon::PageNext,
+        A::PrevPage => Icon::PagePrev,
         A::ToggleChat => Icon::Zap,
         _ => return None,
     })
@@ -126,14 +166,17 @@ fn align_y(at: f64) -> Icon {
 
 fn bool_icon(op: BoolOp) -> Icon {
     match op {
-        BoolOp::Union => Icon::Group,
-        BoolOp::Subtract | BoolOp::Intersect | BoolOp::Exclude => Icon::Corners,
+        BoolOp::Union => Icon::Union,
+        BoolOp::Subtract => Icon::Subtract,
+        BoolOp::Intersect => Icon::Intersect,
+        BoolOp::Exclude => Icon::Exclude,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::shortcuts::{self, MenuEntry};
 
     #[test]
     fn every_tool_has_an_icon_and_alignments_follow_their_edge() {
@@ -144,5 +187,32 @@ mod tests {
         assert_eq!(icon_of(Action::Align(0, 1.0)), Some(Icon::AlignRight));
         assert_eq!(icon_of(Action::Align(1, 0.5)), Some(Icon::AlignVCenter));
         assert_eq!(icon_of(Action::Escape), None);
+    }
+
+    fn actions(entries: &[MenuEntry], out: &mut Vec<Action>) {
+        for entry in entries {
+            match entry {
+                MenuEntry::Item(_, action) => out.push(*action),
+                MenuEntry::Submenu(_, items) => actions(items, out),
+                MenuEntry::Separator => {}
+            }
+        }
+    }
+
+    #[test]
+    fn every_menu_item_has_an_icon_of_its_own() {
+        for (title, entries) in shortcuts::menus() {
+            let mut found = Vec::new();
+            actions(&entries, &mut found);
+            let mut seen = Vec::new();
+            for action in found {
+                let icon = icon_of(action);
+                assert!(icon.is_some(), "{title}: {action:?}");
+                // Every format of the export dialog is the same command.
+                let exporting = icon == Some(Icon::Export);
+                assert!(exporting || !seen.contains(&icon), "{title}: {action:?} repeats an icon");
+                seen.push(icon);
+            }
+        }
     }
 }

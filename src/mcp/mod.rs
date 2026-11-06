@@ -13,7 +13,9 @@
 //!   relay server itself (native only).
 
 pub mod bounds;
+pub mod budget;
 pub mod codegen;
+pub mod context;
 pub mod critique;
 pub mod css;
 pub mod diff;
@@ -21,18 +23,25 @@ pub mod enforcer;
 pub mod handoff;
 pub mod exec;
 pub mod html;
+pub mod import_html;
 pub mod incremental;
 pub mod lint;
 pub mod lint_overflow;
+mod prototype;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod imagegen;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod delegate;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod shell;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod refs;
 pub mod rewrite;
+pub mod strings;
 pub mod room;
 pub mod screen_fit;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod site;
 pub mod swarm;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod relay;

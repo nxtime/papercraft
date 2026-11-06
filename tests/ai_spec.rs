@@ -260,3 +260,61 @@ fn theme_copies_are_flagged_and_a_mode_previews_without_switching() {
     assert_eq!(fill(&dark).to_lowercase(), "#111111", "{id}");
     assert_eq!(fill(h.ed.page_doc(page)), fill(&before), "document untouched");
 }
+
+#[test]
+fn set_variable_mode_switches_a_mode_of_a_named_collection() {
+    let mut h = host();
+    call(&mut h, "create_collection", json!({"name": "Scale", "modes": ["A", "B"]}));
+    for (mode, value) in [("A", 10), ("B", 30)] {
+        call(&mut h, "set_variables", json!({"collection": "Scale", "mode": mode, "type": "number", "variables": {"u": {"value": value}}}));
+    }
+    let board = call(&mut h, "create_artboard", json!({"name": "Board", "styles": {"width": "200px", "height": "100px"}}));
+    let made = call(&mut h, "write_html", json!({"targetNodeId": board["id"], "mode": "insert-children", "html": "<div style=\"width:100px;height:40px\"></div>"}));
+    let boxed = made["createdNodeIds"][0].clone();
+    call(&mut h, "bind_variable", json!({"nodeIds": [boxed], "field": "width", "variable": "u"}));
+
+    call(&mut h, "set_variable_mode", json!({"mode": "B"}));
+
+    let children = call(&mut h, "get_children", json!({"nodeId": board["id"]}));
+    assert_eq!(children["children"][0]["width"], 30.0, "{children}");
+    let missing = exec::call(&mut h, "set_variable_mode", &json!({"mode": "C"})).err().unwrap();
+    assert!(missing.contains("no mode `C`") && missing.contains("A, B"), "{missing}");
+}
+
+/// A host whose GPU dies the way a lost device does: by panicking.
+struct BrokenGpu(exec::SessionHost);
+
+impl exec::Host for BrokenGpu {
+    fn editor(&mut self) -> &mut papercraft::editor::Editor {
+        self.0.editor()
+    }
+    fn store(&self) -> &Store {
+        self.0.store()
+    }
+    fn project(&self) -> Option<&papercraft::project::Project> {
+        self.0.project()
+    }
+    fn canvas_open(&self) -> bool {
+        self.0.canvas_open()
+    }
+    fn open_project(&mut self, dir: &std::path::Path) -> Result<(), String> {
+        self.0.open_project(dir)
+    }
+    fn save(&mut self) -> Result<(), String> {
+        self.0.save()
+    }
+    fn rename_project(&mut self, name: &str) -> Result<std::path::PathBuf, String> {
+        self.0.rename_project(name)
+    }
+    fn gpu(&mut self) -> Option<papercraft::render::gpu::Headless> {
+        panic!("device lost")
+    }
+}
+
+#[test]
+fn a_gpu_panic_fails_the_screenshot_and_not_the_host() {
+    let mut h = BrokenGpu(host());
+    let err = exec::call(&mut h, "get_screenshot", &json!({})).err().unwrap();
+    assert!(err.contains("device lost"), "{err}");
+    assert!(exec::call(&mut h, "get_basic_info", &json!({})).is_ok());
+}

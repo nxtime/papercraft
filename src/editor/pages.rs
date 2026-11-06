@@ -472,8 +472,14 @@ impl Editor {
         let saved_marker = self.saved_marker;
         let outer = self.edit_page.replace(i);
         swap(self, &mut s);
-        let r = f(self);
-        self.commit();
+        // A panic in `f` (a tool call the app survives) must not leave page `i`'s document in the
+        // active slot: the next save would write it under the wrong page.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        if r.is_ok() {
+            self.commit();
+        } else {
+            self.abort();
+        }
         swap(self, &mut s);
         self.edit_page = outer;
         self.saved_marker = saved_marker;
@@ -481,8 +487,13 @@ impl Editor {
         self.revision += 1;
         // The active page's document is the one it was before `f`.
         self.mark(super::Changed::Nodes(std::sync::Arc::new([])));
-        self.flush_cross_pages();
-        r
+        match r {
+            Ok(r) => {
+                self.flush_cross_pages();
+                r
+            }
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 
     /// Re-sync instances on other pages after a main component changed: each touched page
@@ -495,7 +506,17 @@ impl Editor {
         // Instances on a page that is still being read must follow the change too.
         self.finish_loading();
         self.cross_busy = true;
-        for _ in 0..MAX_ROUNDS {
+        // `cross_busy` stays set for good if a sync panics, which would stop all later syncs.
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.flush_rounds(MAX_ROUNDS)));
+        self.cross_pending.clear();
+        self.cross_busy = false;
+        if let Err(panic) = done {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    fn flush_rounds(&mut self, max_rounds: usize) {
+        for _ in 0..max_rounds {
             let Some((src, mains)) = (!self.cross_pending.is_empty())
                 .then(|| self.cross_pending.remove(0))
             else {
@@ -529,8 +550,6 @@ impl Editor {
                 });
             }
         }
-        self.cross_pending.clear();
-        self.cross_busy = false;
     }
 
     /// Hand over the pages `open_pages` got as stand-ins (`pending`: indexes into the page list)

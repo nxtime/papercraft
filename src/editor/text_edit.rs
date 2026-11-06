@@ -48,6 +48,8 @@ impl Editor {
             let byte = byte_at(text, caret);
             text.insert_str(byte, s);
             n.text_style.on_insert(caret, n_new);
+            // Typed text replaces a bound string, as a new colour replaces a `text-color` binding.
+            n.bindings.remove("text");
             if let Some(sp) = inherit {
                 n.text_style.apply_range(caret, caret + n_new, |t| {
                     *t = TextSpan {
@@ -81,6 +83,7 @@ impl Editor {
             let (ba, bb) = (byte_at(text, a), byte_at(text, b));
             text.replace_range(ba..bb, "");
             n.text_style.on_delete(a, b);
+            n.bindings.remove("text");
         }
         self.text_edit = Some(TextEdit {
             id: te.id,

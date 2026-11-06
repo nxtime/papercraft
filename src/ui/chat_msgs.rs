@@ -72,6 +72,8 @@ pub struct Acts {
     /// File this issue draft (its key and contents).
     pub send_issue: Option<(String, super::chat::IssueDraft)>,
     pub discard_issue: Option<String>,
+    /// Stop the running turn and open the agent picker (a rate-limited or silent agent).
+    pub stop_and_switch: bool,
 }
 
 pub struct View<'a> {
@@ -90,6 +92,10 @@ pub struct View<'a> {
     pub signin: Option<&'a super::chat::chat_agents::SignIn>,
     /// The chat's run while it is being recorded, for the live count on the step group.
     pub live_run: Option<&'a Run>,
+    /// The running turn's agent is waiting out a failed model call.
+    pub retry: Option<&'a crate::chat::events::Retry>,
+    /// Seconds the running turn has been silent, once that is long.
+    pub quiet_secs: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------------- pure helpers
@@ -1427,6 +1433,15 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
                 spinner(ui, 12.0, theme::accent());
                 muted(ui, "Working\u{2026}");
             });
+            if let Some(r) = v.retry {
+                let wait = r.next_at_ms.map(|at| at.saturating_sub(crate::project::format::now_ms()).div_ceil(1000)).filter(|s| *s > 0);
+                let when = wait.map_or_else(|| "Retrying now".to_owned(), |s| format!("Retrying in {s} s"));
+                stall_card(ui, "The model's provider is failing", &format!("{}. {when} (attempt {}). Keep waiting, or stop and pick another model or agent.", r.message.trim_end_matches('.'), r.attempt), acts);
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+            } else if let Some(s) = v.quiet_secs {
+                let hint = format!("Nothing from the agent for {}. Its provider may be rate limiting or down. Keep waiting, or stop and pick another model or agent.", fmt_wait(s));
+                stall_card(ui, "No reply yet", &hint, acts);
+            }
         }
         if let Some(e) = v.error {
             error_row(ui, e, v.signin, acts);
@@ -1467,6 +1482,24 @@ pub fn notice_card(ui: &mut Ui, title: &str, hint: &str, acts: &mut Acts) {
             acts.retry_last = true;
         }
     });
+}
+
+/// A running turn that is stuck on its provider: why, and Stop and switch.
+fn stall_card(ui: &mut Ui, title: &str, hint: &str, acts: &mut Acts) {
+    let p = theme::pal(ui);
+    card(ui).show_surface(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(title).font(theme::semibold(theme::BODY)).color(p.warning));
+        ui.add(egui::Label::new(RichText::new(hint).size(theme::SECONDARY).color(p.secondary)).wrap());
+        if kit::button(ui, kit::ButtonKind::Secondary, None, "Stop and switch").clicked() {
+            acts.stop_and_switch = true;
+        }
+    });
+}
+
+/// "45 s", "3 min".
+fn fmt_wait(secs: u64) -> String {
+    if secs < 120 { format!("{secs} s") } else { format!("{} min", secs / 60) }
 }
 
 /// The error card with Retry; an agent that is signed out gets its sign-in card instead.

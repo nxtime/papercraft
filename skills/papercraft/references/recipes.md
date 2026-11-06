@@ -93,7 +93,19 @@ jq -Rs --arg t "$AB" '{targetNodeId:$t,mode:"insert-children",html:.}' landing.h
 
 Check the headline in the screenshot: text boxes with a fixed `width` can wrap earlier than in a browser, so give long headlines generous widths (960px above) and verify.
 
-## 3. Dashboard (sidebar, stat cards, chart)
+## 3. Translate a page
+
+A language is a mode of a string collection, never a copy of the page. Text layers bind to string variables, so switching the mode changes the text and re-fits auto-size text and auto layout.
+
+1. `set_strings {"extract": true, "frame": "<frame id>", "mode": "en"}`: every text layer gets a variable named from its layer path (`hero/title`) and the keys come back with their texts.
+2. Optional, before any real translation: `set_strings {"collection": "Strings", "mode": "xx", "pseudo": true}`, then `set_variable_mode {"mode": "xx"}`. The text is accented, about 35% longer and in brackets, so overflow shows up now.
+3. `set_strings {"collection": "Strings", "mode": "pt", "strings": {"hero/title": "..."}}` per language. Translate in steps with `get_strings {"missing": "pt"}`, which lists only the keys still without a value, with their base text. An unknown key is an error that applies nothing.
+4. `set_variable_mode {"mode": "pt"}`, then `lint_design` and `get_screenshot` in each mode to check overflow: fix a layer that outgrows its box by letting it wrap or hug, never by shrinking the text only in one language.
+5. `set_variable_mode` back to the base mode.
+
+Typing into a bound text detaches it from its variable (as a new colour does for a `text-color` binding); edit the text with `set_strings` instead.
+
+## 4. Dashboard (sidebar, stat cards, chart)
 
 A row artboard (`flexDirection:"row"`) with a fixed 240px sidebar and a `flex-grow:1` main area.
 
@@ -132,7 +144,7 @@ jq -Rs --arg t "$AB" '{targetNodeId:$t,mode:"insert-children",html:.}' dashboard
 
 Charts are just boxes: size the bars from the data (`height = value / max * plot height`). Add axis labels at 12px. Always label what the bars mean; color alone is not information.
 
-## 4. Design-system page
+## 5. Design-system page
 
 Generate swatches from the project's own variables and a type-scale specimen, so the page cannot drift from the tokens:
 

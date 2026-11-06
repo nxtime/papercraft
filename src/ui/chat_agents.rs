@@ -574,7 +574,9 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
     }
 
     // Dimmed backdrop over the column: a click outside the panel closes it.
-    egui::Area::new("chat-agent-backdrop".into()).order(egui::Order::Foreground).fade_in(false).fixed_pos(i.backdrop.min).show(ctx, |ui| {
+    let backdrop = egui::Area::new("chat-agent-backdrop".into()).order(egui::Order::Foreground).fade_in(false).fixed_pos(i.backdrop.min);
+    let backdrop_layer = backdrop.layer();
+    backdrop.show(ctx, |ui| {
         let (r, resp) = ui.allocate_exact_size(i.backdrop.size(), Sense::click());
         ui.painter().rect_filled(r, theme::radius_panel(), Color32::from_black_alpha(BACKDROP_ALPHA));
         if resp.clicked() {
@@ -585,7 +587,12 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
     let top = i.chip.bottom() + 6.0;
     let height = (i.composer_top - 10.0 - top).max(240.0);
     let list_h = height - 2.0 * PANEL_PAD - TITLE_H - SEARCH_H - FOOTER_H - 24.0;
-    egui::Area::new("chat-agent-panel".into()).order(egui::Order::Foreground).fade_in(false).fixed_pos(pos2(i.column.left(), top)).show(ctx, |ui| {
+    let card = egui::Area::new("chat-agent-panel".into()).order(egui::Order::Foreground).fade_in(false).fixed_pos(pos2(i.column.left(), top));
+    // Both areas are Foreground, and egui raises whichever was pressed last: the press of a
+    // click on the backdrop left it above the panel, so the next opening showed only the dimmed
+    // backdrop and every click closed it. As a sublayer the panel always sits right above it.
+    ctx.set_sublayer(backdrop_layer, card.layer());
+    card.show(ctx, |ui| {
         egui::Frame::new()
             .fill(p.popover)
             .stroke(egui::Stroke::new(1.0, p.separator))
@@ -616,6 +623,9 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
                 let mut n = 0usize;
                 egui::ScrollArea::vertical().max_height(list_h).auto_shrink([false, true]).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
+                    if i.detect.scanning {
+                        scanning_row(ui);
+                    }
                     if !g.detected.is_empty() {
                         section(ui, "Detected", Some(g.detected.len()), Fold::None);
                         draw_rows(ui, &g.detected, &selected, ps.sel, &mut n, i.running, &mut act);
@@ -649,7 +659,7 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
                 });
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if kit::chip(ui, "Detect again", false).clicked() {
+                    if ui.add_enabled_ui(!i.detect.scanning, |ui| kit::chip(ui, "Detect again", false)).inner.clicked() {
                         act = Some(Act::DetectAgain);
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -661,6 +671,15 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
             });
     });
     act
+}
+
+/// "Detecting agents" while a scan runs, so a short list is not read as "nothing installed".
+fn scanning_row(ui: &mut Ui) {
+    let p = theme::pal(ui);
+    ui.horizontal(|ui| {
+        ui.add(egui::Spinner::new().size(12.0).color(p.tertiary));
+        ui.label(RichText::new("Detecting agents\u{2026}").size(theme::SECONDARY).color(p.tertiary));
+    });
 }
 
 fn draw_rows(ui: &mut Ui, rows: &[Row], selected: &Pick, sel: usize, n: &mut usize, running: bool, act: &mut Option<Act>) {
@@ -723,11 +742,15 @@ pub fn setup(ui: &mut Ui, d: &Detect, prefs: &ChatPrefs) -> Option<Act> {
         ui.add_space(4.0);
         ui.label(RichText::new("Connect an agent").font(theme::semibold(18.0)));
         let blurb = match ready.len() {
+            0 if d.scanning => "PaperCraft is looking for agents on this computer.".to_owned(),
             0 => "PaperCraft did not find an agent on this computer. Add an API endpoint or a custom agent.".to_owned(),
             1 => "PaperCraft found 1 agent on this computer. Pick it to start designing by conversation.".to_owned(),
             n => format!("PaperCraft found {n} agents on this computer. Pick one to start designing by conversation."),
         };
         ui.add(egui::Label::new(RichText::new(blurb).color(p.secondary)));
+        if d.scanning {
+            scanning_row(ui);
+        }
         if !ready.is_empty() {
             section(ui, "Detected on this computer", Some(ready.len()), Fold::None);
             for r in ready.into_iter().take(SETUP_ROWS) {
@@ -915,6 +938,51 @@ mod tests {
         frame(vec![egui::Event::PointerMoved(at)]);
         frame(vec![button(true)]);
         assert!(matches!(frame(vec![button(false)]).0, Some(Act::Close)));
+    }
+
+    /// Closing with a click on the backdrop raised the backdrop above the panel, so the next
+    /// opening showed only the dimmed backdrop and every click on a row closed the panel.
+    #[test]
+    fn a_reopened_panel_stays_above_its_backdrop() {
+        let ctx = egui::Context::default();
+        crate::ui::setup_style(&ctx);
+        let (d, prefs, backend) = (detect(), prefs(), Backend::default());
+        let col = Rect::from_min_size(pos2(10.0, 60.0), vec2(450.0, 700.0));
+        let chip = Rect::from_min_size(pos2(30.0, 90.0), vec2(120.0, 22.0));
+        let input = PanelIn { detect: &d, prefs: &prefs, backend: &backend, running: false, column: col, backdrop: col, chip, composer_top: 700.0 };
+        let mut ps = PanelState::default();
+        let mut frame = |events: Vec<egui::Event>, open: bool| {
+            let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1280.0, 800.0))), events, ..Default::default() };
+            let mut act = None;
+            let mut out = ctx.run_ui(raw, |_| {
+                if open {
+                    act = panel(&ctx, &mut ps, &input);
+                }
+            });
+            out.textures_delta.clear();
+            (act, out.shapes)
+        };
+        let click = |at: egui::Pos2, pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(vec![], true);
+        frame(vec![], true);
+        let outside = pos2(15.0, 65.0);
+        frame(vec![egui::Event::PointerMoved(outside)], true);
+        frame(vec![click(outside, true)], true);
+        assert!(matches!(frame(vec![click(outside, false)], true).0, Some(Act::Close)));
+        frame(vec![], false);
+        frame(vec![], true);
+        let (_, shapes) = frame(vec![], true);
+        let row = shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::epaint::Shape::Text(t) if t.galley.text() == "Cursor" => Some(t.visual_bounding_rect().center()),
+                _ => None,
+            })
+            .expect("the Cursor row is drawn");
+        frame(vec![egui::Event::PointerMoved(row)], true);
+        frame(vec![click(row, true)], true);
+        let act = frame(vec![click(row, false)], true).0;
+        assert!(matches!(&act, Some(Act::Select(Pick::Agent(id))) if id == "cursor"), "a row click picks the agent, not the backdrop: {}", act.is_some());
     }
 
     /// Draws the panel, then clicks the first text that reads `label`; returns the panel's act.

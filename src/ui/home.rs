@@ -65,6 +65,8 @@ pub struct HomeView {
     pub default_server: String,
     /// The server keeps a library: every project is shared, so no share controls.
     pub library: bool,
+    /// Where this frame's header left room for the window buttons, inside the panel's margins.
+    pub window_slot: Option<egui::Rect>,
     thumbs: HashMap<PathBuf, (Option<SystemTime>, egui::TextureHandle)>,
 }
 
@@ -131,7 +133,7 @@ fn plural(n: u64, unit: &str) -> String {
     }
 }
 
-pub fn draw(ui: &mut Ui, hv: &mut HomeView, _native_chrome: bool, translucent: bool) {
+pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: bool) {
     let p = theme::pal(ui);
     let floating = super::is_floating(translucent);
     let gap = super::PANEL_GAP;
@@ -217,7 +219,7 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, _native_chrome: bool, translucent: b
         .frame(if floating {
             backdrop(0, gap as i8, gap as i8, gap as i8)
         } else {
-            egui::Frame::NONE.fill(p.window).inner_margin(20)
+            egui::Frame::NONE.fill(p.window).inner_margin(egui::Margin::same(20))
         })
         .show(ui, |ui| {
             let body = |ui: &mut Ui| {
@@ -242,6 +244,10 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, _native_chrome: bool, translucent: b
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if custom_titlebar {
+                            let size = egui::vec2(3.0 * super::WIN_BTN_W, super::HOME_WIN_BTN_H);
+                            hv.window_slot = Some(ui.allocate_exact_size(size, egui::Sense::hover()).0);
+                        }
                         if hv.show_trash {
                             ui.add_enabled_ui(!hv.trash.is_empty(), |ui| {
                                 if super::kit::button(

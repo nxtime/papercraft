@@ -3,7 +3,9 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod app;
 pub mod assets;
+pub mod fonts;
 pub mod chat;
+pub mod crash_log;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod connector;

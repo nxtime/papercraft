@@ -23,7 +23,8 @@ and grids become rows of cells (reported in warnings); no tables.
 - get_basic_info lists the person's design lessons (rules kept from past critiques): follow \
 every one. When finish_working_on_nodes returns `next`, offer a critique (ask_user, then \
 critique_design); keep a finding as a lesson (design_lessons) only when the person approves.
-- Text uses Inter (regular, bold, italic). Use px for font sizes.
+- Text uses Inter (regular, bold, italic) unless the brief needs another typeface: then \
+install_font and set font-family. Use px for font sizes.
 - Edit with update_styles, set_text_content, rename_nodes, duplicate_nodes, move_nodes, \
 delete_nodes. Whiteboard shapes, sticky notes and arrows: create_shape. Hand-drawn style: \
 update_styles with {\"sketch\": true, \"roughness\": 1, \"fillStyle\": \"hachure\"}.
@@ -56,6 +57,16 @@ fn page_id() -> Value {
     json!({"type": "string", "description": "Omitted = the page the user is viewing."})
 }
 
+/// `maxTokens` of a read tool that can return a lot.
+fn max_tokens() -> Value {
+    json!({"type": "number", "description": "Token budget of the result (default 20000). Over it the result is cut at a whole node or line, `truncated` is true and the result says how to read the rest."})
+}
+
+/// `offset` of a read tool whose text result is cut into pages.
+fn offset() -> Value {
+    json!({"type": "number", "description": "Line to start at: the `nextOffset` of a truncated result."})
+}
+
 fn styles_schema(desc: &str) -> Value {
     json!({
         "type": "object",
@@ -71,7 +82,7 @@ fn tool(name: &str, desc: &str, props: Value, required: &[&str], read_only: bool
         && !m.contains_key("fileId")
         && !matches!(
             name,
-            "list_resources" | "create_file" | "get_font_family_info" | "get_guide" | "open_file" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "delegate"
+            "list_resources" | "create_file" | "get_font_family_info" | "install_font" | "get_guide" | "open_file" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "delegate"
         )
     {
         m.insert("fileId".into(), file_id());
@@ -230,18 +241,34 @@ pub fn definitions() -> Vec<Value> {
             true,
         ),
         tool(
+            "get_context",
+            "The one compact read to make before editing (about 2k tokens): the page, the target \
+             (`id`, else the first selected layer, else the whole page) with its screen, the \
+             selection, an outline of the target two levels deep with child counts and an \
+             `estimatedTokens` per layer (what a get_tree_summary of it costs, so you know what \
+             is cheap to read next), the variables used inside it with their value in the active \
+             mode and collection, every collection with its modes and the active one, the \
+             components used with instance counts, and a lint summary of that target only (counts \
+             per rule and the first 5 findings). Read deeper nodes afterwards, one at a time.",
+            json!({"id": node_id("A layer or screen to describe; omit for the selection, else the page.")}),
+            &[],
+            true,
+        ),
+        tool(
             "get_node_info",
             "Details of one node: type, name, size, visibility, lock state, parent, children ids, \
-             text content, x/y (relative to parent) and worldX/worldY. Errors if it doesn't exist.",
-            json!({"nodeId": node_id("The node to inspect.")}),
+             text content, x/y (relative to parent) and worldX/worldY. Errors if it doesn't exist. \
+             Reports `estimatedTokens`; over `maxTokens` the child ids are cut (`truncated`).",
+            json!({"nodeId": node_id("The node to inspect."), "maxTokens": max_tokens()}),
             &["nodeId"],
             true,
         ),
         tool(
             "get_children",
             "Direct children of a node (or of the page root when nodeId is \"root\"), with ids, \
-             names, types, child counts and positions.",
-            json!({"nodeId": node_id("The parent node, or \"root\"."), "pageId": page_id()}),
+             names, types, child counts and positions. Reports `estimatedTokens`; over `maxTokens` the \
+             list is cut (`truncated`).",
+            json!({"nodeId": node_id("The parent node, or \"root\"."), "pageId": page_id(), "maxTokens": max_tokens()}),
             &["nodeId"],
             true,
         ),
@@ -267,11 +294,14 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "get_tree_summary",
             "Compact indented text tree of a subtree: type, name, id and size per node. Much \
-             cheaper than get_jsx for orientation. nodeId \"root\" summarizes the whole page.",
+             cheaper than get_jsx for orientation. nodeId \"root\" summarizes the whole page. A second \
+             result block reports `estimatedTokens`; over `maxTokens` the tree is cut at a whole \
+             line and the block carries `truncated`, `nextOffset` (pass it as `offset`) and a hint.",
             json!({
                 "nodeId": node_id("Root of the summary, or \"root\"."),
                 "depth": {"type": "number", "description": "Levels shown, counting nodeId (or each top-level layer for \"root\") as level 1 (default 3, max 10). Deeper levels collapse to \"… N children\"."},
                 "fullText": {"type": "boolean", "description": "Show each text layer's complete text instead of its first 40 characters (for copy review)."},
+                "maxTokens": max_tokens(), "offset": offset(),
                 "pageId": page_id(),
             }),
             &["nodeId"],
@@ -298,10 +328,13 @@ pub fn definitions() -> Vec<Value> {
             "Export a node and its descendants to code: \"inline\" (default, React JSX with inline \
              styles), \"tailwind\" (React JSX with Tailwind CSS utility classes), \"react\" (React \
              TSX component), \"angular\" (Angular v17+ standalone component), \"html\" \
-             (self-contained <style> + HTML markup), or \"egui\" (Rust egui 0.36 code with tokens).",
+             (self-contained <style> + HTML markup), or \"egui\" (Rust egui 0.36 code with tokens). A second result block reports `estimatedTokens`; over \
+             `maxTokens` the code is cut at a whole line and the block carries `truncated`, \
+             `nextOffset` (pass it as `offset`) and a hint to export a narrower node.",
             json!({
                 "nodeId": node_id("The node to convert."),
                 "format": {"type": "string", "enum": ["inline", "inline-styles", "tailwind", "react", "angular", "html", "egui"], "description": "Output format: \"inline\" (default), \"tailwind\", \"react\", \"angular\", \"html\", or \"egui\"."},
+                "maxTokens": max_tokens(), "offset": offset(),
                 "pageId": page_id(),
             }),
             &["nodeId"],
@@ -325,11 +358,14 @@ pub fn definitions() -> Vec<Value> {
              (sizing, flex/grid/egui flow, gaps, paddings, bound `--var` colors), mandatory \
              enforcement rules, and reference target code. Always call this before implementing \
              a design in React, Tailwind, Angular, HTML/CSS, or Rust egui instead of guessing \
-             from a screenshot.",
+             from a screenshot. Reports `estimatedTokens` (json format: a field; other formats: a second \
+             result block); over `maxTokens` the output is cut at a whole line (json: whole array \
+             elements) and flagged `truncated` with how to read the rest.",
             json!({
                 "nodeId": node_id("Root frame or node id to export."),
                 "target": {"type": "string", "enum": ["react", "tailwind", "angular", "html", "egui"], "description": "Target UI framework (default \"react\")."},
                 "format": {"type": "string", "enum": ["markdown", "json", "compact"], "description": "Output format: \"markdown\" (default), \"json\", or \"compact\" (terse text for an implementer: notes, tokens used, kit components, one line per node; no reference code; about 12x fewer tokens than json)."},
+                "maxTokens": max_tokens(), "offset": offset(),
                 "pageId": page_id(),
             }),
             &["nodeId"],
@@ -593,11 +629,22 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "get_font_family_info",
-            "Whether font families are available and their weights/styles. papercraft renders text \
-             with Inter (400, 700, normal and italic); other families fall back to Inter.",
+            "Whether font families are available and their weights/styles. Inter (400, 700, normal \
+             and italic) is built in and families added with install_font follow; others fall \
+             back to Inter.",
             json!({"familyNames": {"type": "array", "items": {"type": "string"}}}),
             &["familyNames"],
             true,
+        ),
+        tool(
+            "install_font",
+            "Add a font and keep it in the open project, so it travels with the project. Takes one \
+             .ttf or .otf per call (one style of a family; a variable font gives its default style); \
+             call again for its bold and italic files. Returns the family; use it as font-family \
+             in write_html and update_styles. Check the font's licence allows the use.",
+            json!({"source": {"type": "string", "description": "A local file path, or an http(s) URL of the font file itself (not a web page, zip or WOFF)."}}),
+            &["source"],
+            false,
         ),
         tool(
             "get_guide",
@@ -610,7 +657,8 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "export",
             "Export nodes to files. `nodes` maps node ids to export settings \
-             ([{format: png|svg|pdf, scale: \"2x\" | \"512w\" | \"512h\" | \"720p\"}]; [] = 2x PNG). \
+             ([{format: png|svg|pdf, scale: \"2x\" | \"512w\" | \"512h\" | \"720p\", \
+             name: file stem, transparent: no white background}]; [] = 2x PNG). \
              Files go to `directory` (default: the Downloads folder). Returns the paths written.",
             json!({
                 "nodes": {"type": "object", "additionalProperties": {"type": "array", "items": {
@@ -618,10 +666,13 @@ pub fn definitions() -> Vec<Value> {
                     "properties": {
                         "format": {"type": "string", "enum": ["png", "svg", "pdf"]},
                         "scale": {"type": "string"},
+                        "name": {"type": "string", "description": "File stem (default: the node name)."},
+                        "transparent": {"type": "boolean", "description": "No white background (PNG, SVG)."},
                     },
                     "required": ["format"],
                 }}},
                 "directory": {"type": "string", "description": "Output folder (absolute path)."},
+                "transparent": {"type": "boolean", "description": "Default for every node."},
                 "pageId": page_id(),
             }),
             &["nodes"],
@@ -710,6 +761,50 @@ pub fn definitions() -> Vec<Value> {
             &["dir"],
             false,
         ),
+        tool(
+            "export_site",
+            "Write frames of a page as a website in one call; returns a short summary, never the \
+             markup. Before the first export ASK THE PERSON which `framework`, `render` and \
+             `styling` they want, and recommend from what they have: the framework their repo or \
+             team uses (read package.json), else html for a finished site nobody will develop or \
+             astro for a content site they will grow. Client JavaScript per page (gzip): html and \
+             astro and static vue 0; static angular ~77 KB, react ~135 KB; spa vue ~40 KB, angular \
+             ~63 KB, react ~97 KB. render static (prerendered) for anything public that needs \
+             search or link previews, spa only for an app behind a login. styling: what their \
+             project uses, else css; scss and tailwind work everywhere; CSS-in-JS is react only: \
+             vanilla-extract (recommended, zero runtime), styled-components or emotion. Also writes \
+             _headers, vercel.json (hashed assets cached a year, SPA fallback) and .nojekyll for \
+             the hosts. Defaults \
+             html, static, css. One page per frame (the first is the home page) with semantic tags \
+             and one h1, <img> alt and link labels from layer names, self-hosted fonts, Open Graph \
+             and robots.txt; `base_url` makes canonical and hreflang absolute and adds sitemap.xml. \
+             Prototype links to exported frames and Url links become links. With `modes` (a \
+             collection whose modes are languages such as en and pt-BR) each mode is a locale: text \
+             that differs becomes a message per locale, styles that differ become :lang() rules. \
+             A project (any framework, scss, tailwind) needs a build: follow `next_steps`. The \
+             folder must be new, empty or an earlier export_site folder; a re-export removes only \
+             what the previous one wrote. Per framework: references/export-site.md in the \
+             papercraft skill. Returns {dir, framework, render, styling, pages, files, bytes, \
+             written, removed, links: {resolved, unresolved}, urls, next_steps, warnings}.",
+            json!({
+                "path": {"type": "string", "description": "Folder to write into (created if missing)."},
+                "frames": {"type": "array", "items": {"type": "string"}, "description": "Frame ids, in page order. Default: the page's screens (set_screens), else its top-level frames."},
+                "modes": {"type": "object", "properties": {
+                    "collection": {"type": "string", "description": "Variable collection name or id."},
+                    "modes": {"type": "array", "items": {"type": "string"}, "description": "Mode names to export, e.g. [\"en\", \"pt-BR\"]."},
+                }, "required": ["collection", "modes"]},
+                "base_url": {"type": "string", "description": "Where the site will be served (https://example.com): absolute hreflang and canonical URLs, and sitemap.xml."},
+                "framework": {"type": "string", "enum": ["html", "react", "vue", "angular", "astro"], "description": "Output: html (static pages, no build step), or a project for react, vue, angular or astro. Ask the person; default html."},
+                "render": {"type": "string", "enum": ["static", "spa"], "description": "static: pages pre-rendered for search (landing, marketing, docs). spa: client-rendered app (behind a login). Only for react, vue and angular. Ask the person; default static."},
+                "styling": {"type": "string", "enum": ["css", "scss", "tailwind", "vanilla-extract", "styled-components", "emotion"], "description": "css (default, no build step), scss, tailwind, or CSS-in-JS for react only: vanilla-extract (recommended, zero runtime), styled-components, emotion. Ask the person; use what their project uses."},
+                "lang": {"type": "string", "description": "Language tag of a single-language site (en, pt-BR): sets <html lang> and og:locale. With `modes`, a mode named like a language tag sets it per folder."},
+                "title": {"type": ["string", "object"], "additionalProperties": {"type": "string"}, "description": "Site title: the home page title and the suffix of the others. Default: the frame names. With `modes`, an object keyed by mode name ({\"en\": \"...\", \"pt-BR\": \"...\"}) gives each language its own; a language without an entry takes the base language's."},
+                "description": {"type": ["string", "object"], "additionalProperties": {"type": "string"}, "description": "Meta description for every page. Default: each page's first line of copy. With `modes`, an object keyed by mode name gives each language its own; a language without an entry takes the base language's."},
+                "pageId": page_id(),
+            }),
+            &["path"],
+            false,
+        ),
         // ------------------------------------------------------------ writing
         tool(
             "create_artboard",
@@ -750,7 +845,8 @@ pub fn definitions() -> Vec<Value> {
              placeholder (each reported in warnings). No tables.\n\
              - Text: font-size, font-weight (≥600 = bold), font-style, color, line-height, \
              letter-spacing, text-align, text-decoration (including wavy and text-decoration-color); \
-             <b>/<i>/<u>/<s>/<span style> make rich text. Font family is always Inter.\n\
+             <b>/<i>/<u>/<s>/<span style> make rich text. font-family applies to a whole text layer: \
+             the first installed family in the list, Inter by default.\n\
              - Boxes: background(-color/-image: colors, linear/radial gradients, url()), border \
              (and border-top/right/bottom/left), border-radius, opacity, overflow:hidden, \
              mix-blend-mode, width/height (px, %, fit-content), min-width/max-width/min-height/max-height.\n\
@@ -769,6 +865,16 @@ pub fn definitions() -> Vec<Value> {
                 "pageId": page_id(),
             }),
             &["html", "targetNodeId", "mode"],
+            false,
+        ),
+        tool(
+            "import_html",
+            "Open an HTML page exported by a prompt-to-design tool as layers: a .html file or a .zip              with its stylesheets and images. <style> blocks and linked stylesheets are inlined (tag,              .class and #id selectors; media queries and combinators are reported), images in the zip              become assets, and each HTML file is written with write_html into its own new top-level              frame on the page (side by side, named after the file). Returns the frames per file,              `ignoredStyles` grouped by property and `warnings`.",
+            json!({
+                "path": {"type": "string", "description": "A local .html or .zip file."},
+                "pageId": {"type": "string", "description": "The page for the frames. Default: the active page."},
+            }),
+            &["path"],
             false,
         ),
         tool(
@@ -933,6 +1039,16 @@ pub fn definitions() -> Vec<Value> {
             true,
         ),
         tool(
+            "get_strings",
+            "The page text for translation, with no styles or geometry. Returns `strings` (text              layers bound to a string variable, by variable name, with the value per mode name),              `unbound` (layer id -> text of text layers bound to nothing; set_strings {extract} binds              them), `missing` (per mode name, the keys with no value of their own, which show the              base text) and `collections`. `missing` set to a mode name returns only {mode, base,              missing: {key: base text}}, so a translation is done in steps. Scope: `frame` (a layer              id; default every layer of the page), `pageId`; `collection` keeps one collection.",
+            json!({"frame": {"type": "string", "description": "Layer id to read inside. Omitted = the whole page."},
+                   "collection": {"type": "string", "description": "Collection name or id to keep."},
+                   "missing": {"type": "string", "description": "A mode name: only the keys that mode lacks, with their base text."},
+                   "pageId": page_id()}),
+            &[],
+            true,
+        ),
+        tool(
             "set_variables",
             "Define or change variables (names like `surface`, `accent-text`, or grouped \
              `color/brand/primary`), on every page. Plain {\"name\": \"#hex\"} defines a color. An \
@@ -985,9 +1101,9 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "set_variable_mode",
-            "Switch the active variable mode (defined with set_variables {mode}): every variable \
-             takes that mode's value and all fills following them change, on every page. One call \
-             turns a whole design from light to dark.",
+            "Switch the active variable mode (defined with set_variables {mode}, in any \
+             collection): that collection's variables take the mode's value and everything bound \
+             to them changes, on every page. One call turns a whole design from light to dark.",
             json!({"mode": {"type": "string"}}),
             &["mode"],
             false,
@@ -1017,8 +1133,9 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "get_components",
             "Main components of every page (or one with `pageId`): id, name, `componentKey` (stable), \
-             `pageId`, `pageName`, size, and `uses` (instances across all pages).",
-            json!({"pageId": page_id()}),
+             `pageId`, `pageName`, size, and `uses` (instances across all pages). Reports \
+             `estimatedTokens`; over `maxTokens` the list is cut (`truncated`).",
+            json!({"pageId": page_id(), "maxTokens": max_tokens()}),
             &[],
             true,
         ),
@@ -1139,13 +1256,21 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "set_prototype_links",
-            "Prototype links for Present mode: clicking a layer (a button, a row, a tab) goes to a \
-             screen on the same page. `to: null` removes a link. Link every entry point you design \
-             (back arrows, list rows, tabs) so the flow can be clicked through.",
+            "Prototype links for Present mode: what clicking a layer (a button, a row, a tab) does. Per \
+             link give at most one of: `to` (go to a screen, a frame on the same page), `overlay` \
+             (open a frame centred over the current one with a dimmed backdrop; one taller than the \
+             viewport scrolls; backdrop click, Escape or a `close` link closes it), `url` (https, \
+             http, mailto or tel only) or `action` (`back` to the previous screen, `close` to close \
+             the overlay). None, or `to: null`, removes the link. All links are checked before any \
+             is applied; targets on other pages are refused. Link every entry point you design \
+             (back arrows, list rows, tabs, modal buttons) so the flow can be clicked through.",
             json!({
                 "links": {"type": "array", "items": {"type": "object", "properties": {
                     "nodeId": {"type": "string"},
                     "to": {"type": ["string", "null"], "description": "The screen (a frame on the same page)."},
+                    "overlay": {"type": "string", "description": "A frame on the same page to open as an overlay."},
+                    "url": {"type": "string", "description": "External address: https, http, mailto or tel."},
+                    "action": {"type": "string", "enum": ["back", "close"], "description": "back: previous screen. close: close the overlay."},
                 }, "required": ["nodeId"]}},
                 "pageId": page_id(),
             }),
@@ -1229,6 +1354,20 @@ pub fn definitions() -> Vec<Value> {
                    "variable": {"type": ["string", "null"]},
                    "pageId": page_id()}),
             &["nodeIds", "field"],
+            false,
+        ),
+        tool(
+            "set_strings",
+            "Translate a page in one undoable call; languages are modes of a string collection,              never copies. Does not switch the active mode (set_variable_mode does). One of:              (a) `extract` true with `frame` (default the page) and `collection` (default `Strings`,              created with a base mode named `mode`, default `Default`): every unbound text layer              gets a string variable named from its layer path (`hero/title`, repeats numbered),              holding its text in the base mode, and is bound to it; returns the keys with their              texts. (b) `collection`, `mode` and `strings` {key: text}: sets those values, creating              the mode if missing; an unknown key, a non-string variable or an unknown collection is              an error that lists the offenders and changes nothing. (c) `collection`, `mode` and              `pseudo` true: fills the mode with the base text accented, about 35% longer and in              brackets, to show overflow before a real translation. Bound text re-fits when the              mode is switched, so run lint_design and get_screenshot per mode.",
+            json!({"extract": {"type": "boolean"},
+                   "frame": {"type": "string", "description": "extract: layer id to read inside. Omitted = the whole page."},
+                   "collection": {"type": "string", "description": "Collection name or id."},
+                   "mode": {"type": "string", "description": "Mode name (the language); extract: the base mode's name when the collection is created."},
+                   "strings": {"type": "object", "propertyNames": {"type": "string"}, "additionalProperties": {"type": "string"},
+                               "description": "{key: text}, keys as returned by get_strings."},
+                   "pseudo": {"type": "boolean"},
+                   "pageId": page_id()}),
+            &[],
             false,
         ),
         tool(
@@ -1439,18 +1578,18 @@ pub fn edits_doc(name: &str, args: &Value) -> bool {
 /// `None` for a tool with no class, so a tool added without one fails the test below.
 fn classify(name: &str, args: &Value) -> Option<bool> {
     Some(match name {
-        "list_resources" | "get_basic_info" | "get_inventory" | "get_selection" | "get_node_info" | "get_children"
+        "list_resources" | "get_basic_info" | "get_inventory" | "get_selection" | "get_context" | "get_node_info" | "get_children"
         | "get_bounds" | "get_tree_summary" | "get_screenshot" | "get_jsx" | "get_design_spec" | "verify_code"
         | "get_computed_styles" | "get_fill_image" | "zoom_image" | "ask_user" | "fetch_reference_images" | "generate_image" | "report_issue" | "design_rules" | "delegate" | "find_nodes" | "get_font_family_info"
-        | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_components" | "search_icons"
+        | "get_annotations" | "get_annotation_template" | "get_guide" | "get_feedback" | "get_variables" | "get_strings" | "get_components" | "search_icons"
         | "diff_frames" | "publish_library" | "list_libraries" | "get_changes" | "critique_design" | "design_lessons" | "claim_nodes" | "release_claims" | "list_claims" => false,
-        "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_presentation" | "export_design_system" | "open_file"
-        | "create_file" | "rename_file" | "finish_working_on_nodes" | "mark_handoff" | "list_handoffs" | "get_handoff_changes" | "export_handoff" => false,
+        "install_font" | "select_nodes" | "set_viewport" | "export" | "export_combined_pdf" | "export_presentation" | "export_design_system" | "open_file"
+        | "create_file" | "rename_file" | "finish_working_on_nodes" | "mark_handoff" | "list_handoffs" | "get_handoff_changes" | "export_handoff" | "export_site" => false,
         "lint_design" => args["fix"] == true,
-        "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html"
+        "create_page" | "rename_pages" | "delete_pages" | "create_artboard" | "write_html" | "import_html"
         | "create_shape" | "update_styles" | "set_text_content" | "rename_nodes"
         | "annotate" | "set_annotation_template" | "upsert_annotation_template" | "delete_annotation_template" | "update_annotation" | "delete_annotations" | "add_feedback" | "resolve_feedback" | "set_variables" | "set_tokens"
-        | "create_collection" | "delete_variables" | "bind_variable"
+        | "create_collection" | "delete_variables" | "bind_variable" | "set_strings"
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
         | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "apply_ui_kit" | "set_code_link"

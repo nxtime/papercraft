@@ -3,7 +3,7 @@
 use super::draw;
 use super::mesh::{Batch, MeshBuilder};
 use super::tess::{Piece, Tess};
-use crate::editor::{Editor, hit, snap::Guide};
+use crate::editor::{Editor, PresentOverlay, hit, snap::Guide};
 use crate::geom::{Camera, Rect, V2, v2};
 use crate::model::BlendMode;
 use crate::model::{Color, Document, NodeId, NodeKind, TextAlign};
@@ -129,6 +129,9 @@ const ZOOM_SETTLE: std::time::Duration = std::time::Duration::from_millis(150);
 /// tessellate far finer than shown) even mid-gesture.
 const ZOOM_LAG: i32 = 2;
 
+/// Opacity (0 to 255) of the black veil behind a Present-mode overlay.
+const BACKDROP_ALPHA: u8 = 140;
+
 /// Screen size (px at the bucket's zoom) under which a layer is not drawn.
 const MIN_SCREEN_PX: f64 = 0.5;
 
@@ -214,6 +217,21 @@ impl SceneCache {
             self.entries.retain(|_, e| e.used);
             self.borders.retain(|id, _| self.entries.contains_key(id));
         }
+        out
+    }
+
+    /// A dimmed backdrop over `view` (world), then the overlay frame shifted and clipped as
+    /// `o` says. Does not touch the cache bookkeeping of [`Self::items`].
+    pub fn overlay_items(&mut self, doc: &Document, o: &PresentOverlay, view: Rect, bucket: i32) -> Vec<Item> {
+        let mut tess = Tess::new(2f64.powi(bucket));
+        let mut out = Vec::new();
+        let mut dim = crate::model::Node::new(NodeId(0), NodeKind::Rect, view);
+        dim.style.fills = vec![crate::model::Paint::solid(Color::rgba(0, 0, 0, BACKDROP_ALPHA))];
+        let pieces = Arc::new(tess.ops(&draw::node_draw(&dim, view, 1.0).ops));
+        out.push(Item { id: dim.id, pieces, clip: None, blend: BlendMode::default() });
+        let origin = doc.parent_origin(doc.get(o.id).and_then(|n| n.parent)) + o.shift;
+        let opacity = draw::inherited_opacity(doc, o.id);
+        self.walk(doc, o.id, origin, Some(o.window), opacity, bucket, &mut tess, None, &mut out);
         out
     }
 
@@ -739,6 +757,10 @@ pub fn canvas(ed: &Editor, cache: &mut SceneCache, offset: V2, show_grid: bool) 
             items
         }
     };
+    let mut items = items;
+    if let Some(o) = &ed.present_overlay {
+        items.extend(cache.overlay_items(&ed.doc, o, vis, bucket));
+    }
     let mut over = MeshBuilder::default();
     overlay(&mut over, ed, offset);
     CanvasFrame {

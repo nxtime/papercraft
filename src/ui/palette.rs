@@ -457,7 +457,7 @@ pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui
                                     } else {
                                         egui::FontId::proportional(theme::BODY + 1.0)
                                     },
-                                    if sel { p.text } else { p.text },
+                                    p.text,
                                 );
                                 ui.painter().text(
                                     egui::pos2(row.right() - 14.0, row.center().y),

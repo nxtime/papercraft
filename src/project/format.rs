@@ -29,7 +29,17 @@ pub const PROJECT_VERSION: u32 = 3;
 /// pages are packed as they are saved.
 const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v, |v| v];
 /// v1: legacy single file. v2: page file inside a project. v3: fill layers (`fills`).
-pub const PAGE_VERSION: u32 = 3;
+/// v4: text can name a font, and layers can carry a link action (URL, back, overlay, close); an
+/// older app would drop either on save, so it must refuse the page.
+pub const PAGE_VERSION: u32 = 4;
+/// What a page that uses neither is saved as, so a v4 app does not lock older ones out of pages
+/// it merely touched (see [`needs_v4`]).
+const PAGE_BASE_VERSION: u32 = 3;
+
+/// Whether a page holds something an older app would drop on save: a named font or a link action.
+fn needs_v4(nodes: &[Node]) -> bool {
+    nodes.iter().any(|n| n.text_style.font.is_some() || n.link_action.is_some())
+}
 
 #[derive(Debug)]
 pub enum FormatError {
@@ -165,7 +175,7 @@ struct PageFile {
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
-const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3];
+const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v];
 /// Formats accepted as older versions of a page.
 const PAGE_ALIASES: &[&str] = &[LEGACY_FORMAT];
 
@@ -208,7 +218,7 @@ pub fn page_to_json_modes(p: &PageData, modes: &PageModes) -> String {
     nodes.sort_by_key(|n| n.id);
     let f = PageFile {
         format: PAGE_FORMAT.into(),
-        version: PAGE_VERSION,
+        version: if needs_v4(&nodes) { PAGE_VERSION } else { PAGE_BASE_VERSION },
         id: p.id.clone(),
         name: p.name.clone(),
         camera: p.camera,
@@ -253,7 +263,7 @@ fn is_current_page(s: &str) -> bool {
         version: Option<u32>,
     }
     serde_json::from_str::<Head>(s)
-        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && h.version == Some(PAGE_VERSION))
+        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | PAGE_BASE_VERSION)))
 }
 
 fn page_from_file(mut f: PageFile) -> Result<(PageData, PageModes), FormatError> {
@@ -367,6 +377,21 @@ mod tests {
     }
 
     #[test]
+    fn link_actions_roundtrip_and_pages_without_them_stay_byte_identical() {
+        use crate::model::LinkAction;
+        let mut doc = demo::showcase().doc;
+        let plain = page_to_json(&page_with(doc.clone()));
+        assert!(!plain.contains("link_action"), "unset: the field is not written");
+        let id = doc.root[0];
+        doc.nodes.get_mut(&id).unwrap().link_action = Some(LinkAction::Url { url: "https://a.dev".into() });
+        let s = page_to_json(&page_with(doc));
+        let back = page_from_json(&s).unwrap();
+        assert_eq!(back.doc.get(id).unwrap().link_action, Some(LinkAction::Url { url: "https://a.dev".into() }));
+        assert_eq!(page_to_json(&back), s);
+        assert_eq!(page_to_json(&page_from_json(&plain).unwrap()), plain);
+    }
+
+    #[test]
     fn annotations_roundtrip_and_old_pages_stay_byte_identical() {
         use crate::model::annotation::{Annotation, Anchor, Side};
         let ed = demo::showcase();
@@ -442,7 +467,17 @@ mod tests {
         assert_eq!(r.style.fill(), Some(crate::model::Color::rgb(255, 0, 0)));
         assert_eq!(r.style.corner_radius, 2.0);
         assert!(p.doc.get(NodeId(2)).unwrap().style.fills.is_empty());
-        assert!(page_to_json(&p).contains("\"version\":3"));
+        assert!(page_to_json(&p).contains(&format!("\"version\":{PAGE_BASE_VERSION}")));
+    }
+
+    #[test]
+    fn only_pages_with_a_font_or_link_action_are_saved_as_the_newer_version() {
+        let plain = r#"{"format":"paper-rs-page","version":3,"id":"a","name":"P","next_id":2,"root":[1],"nodes":[
+            {"id":1,"name":"T","type":"rect","rect":{"x":0,"y":0,"w":5,"h":5}}]}"#;
+        let mut p = page_from_json(plain).unwrap();
+        assert!(page_to_json(&p).contains("\"version\":3"), "an older app can still read it");
+        p.doc.nodes.get_mut(&NodeId(1)).unwrap().text_style.font = Some("Varela Round".into());
+        assert!(page_to_json(&p).contains("\"version\":4"));
     }
 
     #[test]

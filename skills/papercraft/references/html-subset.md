@@ -28,9 +28,17 @@
 
 Supported: `display:flex` (and `inline-flex`), `flex-direction`, `flex-wrap`, `gap`, `row-gap`, `column-gap`, `padding` (shorthand, per side, `padding-inline`, `padding-block`), `align-items`, `justify-content` (including `space-between`), `align-self` (`start`, `center`, `end`, `stretch`), `flex-grow` / `flex: 1`, `width`, `height` (px, %, `fit-content`), `min-width`, `max-width`, `min-height`, `max-height`, `overflow:hidden` (clips), `position:absolute` with `left`/`top`/`right`/`bottom`, `display:none`, `visibility`.
 
-Rewritten before layers are made, each reported in `warnings`: `margin` becomes the parent's `gap` (when uniform) or spacer layers, `margin-*:auto` a growing spacer and `margin:0 auto` centring; `display:grid` becomes rows of cells (`fr` tracks grow, px tracks keep their width, `repeat(auto-fill, minmax())` counts columns from the width); inline boxes (chips, badges) become boxes in a wrapping row; `<input>` and `<textarea>` become a box showing their placeholder or value. Prefer `gap` and `padding` anyway: the result is the same and shorter.
+Rewritten before layers are made, each reported in `warnings`:
+- `margin` between siblings becomes the parent's `gap` when every gap is the same, else spacer layers; the margin before the first and after the last child becomes the parent's `padding` (spacers when its padding is not plain px). `margin-*:auto` is a growing spacer and `margin:0 auto` centres the item across the flow. Negative margins are dropped with a warning.
+- `display:grid` becomes rows of cells: `repeat(N, 1fr)`, px, `fr`, `minmax(px, 1fr)` and `repeat(auto-fill, minmax())` (columns counted from the width) tracks; `gap`, `row-gap`, `column-gap`; `grid-column: span N` (also `1 / 3`) makes a cell cover N columns. `grid-template-rows`, areas, `grid-row` and explicit placement are not supported: cells flow row by row, with a warning.
+- `transform: translate()`, `translateX()` and `translateY()` move a free-positioned layer by that offset (px). Inside auto layout the offset cannot stay, so use margin or gap. `rotate`, `scale`, `skew` and `matrix` are reported in `ignoredStyles` (layers have no rotation).
+- Inline boxes (chips, badges) become boxes in a wrapping row; `<input>` and `<textarea>` become a box showing their placeholder or value.
 
-Not supported (check `ignoredStyles` to be sure): tables, `float`, `calc()`, viewport units, `transform` and rotation.
+`ignoredStyles` lists what was dropped, one entry per property (`transform: rotate, scale`).
+
+Prefer `gap` and `padding` anyway: the result is the same and shorter. To open a whole exported page (a `.html` or a `.zip` with its stylesheets and images), use `import_html`: it inlines `<style>` and linked CSS (tag, `.class` and `#id` selectors, `:root` custom properties; media queries and combinators are reported), registers the zip's images, and writes each HTML file into its own new frame on the page.
+
+Not supported (check `ignoredStyles` to be sure): tables, `float`, `calc()`, viewport units, rotation.
 
 Tips:
 
@@ -41,7 +49,7 @@ Tips:
 
 ## Text
 
-Supported: `font-size` (px), `font-weight` (600 and above renders bold; otherwise regular), `font-style:italic`, `color`, `line-height` (px or unitless), `letter-spacing`, `text-align`, `text-decoration` (including `text-decoration-color` and `text-decoration-style: wavy`, e.g. `text-decoration: underline wavy var(--warning)`). The font is always **Inter**; `font-family` is ignored, and there are only regular and bold weights (plus italic), so hierarchy comes from size, weight, color and space.
+Supported: `font-size` (px), `font-weight` (600 and above renders bold; otherwise regular), `font-style:italic`, `color`, `line-height` (px or unitless), `letter-spacing`, `text-align`, `text-decoration` (including `text-decoration-color` and `text-decoration-style: wavy`, e.g. `text-decoration: underline wavy var(--warning)`). The font is **Inter** unless `font-family` names a family added with `install_font` (it applies to the whole text layer, not a span). There are only regular and bold weights (plus italic), so hierarchy comes from size, weight, color and space.
 
 ## Boxes
 

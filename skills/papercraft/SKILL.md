@@ -7,7 +7,7 @@ description: Drive the PaperCraft design app (native infinite-canvas design tool
 
 PaperCraft is a native Rust design app. You edit the project that is open in the running app: every tool call is one undo step and the window repaints live. Same tools over MCP (`http://127.0.0.1:29980/mcp` or the `papercraft-mcp` stdio bridge) and over the shell (`papercraft-cli`). Look and taste live in the `papercraft-design` skill; this one is the mechanics.
 
-References: [compact-workflow.md](references/compact-workflow.md) (pages and groups, compressing, design-code sync, few tokens, shared work), [tools.md](references/tools.md) (every tool and argument), [html-subset.md](references/html-subset.md) (what `write_html` accepts), [recipes.md](references/recipes.md) (mobile flow, landing page, dashboard, design-system page).
+References: [compact-workflow.md](references/compact-workflow.md) (pages and groups, compressing, design-code sync, few tokens, shared work), [tools.md](references/tools.md) (every tool and argument), [html-subset.md](references/html-subset.md) (what `write_html` accepts), [recipes.md](references/recipes.md) (mobile flow, landing page, dashboard, design-system page), [export-site.md](references/export-site.md) (designs as a website or a React, Vue, Angular or Astro project).
 
 ## 1. Connect and orient
 
@@ -17,6 +17,7 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
 
 * **Check the project is the right one.** `get_basic_info` returns `fileName` and `path`. Build only in a project that belongs to the work (a NotesCraft design file is for NotesCraft screens, not for redesigning PaperCraft). For a different product: `create_file {name}`, then `open_file {fileId}`, and say so. `open_file` swaps the project the user is looking at, so tell them. Pass `fileId` on later calls when more than one project is in play.
 * Not running: ask the user to start PaperCraft and open a project (or `create_file` then `open_file`). `PAPERCRAFT_MCP_PORT` must match if the port was changed. Do not try to launch the GUI yourself unless asked.
+* Call `get_context` first (page, target, outline with token estimates, variables, components, lint); read deeper nodes only as needed, one at a time. Every big read takes `maxTokens` and says when it was `truncated`.
 * Read `get_basic_info` (pages, artboards, sizes, fonts, and `lessons`: the person's rules from past critiques; follow every one), then `get_selection` (what the user is looking at) and `get_variables` and `get_components`. Reuse what exists before creating anything.
 * `pageId` defaults to the page the user is viewing, which can change between calls: pass it explicitly. Node ids look like `3fa9c1:14`; never show them to the user.
 * App closed (server, CI)? `papercraft-cli call --offline ... --project <name>` runs the same tools on the project store and saves after every editing call; `papercraft-cli shell` keeps one session for many calls and reads scripts from stdin. It is refused while the app has that project open. See `docs/agents.md`.
@@ -29,6 +30,7 @@ papercraft-cli call get_basic_info      # fails with exit 1 if the app is not ru
 ## 2. The loop: build, look, lint, fix
 
 1. **Tokens first.** `set_variables` once (roles: `bg`, `surface`, `border`, `text`, `text-muted`, `accent`, `on-accent`, `danger`). Add a second mode for dark or light. No hex in the design afterwards.
+   **Themes are modes, never copies.** One artboard per screen. Show a dark or light (or any other) theme by giving each variable a value per mode and switching with `set_variable_mode`; screenshot each mode in turn. Do not duplicate artboards side by side as "Screen / Light" and "Screen / Dark", and do not rebuild a screen with different hex values for another theme: the copies drift apart and the mode switch stops meaning anything. If a theme needs a different shape (an ornament only one theme shows), make it a variable too (a colour that is `transparent` in the other mode, or `visible` bound to a boolean variable).
 2. **Components first.** Anything that appears twice (button, field, chip, row, tab bar) is built once as an artboard, `create_component`, then placed with `create_instance`.
 3. **Build in small steps.** `create_artboard`, then one `write_html` per visual group (header, card, row) so the user sees progress. Name every layer with `layer-name`.
 4. **Look.** `get_screenshot` of the artboard after each group or two. Scale 2 to read small text. Read it as a designer: hierarchy, alignment, spacing rhythm, clipping, wrapping.
@@ -122,7 +124,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Reuse | `create_component`, `create_instance`, `swap_instance` (also a nested badge inside a row instance: a swap that survives main edits), `get_components`, `<x-paper-instance>` |
 | Component properties | One component with properties instead of one per state: `set_component_props` (`text`, `bool`, `icon`, `enum` options in the overrides format; templates `text`, `active` for tab bars and navs, `status` with [{value, color}]), then `set_instance_props {nodeIds, values}` or `<x-paper-instance component="Badge" props='{"Status":"Rejeitada"}'/>`; `get_components` lists them |
 | Merge per-state components | `merge_variants {componentIds, name}` turns `Tab bar / Hoje`, `Tab bar / Lojas`... into one `Tab bar` with an enum, moves every instance and deletes the emptied variants |
-| Prototype | `set_prototype_links {links:[{nodeId, to}]}`: back arrows, rows and tabs go to their screens in Present mode |
+| Prototype | `set_prototype_links {links:[{nodeId, to}]}`: back arrows, rows and tabs go to their screens in Present mode; or one of `overlay` (frame opened as a dimmed, scrollable overlay), `url` (https, http, mailto, tel), `action` `back` / `close` |
 | Screens | Fixed size (390x844, 1440x900...); content longer than the screen scrolls by itself (the main column under a fixed sidebar and header, else the screen), or set `overflow: auto` on the frame that should scroll; it keeps its size and the overflow scrolls on the canvas and in Present (inspector: Scroll overflow; page: Screens scroll) |
 | Project | `rename_file {name}` (open project stays open), `move_nodes {toPageId}` keeps instances linked and notes attached |
 | Shared libraries | `publish_library`, `list_libraries`, `enable_library`, `update_library`, `disable_library` |
@@ -136,13 +138,14 @@ Full flows: [recipes.md](references/recipes.md).
 | Report a PaperCraft problem | `report_issue` (a draft the user sends; synthetic repro only) |
 | Check quality | `lint_design` (`changedOnly: true` or `since` between edits, a full pass at the end; `overflow` flags layers past their artboard or clipping parent) |
 | Export | `export` (PNG, SVG, PDF to files), `export_combined_pdf`, `export_presentation` (a client deck: cover, contents, a slide per screen) |
+| Publish as a website | `export_site`: ask the person for framework, render and styling first ([export-site.md](references/export-site.md)), then follow its `next_steps` |
 | Point at things for the user | `select_nodes` (`zoom: true`) |
 | Take back | `undo`, `redo` |
 | Save | `finish_working_on_nodes` |
 
 ## 6. Known limits (design around them)
 
-* **Font is Inter only**, regular and bold plus italic. No other families, no weights between. Build hierarchy from size, weight, color and space.
+* **Font is Inter** unless the brief needs another typeface: `install_font` adds a .ttf or .otf to the project and `font-family` applies it to a whole text layer. Each family has regular and bold plus italic at most, no weights between. Build hierarchy from size, weight, color and space.
 * **Variables** are typed (`color`, `number`, `string`, `boolean`), live in collections with modes, group with `/` (`space/md`, `color/brand/primary`) and can alias each other. Colors work as `var(--name)` on fills and text; every other field binds with `bind_variable` (stroke, text-color, width, height, gap, padding, radius, font-size, line-height, opacity, visible). Numbers bind as px; line-height below 4 is a multiplier. Gradients keep fixed colors.
 * **No margin, grid or tables; no shadows, filters or transforms** (reported under `ignoredStyles`). Fake elevation with a border or a lighter surface.
 * **No rotation.** Nodes are axis-aligned.
@@ -169,6 +172,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Call fails with an unknown node id | The id is from another page or was deleted. Re-read with `get_children`; pass `pageId`. |
 | `write_html` reports `ignoredStyles` | You used a CSS property that has no equivalent (`margin`, `box-shadow`, `transform`...). Replace it, see [html-subset.md](references/html-subset.md). |
 | Content is cut off | A frame inside the screen clips it (`overflow: hidden`, or a fixed height under a hugging parent). Give the column that should scroll `overflow: auto`; for a board that should grow, `overflow: "visible"` and `height: "fit-content"`. |
+| Tempted to show a second theme next to the first | Don't copy the artboards. Give the variables a value in each mode and switch with `set_variable_mode`; screenshot one mode, switch, screenshot again. |
 | A color did not change with the theme | It was written as hex, or it is a stroke or gradient. Use `var(--name)` on fills and text; strokes need `update_styles` after a mode switch. |
 | `create_instance` fails | Wrong `componentId` / `componentKey` (read `get_components`). Mains on other pages and enabled libraries work; no import needed. |
 | A page is full of copied components at y=0 | Something imported mains onto the page (`import_components`, or old `write_html` builds). Swap their instances to the design-system mains (`swap_instance {componentKey}`), check a screenshot, then delete the unused copies. |

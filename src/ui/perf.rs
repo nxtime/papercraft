@@ -81,6 +81,8 @@ pub struct Perf {
     pub prefs: PerfPrefs,
     /// GPU adapter, "name (backend)"; set by the shell.
     pub gpu: String,
+    /// The refresh rate of the window's monitor in Hz, where the system reports it.
+    pub display_hz: Option<u32>,
     /// (time in seconds, CPU time of the frame in ms), oldest first.
     frames: VecDeque<(f64, f32)>,
     ram: Option<f64>,
@@ -109,6 +111,11 @@ impl Perf {
     /// Frames shown in the last second.
     pub fn fps(&self) -> usize {
         let Some(&(last, _)) = self.frames.back() else { return 0 };
+        let span = self.frames.front().map_or(0.0, |f| last - f.0);
+        // Above `WINDOW` FPS the window holds under a second, so a count would stop at `WINDOW`.
+        if self.frames.len() == WINDOW && span > 0.0 && span < 1.0 {
+            return ((WINDOW - 1) as f64 / span).round() as usize;
+        }
         self.frames.iter().filter(|(t, _)| last - t < 1.0).count()
     }
 
@@ -125,7 +132,9 @@ impl Perf {
     /// longer than one frame at `min_fps`. Measured on work, not on the frame rate, since the
     /// app draws nothing while idle.
     pub fn is_slow(&self) -> bool {
-        let budget = 1000.0 / self.prefs.judge_fps() as f32;
+        // A cap above the display must not demand frames nobody can see.
+        let rate = self.display_hz.map_or(self.prefs.judge_fps(), |hz| self.prefs.judge_fps().min(hz));
+        let budget = 1000.0 / rate as f32;
         self.frames.len() >= SLOW_STREAK && self.frames.iter().rev().take(SLOW_STREAK).all(|f| f.1 > budget)
     }
 
@@ -159,6 +168,11 @@ impl Perf {
     }
 }
 
+/// The caps worth offering: none above the display, except the one already chosen.
+fn offered_rates(display_hz: Option<u32>, chosen: u32) -> Vec<u32> {
+    THRESHOLDS.into_iter().filter(|&fps| fps == chosen || display_hz.is_none_or(|hz| fps <= hz)).collect()
+}
+
 /// Settings > Performance.
 pub fn settings_page(ui: &mut Ui, perf: &mut Perf) {
     let before = perf.prefs;
@@ -173,13 +187,14 @@ pub fn settings_page(ui: &mut Ui, perf: &mut Perf) {
         if kit::chip(ui, "Auto", perf.prefs.min_fps == AUTO).on_hover_text("Follow the display: no cap").clicked() {
             perf.prefs.min_fps = AUTO;
         }
-        for fps in THRESHOLDS {
+        for fps in offered_rates(perf.display_hz, perf.prefs.min_fps) {
             if kit::chip(ui, &format!("{fps} FPS"), perf.prefs.min_fps == fps).clicked() {
                 perf.prefs.min_fps = fps;
             }
         }
     });
-    ui.label(RichText::new("The most frames PaperCraft draws per second, so a fast monitor does not spend power on frames you cannot use. Auto follows the display. A badge shows on the canvas while frames take longer than this rate allows.").size(theme::SECONDARY).color(theme::pal(ui).tertiary));
+    let display = perf.display_hz.map_or(String::new(), |hz| format!(" This display runs at {hz} Hz."));
+    ui.label(RichText::new(format!("The most frames PaperCraft draws per second, so a fast monitor does not spend power on frames you cannot use. Auto follows the display.{display} A badge shows on the canvas while frames take longer than this rate allows.")).size(theme::SECONDARY).color(theme::pal(ui).tertiary));
     ui.add_space(16.0);
     kit::section_header(ui, "Now", None);
     ui.add_space(4.0);
@@ -366,6 +381,9 @@ mod tests {
         }
         assert_eq!(PerfPrefs::parse("").min_fps, DEFAULT_RATE, "nothing saved yet");
         assert!(THRESHOLDS.contains(&60) && THRESHOLDS.contains(&360));
+        assert_eq!(offered_rates(Some(60), AUTO), [30, 45, 60]);
+        assert_eq!(offered_rates(Some(60), 120), [30, 45, 60, 120]);
+        assert_eq!(offered_rates(None, AUTO), THRESHOLDS);
         assert!(THRESHOLDS.windows(2).all(|w| w[0] < w[1]), "ascending, so the chips read in order");
     }
 
@@ -376,6 +394,22 @@ mod tests {
         assert!(PerfPrefs::parse(&saved) == p);
         assert_eq!(PerfPrefs::parse("1 garbage").min_fps, DEFAULT_RATE, "an unreadable rate falls back to the default");
         assert_eq!(PerfPrefs::parse("0 0").min_fps, AUTO, "Auto is a saved choice, not a missing one");
+    }
+
+    #[test]
+    fn fps_reads_past_the_size_of_the_window() {
+        for rate in [160, 360] {
+            let mut p = Perf::default();
+            for i in 0..1000 {
+                p.record(f64::from(i) / f64::from(rate), 1.0);
+            }
+            assert_eq!(p.fps(), rate as usize);
+        }
+        let mut slow = Perf::default();
+        for i in 0..200 {
+            slow.record(f64::from(i) / 60.0, 1.0);
+        }
+        assert_eq!(slow.fps(), 60);
     }
 
     #[test]

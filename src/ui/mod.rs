@@ -6,11 +6,13 @@ pub mod agent;
 pub mod annotations;
 pub mod annotations_canvas;
 pub mod bind;
+pub mod canvas_prefs;
 pub mod chat;
 pub mod chat_md;
 pub mod chat_msgs;
 pub mod confirm;
 pub mod design;
+pub mod help_sheet;
 pub mod home;
 pub mod inspector;
 pub mod props_modal;
@@ -23,6 +25,7 @@ pub mod menus;
 pub mod panel_handle;
 pub mod motion;
 pub mod pages;
+pub mod present;
 pub mod perf;
 pub mod palette;
 pub mod panels;
@@ -33,6 +36,7 @@ pub mod variables;
 pub mod update;
 
 use crate::theme::Surface as _;
+pub use present::start_present;
 use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
 use crate::model::{Color, NodeId, NodeKind};
@@ -54,6 +58,9 @@ pub struct UiState {
     pub renaming: Option<(NodeId, String)>,
     pub show_help: bool,
     pub show_grid_off: bool,
+    /// A mouse wheel zooms the canvas instead of panning it.
+    pub wheel_zooms: bool,
+    pub canvas_saved: canvas_prefs::CanvasPrefs,
     /// Export settings (inspector Export section).
     pub export: crate::io::export::Spec,
     /// Export settings the user kept with "+", applied with one click (right-click removes).
@@ -110,8 +117,8 @@ pub struct UiState {
     pub panel_need: [f32; 2],
     /// Present mode: only the canvas, with a presenter bar to step through the page's frames.
     pub present: bool,
-    /// Frame shown by the presenter (index into the page's top-level frames).
-    pub present_index: usize,
+    /// Where the presenter is: shown frame, history, open overlay.
+    pub present_nav: present::Nav,
     /// Inspector shows the Prototype tab instead of Design.
     pub proto_tab: bool,
     /// Present mode's camera glide `(from, to, started)`, if one is running.
@@ -519,11 +526,11 @@ pub(crate) fn agent_verb(tool: &str) -> &'static str {
         "update_styles" | "set_text_content" | "rename_nodes" => "Styling",
         "get_screenshot" | "get_jsx" | "get_design_spec" | "get_computed_styles" | "get_node_info"
         | "get_children" | "get_tree_summary" | "get_bounds" | "get_selection" | "get_basic_info"
-        | "get_inventory" | "get_variables" | "get_components" | "find_nodes" | "get_annotations"
+        | "get_inventory" | "get_variables" | "get_strings" | "get_components" | "find_nodes" | "get_annotations"
         | "get_annotation_template" | "get_font_family_info" | "get_fill_image" | "search_icons"
         | "list_resources" | "list_libraries" => "Looking at the design",
         "lint_design" | "verify_code" | "diff_frames" => "Checking the design",
-        "set_variables" | "set_tokens" | "set_variable_mode" | "import_design_system" => {
+        "set_variables" | "set_strings" | "set_tokens" | "set_variable_mode" | "import_design_system" => {
             "Setting up tokens"
         }
         "create_component" | "create_instance" | "import_components" | "swap_instance" => {
@@ -651,176 +658,6 @@ const SIDE_MAX_SHARE: f32 = 0.3;
 /// The canvas, with the toolbar above it, needs at least this much room; below it the side
 /// panels step aside.
 const MIN_CANVAS_W: f32 = 600.0;
-
-/// Bottom strip of the canvas taken by the presenter bar; clicks there never follow links.
-const PRESENT_BAR_H: f32 = 80.0;
-
-/// The page's top-level frames, in layer order: what Present mode steps through.
-fn present_frames(ed: &Editor) -> Vec<NodeId> {
-    ed.doc
-        .root
-        .iter()
-        .copied()
-        .filter(|id| {
-            ed.doc
-                .get(*id)
-                .is_some_and(|n| n.is_frame() && n.visible && !n.component)
-        })
-        .collect()
-}
-
-/// Starts Present mode on the first frame (or the selected one).
-pub fn start_present(ed: &mut Editor, st: &mut UiState) {
-    let frames = present_frames(ed);
-    st.present_index = ed
-        .selection
-        .first()
-        .and_then(|s| frames.iter().position(|f| f == s))
-        .unwrap_or(0);
-    st.present = true;
-    st.present_glide = None;
-    st.present_glide_ready = false;
-    show_present_frame(ed, st);
-}
-
-/// How long the camera takes to glide from one presented frame to the next.
-const PRESENT_GLIDE_SECS: f32 = 0.45;
-
-fn show_present_frame(ed: &mut Editor, st: &mut UiState) {
-    let frames = present_frames(ed);
-    let Some(&id) = frames.get(st.present_index) else {
-        return;
-    };
-    let from = ed.camera;
-    ed.selection = vec![id];
-    ed.run(Action::ZoomSelection);
-    ed.selection.clear();
-    let to = ed.camera;
-    // Glide instead of cutting (the first frame of a presentation still snaps).
-    st.present_glide = (st.present_glide_ready && from != to).then(|| {
-        ed.camera = from;
-        (from, to, web_time::Instant::now())
-    });
-    st.present_glide_ready = true;
-}
-
-/// Moves the camera along the glide started by [`show_present_frame`].
-fn step_present_glide(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
-    let Some((from, to, start)) = st.present_glide else {
-        return;
-    };
-    let t = (start.elapsed().as_secs_f32() / PRESENT_GLIDE_SECS).min(1.0);
-    let e = f64::from(motion::ease_in_out_cubic(t));
-    if t >= 1.0 || !motion::enabled(ctx) {
-        ed.camera = to;
-        st.present_glide = None;
-        return;
-    }
-    ed.camera.pan = crate::geom::v2(
-        from.pan.x + (to.pan.x - from.pan.x) * e,
-        from.pan.y + (to.pan.y - from.pan.y) * e,
-    );
-    // Zoom glides in log space so it feels even.
-    ed.camera.zoom = (from.zoom.ln() + (to.zoom.ln() - from.zoom.ln()) * e).exp();
-    ctx.request_repaint();
-}
-
-/// The presenter bar: previous and next frame, a counter and Exit; Esc and the arrow keys work too.
-fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect) {
-    step_present_glide(ctx, ed, st);
-    let frames = present_frames(ed);
-    let total = frames.len();
-    let (left, right, esc) = ctx.input(|i| {
-        (
-            i.key_pressed(egui::Key::ArrowLeft),
-            i.key_pressed(egui::Key::ArrowRight),
-            i.key_pressed(egui::Key::Escape),
-        )
-    });
-    let mut step: i32 = i32::from(right) - i32::from(left);
-    let mut exit = esc;
-    // A click on a layer with a prototype link jumps to its frame.
-    let clicked = ctx.input(|i| i.pointer.primary_clicked())
-        && ctx
-            .pointer_interact_pos()
-            .is_some_and(|p| canvas.contains(p) && p.y < canvas.bottom() - PRESENT_BAR_H);
-    if clicked {
-        let at = ed.screen_to_world(ed.pointer);
-        let hit = crate::editor::hit::hit_test(&ed.doc, at, ed.camera.zoom);
-        let target = hit.and_then(|h| {
-            std::iter::once(h)
-                .chain(ed.doc.ancestors(h))
-                .find_map(|id| ed.doc.get(id).and_then(|n| n.link))
-        });
-        if let Some(i) = target.and_then(|t| frames.iter().position(|f| *f == t)) {
-            st.present_index = i;
-            show_present_frame(ed, st);
-        }
-    }
-    let p = theme::pal_from_ctx(ctx);
-    egui::Area::new("presenter".into())
-        .order(egui::Order::Foreground)
-        .pivot(Align2::CENTER_BOTTOM)
-        .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - RUN_TOAST_LIFT))
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(p.sidebar)
-                .corner_radius(egui::CornerRadius::same(255))
-                .inner_margin(egui::Margin::symmetric(8, 6))
-                .show_surface(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        if kit::lottie_button(ui, "chevron-left", "Previous frame (←)", 32.0)
-                            .clicked()
-                        {
-                            step = -1;
-                        }
-                        ui.label(
-                            RichText::new(format!(
-                                "{} / {}",
-                                (st.present_index + 1).min(total.max(1)),
-                                total.max(1)
-                            ))
-                            .font(theme::semibold(theme::BODY)),
-                        );
-                        if kit::lottie_button(ui, "chevron-right", "Next frame (→)", 32.0).clicked()
-                        {
-                            step = 1;
-                        }
-                        if kit::button(ui, kit::ButtonKind::Primary, None, "Exit").clicked() {
-                            exit = true;
-                        }
-                    });
-                });
-        });
-    egui::Area::new("presenting".into())
-        .order(egui::Order::Foreground)
-        .anchor(
-            Align2::LEFT_TOP,
-            egui::vec2(canvas.left() + 24.0, canvas.top() + 24.0),
-        )
-        .interactable(false)
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(p.sidebar)
-                .corner_radius(egui::CornerRadius::same(255))
-                .inner_margin(egui::Margin::symmetric(14, 6))
-                .show_surface(ui, |ui| {
-                    ui.label(
-                        RichText::new(format!("Presenting · {}", ed.page_name()))
-                            .size(theme::SECONDARY)
-                            .color(p.secondary),
-                    );
-                });
-        });
-    if step != 0 && total > 0 {
-        st.present_index = (st.present_index as i32 + step).rem_euclid(total as i32) as usize;
-        show_present_frame(ed, st);
-    }
-    if exit {
-        st.present = false;
-    }
-}
 
 /// Whether the chrome uses the floating rounded look (everything except the macOS translucent sidebar).
 pub(crate) fn is_floating(translucent: bool) -> bool {
@@ -985,14 +822,15 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         toast(ui.ctx(), text, *error);
     }
     if let Some(hv) = &mut st.home {
-        home::draw(ui, hv, st.native_chrome, st.translucent_sidebar);
+        home::draw(ui, hv, st.custom_titlebar, st.translucent_sidebar);
         #[cfg(not(target_arch = "wasm32"))]
         {
             st.updater.open |= std::mem::take(&mut hv.show_updates);
             st.updater.show(ui.ctx());
         }
+        let slot = hv.window_slot;
         if st.custom_titlebar {
-            home_window_chrome(ui, st);
+            home_window_chrome(ui, st, slot);
         }
         return egui::Rect::NOTHING;
     }
@@ -1032,7 +870,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         confirm::show(ui.ctx(), ed, st);
         let canvas = ui.available_rect_before_wrap();
         if st.present {
-            presenter(ui.ctx(), ed, st, canvas);
+            present::presenter(ui.ctx(), ed, st, canvas);
         }
         palette::draw(ui.ctx(), ed, st, canvas);
         return canvas;
@@ -1220,9 +1058,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     perf::overlay(ui.ctx(), &mut st.perf, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
     if st.show_help {
-        help(ui.ctx(), st, canvas);
+        help_sheet::show(ui.ctx(), st, canvas);
     }
-    settings::show(ui.ctx(), st);
+    settings::show(ui.ctx(), ed, st);
+    canvas_prefs::sync(ed, st);
     variables::show(ui.ctx(), ed, st);
     libraries::show(ui.ctx(), ed, st);
     #[cfg(not(target_arch = "wasm32"))]
@@ -1246,10 +1085,14 @@ fn menu_entries(ui: &mut Ui, ed: &mut Editor, entries: &[shortcuts::MenuEntry]) 
                 ui.separator();
             }
             shortcuts::MenuEntry::Submenu(label, items) => {
-                ui.menu_button(*label, |ui| {
-            crate::theme::popup_backing(ui);
-            menu_entries(ui, ed, items)
-        });
+                let icon = items.iter().find_map(|item| match item {
+                    shortcuts::MenuEntry::Item(_, action) => menus::icon_of(*action),
+                    _ => None,
+                });
+                menus::submenu(ui, label, icon, |ui| {
+                    crate::theme::popup_backing(ui);
+                    menu_entries(ui, ed, items);
+                });
             }
         }
     }
@@ -1427,7 +1270,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 st.updater.open = true;
             }
             if theme::icon_button(ui, theme::Icon::Play, 26.0, false).on_hover_text("Present").clicked() {
-                start_present(ed, st);
+                present::start_present(ed, st);
             }
             if st.chat_mode
                 && !compact
@@ -1605,6 +1448,7 @@ fn theme_menu(ui: &mut Ui) {
 }
 
 const WIN_BTN_W: f32 = 46.0;
+const HOME_WIN_BTN_H: f32 = 34.0;
 /// Stroke of the minimize, maximize and close glyphs: the weight of the toolbar's icons.
 const WIN_GLYPH_STROKE: f32 = 1.25;
 /// How long the File / Edit strip takes to slide open or shut.
@@ -1671,19 +1515,21 @@ fn window_buttons(ui: &mut Ui, st: &mut UiState, h: f32) {
     });
 }
 
-/// The home screen has no toolbar: its top strip drags the window, the buttons sit top right.
-fn home_window_chrome(ui: &mut Ui, st: &mut UiState) {
+/// The home screen has no toolbar: its top strip drags the window, the buttons sit in `slot`,
+/// the end of the header row inside the panel.
+fn home_window_chrome(ui: &mut Ui, st: &mut UiState, slot: Option<egui::Rect>) {
     let screen = ui.ctx().content_rect();
     let strip = egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), theme::TOOLBAR_H));
     egui::Area::new("home-window-drag".into()).order(egui::Order::Background).fixed_pos(strip.min).show(ui.ctx(), |ui| {
         drag_area(ui, strip, st);
     });
+    let Some(slot) = slot else { return };
     egui::Area::new("home-window-buttons".into())
         .order(egui::Order::Foreground)
         .pivot(egui::Align2::RIGHT_TOP)
-        .fixed_pos(screen.right_top())
+        .fixed_pos(slot.right_top())
         .show(ui.ctx(), |ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| window_buttons(ui, st, theme::TOOLBAR_H));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| window_buttons(ui, st, slot.height()));
         });
 }
 
@@ -1971,7 +1817,9 @@ pub fn drop_layer(ed: &mut Editor, id: NodeId, d: LayerDrop) {
             )
         }
     };
-    if parent.is_some_and(|p| p == id || ed.doc.is_ancestor(id, p)) {
+    if parent.is_some_and(|p| p == id || ed.doc.is_ancestor(id, p))
+        || crate::editor::structure::moves_into_cycle(&ed.doc, id, parent)
+    {
         return;
     }
     ed.edit("Move layer", |tx| {
@@ -2760,78 +2608,6 @@ fn status(ctx: &egui::Context, ed: &Editor, canvas: egui::Rect) {
                     );
                 });
         });
-}
-
-fn help(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
-    let width = 820.0f32.min(canvas.width() - 40.0);
-    egui::Area::new("help".into())
-        .order(egui::Order::Foreground)
-        .fade_in(false)
-        .pivot(Align2::CENTER_CENTER)
-        .fixed_pos(canvas.center())
-        .show(ctx, |ui| {
-            let p = theme::pal(ui);
-            egui::Frame::popup(ui.style())
-                .fill(p.sidebar)
-                .corner_radius(crate::theme::r(24.0))
-                .inner_margin(24.0)
-                .stroke(egui::Stroke::NONE)
-                .show_surface(ui, |ui| {
-                    ui.set_width(width);
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 2.0;
-                            ui.label(RichText::new("Keyboard shortcuts").font(theme::semibold(20.0)));
-                            ui.label(RichText::new("Press ? anytime to open this sheet.").color(p.secondary));
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if kit::button(ui, kit::ButtonKind::Secondary, None, "Done")
-                                .on_hover_text("Close (Esc)")
-                                .clicked()
-                            {
-                                st.show_help = false;
-                            }
-                        });
-                    });
-                    ui.add_space(12.0);
-                    let sections = shortcuts::help_sections();
-                    egui::ScrollArea::vertical()
-                        .max_height((canvas.height() - 160.0).max(200.0))
-                        .show(ui, |ui| {
-                            ui.columns(3, |cols| {
-                                // Balance columns by row count.
-                                let total: usize = sections.iter().map(|(_, r)| r.len() + 2).sum();
-                                let mut acc = 0;
-                                for (title, rows) in sections.iter() {
-                                    let col = (acc * 3 / total.max(1)).min(2);
-                                    acc += rows.len() + 2;
-                                    let ui = &mut cols[col];
-                                    kit::section_header(ui, title, None);
-                                    ui.add_space(4.0);
-                                    for (k, d) in rows {
-                                        ui.horizontal(|ui| {
-                                            ui.set_height(30.0);
-                                            ui.label(RichText::new(*d).size(theme::BODY));
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                ui.spacing_mut().item_spacing.x = 4.0;
-                                                kit::key_caps_rtl(ui, k);
-                                            });
-                                        });
-                                    }
-                                    ui.add_space(14.0);
-                                }
-                            });
-                        });
-                    ui.label(
-                        RichText::new("Space-drag pans · wheel pans · ⌘/Ctrl+wheel or pinch zooms · ⌥-drag duplicates · hold ⌥ to measure")
-                            .size(theme::SECONDARY)
-                            .color(p.secondary),
-                    );
-                });
-        });
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        st.show_help = false;
-    }
 }
 
 #[cfg(test)]

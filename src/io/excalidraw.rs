@@ -474,8 +474,8 @@ fn build(mut imp: Imported) -> (Document, Vec<NodeId>) {
         let id = tx.alloc_id();
         n.id = id;
         tx.insert(n, None, None);
+        order.push((eid.clone(), id));
         ids.insert(eid, id);
-        order.push(id);
     }
     // Frames: frame children (listed below the frame in Excalidraw) move inside it.
     for (eid, (_, frame)) in &imp.nesting {
@@ -487,10 +487,7 @@ fn build(mut imp: Imported) -> (Document, Vec<NodeId>) {
     }
     // Groups, outermost first so inner groups nest inside outer ones.
     let mut group_nodes: HashMap<String, NodeId> = HashMap::new();
-    for id in &order {
-        let Some((eid, _)) = ids.iter().find(|(_, v)| *v == id) else {
-            continue;
-        };
+    for (eid, id) in &order {
         let (groups, _) = imp.nesting[eid].clone();
         let mut parent = tx.doc().get(*id).and_then(|n| n.parent);
         for g in groups.iter().rev() {
@@ -652,6 +649,25 @@ mod tests {
         // Frame children live inside the frame.
         let frame = doc.nodes.values().find(|n| n.is_frame()).unwrap();
         assert!(!frame.children.is_empty());
+    }
+
+    #[test]
+    fn imports_thousands_of_grouped_elements() {
+        let els: Vec<String> = (0..3000)
+            .map(|i| {
+                format!(
+                    r#"{{"id":"r{i}","type":"rectangle","x":{x},"y":0,"width":10,"height":10,"groupIds":["g{g}"]}}"#,
+                    x = i * 12,
+                    g = i / 3
+                )
+            })
+            .collect();
+        let json = format!(r#"{{"type":"excalidraw","elements":[{}]}}"#, els.join(","));
+        let doc = import_scene(&json).unwrap();
+        let rects = doc.nodes.values().filter(|n| n.kind.type_name() == "Rectangle").count();
+        let groups = doc.nodes.values().filter(|n| n.kind.type_name() == "Group").count();
+        assert_eq!((rects, groups), (3000, 1000));
+        doc.validate().unwrap();
     }
 
     #[test]

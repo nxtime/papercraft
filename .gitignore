@@ -6,3 +6,7 @@ app.asar.unpacked/
 web/pkg/
 .worktrees/
 .oc-agents/
+
+.export-panels.tmp.pc
+.design-work/
+tools/showcase/*.log

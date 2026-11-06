@@ -105,6 +105,7 @@ fn interpolate([ax, ay]: [f32; 2], [bx, by]: [f32; 2], t: f32) -> [f32; 2] {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::apply;
     use crate::lottie::Polyline;

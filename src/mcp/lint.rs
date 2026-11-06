@@ -17,7 +17,7 @@ pub struct Issue {
 }
 
 /// Screens at least this wide are desktop (pointer) UIs.
-const DESKTOP_MIN_W: f64 = 1024.0;
+pub(crate) const DESKTOP_MIN_W: f64 = 1024.0;
 /// Touch targets: Apple HIG 44pt, WCAG 2.5.5 (AAA).
 const TOUCH_TARGET: f64 = 44.0;
 /// Pointer targets: WCAG 2.2 2.5.8 (AA). Compact 32px desktop controls pass.
@@ -140,6 +140,19 @@ fn off_grid(v: f64) -> bool {
     v > 0.0 && (v / 4.0 - (v / 4.0).round()).abs() > 1e-6
 }
 
+/// A text layer's contrast against what is behind it: `(text, backdrop, ratio, needed ratio)`.
+/// WCAG AA needs 4.5:1, or 3:1 for large text (24px, or 18.66px bold).
+pub fn text_contrast(doc: &Document, id: NodeId) -> Option<(Color, Color, f64, f64)> {
+    let n = doc.get(id)?;
+    let size = n.kind.font_size()?;
+    n.kind.text()?;
+    let (fg, _) = solid(n)?;
+    let bg = backdrop(doc, id)?;
+    let fg = blend(bg, fg);
+    let large = size >= 24.0 || (size >= 18.66 && n.text_style.bold);
+    Some((fg, bg, contrast(fg, bg), if large { 3.0 } else { 4.5 }))
+}
+
 /// Lint the subtrees under `roots` (instances are skipped: their component is linted instead).
 pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
     let mut out: Vec<Issue> = Vec::new();
@@ -169,25 +182,19 @@ pub fn lint(doc: &Document, roots: &[NodeId], scale: &[f64]) -> Vec<Issue> {
         };
         // ---- text
         if let (Some(size), Some(_)) = (n.kind.font_size(), n.kind.text()) {
-            if let Some((fg, _)) = solid(n)
-                && let Some(bg) = backdrop(doc, id)
+            if let Some((fg, bg, ratio, need)) = text_contrast(doc, id)
+                && ratio < need
             {
-                let fg = blend(bg, fg);
-                let ratio = contrast(fg, bg);
-                let large = size >= 24.0 || (size >= 18.66 && n.text_style.bold);
-                let need = if large { 3.0 } else { 4.5 };
-                if ratio < need {
-                    add(
-                        "contrast",
-                        "error",
-                        format!(
-                            "text {} on {} is {ratio:.1}:1 (needs {need}:1)",
-                            fg.to_hex(),
-                            bg.to_hex()
-                        ),
-                        "use a lighter or darker text color, or change the background".into(),
-                    );
-                }
+                add(
+                    "contrast",
+                    "error",
+                    format!(
+                        "text {} on {} is {ratio:.1}:1 (needs {need}:1)",
+                        fg.to_hex(),
+                        bg.to_hex()
+                    ),
+                    "use a lighter or darker text color, or change the background".into(),
+                );
             }
             if let Some(l) = crate::text::layout_node(n)
                 && let Some(t) = n.kind.text()

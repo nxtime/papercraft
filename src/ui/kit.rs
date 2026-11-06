@@ -41,6 +41,14 @@ pub fn button_compact(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: 
     paint_button(ui, kind, icon, label, false, SEGMENTED_H)
 }
 
+/// Smallest touch target (px): [`button_touch`] and the Present-mode bar use it.
+pub const TOUCH_H: f32 = 44.0;
+
+/// Like [`button`], as tall as a touch target (for bars used on a phone or tablet).
+pub fn button_touch(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: &str) -> Response {
+    paint_button(ui, kind, icon, label, false, TOUCH_H)
+}
+
 /// Like [`button`], stretched over the available width, label centred.
 pub fn button_wide(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: &str) -> Response {
     paint_button(ui, kind, icon, label, true, BUTTON_H)

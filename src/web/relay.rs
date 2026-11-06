@@ -50,15 +50,15 @@ pub struct Relay {
     retry_at: Option<f64>,
 }
 
-fn new_token() -> String {
+/// A share token from Web Crypto. Without it (an insecure context) there is no safe token,
+/// and a seeded PRNG would make the link guessable.
+pub(crate) fn new_token() -> String {
     let mut bytes = [0u8; TOKEN_BYTES];
-    let filled = super::window()
+    super::window()
         .crypto()
-        .is_ok_and(|c| c.get_random_values_with_u8_array(&mut bytes).is_ok());
-    if !filled {
-        // No Web Crypto (very old browser or insecure context): fall back to the seeded PRNG.
-        bytes.iter_mut().for_each(|b| *b = fastrand::u8(..));
-    }
+        .ok()
+        .and_then(|c| c.get_random_values_with_u8_array(&mut bytes).ok())
+        .expect("Web Crypto is not available");
     relay_proto::hex(&bytes)
 }
 

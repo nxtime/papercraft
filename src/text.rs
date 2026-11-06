@@ -17,46 +17,53 @@ static BOLD: &[u8] = include_bytes!("../assets/fonts/Inter-Bold.ttf");
 static ITALIC: &[u8] = include_bytes!("../assets/fonts/Inter-Italic.ttf");
 static BOLD_ITALIC: &[u8] = include_bytes!("../assets/fonts/Inter-BoldItalic.ttf");
 
-/// Face index: bit 0 = bold, bit 1 = italic.
-pub type FaceId = u8;
+/// Inter's faces come first, indexed by bit 0 = bold, bit 1 = italic; [`crate::fonts`] numbers
+/// the rest.
+pub type FaceId = u16;
+pub const BUILT_IN_FACES: FaceId = 4;
 
 pub fn face_id(bold: bool, italic: bool) -> FaceId {
-    bold as u8 | (italic as u8) << 1
+    bold as u16 | (italic as u16) << 1
 }
 
 pub fn face_bytes(id: FaceId) -> &'static [u8] {
-    match id & 3 {
+    match id {
         0 => FONT_BYTES,
         1 => BOLD,
         2 => ITALIC,
-        _ => BOLD_ITALIC,
+        3 => BOLD_ITALIC,
+        _ => crate::fonts::loaded(id).bytes,
     }
 }
 
 pub fn face_of(id: FaceId) -> &'static ttf_parser::Face<'static> {
     static FACES: OnceLock<[ttf_parser::Face<'static>; 4]> = OnceLock::new();
+    if id >= BUILT_IN_FACES {
+        return &crate::fonts::loaded(id).face;
+    }
     &FACES.get_or_init(|| {
         [0, 1, 2, 3]
             .map(|i| ttf_parser::Face::parse(face_bytes(i), 0).expect("bundled font parses"))
-    })[(id & 3) as usize]
+    })[id as usize]
 }
 
 pub fn face() -> &'static ttf_parser::Face<'static> {
     face_of(0)
 }
 
-fn units_per_em() -> f64 {
-    face().units_per_em() as f64
+pub fn line_height(font_size: f64) -> f64 {
+    line_height_in(0, font_size)
 }
 
-pub fn line_height(font_size: f64) -> f64 {
-    let f = face();
-    let h = (f.ascender() as f64 - f.descender() as f64 + f.line_gap() as f64) / units_per_em();
+fn line_height_in(face: FaceId, font_size: f64) -> f64 {
+    let f = face_of(face);
+    let h = (f.ascender() as f64 - f.descender() as f64 + f.line_gap() as f64) / f.units_per_em() as f64;
     font_size * h.max(1.1)
 }
 
-pub fn ascent(font_size: f64) -> f64 {
-    face().ascender() as f64 / units_per_em() * font_size
+fn ascent_in(face: FaceId, font_size: f64) -> f64 {
+    let f = face_of(face);
+    f.ascender() as f64 / f.units_per_em() as f64 * font_size
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,37 +106,49 @@ pub struct TextLayout {
     pub font_size: f64,
 }
 
-/// Glyph id and advance (in ems) of `c`, `?` standing in for a missing glyph.
-fn lookup(face: FaceId, c: char) -> (u16, f64) {
+/// The face, glyph id and advance (in ems) of `c`: Inter takes over for what an added font
+/// lacks, and `?` stands in for what Inter lacks.
+fn lookup(face: FaceId, c: char) -> (FaceId, u16, f64) {
     let f = face_of(face);
+    if face >= BUILT_IN_FACES && f.glyph_index(c).is_none() {
+        return lookup(crate::fonts::loaded(face).fallback, c);
+    }
     let gid = f
         .glyph_index(c)
         .or_else(|| f.glyph_index('?'))
         .map(|g| g.0)
         .unwrap_or(0);
     let adv = f.glyph_hor_advance(ttf_parser::GlyphId(gid)).unwrap_or(0) as f64;
-    (gid, adv / f.units_per_em() as f64)
+    (face, gid, adv / f.units_per_em() as f64)
 }
 
 /// Chars below this are looked up once per face: a cmap lookup re-parses the subtable.
 const CACHED_CHARS: usize = 256;
 
-fn advance_in(face: FaceId, c: char, font_size: f64) -> (u16, f64) {
-    static TABLES: [OnceLock<Vec<(u16, f64)>>; 4] = [const { OnceLock::new() }; 4];
-    let (gid, em) = match (c as usize) < CACHED_CHARS {
-        true => TABLES[(face & 3) as usize].get_or_init(|| {
-            (0..CACHED_CHARS as u32)
-                .map(|i| lookup(face, char::from_u32(i).unwrap_or('?')))
-                .collect()
-        })[c as usize],
+fn advance_in(face: FaceId, c: char, font_size: f64) -> (FaceId, u16, f64) {
+    static TABLES: [OnceLock<crate::fonts::AdvanceTable>; BUILT_IN_FACES as usize] =
+        [const { OnceLock::new() }; BUILT_IN_FACES as usize];
+    let (used, gid, em) = match (c as usize) < CACHED_CHARS {
+        true => {
+            let table = match face < BUILT_IN_FACES {
+                true => &TABLES[face as usize],
+                false => &crate::fonts::loaded(face).advances,
+            };
+            table.get_or_init(|| {
+                (0..CACHED_CHARS as u32)
+                    .map(|i| lookup(face, char::from_u32(i).unwrap_or('?')))
+                    .collect()
+            })[c as usize]
+        }
         false => lookup(face, c),
     };
-    (gid, em * font_size)
+    (used, gid, em * font_size)
 }
 
 #[cfg(test)]
 fn advance(c: char, font_size: f64) -> (u16, f64) {
-    advance_in(0, c, font_size)
+    let (_, gid, adv) = advance_in(0, c, font_size);
+    (gid, adv)
 }
 
 /// Lay out plain text with optional wrapping at `max_width`.
@@ -158,17 +177,19 @@ pub fn layout_rich(
         .map(|i| ts.char_style(i, font_size, color))
         .collect();
     let ls = ts.letter_spacing;
-    let adv: Vec<(u16, f64)> = chars
+    let font = ts.font.as_deref();
+    let faces = [0, 1, 2, 3].map(|s| crate::fonts::style_face(font, s & 1 != 0, s & 2 != 0));
+    let adv: Vec<(FaceId, u16, f64)> = chars
         .iter()
         .zip(&styles)
         .map(|(c, s)| {
-            let (g, a) = advance_in(face_id(s.bold, s.italic), *c, s.size);
-            (g, a + ls)
+            let (f, g, a) = advance_in(faces[face_id(s.bold, s.italic) as usize], *c, s.size);
+            (f, g, a + ls)
         })
         .collect();
     let lh_of = |size: f64| match ts.line_height {
         Some(m) => size * m,
-        None => line_height(size),
+        None => line_height_in(faces[0], size),
     };
     // Break into lines: hard breaks on '\n', soft breaks at spaces when wrapping.
     let mut ranges: Vec<(usize, usize)> = Vec::new();
@@ -184,7 +205,7 @@ pub fn layout_rich(
             let mut last_space: Option<usize> = None;
             let mut i = line_start;
             while i < hard_end {
-                let a = adv[i].1;
+                let a = adv[i].2;
                 if chars[i] == ' ' {
                     last_space = Some(i);
                 }
@@ -225,16 +246,16 @@ pub fn layout_rich(
                     .map_or(font_size, |c| c.size)
             });
         let lh = lh_of(max_size);
-        let natural = line_height(max_size);
-        let baseline = top + ascent(max_size) + (lh - natural) * 0.5;
+        let natural = line_height_in(faces[0], max_size);
+        let baseline = top + ascent_in(faces[0], max_size) + (lh - natural) * 0.5;
         let mut x = 0.0;
         let mut carets = vec![0.0];
         for i in s..e {
             let st = styles[i];
-            let (gid, a) = adv[i];
+            let (face, gid, a) = adv[i];
             glyphs.push(PlacedGlyph {
                 gid,
-                face: face_id(st.bold, st.italic),
+                face,
                 size: st.size,
                 color: st.color,
                 x,
@@ -375,7 +396,7 @@ fn tessellate_glyph(face: FaceId, gid: u16) -> GlyphMesh {
     }
     let path = b.b.build();
     let mut buffers: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
-    let tol = (units_per_em() / 2000.0) as f32;
+    let tol = face_of(face).units_per_em() as f32 / 2000.0;
     let _ = FillTessellator::new().tessellate_path(
         &path,
         &FillOptions::tolerance(tol).with_fill_rule(lyon::tessellation::FillRule::NonZero),
