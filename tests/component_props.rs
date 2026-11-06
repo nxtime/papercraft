@@ -132,6 +132,33 @@ fn per_state_components_merge_into_one_with_an_enum() {
 }
 
 #[test]
+fn a_size_axis_differing_in_padding_and_font_size_merges() {
+    let mut h = host();
+    let mut mains = Vec::new();
+    for (name, pad, font) in [("Button / Size=S", 8, 12), ("Button / Size=M", 16, 16)] {
+        let m = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": "120px", "height": "80px", "display": "flex", "padding": format!("{pad}px")}}));
+        call(&mut h, "write_html", json!({"targetNodeId": m["id"], "html": format!("<span layer-name=\"Label\" style=\"font-size:{font}px\">Go</span>")}));
+        mains.push(call(&mut h, "create_component", json!({"nodeId": m["id"]}))["id"].clone());
+    }
+    let r = call(&mut h, "merge_variants", json!({"componentIds": mains}));
+    assert_eq!(r["axes"][0]["options"], json!(["S", "M"]), "{r}");
+    assert!(r.get("warnings").is_none(), "{r}");
+}
+
+#[test]
+fn an_axis_error_gives_the_reason_a_variant_was_left_out() {
+    let mut h = host();
+    let mut mains = Vec::new();
+    for (name, justify) in [("Box / Size=S", "flex-start"), ("Box / Size=M", "flex-end")] {
+        let m = call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": "360px", "height": "60px", "display": "flex", "justifyContent": justify}}));
+        call(&mut h, "write_html", json!({"targetNodeId": m["id"], "html": "<span layer-name=\"Text\">Oi</span>"}));
+        mains.push(call(&mut h, "create_component", json!({"nodeId": m["id"]}))["id"].clone());
+    }
+    let e = exec::call(&mut h, "merge_variants", &json!({"componentIds": mains})).unwrap_err();
+    assert!(e.contains("justifyContent"), "{e}");
+}
+
+#[test]
 fn a_variant_with_another_layout_is_left_out_of_a_merge() {
     let mut h = host();
     let mut mains = Vec::new();

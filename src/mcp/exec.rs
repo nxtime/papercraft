@@ -6185,7 +6185,7 @@ fn template_props(doc: &Document, id: NodeId, template: &str, a: &Args) -> Resul
 }
 
 /// Style keys compared between variants, with the value that means "none" when a side lacks it.
-const VARIANT_KEYS: [(&str, &str); 9] = [
+const VARIANT_KEYS: [(&str, &str); 13] = [
     ("backgroundColor", "transparent"),
     ("background", "transparent"),
     ("color", ""),
@@ -6195,6 +6195,10 @@ const VARIANT_KEYS: [(&str, &str); 9] = [
     ("opacity", "1"),
     ("fontWeight", "400"),
     ("borderRadius", "0px"),
+    ("padding", "0px"),
+    ("fontSize", ""),
+    ("lineHeight", ""),
+    ("letterSpacing", ""),
 ];
 
 /// A component's layers by path of names (`Item > Label`); icon names are matched as one name so
@@ -6360,7 +6364,7 @@ fn merge_variants(ed: &mut Editor, a: &Args) -> ToolResult {
     let mut defs: Vec<crate::model::PropDef> = Vec::new();
     for (axis, subset) in &axes {
     if subset.len() < 2 {
-        return Err(format!("axis `{axis}` needs at least two variants that differ from the base only in it"));
+        return Err(format!("axis `{axis}` needs at least two variants that differ from the base only in it. {}", warnings.join("; ")));
     }
     let n = subset.len();
     let mut tbl: BTreeMap<(String, String), Vec<Value>> = BTreeMap::new();
