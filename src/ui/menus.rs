@@ -107,6 +107,7 @@ pub fn icon_of(action: Action) -> Option<Icon> {
         A::ToggleUi => Icon::Eye,
         A::TogglePanels => Icon::Sidebar,
         A::ToggleGrid => Icon::Grid,
+        A::BreakpointPreview => Icon::Scale,
         A::ToggleAnnotations => Icon::Note,
         A::OpenVariables => Icon::Database,
         A::ToggleHelp => Icon::Question,
