@@ -76,7 +76,7 @@ impl super::Editor {
     }
 
     /// Render the preview frame at its width into `breakpoint.image`.
-    pub fn render_breakpoint(&mut self, gpu: &crate::render::gpu::Headless) {
+    pub fn render_breakpoint(&mut self, gpu: &crate::render::headless::Headless) {
         let Some(p) = &self.breakpoint else { return };
         let (frame, width) = (p.frame, p.width);
         let Some((copy, id)) = at_width(&self.doc, frame, f64::from(width)) else {
