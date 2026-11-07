@@ -371,6 +371,9 @@ pub(crate) fn tw_classes(doc: &Document, n: &Node, is_root: bool) -> String {
     if n.style.backdrop_blur > 0.0 {
         c.push(format!("backdrop-blur-[{}px]", px_num(n.style.backdrop_blur)));
     }
+    if n.style.rotation != 0.0 {
+        c.push(format!("rotate-[{}deg]", px_num(n.style.rotation)));
+    }
     if let Some(sh) = n.style.shadow {
         c.push(format!(
             "shadow-[{}px_{}px_{}px_{}px_{}]",
@@ -1800,6 +1803,9 @@ fn build_spec_tree(
         if n.style.backdrop_blur > 0.0 {
             m.insert("backdropBlur".into(), json!(n.style.backdrop_blur));
         }
+        if n.style.rotation != 0.0 {
+            m.insert("rotation".into(), json!(n.style.rotation));
+        }
         if let Some(sh) = n.style.shadow {
             m.insert(
                 "shadow".into(),
@@ -2696,6 +2702,11 @@ mod tests {
         assert!(cls.contains("blur-[4px]") && cls.contains("backdrop-blur-[12px]"), "{cls}");
         let spec = to_ai_spec(&doc, root, "react").unwrap().to_string();
         assert!(spec.contains("\"blur\":4") && spec.contains("\"backdropBlur\":12"), "{spec}");
+        doc.nodes.get_mut(&root).unwrap().style.rotation = -12.5;
+        let cls = tw_classes(&doc, doc.get(root).unwrap(), true);
+        assert!(cls.contains("rotate-[-12.5deg]"), "{cls}");
+        let spec = to_ai_spec(&doc, root, "react").unwrap().to_string();
+        assert!(spec.contains("\"rotation\":-12.5"), "{spec}");
         doc.nodes.get_mut(&root).unwrap().style.blur = 0.0;
         assert!(!tw_classes(&doc, doc.get(root).unwrap(), true).contains("blur-[4px]"));
     }

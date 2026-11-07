@@ -2206,6 +2206,11 @@ fn effects(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             apply(ed, "background blur", ids, |n| n.style.backdrop_blur = v);
         }
     });
+    ui.horizontal(|ui| {
+        if let Some(v) = num_field(ui, ed, "Rotate °", first.style.rotation, 1.0, -360.0..=360.0, w) {
+            apply(ed, "rotation", ids, |n| n.style.rotation = v);
+        }
+    });
     let Some(sh) = shadow else { return };
     let set = |ed: &mut Editor, f: fn(&mut crate::model::Shadow, f64), v: f64| {
         apply(ed, "shadow", ids, |n| {

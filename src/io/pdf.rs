@@ -458,7 +458,28 @@ impl PageWriter<'_> {
         }
     }
 
+    /// A turned layer is drawn, children included, under a matrix that rotates it around its centre.
     fn node(&mut self, doc: &Document, id: NodeId, opacity: f64) {
+        let Some(n) = doc.get(id) else { return };
+        let deg = n.style.rotation;
+        if deg == 0.0 || !n.visible {
+            return self.upright(doc, id, opacity);
+        }
+        let c = doc.world_rect(id).unwrap().center();
+        let (s, k) = deg.to_radians().sin_cos();
+        let _ = writeln!(
+            self.out,
+            "q {k:.9} {s:.9} {:.9} {k:.9} {:.4} {:.4} cm",
+            -s,
+            c.x - k * c.x + s * c.y,
+            c.y - s * c.x - k * c.y
+        );
+        self.upright(doc, id, opacity);
+        self.out.push_str("Q
+");
+    }
+
+    fn upright(&mut self, doc: &Document, id: NodeId, opacity: f64) {
         let Some(n) = doc.get(id) else { return };
         if !n.visible {
             return;
@@ -467,7 +488,9 @@ impl PageWriter<'_> {
         let op = opacity * n.style.opacity;
         let clip = matches!(n.kind, NodeKind::Frame { clip: true });
         // Outside the insert's area: nothing of it shows, unless an unclipped child pokes in.
-        let outside = self.cull.is_some_and(|c| !wr.intersects(&c));
+        // A turned layer (or one inside one) is not where its unturned box says, so it is kept.
+        let outside = self.cull.is_some_and(|c| !wr.intersects(&c))
+            && doc.rotation_chain(id, true).is_empty();
         if outside && (clip || n.children.is_empty()) {
             return;
         }
@@ -689,6 +712,19 @@ mod tests {
         let table = String::from_utf8_lossy(&pdf[xref_at..]);
         let first_off: usize = table.lines().nth(3).unwrap()[..10].parse().unwrap();
         assert!(pdf[first_off..].starts_with(b"1 0 obj"));
+    }
+
+    #[test]
+    fn a_turned_layer_changes_the_page_content() {
+        use crate::model::{Node, NodeKind};
+        let page = |deg: f64| {
+            let mut ed = crate::editor::Editor::default();
+            let mut n = Node::new(NodeId(0), NodeKind::Rect, Rect::new(0.0, 0.0, 100.0, 20.0));
+            n.style.rotation = deg;
+            let id = ed.add_node(n, None);
+            export(&pages_for(&ed.doc, Some(&[id]), false, None))
+        };
+        assert_ne!(page(0.0), page(30.0));
     }
 
     #[test]

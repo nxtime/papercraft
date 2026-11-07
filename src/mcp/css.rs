@@ -952,8 +952,9 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
         let ok = match k.as_str() {
             "fontSize" => true, // applied above; inherited by text children
             "transform" => {
-                let (by, lost) = transform(v, fs);
+                let (by, turn, lost) = transform(v, fs);
                 shift = (shift.0 + by.0, shift.1 + by.1);
+                n.style.rotation = turn;
                 a.ignored.extend(lost.into_iter().map(|f| format!("transform: {f}")));
                 true
             }
@@ -1651,10 +1652,22 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
     a
 }
 
-/// The offset of a `transform`'s translate functions, and the functions the model cannot hold
-/// (there is no rotation, scale or skew on a layer).
-fn transform(v: &str, font_size: f64) -> ((f64, f64), Vec<String>) {
-    let (mut by, mut lost) = ((0.0, 0.0), Vec::new());
+/// An angle in degrees: `deg`, `rad`, `turn`, `grad`, or a bare `0`.
+fn angle(t: &str) -> Option<f64> {
+    let t = t.trim().to_ascii_lowercase();
+    let unit = |u: &str, per: f64| t.strip_suffix(u)?.trim().parse::<f64>().ok().map(|x| x * per);
+    // `grad` and `turn` before `rad`/`deg`: no unit is a suffix of another except `grad`/`rad`.
+    unit("grad", 0.9)
+        .or_else(|| unit("deg", 1.0))
+        .or_else(|| unit("rad", 180.0 / std::f64::consts::PI))
+        .or_else(|| unit("turn", 360.0))
+        .or_else(|| (t == "0").then_some(0.0))
+}
+
+/// The offset of a `transform`'s translate functions, its total rotation in degrees (`none`
+/// or no `rotate()` gives 0), and the functions the model cannot hold (scale, skew).
+fn transform(v: &str, font_size: f64) -> ((f64, f64), f64, Vec<String>) {
+    let (mut by, mut lost, mut turn) = ((0.0, 0.0), Vec::new(), 0.0);
     let mut rest = v.trim();
     while let Some(open) = rest.find('(') {
         let name = rest[..open].trim().to_ascii_lowercase();
@@ -1666,6 +1679,13 @@ fn transform(v: &str, font_size: f64) -> ((f64, f64), Vec<String>) {
             "translate" | "translate3d" => (len(0), len(1).or(Some(Some(0.0)))),
             "translatex" => (len(0), Some(Some(0.0))),
             "translatey" => (Some(Some(0.0)), len(0)),
+            "rotate" | "rotatez" => {
+                match args.first().and_then(|t| angle(t)) {
+                    Some(d) => turn += d,
+                    None => lost.push(format!("{name} (needs deg, rad or turn)")),
+                }
+                continue;
+            }
             _ => {
                 lost.push(name);
                 continue;
@@ -1679,7 +1699,7 @@ fn transform(v: &str, font_size: f64) -> ((f64, f64), Vec<String>) {
             _ => lost.push(format!("{name} (needs px)")),
         }
     }
-    (by, lost)
+    (by, turn, lost)
 }
 
 fn set_dash(n: &mut Node, style: &str) {
@@ -2052,6 +2072,9 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
     if n.style.backdrop_blur > 0.0 {
         put("backdropFilter", format!("blur({})", px(n.style.backdrop_blur)));
     }
+    if n.style.rotation != 0.0 {
+        put("transform", format!("rotate({}deg)", px(n.style.rotation).trim_end_matches("px")));
+    }
     if n.style.opacity < 1.0 {
         put(
             "opacity",
@@ -2167,11 +2190,26 @@ mod tests {
         let mut n = Node::new(NodeId(3), NodeKind::Rect, Rect::new(0.0, 0.0, 10.0, 10.0));
         let a = apply(&mut n, &parse_inline("transform: translate(10px, -4px) rotate(5deg) scale(2); left: 20px"), &Context::default());
         assert_eq!((n.rect.x, n.rect.y), (30.0, -4.0));
-        assert_eq!(a.ignored, ["transform: rotate", "transform: scale"]);
+        assert_eq!(n.style.rotation, 5.0);
+        assert_eq!(a.ignored, ["transform: scale"]);
         let ctx = Context { parent_layout: Some(AutoLayout::default()), parent_size: None, margin: false };
         let a = apply(&mut n, &parse_inline("transform: translateX(8px)"), &ctx);
         assert_eq!(n.rect.x, 30.0);
         assert_eq!(a.ignored.len(), 1, "{:?}", a.ignored);
+    }
+
+    #[test]
+    fn rotate_reads_every_angle_unit_and_writes_back_in_degrees() {
+        let mut n = Node::new(NodeId(3), NodeKind::Rect, Rect::new(0.0, 0.0, 10.0, 10.0));
+        for (css, deg) in [("rotate(45deg)", 45.0), ("rotate(0.25turn)", 90.0), ("rotate(-100grad)", -90.0), ("rotate(10deg) rotate(5deg)", 15.0), ("none", 0.0)] {
+            apply(&mut n, &parse_inline(&format!("transform: {css}")), &Context::default());
+            assert!((n.style.rotation - deg).abs() < 1e-9, "{css}: {}", n.style.rotation);
+        }
+        apply(&mut n, &parse_inline("transform: rotate(3.14159265358979rad)"), &Context::default());
+        assert!((n.style.rotation - 180.0).abs() < 1e-6);
+        assert_eq!(computed(&n, None, true)["transform"], "rotate(180deg)");
+        let a = apply(&mut n, &parse_inline("transform: rotate(3em)"), &Context::default());
+        assert_eq!(a.ignored, ["transform: rotate (needs deg, rad or turn)"]);
     }
 
     #[test]
