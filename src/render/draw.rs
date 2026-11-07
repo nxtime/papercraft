@@ -86,7 +86,9 @@ pub fn shape_path(n: &Node, wr: Rect) -> Option<VPath> {
             &vector::star_points(wr, *points, *inner),
             n.style.corner_radius,
         ),
-        NodeKind::Path { subpaths, .. } => vector::from_subpaths(wr.min(), subpaths),
+        NodeKind::Path { subpaths, .. } | NodeKind::Boolean { subpaths, .. } => {
+            vector::from_subpaths(wr.min(), subpaths)
+        }
         NodeKind::Line { a, b } => VPath::polyline(&[wr.min() + *a, wr.min() + *b], false),
         NodeKind::Stroke {
             points,
@@ -384,12 +386,13 @@ pub fn node_draw(n: &Node, wr: Rect, opacity: f64) -> NodeDraw {
             let Some(path) = shape_path(n, wr) else {
                 return NodeDraw::default();
             };
+            // A boolean result is a set of outlines whose holes are the inner ones.
             let even_odd = matches!(
                 n.kind,
                 NodeKind::Path {
                     fill_rule: FillRule::EvenOdd,
                     ..
-                }
+                } | NodeKind::Boolean { .. }
             );
             if is_area(n) {
                 for p in &n.style.fills {

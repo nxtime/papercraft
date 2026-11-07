@@ -58,7 +58,11 @@ pub fn export_bounds(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
             let (Some(nd), Some(wr)) = (doc.get(id), doc.world_rect(id)) else {
                 continue;
             };
-            if nd.is_group() || !doc.is_effectively_visible(id) {
+            // The operands of a boolean group are not drawn; the group is.
+            if matches!(nd.kind, NodeKind::Group)
+                || !doc.is_effectively_visible(id)
+                || doc.ancestors(id).iter().any(|a| doc.get(*a).is_some_and(|x| x.is_boolean()))
+            {
                 continue;
             }
             // Children of clipping frames can't draw outside them.
@@ -332,7 +336,7 @@ impl Writer<'_> {
         );
         let d = draw::node_draw(nd, wr, op);
         self.ops(&d.ops, &format!("{ind}  "));
-        if !nd.children.is_empty() {
+        if !nd.children.is_empty() && !nd.is_boolean() {
             let clip = matches!(nd.kind, NodeKind::Frame { clip: true });
             if clip {
                 let cid = self.def_id("clip");
