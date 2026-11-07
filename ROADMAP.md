@@ -32,7 +32,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 15 | MCP and CLI tool surface | **done** | 106 tools, one undo step per call, `papercraft-cli list / schema / call`. |
+| 15 | MCP and CLI tool surface | **done** | 107 tools, one undo step per call, `papercraft-cli list / schema / call`. |
 | 16 | Agent skills | **done** | `skills/papercraft` and `skills/papercraft-design`. |
 | 17 | Accessibility annotations | **done** | `set_accessibility`: alt text, decorative, roles, heading levels and reading order on layers, checked by `lint_design` and used by `export_site`. |
 | 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |
@@ -54,7 +54,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 28 | Rotation | **done** | `rotation` in degrees around the centre (CSS `rotate()`; layout and `rect` stay unrotated), page format v9. Rendered, hit-tested and clipped along the rotated outline; the canvas has a rotate knob (Shift snaps to 15°) and the inspector a Rotate field; `transform: rotate()` in HTML, CSS, Tailwind `rotate-[..]`, SVG and PDF. Known limits: resizing a turned layer by handles (use W/H), snapping, guides, connectors and drop targets ignore the turn, and a multi-selection has no knob. |
 | 29 | Overlay, dodge, burn, light blend modes on the canvas | **done** | All 16 modes draw on the canvas; the ones the GPU cannot blend in fixed function read the backdrop through an offscreen layer. |
 | 30 | Rounded frame clipping | **done** | A clipping frame with a corner radius (per corner too) masks its children to the rounded shape on the canvas; nested clips work. Layers nest three deep, deeper ones draw into their parent unmasked. |
-| 31 | Non-destructive booleans | todo | The result is a flattened path. |
+| 31 | Non-destructive booleans | **done** | Union, subtract, intersect and exclude make a live group (page format v10); operands stay editable, the result is cached until one changes; Flatten bakes it into a path. |
 
 ## 4. Files and collaboration
 

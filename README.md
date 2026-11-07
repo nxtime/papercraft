@@ -119,7 +119,7 @@ Projects live in `~/Documents/papercraft/<name>/` (`project.json`, one JSON file
 
 ## Agents
 
-PaperCraft exposes **106 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
+PaperCraft exposes **107 tools** (`src/mcp/tools.rs`) three ways. They run the same code inside the app.
 
 | Way | Notes |
 |---|---|
@@ -281,7 +281,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 * **Variables:** gradients keep fixed colors, and there are no text styles (named type styles that update every text layer).
 * **Components:** properties (text, bool, icon, enum) and `merge_variants` cover variants, but there are no variant sets with several axes, and no responsive per-breakpoint variants or breakpoint preview.
 * **Prototyping:** links and flows work in Present mode; smart transitions and hover states do not exist yet.
-* **Booleans are destructive:** the result is a new vector path with flattened curves.
+* **Booleans are live groups:** the operands stay editable inside and the result is recomputed when one changes. Flatten (⌘E) bakes it into a vector path with flattened curves. Text operands use their glyph outlines.
 * **`write_html`** maps margin (shorthand, per side, `auto`) onto gap, padding, spacer or margin wrapper frames, collapsing block sibling margins only; it does not model parent and first-child collapse, and negative or percentage margins are reported. It ignores tables and transforms (it reports them as `ignoredStyles`) and does not fetch remote images; pass a local path or a `data:` URI.
 * **Agents:** one project is open at a time in the app, and `move_nodes` stays on one page. The in-app Chat mode runs Claude Code, Codex, ACP agents or your own Anthropic key. Agents that are not in Chat connect over MCP or the CLI.
 * **Presence** on a shared project shows the other devices' cursors and selections on the page you are looking at (not which page the others are on), and needs a relay that has the presence route; with an older relay it is simply off. Pausing an agent covers external MCP clients; a call waits at most 100 s before it is refused.
