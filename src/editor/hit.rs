@@ -67,7 +67,7 @@ fn shape_contains(doc: &Document, id: NodeId, p: V2, zoom: f64, slop_px: f64) ->
                 NodeKind::Path {
                     fill_rule: crate::model::FillRule::EvenOdd,
                     ..
-                }
+                } | NodeKind::Boolean { .. }
             );
             // Tiny shapes are easier to grab by their box.
             if r.w.min(r.h) * zoom < 8.0 && draw::is_area(n) && r.inflate(slop).contains(p) {
@@ -81,6 +81,36 @@ fn shape_contains(doc: &Document, id: NodeId, p: V2, zoom: f64, slop_px: f64) ->
     }
 }
 
+// `p` is carried into each node's unrotated frame on the way down: a rotation turns the
+// node and everything in it, so the outline that counts is the rotated one.
+fn walk(doc: &Document, ids: &[NodeId], p: V2, zoom: f64, slop_px: f64) -> Option<NodeId> {
+    for &id in ids.iter().rev() {
+        let Some(n) = doc.get(id) else { continue };
+        if !n.visible || n.locked {
+            continue;
+        }
+        let p = match doc.world_rect(id) {
+            Some(r) => rotate_about(p, r.center(), -n.style.rotation),
+            None => p,
+        };
+        if matches!(n.kind, NodeKind::Frame { clip: true })
+            && !doc.world_rect(id).is_some_and(|r| r.contains(p))
+        {
+            continue;
+        }
+        // The operands of a boolean group are not drawn: only its result can be hit.
+        if !n.is_boolean()
+            && let Some(hit) = walk(doc, &n.children, p, zoom, slop_px)
+        {
+            return Some(hit);
+        }
+        if shape_contains(doc, id, p, zoom, slop_px) {
+            return Some(id);
+        }
+    }
+    None
+}
+
 /// Topmost visible, unlocked node under `p`, deepest first.
 ///
 /// Reverse paint order (children before their parent, later siblings first), descending only
@@ -92,33 +122,14 @@ pub fn hit_test(doc: &Document, p: V2, zoom: f64) -> Option<NodeId> {
 
 /// [`hit_test`] with the tolerance for thin geometry given in screen px.
 pub fn hit_test_slop(doc: &Document, p: V2, zoom: f64, slop_px: f64) -> Option<NodeId> {
-    // `p` is carried into each node's unrotated frame on the way down: a rotation turns the
-    // node and everything in it, so the outline that counts is the rotated one.
-    fn walk(doc: &Document, ids: &[NodeId], p: V2, zoom: f64, slop_px: f64) -> Option<NodeId> {
-        for &id in ids.iter().rev() {
-            let Some(n) = doc.get(id) else { continue };
-            if !n.visible || n.locked {
-                continue;
-            }
-            let p = match doc.world_rect(id) {
-                Some(r) => rotate_about(p, r.center(), -n.style.rotation),
-                None => p,
-            };
-            if matches!(n.kind, NodeKind::Frame { clip: true })
-                && !doc.world_rect(id).is_some_and(|r| r.contains(p))
-            {
-                continue;
-            }
-            if let Some(hit) = walk(doc, &n.children, p, zoom, slop_px) {
-                return Some(hit);
-            }
-            if shape_contains(doc, id, p, zoom, slop_px) {
-                return Some(id);
-            }
-        }
-        None
-    }
     walk(doc, &doc.root, p, zoom, slop_px)
+}
+
+/// The topmost visible operand of boolean group `group` under `p` (world), by its own outline
+/// rather than the group's result: how a group that is being edited picks its parts.
+pub fn hit_operand(doc: &Document, group: NodeId, p: V2, zoom: f64, slop_px: f64) -> Option<NodeId> {
+    let g = doc.get(group)?;
+    walk(doc, &g.children, doc.to_unrotated(group, p, true), zoom, slop_px)
 }
 
 /// Screen-space rectangle of a top-level frame's name label.

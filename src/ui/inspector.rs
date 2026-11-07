@@ -1194,12 +1194,7 @@ fn header(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     if ids.len() > 1 {
         ui.label(title_text(format!("{} layers", ids.len())));
         ui.horizontal_wrapped(|ui| {
-            for op in [
-                BoolOp::Union,
-                BoolOp::Subtract,
-                BoolOp::Intersect,
-                BoolOp::Exclude,
-            ] {
+            for op in BoolOp::ALL {
                 if crate::theme::small_button(ui, op.label()).clicked() {
                     ed.boolean(op);
                 }
@@ -1226,6 +1221,17 @@ fn header(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         first.kind.type_name()
     };
     ui.label(title_text(format!("{kind} · {}", first.name)));
+    if let NodeKind::Boolean { op, .. } = &first.kind {
+        ui.horizontal(|ui| {
+            let ops = BoolOp::ALL.map(|o| (o, o.label()));
+            if let Some(o) = combo(ui, "boolop", *op, &ops, half(ui)) {
+                ed.set_bool_op(o);
+            }
+            if crate::theme::small_button(ui, "Flatten").clicked() {
+                ed.flatten_selection();
+            }
+        });
+    }
     let is_inst_root = ed.is_instance_root(first.id);
     let has_subtree_overrides = is_inst_root
         && ed.doc.subtree(first.id).into_iter().any(|id| {

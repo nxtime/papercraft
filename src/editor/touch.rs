@@ -15,10 +15,26 @@ impl Editor {
         if self.touch { TOUCH_RADIUS_PX } else { MOUSE_HANDLE_RADIUS_PX }
     }
 
+    fn hit_slop(&self) -> f64 {
+        if self.touch { TOUCH_RADIUS_PX } else { MOUSE_HIT_SLOP_PX }
+    }
+
+    /// The operand of boolean group `group` under a world point (double-click enters the group).
+    pub(super) fn operand_at(&self, group: NodeId, world: V2) -> Option<NodeId> {
+        hit::hit_operand(&self.doc, group, world, self.camera.zoom, self.hit_slop())
+    }
+
     /// Topmost layer under a world point, with the tolerance of the current input device.
     pub(super) fn hit_at(&self, world: V2) -> Option<NodeId> {
-        let slop = if self.touch { TOUCH_RADIUS_PX } else { MOUSE_HIT_SLOP_PX };
-        hit::hit_test_slop(&self.doc, world, self.camera.zoom, slop)
+        let slop = self.hit_slop();
+        let zoom = self.camera.zoom;
+        // Inside a boolean group that is being edited its operands are hit by their own
+        // outlines, so a part the result cuts away can still be picked.
+        self.selection
+            .iter()
+            .find_map(|s| self.doc.ancestors(*s).into_iter().find(|a| self.doc.get(*a).is_some_and(|n| n.is_boolean())))
+            .and_then(|g| hit::hit_operand(&self.doc, g, world, zoom, slop))
+            .or_else(|| hit::hit_test_slop(&self.doc, world, zoom, slop))
     }
 
     /// Whether a finger landing at `pos` (canvas px) should drag rather than pan: any tool but
