@@ -659,7 +659,7 @@ Sets what clicking a layer does in Present mode. Per link give at most one of `t
 
 | Argument | Type | Required | Notes |
 |---|---|---|---|
-| `links` | array | yes | Objects `{nodeId, to?, overlay?, url?, action?}`. `to`: a frame on the same page to go to (null removes). `overlay`: a frame opened centred over the current one with a dimmed backdrop (taller than the viewport scrolls; backdrop click or Escape closes). `url`: https, http, mailto or tel only. `action`: `back` (previous frame) or `close` (close the overlay). |
+| `links` | array | yes | Objects `{nodeId, to?, overlay?, url?, action?, trigger?, transition?}`. `trigger: "hover"` (with `to` or `overlay`) fires while the pointer is over the layer and reverts on leave; `transition: "smart"` (with `to`) tweens same-named layers between the frames. `to`: a frame on the same page to go to (null removes). `overlay`: a frame opened centred over the current one with a dimmed backdrop (taller than the viewport scrolls; backdrop click or Escape closes). `url`: https, http, mailto or tel only. `action`: `back` (previous frame) or `close` (close the overlay). |
 
 ### `search_icons` (read-only)
 

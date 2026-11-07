@@ -236,6 +236,26 @@ fn prototype_links_set_each_kind_and_refuse_bad_ones() {
 
     set(&mut h, json!({"nodeId": button, "to": null})).unwrap();
     assert_eq!(link(&mut h), (None, None), "no kind clears the link");
+
+    let flags = |h: &mut exec::SessionHost| {
+        let n = h.ed.doc.get(num(&button)).unwrap();
+        (n.link_hover, n.link_smart)
+    };
+    set(&mut h, json!({"nodeId": button, "to": home, "trigger": "hover", "transition": "smart"})).unwrap();
+    assert_eq!(flags(&mut h), (true, true));
+    set(&mut h, json!({"nodeId": button, "overlay": modal, "trigger": "hover"})).unwrap();
+    assert_eq!(flags(&mut h), (true, false), "a new link starts from the defaults");
+    for bad in [
+        json!({"nodeId": button, "action": "back", "trigger": "hover"}),
+        json!({"nodeId": button, "url": "https://a.dev", "trigger": "hover"}),
+        json!({"nodeId": button, "overlay": modal, "transition": "smart"}),
+        json!({"nodeId": button, "to": home, "trigger": "tap"}),
+        json!({"nodeId": button, "to": home, "transition": "morph"}),
+    ] {
+        assert!(set(&mut h, bad.clone()).is_err(), "{bad}");
+    }
+    set(&mut h, json!({"nodeId": button, "to": null})).unwrap();
+    assert_eq!(flags(&mut h), (false, false), "clearing the link clears both");
 }
 
 #[test]

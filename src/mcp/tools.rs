@@ -1266,7 +1266,10 @@ pub fn definitions() -> Vec<Value> {
              (open a frame centred over the current one with a dimmed backdrop; one taller than the \
              viewport scrolls; backdrop click, Escape or a `close` link closes it), `url` (https, \
              http, mailto or tel only) or `action` (`back` to the previous screen, `close` to close \
-             the overlay). None, or `to: null`, removes the link. All links are checked before any \
+             the overlay). `trigger: \"hover\"` (with `to` or `overlay`) fires the link while the pointer is over \
+             the layer and undoes it on leaving; the default is `click`. `transition: \"smart\"` (with \
+             `to`) tweens layers whose names match between the two screens (position, size, opacity, \
+             fill) instead of gliding the camera. None, or `to: null`, removes the link. All links are checked before any \
              is applied; targets on other pages are refused. Link every entry point you design \
              (back arrows, list rows, tabs, modal buttons) so the flow can be clicked through.",
             json!({
@@ -1276,6 +1279,8 @@ pub fn definitions() -> Vec<Value> {
                     "overlay": {"type": "string", "description": "A frame on the same page to open as an overlay."},
                     "url": {"type": "string", "description": "External address: https, http, mailto or tel."},
                     "action": {"type": "string", "enum": ["back", "close"], "description": "back: previous screen. close: close the overlay."},
+                    "trigger": {"type": "string", "enum": ["click", "hover"], "description": "hover: fire while the pointer is over the layer (needs `to` or `overlay`)."},
+                    "transition": {"type": "string", "enum": ["glide", "smart"], "description": "smart: tween same-named layers between screens (needs `to`)."},
                 }, "required": ["nodeId"]}},
                 "pageId": page_id(),
             }),

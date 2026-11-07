@@ -157,6 +157,9 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         st.versions = crate::versions::list(&dir, &page_id);
         st.versions_key = key;
     }
+    if st.compare.is_some() && super::compare::view(ui, ed, st) {
+        return;
+    }
     crate::theme::lit(ui, |ui| ui.add(
         egui::TextEdit::singleline(&mut st.version_draft)
             .hint_text("Name this version")
@@ -194,6 +197,7 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     }
     let mut restore: Option<String> = None;
     let mut delete: Option<String> = None;
+    let mut compare: Option<String> = None;
     let mut rename: Option<(String, String)> = None;
     egui::ScrollArea::vertical()
         .id_salt("versions")
@@ -228,7 +232,7 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     continue;
                 }
                 let resp = row(ui, dot, &v.name, &sub, false, v.auto)
-                    .on_hover_text("Click to restore this version");
+                    .on_hover_text("Click to restore this version; right-click to compare");
                 if resp.clicked() {
                     restore = Some(v.id.clone());
                 }
@@ -236,6 +240,10 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                     crate::theme::popup_backing(ui);
                     if super::icon_menu_item(ui, crate::theme::Icon::Restore, "Restore").clicked() {
                         restore = Some(v.id.clone());
+                        ui.close();
+                    }
+                    if super::icon_menu_item(ui, crate::theme::Icon::Eye, "Compare with current page").clicked() {
+                        compare = Some(v.id.clone());
                         ui.close();
                     }
                     if super::icon_menu_item(ui, crate::theme::Icon::Text, "Rename").clicked() {
@@ -266,6 +274,12 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         ed.restore_snapshot(&snap);
         st.versions_key = None;
         ed.status = "Restored a version".into();
+    }
+    if let Some(id) = compare {
+        match super::compare::Compare::open(&dir, ed, id, None) {
+            Some(c) => st.compare = Some(c),
+            None => ed.status = "Could not read that version".into(),
+        }
     }
     if let Some(id) = delete {
         crate::versions::delete(&dir, &id);
@@ -883,7 +897,7 @@ fn detail(n: &crate::mcp::diff::NodeDiff) -> String {
     }
 }
 
-enum ReviewAct {
+pub(super) enum ReviewAct {
     Open(String, Option<NodeId>),
     Undo(String, crate::mcp::diff::NodeDiff),
 }
@@ -892,11 +906,11 @@ enum ReviewAct {
 /// the tint's edge.
 const DIFF_ROW_PAD: f32 = 10.0;
 
-fn diff_row(
+pub(super) fn diff_row(
     ui: &mut Ui,
     page_id: &str,
     n: &crate::mcp::diff::NodeDiff,
-    deleted: bool,
+    read_only: bool,
     act: &mut Option<ReviewAct>,
 ) {
     let p = theme::pal(ui);
@@ -936,8 +950,9 @@ fn diff_row(
         egui::FontId::proportional(theme::SECONDARY),
         p.secondary,
     );
-    // A deleted page has no live node to revert into; "Revert run" re-creates it.
-    if !deleted {
+    // A deleted page has no live node to revert into ("Revert run" re-creates it), and a compare
+    // never edits.
+    if !read_only {
         let btn = egui::Rect::from_min_size(
             egui::pos2(rect.right() - DIFF_ROW_PAD - 32.0, rect.center().y - 16.0),
             egui::vec2(32.0, 32.0),
@@ -1061,16 +1076,7 @@ pub(super) fn review(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                             ui.add_space(8.0);
                             kit::section_header(ui, &format!("Variables · {}", d.variables.len()), None);
                             for v in &d.variables {
-                                let n = crate::mcp::diff::NodeDiff {
-                                    id_a: None,
-                                    id_b: None,
-                                    path: String::new(),
-                                    name: v.after.split(':').next().unwrap_or("").to_string(),
-                                    kind: "variable",
-                                    status: "modified",
-                                    changes: vec![v.clone()],
-                                };
-                                variable_row(ui, &n);
+                                variable_row(ui, &property_row(v));
                             }
                         }
                         if !d.annotations.is_empty() {
@@ -1137,8 +1143,21 @@ pub(super) fn review(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     }
 }
 
+/// A variable change shown as a row.
+pub(super) fn property_row(v: &crate::mcp::diff::PropChange) -> crate::mcp::diff::NodeDiff {
+    crate::mcp::diff::NodeDiff {
+        id_a: None,
+        id_b: None,
+        path: String::new(),
+        name: v.after.split(':').next().unwrap_or("").to_string(),
+        kind: "variable",
+        status: "modified",
+        changes: vec![v.clone()],
+    }
+}
+
 /// A Variables row: same look as a diff row, without the per-row revert.
-fn variable_row(ui: &mut Ui, n: &crate::mcp::diff::NodeDiff) {
+pub(super) fn variable_row(ui: &mut Ui, n: &crate::mcp::diff::NodeDiff) {
     let p = theme::pal(ui);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 48.0), egui::Sense::hover());
     let badge = egui::Rect::from_min_size(rect.left_center() - egui::vec2(0.0, 14.0), egui::vec2(28.0, 28.0));

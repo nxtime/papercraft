@@ -1,7 +1,7 @@
 //! Present mode: a page's frames as a clickable prototype. Links jump to frames, open overlays,
 //! go back or open an address; frames too tall for the window scroll.
 
-use super::{kit, motion, UiState, RUN_TOAST_LIFT};
+use super::{kit, motion, smart, UiState, RUN_TOAST_LIFT};
 use crate::editor::shortcuts::Action;
 use crate::editor::{Editor, PresentOverlay, Tool};
 use crate::geom::{v2, Camera, Rect, V2};
@@ -57,6 +57,19 @@ pub struct Nav {
     overlay: Option<OpenOverlay>,
     /// The tool to give back on exit: Present uses the hand so clicks never select or edit.
     prev_tool: Option<Tool>,
+    /// The hover link that is applied now, until the pointer leaves it.
+    hover: Option<Hover>,
+}
+
+/// A hover link in effect: what it was started from, so leaving can undo it.
+struct Hover {
+    /// On screen (canvas px), where the pointer must stay. Kept in screen space because the
+    /// camera moves to the frame the link shows.
+    hotspot: Rect,
+    from: usize,
+    /// The overlay it opened, or the frame it moved to.
+    opened_overlay: bool,
+    smart: bool,
 }
 
 impl Nav {
@@ -94,6 +107,46 @@ impl Nav {
             }
             None => Effect::None,
         }
+    }
+
+    /// Starts a hover link when the pointer enters `hotspot` (screen px). Only frame jumps and
+    /// overlays are hover links; anything else (an address, back) is ignored.
+    pub fn hover_enter(&mut self, click: Click, hotspot: Rect, smart: bool, frames: &[NodeId], camera: Camera) -> Effect {
+        if self.hover.is_some() || !matches!(click, Click::Go(_) | Click::Act(LinkAction::Overlay { .. })) {
+            return Effect::None;
+        }
+        let from = self.index;
+        let opened_overlay = matches!(click, Click::Act(LinkAction::Overlay { .. }));
+        let effect = self.follow(click, frames, camera);
+        self.hover = Some(Hover { hotspot, from, opened_overlay, smart });
+        effect
+    }
+
+    /// Ends the hover link when the pointer at `at` (screen px) is outside its hotspot: the
+    /// overlay closes, or the presentation returns to the frame it left.
+    pub fn hover_leave(&mut self, at: V2) -> Effect {
+        if self.hover.as_ref().is_none_or(|h| h.hotspot.contains(at)) {
+            return Effect::None;
+        }
+        let Some(h) = self.hover.take() else { return Effect::None };
+        if h.opened_overlay {
+            return if self.close_overlay() { Effect::Overlay } else { Effect::None };
+        }
+        if self.index != h.from && self.history.last() == Some(&h.from) {
+            self.history.pop();
+            self.index = h.from;
+            return Effect::Show;
+        }
+        Effect::None
+    }
+
+    pub fn hovering(&self) -> bool {
+        self.hover.is_some()
+    }
+
+    /// Whether the hover link in effect tweens layers (leaving tweens them back).
+    pub fn hover_smart(&self) -> bool {
+        self.hover.as_ref().is_some_and(|h| h.smart)
     }
 
     pub fn close_overlay(&mut self) -> bool {
@@ -196,10 +249,11 @@ pub fn start_present(ed: &mut Editor, st: &mut UiState) {
     st.present = true;
     st.present_glide = None;
     st.present_glide_ready = false;
-    show_present_frame(ed, st);
+    show_present_frame(ed, st, None);
 }
 
 fn exit_present(ed: &mut Editor, st: &mut UiState) {
+    finish_tween(ed, st);
     st.present = false;
     ed.present_overlay = None;
     if let Some(t) = st.present_nav.prev_tool.take() {
@@ -207,7 +261,10 @@ fn exit_present(ed: &mut Editor, st: &mut UiState) {
     }
 }
 
-fn show_present_frame(ed: &mut Editor, st: &mut UiState) {
+/// Shows the current frame. `smart_from`: the frame left, whose same-named layers tween into
+/// this one in place of the camera glide.
+fn show_present_frame(ed: &mut Editor, st: &mut UiState, smart_from: Option<NodeId>) {
+    finish_tween(ed, st);
     // The glide skips sync_overlay, which would leave a closed overlay drawn until it ends.
     ed.present_overlay = None;
     let frames = present_frames(ed);
@@ -221,12 +278,46 @@ fn show_present_frame(ed: &mut Editor, st: &mut UiState) {
     let tall = ed.doc.world_rect(id).and_then(|r| tall_camera(r, ed.viewport, r.y));
     let to = tall.unwrap_or(ed.camera);
     ed.camera = to;
+    let pairs = smart_from.filter(|f| *f != id).map(|f| smart::plan(&ed.doc, f, id)).filter(|p| !p.is_empty());
+    if let Some(pairs) = pairs {
+        // The layers carry the motion, so the camera cuts.
+        st.present_glide = None;
+        st.present_glide_ready = true;
+        apply_tween(ed, &pairs, 0.0);
+        st.present_tween = Some((pairs, web_time::Instant::now()));
+        return;
+    }
     // Glide instead of cutting (the first frame of a presentation still snaps).
     st.present_glide = (st.present_glide_ready && from != to).then(|| {
         ed.camera = from;
         (from, to, web_time::Instant::now())
     });
     st.present_glide_ready = true;
+}
+
+fn apply_tween(ed: &mut Editor, pairs: &[smart::Pair], t: f64) {
+    let touched = smart::apply(&mut ed.doc, pairs, t);
+    ed.mark(crate::editor::Changed::Nodes(touched.into()));
+}
+
+/// Puts the document back as it is and drops a running smart transition.
+fn finish_tween(ed: &mut Editor, st: &mut UiState) {
+    if let Some((pairs, _)) = st.present_tween.take() {
+        apply_tween(ed, &pairs, 1.0);
+    }
+}
+
+fn step_present_tween(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
+    let Some((_, start)) = &st.present_tween else { return };
+    let t = (start.elapsed().as_secs_f32() / smart::SMART_SECS).min(1.0);
+    if t >= 1.0 || !motion::enabled(ctx) {
+        finish_tween(ed, st);
+        return;
+    }
+    if let Some((pairs, _)) = &st.present_tween {
+        apply_tween(ed, pairs, f64::from(motion::ease_in_out_cubic(t)));
+    }
+    ctx.request_repaint();
 }
 
 /// Moves the camera along the glide started by [`show_present_frame`].
@@ -279,11 +370,11 @@ fn sync_overlay(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
 
 /// The click under the pointer. With an overlay open only its layers count, and a click outside
 /// it is on the backdrop, which closes it.
-fn click_at(ed: &Editor, overlay: Option<&PresentOverlay>) -> Option<Click> {
+fn click_at(ed: &Editor, overlay: Option<&PresentOverlay>) -> Option<(Click, bool)> {
     let at = ed.screen_to_world(ed.pointer);
     let (at, root) = match overlay {
         Some(o) if o.window.contains(at) => (at - o.shift, Some(o.id)),
-        Some(_) => return Some(Click::Act(LinkAction::Close)),
+        Some(_) => return Some((Click::Act(LinkAction::Close), false)),
         None => (at, None),
     };
     let hit = crate::editor::hit::hit_test(&ed.doc, at, ed.camera.zoom)?;
@@ -291,17 +382,39 @@ fn click_at(ed: &Editor, overlay: Option<&PresentOverlay>) -> Option<Click> {
     if root.is_some_and(|r| !chain.contains(&r)) {
         return None;
     }
-    let click = chain.iter().find_map(|id| ed.doc.get(*id).and_then(click_of))?;
+    // A hover link does nothing on click.
+    let (click, node) = chain.iter().find_map(|id| {
+        let n = ed.doc.get(*id).filter(|n| !n.link_hover)?;
+        Some((click_of(n)?, n.link_smart))
+    })?;
     match &click {
         Click::Act(LinkAction::Overlay { target }) if !ed.doc.get(*target).is_some_and(|n| n.is_frame()) => None,
-        _ => Some(click),
+        _ => Some((click, node)),
     }
+}
+
+/// The hover link under the pointer: what it does, its hotspot on screen and whether it tweens.
+/// None while an overlay is open or when the target is not a frame.
+fn hover_at(ed: &Editor) -> Option<(Click, Rect, bool)> {
+    if ed.present_overlay.is_some() {
+        return None;
+    }
+    let hit = crate::editor::hit::hit_test(&ed.doc, ed.screen_to_world(ed.pointer), ed.camera.zoom)?;
+    let n = std::iter::once(hit).chain(ed.doc.ancestors(hit)).filter_map(|id| ed.doc.get(id)).find(|n| n.link_hover)?;
+    let click = click_of(n).filter(|c| match c {
+        Click::Go(_) => true,
+        Click::Act(LinkAction::Overlay { target }) => ed.doc.get(*target).is_some_and(|t| t.is_frame()),
+        Click::Act(_) => false,
+    })?;
+    let spot = ed.camera.world_rect_to_screen(&ed.doc.world_rect(n.id)?);
+    Some((click, spot, n.link_smart))
 }
 
 /// The presenter bar: back, previous and next frame, a counter and Exit; Esc, Backspace and the
 /// arrow keys work too.
 pub fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect) {
     step_present_glide(ctx, ed, st);
+    step_present_tween(ctx, ed, st);
     let frames = present_frames(ed);
     let total = frames.len();
     let (left, right, esc, backspace) = ctx.input(|i| {
@@ -325,8 +438,21 @@ pub fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
     let clicked = ctx.input(|i| i.pointer.primary_clicked())
         && ctx.pointer_interact_pos().is_some_and(|p| canvas.contains(p) && p.y < canvas.bottom() - PRESENT_BAR_H);
     let mut effect = Effect::None;
-    if let Some(c) = clicked.then(|| click_at(ed, ed.present_overlay.as_ref())).flatten() {
+    let mut smart = false;
+    let left = frames.get(st.present_nav.index).copied();
+    if let Some((c, s)) = clicked.then(|| click_at(ed, ed.present_overlay.as_ref())).flatten() {
         effect = st.present_nav.follow(c, &frames, ed.camera);
+        smart = s;
+    }
+    let settled = st.present_glide.is_none() && st.present_tween.is_none();
+    if effect == Effect::None && settled {
+        if st.present_nav.hovering() {
+            smart = st.present_nav.hover_smart();
+            effect = st.present_nav.hover_leave(ed.pointer);
+        } else if let Some((c, spot, s)) = hover_at(ed) {
+            effect = st.present_nav.hover_enter(c, spot, s, &frames, ed.camera);
+            smart = s;
+        }
     }
     let p = theme::pal_from_ctx(ctx);
     egui::Area::new("presenter".into())
@@ -377,11 +503,13 @@ pub fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
         });
     if back {
         effect = st.present_nav.back();
+        smart = false;
     } else if step != 0 {
         effect = st.present_nav.step(step, total);
+        smart = false;
     }
     match effect {
-        Effect::Show => show_present_frame(ed, st),
+        Effect::Show => show_present_frame(ed, st, left.filter(|_| smart)),
         Effect::Url(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
         Effect::Overlay | Effect::None => {}
     }
@@ -436,6 +564,32 @@ mod tests {
     }
 
     #[test]
+    fn hover_links_apply_until_the_pointer_leaves_the_hotspot() {
+        let (mut n, f) = (nav(), frames());
+        let spot = Rect::new(10.0, 10.0, 100.0, 40.0);
+        assert_eq!(n.hover_enter(Click::Go(NodeId(3)), spot, false, &f, CAM), Effect::Show);
+        assert_eq!((n.index, n.hovering()), (2, true));
+        assert_eq!(n.hover_enter(Click::Go(NodeId(2)), spot, false, &f, CAM), Effect::None, "one at a time");
+        assert_eq!(n.hover_leave(v2(50.0, 30.0)), Effect::None, "still over it");
+        assert_eq!(n.hover_leave(v2(500.0, 30.0)), Effect::Show);
+        assert_eq!((n.index, n.can_back(), n.hovering()), (0, false, false), "back where it was, no history left");
+        assert_eq!(n.hover_leave(v2(500.0, 30.0)), Effect::None);
+    }
+
+    #[test]
+    fn a_hover_overlay_closes_on_leave_and_other_actions_never_hover() {
+        let (mut n, f) = (nav(), frames());
+        let spot = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let url = Click::Act(LinkAction::Url { url: "https://a.dev".into() });
+        assert_eq!(n.hover_enter(url, spot, false, &f, CAM), Effect::None);
+        assert!(!n.hovering());
+        let open = Click::Act(LinkAction::Overlay { target: NodeId(4) });
+        assert_eq!(n.hover_enter(open, spot, false, &f, CAM), Effect::Overlay);
+        assert_eq!(n.hover_leave(v2(99.0, 99.0)), Effect::Overlay);
+        assert!(!n.overlay_open());
+    }
+
+    #[test]
     fn stepping_wraps_and_counts_as_navigation() {
         let mut n = nav();
         assert_eq!(n.step(-1, 4), Effect::Show);
@@ -487,7 +641,7 @@ mod tests {
         let mut ed = Editor::new(crate::model::Document::default());
         let mut st = UiState::default();
         ed.present_overlay = Some(PresentOverlay { id: NodeId(1), shift: V2::ZERO, window: Rect::new(0.0, 0.0, 1.0, 1.0) });
-        show_present_frame(&mut ed, &mut st);
+        show_present_frame(&mut ed, &mut st, None);
         assert!(ed.present_overlay.is_none());
     }
 

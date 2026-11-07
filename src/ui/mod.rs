@@ -10,6 +10,7 @@ pub mod canvas_prefs;
 pub mod chat;
 pub mod chat_md;
 pub mod chat_msgs;
+pub mod compare;
 pub mod confirm;
 pub mod design;
 pub mod help_sheet;
@@ -32,6 +33,7 @@ pub mod palette;
 pub mod panels;
 pub mod libraries;
 pub mod settings;
+pub mod smart;
 pub mod variables;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
@@ -93,6 +95,8 @@ pub struct UiState {
     /// Saved versions of the current page, refreshed when the page or project changes.
     pub versions: Vec<crate::versions::Version>,
     pub versions_key: Option<(std::path::PathBuf, String)>,
+    /// Open version compare of the current page (read-only).
+    pub compare: Option<compare::Compare>,
     /// Autosave state for the toolbar subtitle, e.g. "Saved" or "Saving…".
     pub save_state: String,
     pub pages: pages::PagesUi,
@@ -126,6 +130,8 @@ pub struct UiState {
     pub present_glide: Option<(crate::geom::Camera, crate::geom::Camera, web_time::Instant)>,
     /// Present mode has shown a frame already, so the next one glides.
     pub present_glide_ready: bool,
+    /// A smart transition running in Present mode: the paired layers and when it began.
+    pub present_tween: Option<(Vec<smart::Pair>, web_time::Instant)>,
     /// Layer being dragged in the layers panel, and where it would drop.
     pub layer_drag: Option<(NodeId, Option<LayerDrop>)>,
     /// Row rects of the last layers-panel frame (for drop targeting).
@@ -1061,6 +1067,7 @@ fn overlays(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect, 
     agent_glow(ui.ctx(), st, canvas);
     status(ui.ctx(), ed, canvas);
     review_overlay(ui.ctx(), ed, st, canvas);
+    compare::overlay(ui.ctx(), ed, st, canvas);
     chat::follow(ed, &mut st.chat);
     if !st.present {
         screen_scroll_toggles(ui.ctx(), ed, canvas);
@@ -2340,6 +2347,18 @@ fn review_overlay(ctx: &egui::Context, ed: &Editor, st: &UiState, canvas: egui::
         return;
     };
     let snap = rd.snaps.get(i).and_then(Option::as_ref);
+    diff_overlay(ctx, ed, canvas, "review-overlay", diff, snap);
+}
+
+/// Outlines for `diff` of the active page against `snap` (the earlier document, for removed layers).
+fn diff_overlay(
+    ctx: &egui::Context,
+    ed: &Editor,
+    canvas: egui::Rect,
+    area: &'static str,
+    diff: &crate::mcp::diff::PageDiff,
+    snap: Option<&crate::model::Document>,
+) {
     let to_screen = |r: &crate::geom::Rect| {
         let s = ed.camera.world_rect_to_screen(r);
         egui::Rect::from_min_size(
@@ -2347,7 +2366,7 @@ fn review_overlay(ctx: &egui::Context, ed: &Editor, st: &UiState, canvas: egui::
             egui::vec2(s.w as f32, s.h as f32),
         )
     };
-    egui::Area::new("review-overlay".into())
+    egui::Area::new(area.into())
         .order(egui::Order::Middle)
         .fixed_pos(canvas.min)
         .interactable(false)
