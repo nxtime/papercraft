@@ -3,6 +3,8 @@
 
 pub mod actions;
 pub mod agent;
+pub mod agent_pause;
+pub mod peers;
 pub mod annotations;
 pub mod annotations_canvas;
 pub mod bind;
@@ -171,6 +173,12 @@ pub struct UiState {
     pub runs_key: Option<std::path::PathBuf>,
     /// The runs being recorded now (one per agent client), copied from the tracker each frame.
     pub run_open: Vec<crate::runs::Run>,
+    /// Pause controls for the external agents that called lately; the shell fills them each
+    /// frame and acts on `pause_toggles` (client keys the user clicked).
+    pub pause_chips: Vec<crate::pause::Chip>,
+    pub pause_toggles: Vec<String>,
+    /// The open shared project's presence (other devices' cursors); None when it is not shared.
+    pub presence: Option<std::sync::Arc<crate::presence::Link>>,
     /// (active page, history generation) when the review runs were last recounted.
     pub runs_gen: Option<(usize, u64)>,
     /// A recount running on another thread: (run id, counts) per run when done.
@@ -1073,6 +1081,8 @@ fn overlays(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect, 
         screen_scroll_toggles(ui.ctx(), ed, canvas);
     }
     agent_overlay(ui.ctx(), ed, st, canvas);
+    agent_pause::chips(ui.ctx(), st, canvas);
+    peers::overlay(ui.ctx(), ed, st, canvas);
     annotations_canvas::draw(ui.ctx(), ed, &mut st.annotations, &mut st.selected_annotation, canvas);
     props_modal::show(ui.ctx(), ed, st);
     run_toast(ui.ctx(), st, canvas);

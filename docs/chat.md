@@ -102,6 +102,7 @@ Replies are markdown: paragraphs, lists, code blocks with a copy button, inline 
 * **Errors**: a failed turn shows a red row with Retry. A sign-in problem shows the sign-in card (see Setup).
 * **Canvas follow**: when a tool call targets a node, the canvas pans to it, unless you moved the camera in the last 10 seconds.
 * **Agent presence**: after each agent call, the layers it pointed at or changed get an accent outline that fades over 3 seconds, and the newest carries a label with the verb and the client ("Styling · Claude Code"). This works for chat turns and for any MCP client. When the agent works on another page, a chip "Agent on page X →" switches to it.
+* **Pause an external agent**: an MCP client that called in the last two minutes has a chip at the top right of the canvas, "Pause Claude Code". While paused, its editing calls wait (reads still work) and the chip reads "Claude Code paused · 2 waiting · Resume". Resume runs the waiting calls in order. A call that has waited 100 seconds is refused with "paused by the user ... Nothing was changed", so the agent can tell you and retry. The in-app chat is not held; use its Stop.
 
 ## Design-system context
 

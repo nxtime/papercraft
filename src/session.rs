@@ -185,6 +185,12 @@ impl Session {
         self.sync.join(&dir, link)
     }
 
+    /// The open project's presence link, when it is shared: other devices' cursors and selections.
+    pub fn presence(&self) -> Option<std::sync::Arc<crate::presence::Link>> {
+        let dir = &self.project.as_ref()?.dir;
+        self.sync.status(dir).map(|s| s.presence.clone())
+    }
+
     /// The shared projects for the home screen: their status and links.
     pub fn shared_info(
         &self,

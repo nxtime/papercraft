@@ -8,6 +8,8 @@
 //!                                 (`*.json` bodies must parse as JSON, else 422)
 //! DELETE /p/{token}/f/{path}     remove
 //! GET    /p/{token}/ws?client=<id>   pushes {"op","path","rev","client"} for other clients' changes
+//! PUT    /p/{token}/presence     one device's report in, the other devices' out (see `presence`);
+//!                                 memory only, and an older relay answers 404
 //! ```
 //!
 //! The token is the only credential, like the agent link: anyone holding it can read and edit.
@@ -71,6 +73,8 @@ pub struct Store {
     root: PathBuf,
     library: bool,
     projects: Mutex<HashMap<String, Arc<Project>>>,
+    /// Who is looking at which project; memory only, never on disk.
+    presence: Mutex<crate::presence::Book>,
 }
 
 impl Store {
@@ -79,6 +83,7 @@ impl Store {
             root: data.dir,
             library: data.library,
             projects: Mutex::new(HashMap::new()),
+            presence: Mutex::default(),
         })
     }
 
@@ -191,6 +196,33 @@ async fn list(State(store): State<Arc<Store>>, Path(token): Path<String>) -> Res
     .await
     .unwrap_or_default();
     axum::Json(files).into_response()
+}
+
+/// Records the caller's presence and answers with the other devices on the project. Not part
+/// of the project: nothing is stored on disk, and an unknown token costs only a bounded entry.
+async fn presence(
+    State(store): State<Arc<Store>>,
+    Path(token): Path<String>,
+    body: Bytes,
+) -> Response {
+    if !relay_proto::valid_token(&token) {
+        return not_found();
+    }
+    if body.len() > crate::presence::MAX_BODY {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    let report = serde_json::from_slice::<crate::presence::Report>(&body)
+        .ok()
+        .and_then(crate::presence::Report::sanitized);
+    let Some(report) = report else {
+        return (StatusCode::BAD_REQUEST, "bad presence report").into_response();
+    };
+    let peers = store
+        .presence
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .exchange(&token, report, web_time::Instant::now());
+    axum::Json(crate::presence::Peers { peers }).into_response()
 }
 
 /// Every project's token (library mode).
@@ -358,6 +390,7 @@ pub fn router(store: Arc<Store>) -> axum::Router {
     let mut app = axum::Router::new()
         .route("/p/{token}/files", get(list))
         .route("/p/{token}/f/{*path}", get(read).put(write).delete(remove))
+        .route("/p/{token}/presence", axum::routing::put(presence))
         .route("/p/{token}/ws", get(socket));
     if store.library {
         app = app

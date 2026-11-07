@@ -60,6 +60,8 @@ const AGENT_FRAME: Duration = Duration::from_millis(50);
 /// How long agent calls wait for a drag to end before running anyway, so a stuck gesture
 /// cannot block them for good.
 const GESTURE_HOLD: Duration = Duration::from_secs(10);
+/// How often waiting calls of a paused client are checked against their time limit.
+const PAUSE_POLL: Duration = Duration::from_secs(1);
 
 /// Whether agent calls should keep waiting: a gesture is in progress and has not held them
 /// longer than `GESTURE_HOLD`. `since` is when the wait began; it is cleared once they may run.
@@ -110,6 +112,8 @@ pub struct App {
     /// Tool calls waiting for the person's drag to end, and since when.
     held: Vec<crate::mcp::Call>,
     held_since: Option<Instant>,
+    /// External clients the user paused, and their editing calls waiting for a resume.
+    pauses: crate::pause::Pauses,
     /// Claims and what each agent last saw; shared with delegate threads, which release their
     /// helper's claims when it ends.
     swarm: std::sync::Arc<std::sync::Mutex<crate::mcp::swarm::Swarm>>,
@@ -166,6 +170,7 @@ impl App {
             runs: Default::default(),
             held: Vec::new(),
             held_since: None,
+            pauses: Default::default(),
             swarm: Default::default(),
         };
         app.st.library.library = library;
@@ -816,6 +821,8 @@ impl App {
             self.swarm.lock().unwrap().release_chats();
         }
         self.st.sync_runs(&self.ctx, &mut self.runs, &self.ed);
+        self.sync_pauses();
+        self.st.presence = self.session.presence();
         self.st.chat.tools = self.tool_dispatch().map(crate::chat::events::ToolDispatch);
         if self.st.chat.gpu.is_none() {
             self.st.chat.gpu = self.offscreen();
@@ -1506,7 +1513,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         self.tick_sync();
-        if !self.held.is_empty() {
+        if !self.held.is_empty() || self.pauses.has_waiting() {
             self.run_mcp_calls();
         }
         let wake = [
@@ -1618,6 +1625,20 @@ impl App {
         self.mcp.as_ref().map(|(_, _, d)| d.clone())
     }
 
+    /// Applies the pause buttons clicked on the canvas and refreshes what they show.
+    fn sync_pauses(&mut self) {
+        let toggles = std::mem::take(&mut self.st.pause_toggles);
+        let resumes = toggles.iter().any(|k| self.pauses.is_paused(k));
+        for key in &toggles {
+            self.pauses.toggle(key);
+        }
+        self.st.pause_chips = self.pauses.chips(Instant::now());
+        if resumes {
+            // The released calls run on the next turn of the event loop, not inside this frame.
+            self.next_repaint = Some(Instant::now());
+        }
+    }
+
     /// Run the MCP tool calls that arrived since the last wake-up, then repaint.
     fn run_mcp_calls(&mut self) {
         let Some((rx, _, _)) = &self.mcp else {
@@ -1625,10 +1646,18 @@ impl App {
             for c in std::mem::take(&mut self.held) {
                 let _ = c.reply.send(Err("PaperCraft's MCP server is not running".into()));
             }
+            self.pauses.fail_all("PaperCraft's MCP server is not running");
             return;
         };
         let mut calls = std::mem::take(&mut self.held);
         calls.extend(rx.try_iter());
+        let runs = &mut self.runs;
+        let calls = self.pauses.admit(calls, Instant::now(), |c| runs.label(c));
+        if self.pauses.has_waiting() {
+            // Wake to refuse the waiting calls once they have waited long enough.
+            let wake = Instant::now() + PAUSE_POLL;
+            self.next_repaint = Some(self.next_repaint.map_or(wake, |r| r.min(wake)));
+        }
         if calls.is_empty() {
             return;
         }

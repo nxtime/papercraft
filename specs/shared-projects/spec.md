@@ -23,7 +23,15 @@ The relay already hosts the app, so it can also host the project files.
 5. **Native too.** The desktop app shares a project to any relay (`Share…` asks for the server)
    and joins by link, exactly like the browser; both can edit the same project.
 
-Out of scope: per-object merging (CRDT), cursors/presence, accounts, per-user permissions,
+6. **Presence.** Each device `PUT`s `{id,label,page,cursor,sel,idle,leave}` to
+   `/p/{token}/presence` about every 0.7 s while active (4 s idle) and gets the other devices'
+   reports back. The relay keeps them in memory for 20 s, bounds sizes and rate, and never writes
+   them to disk; devices draw them as cursors and selection outlines in a colour derived from the
+   device id, fading after 5 s idle and gone after 60 s or on `leave`. An older relay answers 404
+   and the device stops asking; an older device never reports and is just not shown; unknown JSON
+   fields are ignored both ways.
+
+Out of scope: per-object merging (CRDT), accounts, per-user permissions,
 history. The share token is the credential: anyone with the link can read and edit.
 
 ## Protocol
@@ -68,4 +76,5 @@ after a relay restart (tabs resync from `/files` on reconnect, so a lower rev is
 | Sync engine (both targets), `.share` file, link parsing, server-path sanitising | `src/sync.rs` (HTTP: reqwest native, `fetch` wasm) |
 | Reload of the open project, status, join/share entry points | `src/session.rs` (`sync_poll`, `share_project`, `join_shared`) |
 | Home screen: Share…, Join shared…, status badge, copy link | `src/ui/home.rs`; actions handled in `src/app.rs` and `src/web.rs`; `?share=` auto-join in `src/web.rs` |
-| Tests | `tests/relay.rs` (store routes), `tests/sync.rs` (two folders through a real relay), unit tests in `src/sync.rs` and `src/mcp/store.rs` |
+| Presence (wire types, relay book, client loop) | `src/presence.rs`; route in `src/mcp/store.rs`; drawing in `src/ui/peers.rs` |
+| Tests | `tests/presence.rs` (relay, old relay, bad input), `tests/relay.rs` (store routes), `tests/sync.rs` (two folders through a real relay), unit tests in `src/sync.rs` and `src/mcp/store.rs` |
