@@ -149,9 +149,12 @@ fn write_html_maps_margin_grid_and_translate_and_groups_what_it_drops() {
     let html = "<div layer-name=\"Page\" style=\"display:flex;flex-direction:column;width:400px\">        <div layer-name=\"Grid\" style=\"display:grid;grid-template-columns:repeat(2,1fr);gap:10px;width:400px\">          <div layer-name=\"Wide\" style=\"grid-column:span 2;height:20px\"></div>          <div layer-name=\"Left\" style=\"height:20px\"></div><div layer-name=\"Right\" style=\"height:20px;transform:translate(5px,5px) rotate(3deg)\"></div></div>        <div layer-name=\"Tilted\" style=\"height:10px;transform:rotate(2deg) scale(1.1);float:left\"></div></div>";
     let w = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": html}));
     let ignored = w["ignoredStyles"].to_string();
-    assert!(ignored.contains("transform: rotate, scale"), "{w}");
+    assert!(ignored.contains("transform: scale"), "{w}");
+    assert!(!ignored.contains("rotate") && !ignored.contains("margin:"), "rotation is kept, and no margin was written: {w}");
     assert_eq!(w["ignoredStyles"].as_array().unwrap().iter().filter(|v| v.as_str().unwrap().starts_with("transform")).count(), 1, "{w}");
-    let rect = |name: &str| h.ed.doc.nodes.values().find(|n| n.name == name).unwrap_or_else(|| panic!("no {name}")).rect;
+    let node = |name: &str| h.ed.doc.nodes.values().find(|n| n.name == name).unwrap_or_else(|| panic!("no {name}"));
+    assert_eq!((node("Tilted").style.rotation, node("Right").style.rotation), (2.0, 3.0));
+    let rect = |name: &str| node(name).rect;
     assert!((rect("Wide").w - 400.0).abs() < 0.5, "a span covers both columns: {:?}", rect("Wide"));
     assert!((rect("Left").w - 195.0).abs() < 0.5, "{:?}", rect("Left"));
 }
@@ -179,8 +182,10 @@ fn import_html_opens_a_zip_with_its_css_and_images() {
     assert_eq!(h.ed.doc.root.len(), 2, "one frame per file");
     let warnings = r["warnings"].to_string();
     assert!(warnings.contains("evil.html"), "unsafe entries are reported: {r}");
-    assert!(r["ignoredStyles"].to_string().contains("transform: rotate"), "{r}");
+    let ignored = r["ignoredStyles"].to_string();
+    assert!(!ignored.contains("transform") && !ignored.contains("margin:"), "rotate() from a <style> rule is applied: {r}");
     let nodes = || h.ed.doc.nodes.values();
+    assert_eq!(nodes().filter(|n| n.style.rotation == 4.0).count(), 2, "one turned card per page");
     let title = nodes().find(|n| n.kind.text().map(String::as_str) == Some("Home")).expect("Home text");
     assert_eq!(title.kind.font_size(), Some(30.0), "<style> rule applied");
     assert_eq!(title.style.fill(), Some(Color::rgb(0, 0, 255)), "linked stylesheet applied");
