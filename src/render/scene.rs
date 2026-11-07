@@ -7,7 +7,7 @@ use super::tess::{Piece, Tess};
 use crate::editor::{Editor, PresentOverlay, hit, snap::Guide};
 use crate::geom::{Camera, Rect, V2, v2};
 use crate::model::BlendMode;
-use crate::model::rotation::Rot;
+use crate::model::rotation::{Rot, apply_chain};
 use crate::model::{Color, Document, NodeId, NodeKind, TextAlign};
 use crate::text;
 use lyon::tessellation::{FillRule, LineCap};
@@ -639,7 +639,9 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
             mb.rect_outline(sb, 1.0, accent);
         }
         let tiny = sb.w.min(sb.h) < 24.0;
-        for (hx, hy) in hit::HANDLES {
+        let turned = ed.selection_rotated();
+        // Resize handles belong to upright boxes; a turned layer gets the rotate knob.
+        for (hx, hy) in hit::HANDLES.into_iter().filter(|_| !turned) {
             if tiny && (hx == 0.5 || hy == 0.5) {
                 continue;
             }
@@ -648,8 +650,16 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
             mb.rect(r, [1.0, 1.0, 1.0, 1.0]);
             mb.rect_outline(r, 1.0, accent);
         }
-        // Size badge below the selection.
-        let label = format!("{} × {}", fmt_num(b.w), fmt_num(b.h));
+        if let Some(knob) = ed.rotate_knob() {
+            rotate_knob(mb, &v, ed, knob, accent);
+        }
+        // Size badge below the selection (a turned layer shows its own size, not its bounds).
+        let own = match &ed.top_selection()[..] {
+            [id] => ed.doc.get(*id).map(|n| (n.rect.w, n.rect.h)),
+            _ => None,
+        };
+        let (bw, bh) = own.filter(|_| turned).unwrap_or((b.w, b.h));
+        let label = format!("{} × {}", fmt_num(bw), fmt_num(bh));
         let w = text::layout(&label, 11.0, None, TextAlign::Left).width;
         let pill = Rect::new(
             sb.center().x - w * 0.5 - 6.0,
@@ -828,7 +838,39 @@ fn vector_edit_overlay(mb: &mut MeshBuilder, ed: &Editor, v: &View, accent: [f32
     }
 }
 
+/// The knob that turns the selected layer: a stem from the top edge to a ring.
+fn rotate_knob(mb: &mut MeshBuilder, v: &View, ed: &Editor, knob: V2, accent: [f32; 4]) {
+    let &[id] = &ed.top_selection()[..] else { return };
+    let Some(q) = v.doc.world_outline(id) else { return };
+    let top = v.to_screen((q[0] + q[1]) * 0.5);
+    let k = v.to_screen(knob);
+    mb.line(top, k, 1.0, accent);
+    mb.circle(k, 5.0, accent);
+    mb.circle(k, 3.5, [1.0, 1.0, 1.0, 1.0]);
+}
+
+/// Outline of a layer inside a rotation: its shape pushed through the rotations.
+fn outline_turned(mb: &mut MeshBuilder, v: &View, id: NodeId, chain: &[Rot], color: [f32; 4], w: f64) {
+    let (Some(n), Some(wr)) = (v.doc.get(id), v.doc.world_rect(id)) else { return };
+    let to = |p: V2| v.to_screen(apply_chain(chain, p));
+    let path = match &n.kind {
+        NodeKind::Frame { .. } | NodeKind::Rect | NodeKind::Text { .. } | NodeKind::Group | NodeKind::Stroke { .. } => {
+            let pts: Vec<V2> = wr.corners().into_iter().map(to).collect();
+            MeshBuilder::polygon_path(&pts, true)
+        }
+        _ => match draw::shape_path(n, wr) {
+            Some(path) => path.map(to).to_lyon(),
+            None => return,
+        },
+    };
+    mb.stroke_path(&path, w as f32, color, LineCap::Round);
+}
+
 fn outline_node(mb: &mut MeshBuilder, v: &View, id: NodeId, sr: Rect, color: [f32; 4], w: f64) {
+    let chain = v.doc.rotation_chain(id, true);
+    if !chain.is_empty() {
+        return outline_turned(mb, v, id, &chain, color, w);
+    }
     let n = v.doc.get(id).unwrap();
     let z = v.camera.zoom;
     match &n.kind {

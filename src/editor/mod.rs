@@ -10,6 +10,7 @@ pub mod design;
 pub mod hit;
 pub mod input;
 pub mod pages;
+mod rotate;
 pub mod screens;
 pub mod shortcuts;
 pub mod snap;
@@ -182,6 +183,14 @@ enum Gesture {
         /// Every node in the resized subtrees as it was at drag start (constraints and
         /// group scaling are recomputed from this each move, so nothing drifts).
         snapshot: Vec<Node>,
+    },
+    /// Turning a layer by its knob: `centre` is where it is drawn, `from` the pointer's angle
+    /// around it at the press and `base` the layer's rotation then.
+    Rotate {
+        id: NodeId,
+        centre: V2,
+        from: f64,
+        base: f64,
     },
     Create {
         tool: Tool,
@@ -724,7 +733,7 @@ impl Editor {
         let rects: Vec<Rect> = self
             .top_selection()
             .iter()
-            .filter_map(|id| self.doc.world_rect(*id))
+            .filter_map(|id| self.doc.world_bounds(*id))
             .collect();
         Rect::union_all(&rects)
     }
@@ -1145,8 +1154,12 @@ impl Editor {
                 return;
             }
         }
+        if self.start_rotate(pos, world) {
+            return;
+        }
         // Resize handles of the current selection take priority.
         if self.text_edit.is_none()
+            && !self.selection_rotated()
             && let Some(b) = self.selection_bounds()
         {
             let bs = self.camera.world_rect_to_screen(&b);
@@ -1526,6 +1539,10 @@ impl Editor {
                     snapshot,
                 };
             }
+            Gesture::Rotate { id, centre, from, base } => {
+                self.rotate_to(id, centre, from, base, world);
+                self.gesture = Gesture::Rotate { id, centre, from, base };
+            }
             Gesture::Marquee { start, scope, base } => {
                 let r = Rect::from_points(start, world);
                 self.marquee = Some(r);
@@ -1536,7 +1553,8 @@ impl Editor {
                     if !n.visible || n.locked || sel.contains(&id) {
                         continue;
                     }
-                    let Some(wr) = self.doc.world_rect(id) else {
+                    // A turned layer counts by its bounding box as drawn.
+                    let Some(wr) = self.doc.world_bounds(id) else {
                         continue;
                     };
                     // Top-level frames must be fully enclosed; everything else just intersect.
@@ -1753,6 +1771,7 @@ impl Editor {
                 self.guides.clear();
                 self.commit();
             }
+            Gesture::Rotate { .. } => self.commit(),
             Gesture::Marquee { .. } => {
                 self.marquee = None;
             }
@@ -2294,6 +2313,7 @@ impl Editor {
         match std::mem::replace(&mut self.gesture, Gesture::None) {
             Gesture::Move { .. }
             | Gesture::Resize { .. }
+            | Gesture::Rotate { .. }
             | Gesture::Create { .. }
             | Gesture::Draw { .. }
             | Gesture::PathPart { .. }
