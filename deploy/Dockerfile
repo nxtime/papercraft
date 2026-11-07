@@ -10,14 +10,17 @@ RUN rustup target add wasm32-unknown-unknown \
  && rm -rf /var/lib/apt/lists/* \
  && cargo install wasm-bindgen-cli --version ${WASM_BINDGEN} --locked
 COPY --from=vendor crates /vendor
-RUN printf '%s\n' \
- '[source.crates-io]' 'replace-with = "vendored-sources"' \
- '[source."git+https://git.marcospaulo.dev.br/masi/craft-libs?rev=22544b6d619d4f16779b8bdfa3f0b642a86fc065"]' \
- 'git = "https://git.marcospaulo.dev.br/masi/craft-libs"' \
- 'rev = "22544b6d619d4f16779b8bdfa3f0b642a86fc065"' 'replace-with = "vendored-sources"' \
- '[source.vendored-sources]' 'directory = "/vendor"' > "$CARGO_HOME/config.toml"
 WORKDIR /src
 COPY . .
+# The craft-libs revision is read from Cargo.lock, so the image never pins a stale one.
+RUN rev=$(grep -o 'craft-libs?rev=[0-9a-f]*' Cargo.lock | head -n1 | cut -d= -f2) \
+ && test -n "$rev" \
+ && printf '%s\n' \
+ '[source.crates-io]' 'replace-with = "vendored-sources"' \
+ "[source.\"git+https://git.marcospaulo.dev.br/masi/craft-libs?rev=$rev\"]" \
+ 'git = "https://git.marcospaulo.dev.br/masi/craft-libs"' \
+ "rev = \"$rev\"" 'replace-with = "vendored-sources"' \
+ '[source.vendored-sources]' 'directory = "/vendor"' > "$CARGO_HOME/config.toml"
 RUN sh web/build.sh && cargo build --release --locked --bin papercraft-relay
 
 FROM debian:stable-slim
