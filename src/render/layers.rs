@@ -29,6 +29,8 @@ struct Post {
     blend: u32,
     flags: u32,
     size: vec2<f32>,
+    rot: vec2<f32>,
+    pad: vec2<f32>,
 };
 @group(0) @binding(0) var<uniform> p: Post;
 @group(0) @binding(1) var t_layer: texture_2d<f32>;
@@ -59,7 +61,9 @@ fn blur(uv: vec2<f32>) -> vec4<f32> {
 // Signed distance to a rounded box with per-corner radii (tl, tr, br, bl), pixels, y down.
 fn sd_rrect(pos: vec2<f32>) -> f32 {
     let half = p.rect.zw * 0.5;
-    let q = pos - (p.rect.xy + half);
+    let d0 = pos - (p.rect.xy + half);
+    // The shape may be turned: undo the turn (cos, sin) around its centre.
+    let q = vec2<f32>(p.rot.x * d0.x + p.rot.y * d0.y, -p.rot.y * d0.x + p.rot.x * d0.y);
     var r = p.radii.x;
     if (q.x > 0.0 && q.y <= 0.0) { r = p.radii.y; }
     if (q.x > 0.0 && q.y > 0.0) { r = p.radii.z; }
@@ -163,6 +167,9 @@ struct Post {
     blend: u32,
     flags: u32,
     size: [f32; 2],
+    /// Cosine and sine of the shape's turn.
+    rot: [f32; 2],
+    _pad: [f32; 2],
 }
 
 struct Tex {
@@ -198,7 +205,7 @@ pub(super) struct Layers {
 /// Key of a group for the world cache's signature.
 pub(super) fn group_key(g: &Group) -> usize {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    for v in [g.shape.x, g.shape.y, g.shape.w, g.shape.h, g.blur, g.backdrop_blur] {
+    for v in [g.shape.x, g.shape.y, g.shape.w, g.shape.h, g.angle, g.blur, g.backdrop_blur] {
         v.to_bits().hash(&mut h);
     }
     g.radii.iter().for_each(|r| r.to_bits().hash(&mut h));
@@ -211,9 +218,9 @@ pub(super) fn group_key(g: &Group) -> usize {
 /// shows the whole shape), grown by the blur's reach.
 pub(super) fn group_bounds(g: &Group, content: Option<Rect>) -> Rect {
     let r = match (content, g.mask) {
-        (Some(c), true) => c.intersection(&g.shape).unwrap_or(g.shape),
-        (None, _) => g.shape,
-        (Some(c), false) if g.backdrop_blur > 0.0 => c.union(&g.shape),
+        (Some(c), true) => c.intersection(&g.outline_bounds()).unwrap_or(g.outline_bounds()),
+        (None, _) => g.outline_bounds(),
+        (Some(c), false) if g.backdrop_blur > 0.0 => c.union(&g.outline_bounds()),
         (Some(c), false) => c,
     };
     r.inflate(REACH * g.blur)
@@ -466,6 +473,8 @@ impl Layers {
                     blend: 0,
                     flags: 0,
                     size: [w as f32, h as f32],
+                    rot: [1.0, 0.0],
+                    _pad: [0.0; 2],
                 };
                 let bg = self.bind_group(device, &post, from, &self.blank.view, &self.blank.view);
                 let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -649,6 +658,11 @@ fn finish_group(
         blend: blend_index(g.blend),
         flags: if g.mask { FLAG_MASK } else { 0 },
         size: [size[0] as f32, size[1] as f32],
+        rot: {
+            let (s, c) = g.angle.to_radians().sin_cos();
+            [c as f32, s as f32]
+        },
+        _pad: [0.0; 2],
     };
     let bg = if replace {
         // The backdrop is the parent as drawn so far.

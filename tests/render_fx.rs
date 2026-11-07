@@ -131,3 +131,54 @@ fn overlay_and_dodge_read_the_backdrop() {
     // 0.25 / (1 - 0.5) = 0.5 -> 128.
     assert!((dodge[0] as i32 - 128).abs() <= 4, "dodge {dodge:?}");
 }
+
+fn turn(e: &mut papercraft::editor::Editor, id: NodeId, deg: f64) {
+    e.edit("rotate", |tx| {
+        if let Some(n) = tx.node_mut(id) {
+            n.style.rotation = deg;
+        }
+    });
+}
+
+#[test]
+fn a_rotated_rect_is_drawn_turned_around_its_centre() {
+    let Some(g) = gpu() else { return };
+    let mut e = editor(400.0, 300.0);
+    let r = rect(&mut e, Rect::new(150.0, 100.0, 100.0, 100.0), Color::BLACK, None);
+    turn(&mut e, r, 45.0);
+    let img = render_canvas(g, &e);
+    assert!(close(px(&img, v2(200.0, 150.0)), Color::BLACK, 3));
+    // The diamond's top point (200, 79) is covered; the square's old corner (152, 102) is not.
+    assert!(close(px(&img, v2(200.0, 84.0)), Color::BLACK, 3));
+    assert!(!close(px(&img, v2(153.0, 103.0)), Color::BLACK, 30));
+}
+
+#[test]
+fn a_rotated_frame_carries_its_children_and_clips_to_its_outline() {
+    let Some(g) = gpu() else { return };
+    let mut e = editor(400.0, 300.0);
+    let f = clip_frame(&mut e, Rect::new(100.0, 50.0, 200.0, 200.0), 0.0, None);
+    rect(&mut e, Rect::new(-50.0, -50.0, 300.0, 300.0), Color::BLACK, Some(f));
+    turn(&mut e, f, 45.0);
+    let img = render_canvas(g, &e);
+    assert!(close(px(&img, v2(200.0, 150.0)), Color::BLACK, 3));
+    // Inside the diamond, past the square's top edge; outside it at the square's corner.
+    assert!(close(px(&img, v2(200.0, 20.0)), Color::BLACK, 3));
+    assert!(!close(px(&img, v2(106.0, 56.0)), Color::BLACK, 30), "the clip turns with the frame");
+}
+
+#[test]
+fn a_rotated_blurred_node_keeps_its_centre_and_loses_its_old_corner() {
+    let Some(g) = gpu() else { return };
+    let mut e = editor(400.0, 300.0);
+    let r = rect(&mut e, Rect::new(150.0, 100.0, 100.0, 100.0), Color::BLACK, None);
+    turn(&mut e, r, 45.0);
+    e.edit("blur", |tx| {
+        if let Some(n) = tx.node_mut(r) {
+            n.style.blur = 4.0;
+        }
+    });
+    let img = render_canvas(g, &e);
+    assert!(close(px(&img, v2(200.0, 150.0)), Color::BLACK, 12));
+    assert!(!close(px(&img, v2(153.0, 103.0)), Color::BLACK, 60));
+}
