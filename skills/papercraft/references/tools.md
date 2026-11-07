@@ -414,6 +414,18 @@ Delete nodes and their descendants. Verify parents with get_node_info first when
 | `nodeIds` | array of string | yes | Nodes to delete. |
 
 
+### `boolean_nodes`
+
+Combine shapes into a live boolean group that keeps them as editable children: `op` union, subtract, intersect or exclude with two or more `nodeIds` (shapes, frames, groups or text; not lines or arrows). Subtract cuts the others out of the lowest layer. The group paints the result with its own fill and stroke and updates when a child moves, resizes or changes. Pass one existing boolean group with `op` to change the operation, or `flatten: true` to bake the result into a plain path and drop the children. Returns the group id.
+
+| Argument | Type | Required | Notes |
+|---|---|---|---|
+| `nodeIds` | array of string | yes | Two or more shapes to combine, or one boolean group to change. |
+| `op` | string | no | union, subtract, intersect or exclude. |
+| `flatten` | boolean | no | Bake an existing boolean group into a path. |
+| `pageId` | string | no |  |
+
+
 ### `duplicate_nodes`
 
 Deep-clone nodes, including across pages (via `toPageId` or a cross-page `parentId`; `<x-paper-clone node-id="<page>:<id>"/>` also works across pages). Each copy goes under parentId when given, else next to its source; duplicated artboards are placed in an empty spot. Returns new ids and a descendantIdMap from every original descendant id to its copy.

@@ -120,6 +120,7 @@ Full flows: [recipes.md](references/recipes.md).
 | Change styles or text | `update_styles`, `set_text_content`, `rename_nodes` |
 | Whiteboard shapes, sticky notes, arrows | `create_shape` |
 | Copy, move, delete | `duplicate_nodes`, `move_nodes`, `delete_nodes` |
+| Union, subtract, intersect, exclude | `boolean_nodes` (live group; `flatten: true` bakes it into a path) |
 | Tokens | `get_variables` (`format` css, json or tailwind), `set_variables` (`collection`, `type`, `mode`, `alias`), `create_collection`, `delete_variables`, `set_variable_mode`, `bind_variable` |
 | Reuse | `create_component`, `create_instance`, `swap_instance` (also a nested badge inside a row instance: a swap that survives main edits), `get_components`, `<x-paper-instance>` |
 | Component properties | One component with properties instead of one per state: `set_component_props` (`text`, `bool`, `icon`, `enum` options in the overrides format; templates `text`, `active` for tab bars and navs, `status` with [{value, color}]), then `set_instance_props {nodeIds, values}` or `<x-paper-instance component="Badge" props='{"Status":"Rejeitada"}'/>`; `get_components` lists them |
