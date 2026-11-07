@@ -504,6 +504,8 @@ pub struct Context {
     pub parent_layout: Option<AutoLayout>,
     /// The parent's size (for percentages and right/bottom).
     pub parent_size: Option<(f64, f64)>,
+    /// The caller turns `margin` into layout (see `margin.rs`), so it is not an ignored style.
+    pub margin: bool,
 }
 
 /// What `apply` did besides changing the node.
@@ -1048,6 +1050,7 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
                 }
                 None => false,
             },
+            _ if ctx.margin && k.starts_with("margin") => true,
             "padding" if n.is_frame() => match four(v, fs) {
                 Some(p) => {
                     layout_mut(n).padding = p;
@@ -2133,7 +2136,7 @@ mod tests {
         let a = apply(&mut n, &parse_inline("transform: translate(10px, -4px) rotate(5deg) scale(2); left: 20px"), &Context::default());
         assert_eq!((n.rect.x, n.rect.y), (30.0, -4.0));
         assert_eq!(a.ignored, ["transform: rotate", "transform: scale"]);
-        let ctx = Context { parent_layout: Some(AutoLayout::default()), parent_size: None };
+        let ctx = Context { parent_layout: Some(AutoLayout::default()), parent_size: None, margin: false };
         let a = apply(&mut n, &parse_inline("transform: translateX(8px)"), &ctx);
         assert_eq!(n.rect.x, 30.0);
         assert_eq!(a.ignored.len(), 1, "{:?}", a.ignored);
@@ -2172,6 +2175,7 @@ mod tests {
             &Context {
                 parent_layout: Some(AutoLayout::default()),
                 parent_size: Some((300.0, 300.0)),
+                margin: false,
             },
         );
         assert!(a.ignored.is_empty(), "{:?}", a.ignored);

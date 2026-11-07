@@ -992,7 +992,7 @@ pub fn definitions() -> Vec<Value> {
              narrow for its words (text-collapsed), and hard-coded colors that equal a variable. Run it before \
              finish_working_on_nodes and fix errors and warnings; `info` items are suggestions. \
              Pass `fix: true` to automatically snap spacing/padding to 4px, relink matching color \
-             variables, snap text sizes, and enlarge small touch targets. After the first full pass, \
+             variables, snap text sizes, enlarge small touch targets, bind literal gap, padding, radius and \n             font-size numbers to a number variable with the same value, and apply a text style that \n             matches a text layer exactly. One undo step; the result lists every change in `fixes`. After the first full pass, \
              lint only what you changed: `changedOnly: true` checks the layers changed since this \
              client's last whole-page lint, `since: <rev>` since that revision (every write tool \
              returns `rev`); both add what a change can affect (ancestors, descendants, siblings, \

@@ -8,6 +8,7 @@
 
 use super::css::{self, Context, Styles};
 use super::html::{self, Element, Html};
+use super::margin;
 use super::{Out, ToolResult, tools};
 use crate::editor::{Editor, design};
 use crate::geom::{MAX_ZOOM, MIN_ZOOM, Rect, V2, v2};
@@ -2935,6 +2936,7 @@ impl Parent {
         Context {
             parent_layout: self.layout,
             parent_size: self.size,
+            margin: true,
         }
     }
     /// The cross axis, when children are laid out.
@@ -3342,7 +3344,32 @@ impl Builder<'_, '_> {
         out
     }
 
+    /// An element, with its CSS margin applied around the layer it made.
     fn element(
+        &mut self,
+        el: &Element,
+        inherited: &Styles,
+        parent: &Parent,
+        index: &mut Option<usize>,
+    ) -> Option<NodeId> {
+        let id = self.element_box(el, inherited, parent, index)?;
+        if matches!(el.tag.as_str(), "html" | "body") {
+            return Some(id);
+        }
+        let mut own = ua_styles(&el.tag);
+        own.extend(css::parse_inline(el.attr("style").unwrap_or("")));
+        let fs_of = |st: &Styles| get(st, "fontSize").and_then(|v| css::length(v, 16.0));
+        let fs = fs_of(&own).or_else(|| fs_of(inherited)).unwrap_or(16.0);
+        let mut warn = Vec::new();
+        let margins = margin::parse(&own, fs, &mut warn);
+        self.ignored.extend(warn);
+        let in_flow = parent.layout.is_some() && self.tx.doc().get(id).is_some_and(|n| !n.layout_child.absolute);
+        let Some(m) = margins else { return Some(id) };
+        let far = [get(&own, "right").is_some() && get(&own, "left").is_none(), get(&own, "bottom").is_some() && get(&own, "top").is_none()];
+        Some(margin::apply(self.tx, id, m, parent.id, in_flow, far))
+    }
+
+    fn element_box(
         &mut self,
         el: &Element,
         inherited: &Styles,
@@ -5386,20 +5413,25 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
     let since = a.num("since").filter(|s| *s >= 0.0).map(|s| s as u64);
     let scope = super::incremental::lint_scope(ed, page, &roots, since, a.bool("changedOnly").unwrap_or(false));
     let total: usize = roots.iter().map(|r| ed.page_doc(page).subtree(*r).len()).sum();
-    let fixed = if a.bool("fix").unwrap_or(false) {
+    let fixes: Vec<(NodeId, Vec<String>)> = if a.bool("fix").unwrap_or(false) {
         ed.with_page(page, |ed| {
             ed.edit("Auto-fix design lint", |tx| match &scope.ids {
                 None => super::lint::autofix(tx, &roots, &scale),
                 Some(ids) => {
                     let mut ids: Vec<_> = ids.iter().copied().collect();
                     ids.sort();
-                    ids.into_iter().filter(|id| super::lint::autofix_node(tx, *id, &scale)).count()
+                    ids.into_iter().map(|id| (id, super::lint::autofix_node(tx, id, &scale))).filter(|(_, c)| !c.is_empty()).collect()
                 }
             })
         })
     } else {
-        0
+        Vec::new()
     };
+    let fixed = fixes.len();
+    let applied: Vec<Value> = fixes
+        .iter()
+        .map(|(id, changes)| json!({"node": node_key(ed, page, *id), "name": ed.page_doc(page).get(*id).map(|n| n.name.clone()), "changes": changes}))
+        .collect();
     // The next `changedOnly` lint starts from here. A subtree lint leaves the rest unchecked.
     if whole_page {
         let page_id = ed.pages[page].id.clone();
@@ -5432,7 +5464,7 @@ fn lint_design(ed: &mut Editor, a: &Args) -> ToolResult {
     let checked = scope.ids.as_ref().map_or(total, |ids| ids.len());
     text(json!({
         "errors": count("error"), "warnings": count("warning"), "info": count("info"),
-        "fixedNodes": fixed,
+        "fixedNodes": fixed, "fixes": applied,
         "rev": ed.changes.rev(),
         "covered": {"checked": checked, "total": total, "since": scope.since,
                     "partial": scope.ids.is_some(), "fullPassBecause": scope.fallback},

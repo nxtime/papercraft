@@ -392,7 +392,9 @@ fn margins(e: &mut Element, notes: &mut Vec<String>) {
     let row = is_row(&d);
     let flex = matches!(get(&d, "display"), Some("flex" | "inline-flex"));
     let gap = get(&d, "gap").and_then(|g| g.split_whitespace().next().and_then(px)).unwrap_or(0.0);
-    let kids: Vec<usize> = e.children.iter().enumerate().filter(|(_, c)| matches!(c, Html::Element(_))).map(|(i, _)| i).collect();
+    // An absolute box is out of the flow: its margin offsets it (see `margin.rs`).
+    let in_flow = |k: &Element| !matches!(get(&decls(k), "position"), Some("absolute" | "fixed"));
+    let kids: Vec<usize> = e.children.iter().enumerate().filter(|(_, c)| matches!(c, Html::Element(k) if in_flow(k))).map(|(i, _)| i).collect();
     let m: Vec<_> = kids
         .iter()
         .map(|i| match &e.children[*i] {
@@ -443,8 +445,16 @@ fn margins(e: &mut Element, notes: &mut Vec<String>) {
         kd.retain(|(n, _)| !n.starts_with("margin"));
         if auto(cs) && auto(ce) {
             kd.push(("align-self".into(), "center".into()));
-        } else if len(cs) > 0.0 || len(ce) > 0.0 {
-            notes.push(format!("margins across the flow are dropped (`{}`): pad the parent instead", k.attr("layer-name").unwrap_or(&k.tag)));
+        } else {
+            // The builder lays the rest out as padding around the box and `auto` alignment.
+            let (a, z) = if row { ("top", "bottom") } else { ("left", "right") };
+            for (name, side) in [(a, cs), (z, ce)] {
+                match side {
+                    Some(None) => kd.push((format!("margin-{name}"), "auto".into())),
+                    Some(Some(v)) if v > 0.0 => kd.push((format!("margin-{name}"), format!("{v}px"))),
+                    _ => {}
+                }
+            }
         }
         set_decls(&mut k, &kd);
         out.push(Html::Element(k));
@@ -513,6 +523,13 @@ mod tests {
         assert!(out.contains("<div flex-grow:1></><button >Save"), "auto margin takes the free space: {out}");
         let out = run("<div><p style=\"margin-bottom:8px\">a</p><p style=\"margin-top:24px\">b</p><p>c</p></div>");
         assert!(out.contains("height:24px") && !out.contains("height:8px"), "block margins collapse: {out}");
+    }
+
+    #[test]
+    fn margins_across_the_flow_and_on_absolute_boxes_are_kept_for_the_builder() {
+        let out = run("<div><p style=\"margin:0 12px\">a</p><p style=\"position:absolute;margin-top:6px\">b</p></div>");
+        assert!(out.contains("margin-left:12px") && out.contains("margin-right:12px"), "{out}");
+        assert!(out.contains("margin-top:6px") && !out.contains("Spacer"), "{out}");
     }
 
     #[test]

@@ -489,49 +489,45 @@ fn snap4(v: f64) -> f64 {
 }
 
 /// Apply safe automatic fixes (`spacing-grid`, `hard-coded-color`, `text-size`, `type-scale`,
-/// `touch-target`) to `id` (or all non-instance visible descendants under `roots`).
-/// Returns the number of nodes modified.
-pub fn autofix(tx: &mut crate::history::Tx, roots: &[NodeId], scale: &[f64]) -> usize {
+/// `touch-target`, and the design system's number variables and text styles) to `id` (or all
+/// non-instance visible descendants under `roots`). Returns each modified node with a note per
+/// change.
+pub fn autofix(tx: &mut crate::history::Tx, roots: &[NodeId], scale: &[f64]) -> Vec<(NodeId, Vec<String>)> {
     let mut ids: Vec<NodeId> = Vec::new();
     for r in roots {
         ids.extend(tx.doc().subtree(*r));
     }
-    let mut fixed = 0;
-    for id in ids {
-        if autofix_node(tx, id, scale) {
-            fixed += 1;
-        }
-    }
-    fixed
+    ids.into_iter()
+        .map(|id| (id, autofix_node(tx, id, scale)))
+        .filter(|(_, notes)| !notes.is_empty())
+        .collect()
 }
 
-/// Apply safe automatic fixes to a single node `id`. Returns true if anything changed.
-pub fn autofix_node(tx: &mut crate::history::Tx, id: NodeId, scale: &[f64]) -> bool {
+/// Apply safe automatic fixes to a single node `id`. Returns a note per change (empty when
+/// nothing changed).
+pub fn autofix_node(tx: &mut crate::history::Tx, id: NodeId, scale: &[f64]) -> Vec<String> {
     let Some(n) = tx.doc().get(id).cloned() else {
-        return false;
+        return Vec::new();
     };
     if !n.visible || n.instance.is_some() {
-        return false;
+        return Vec::new();
     }
     let vars = tx.doc().variables.clone();
-    let mut changed = false;
+    let mut notes: Vec<String> = Vec::new();
 
     // 1. Snap off-grid auto-layout spacing/padding to 4px multiples.
     let mut new_layout = n.layout;
     if let Some(l) = &mut new_layout {
-        if off_grid(l.gap) {
-            l.gap = snap4(l.gap);
-            changed = true;
-        }
-        if off_grid(l.cross_gap) {
-            l.cross_gap = snap4(l.cross_gap);
-            changed = true;
-        }
-        for p in &mut l.padding {
-            if off_grid(*p) {
-                *p = snap4(*p);
-                changed = true;
+        let snapped = |label: &str, v: &mut f64, notes: &mut Vec<String>| {
+            if off_grid(*v) {
+                notes.push(format!("{label} {v}px snapped to {}px", snap4(*v)));
+                *v = snap4(*v);
             }
+        };
+        snapped("gap", &mut l.gap, &mut notes);
+        snapped("cross gap", &mut l.cross_gap, &mut notes);
+        for p in &mut l.padding {
+            snapped("padding", p, &mut notes);
         }
     }
 
@@ -543,18 +539,25 @@ pub fn autofix_node(tx: &mut crate::history::Tx, id: NodeId, scale: &[f64]) -> b
             && color.a == 255
             && let Some((name, _)) = vars.iter().find(|(_, v)| **v == *color)
         {
+            notes.push(format!("fill linked to --{name}"));
             *var = Some(name.clone());
-            changed = true;
         }
     }
 
     // Hard-coded borders that equal a color variable get bound to it.
     let stroke_var = hard_stroke(&n, &vars);
-    changed |= stroke_var.is_some();
+    if let Some(v) = &stroke_var {
+        notes.push(format!("border linked to --{v}"));
+    }
 
-    // 3. Snap text size to >= 12px and nearest type-scale value.
+    // 3. A text layer that has exactly a named text style's properties follows the style;
+    // otherwise snap its size to >= 12px and the nearest type-scale value.
     let mut new_kind = n.kind.clone();
-    if let crate::model::NodeKind::Text { font_size, .. } = &mut new_kind {
+    let style_ref = super::lint_ds::matching_text_style(tx.doc(), &n);
+    if let Some(name) = &style_ref {
+        notes.push(format!("text style `{name}` applied"));
+    }
+    if let (crate::model::NodeKind::Text { font_size, .. }, None) = (&mut new_kind, &style_ref) {
         let target = if *font_size < 12.0 {
             scale.iter().copied().find(|s| *s >= 12.0).unwrap_or(12.0)
         } else if !scale.is_empty() && !scale.iter().any(|s| (s - *font_size).abs() < 0.01) {
@@ -567,8 +570,8 @@ pub fn autofix_node(tx: &mut crate::history::Tx, id: NodeId, scale: &[f64]) -> b
             *font_size
         };
         if (target - *font_size).abs() > 0.01 {
+            notes.push(format!("font size {font_size}px snapped to {target}px"));
             *font_size = target;
-            changed = true;
         }
     }
 
@@ -586,20 +589,35 @@ pub fn autofix_node(tx: &mut crate::history::Tx, id: NodeId, scale: &[f64]) -> b
             l.padding[0] = snap4(l.padding[0] + extra);
             l.padding[2] = snap4(l.padding[2] + extra);
         }
+        notes.push(format!("height {}px raised to {min}px", n.rect.h));
         new_h = min;
-        changed = true;
     }
 
-    if changed && let Some(m) = tx.node_mut(id) {
+    // 5. Literal spacing, radius and font size follow the number variable with that value.
+    let fs = match (&new_kind, &style_ref) {
+        (k, None) => k.font_size(),
+        _ => None,
+    };
+    let bound = super::lint_ds::bind_numbers(tx.doc(), &n, new_layout.as_ref(), fs);
+    notes.extend(bound.iter().map(|b| b.note.clone()));
+
+    let style = style_ref.and_then(|name| tx.doc().text_styles.get(&name).cloned().map(|s| (name, s)));
+    if !notes.is_empty() && let Some(m) = tx.node_mut(id) {
         if let Some(v) = stroke_var {
             m.bindings.insert("stroke".into(), v);
+        }
+        for b in bound {
+            m.bindings.insert(b.field.into(), b.token);
         }
         m.layout = new_layout;
         m.style.fills = new_fills;
         m.kind = new_kind;
         m.rect.h = new_h;
+        if let Some((name, s)) = &style {
+            s.apply(name, m);
+        }
     }
-    changed
+    notes
 }
 
 fn join(v: &[f64]) -> String {
@@ -769,13 +787,59 @@ mod tests {
         let mut rec = crate::history::Recording::new("autofix", &doc);
         let mut tx = crate::history::Tx::new(&mut doc, &mut rec);
         let count = autofix(&mut tx, &[id], &DEFAULT_SCALE);
-        assert_eq!(count, 1);
+        assert_eq!(count.len(), 1);
         let fixed = doc.get(id).unwrap();
         assert_eq!(fixed.style.fills[0].var(), Some("accent"));
         let l = fixed.layout.unwrap();
         assert_eq!(l.gap, 12.0);
         assert_eq!(l.padding, [8.0, 16.0, 8.0, 16.0]);
         assert_eq!(fixed.rect.h, 44.0);
+    }
+
+    #[test]
+    fn autofix_binds_numbers_to_variables_and_applies_a_matching_text_style() {
+        use crate::model::{AutoLayout, NodeKind};
+        let mut doc = Document::default();
+        for (k, v) in [("space-md", "16px"), ("radius-md", "16px"), ("font-body", "14px"), ("space-sm", "8px")] {
+            doc.tokens.insert(k.into(), v.into());
+        }
+        doc.tokens.insert("brand".into(), "Inter".into());
+        doc.text_styles.insert("Body".into(), crate::model::TypeStyle { font_size: 14.0, font: None, bold: false, italic: false, line_height: None, letter_spacing: 0.0 });
+        let card = doc.alloc_id();
+        let mut c = Node::new(card, NodeKind::Frame { clip: false }, crate::geom::Rect::new(0.0, 0.0, 200.0, 100.0));
+        c.name = "Card".into();
+        c.style.corner_radius = 16.0;
+        c.layout = Some(AutoLayout { gap: 8.0, padding: [16.0, 8.0, 16.0, 8.0], ..Default::default() });
+        let label = doc.alloc_id();
+        let kind = NodeKind::Text { text: "Hi".into(), font_size: 14.0, auto_width: true, align: Default::default() };
+        let mut t = Node::new(label, kind, crate::geom::Rect::new(0.0, 0.0, 20.0, 18.0));
+        t.name = "Label".into();
+        let big = doc.alloc_id();
+        let kind = NodeKind::Text { text: "Big".into(), font_size: 20.0, auto_width: true, align: Default::default() };
+        let mut b = Node::new(big, kind, crate::geom::Rect::new(0.0, 0.0, 20.0, 18.0));
+        b.name = "Big".into();
+        for k in [&mut t, &mut b] {
+            k.parent = Some(card);
+        }
+        c.children = vec![label, big];
+        for n in [c, t, b] {
+            doc.nodes.insert(n.id, n);
+        }
+        doc.root.push(card);
+
+        let mut rec = crate::history::Recording::new("autofix", &doc);
+        let mut tx = crate::history::Tx::new(&mut doc, &mut rec);
+        let fixes = autofix(&mut tx, &[card], &DEFAULT_SCALE);
+        let notes = |id| fixes.iter().find(|(i, _)| *i == id).map(|(_, n)| n.join("; ")).unwrap_or_default();
+        let card_n = doc.get(card).unwrap();
+        assert_eq!(card_n.bindings.get("gap").map(String::as_str), Some("space-sm"), "the unique 8px token fits a gap: {}", notes(card));
+        assert_eq!(card_n.bindings.get("radius").map(String::as_str), Some("radius-md"));
+        assert_eq!(card_n.bindings.get("padding-top").map(String::as_str), Some("space-md"));
+        assert_eq!(card_n.bindings.get("padding-left").map(String::as_str), Some("space-sm"));
+        let label_n = doc.get(label).unwrap();
+        assert_eq!(label_n.text_style.style_ref.as_deref(), Some("Body"));
+        assert!(!label_n.bindings.contains_key("font-size"), "the style owns the size");
+        assert_eq!(doc.get(big).unwrap().bindings.get("font-size"), None, "no variable holds 20px");
     }
 
     #[test]
