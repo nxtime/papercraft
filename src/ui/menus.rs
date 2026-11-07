@@ -165,7 +165,7 @@ fn align_y(at: f64) -> Icon {
     }
 }
 
-fn bool_icon(op: BoolOp) -> Icon {
+pub(super) fn bool_icon(op: BoolOp) -> Icon {
     match op {
         BoolOp::Union => Icon::Union,
         BoolOp::Subtract => Icon::Subtract,

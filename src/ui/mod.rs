@@ -1901,6 +1901,7 @@ fn node_icon(n: &crate::model::Node) -> Icon {
 fn kind_icon(k: &NodeKind) -> Icon {
     match k {
         NodeKind::Group => Icon::Group,
+        NodeKind::Boolean { op, .. } => crate::ui::menus::bool_icon(*op),
         NodeKind::Connector { .. } => Icon::Arrow,
         NodeKind::Sticky { .. } => Icon::Sticky,
         NodeKind::Path { .. } => Icon::Pen,

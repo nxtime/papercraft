@@ -3,6 +3,7 @@
 //! It consumes platform-agnostic [`InputEvent`]s, so every interaction can be scripted in tests.
 
 pub mod annotations;
+pub mod boolean;
 pub mod breakpoints;
 pub mod changes;
 pub mod commands;
@@ -1233,8 +1234,17 @@ impl Editor {
             self.start_path_edit(target);
             return;
         }
+        // A selected boolean group is entered by double-click, on the operand under the pointer.
+        let mut entered = false;
+        if double
+            && node.is_boolean()
+            && self.selection == [target]
+            && let Some(part) = self.operand_at(target, world)
+        {
+            (target, entered) = (part, true);
+        }
         // Groups and instances capture clicks until entered (double-click or Cmd-click).
-        if !self.mods.command() {
+        if !entered && !self.mods.command() {
             target = self.click_target(target, double);
         }
         // If an ancestor is already selected, keep dragging the ancestor.
@@ -1345,7 +1355,7 @@ impl Editor {
             Gesture::None => {
                 self.hover = if self.tool == Tool::Select {
                     self.label_at(pos)
-                        .or_else(|| hit::hit_test(&self.doc, world, self.camera.zoom))
+                        .or_else(|| self.hit_at(world))
                 } else {
                     None
                 };

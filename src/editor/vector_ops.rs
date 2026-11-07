@@ -11,29 +11,12 @@ use i_overlay::core::fill_rule::FillRule as OvFill;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoolOp {
-    Union,
-    Subtract,
-    Intersect,
-    Exclude,
-}
+pub use crate::model::BoolOp;
 
-impl BoolOp {
-    pub fn label(self) -> &'static str {
-        match self {
-            BoolOp::Union => "Union",
-            BoolOp::Subtract => "Subtract",
-            BoolOp::Intersect => "Intersect",
-            BoolOp::Exclude => "Exclude",
-        }
-    }
-}
+pub(super) type Contours = Vec<Vec<[f64; 2]>>;
 
-type Contours = Vec<Vec<[f64; 2]>>;
-
-/// A node's filled area as world-space polygons.
-pub fn node_contours(doc: &crate::model::Document, id: NodeId) -> Contours {
+/// A shape's (or text's) filled area as world-space polygons, ignoring its children.
+pub(super) fn leaf_contours(doc: &crate::model::Document, id: NodeId) -> Contours {
     let Some(n) = doc.get(id) else { return vec![] };
     let Some(wr) = doc.world_rect(id) else {
         return vec![];
@@ -53,19 +36,6 @@ pub fn node_contours(doc: &crate::model::Document, id: NodeId) -> Contours {
             }
             p
         }
-        NodeKind::Group | NodeKind::Frame { .. } if !n.children.is_empty() => {
-            // Containers contribute their children's union.
-            let mut acc: Contours = Vec::new();
-            for c in &n.children {
-                let cc = node_contours(doc, *c);
-                acc = if acc.is_empty() {
-                    cc
-                } else {
-                    shapes_to_contours(acc.overlay(&cc, OverlayRule::Union, OvFill::NonZero))
-                };
-            }
-            return acc;
-        }
         _ => match draw::shape_path(n, wr) {
             Some(p) => p,
             None => return vec![],
@@ -78,7 +48,7 @@ pub fn node_contours(doc: &crate::model::Document, id: NodeId) -> Contours {
         .collect()
 }
 
-fn shapes_to_contours(s: Vec<Vec<Vec<[f64; 2]>>>) -> Contours {
+pub(super) fn shapes_to_contours(s: Vec<Vec<Vec<[f64; 2]>>>) -> Contours {
     s.into_iter().flatten().collect()
 }
 
@@ -108,7 +78,7 @@ pub fn boolean(op: BoolOp, operands: &[Contours]) -> Contours {
 }
 
 /// Bounds of point lists.
-fn contour_bounds(c: &Contours) -> Option<Rect> {
+pub(super) fn contour_bounds(c: &Contours) -> Option<Rect> {
     let pts: Vec<V2> = c.iter().flatten().map(|p| v2(p[0], p[1])).collect();
     let f = pts.first()?;
     let (mut x0, mut y0, mut x1, mut y1) = (f.x, f.y, f.x, f.y);
@@ -184,75 +154,6 @@ pub enum PointPart {
 const PEN_CLOSE_PX: f64 = 8.0;
 
 impl Editor {
-    /// Boolean-combine the selection into one vector layer.
-    pub fn boolean(&mut self, op: BoolOp) {
-        let mut ids = self.top_selection();
-        if ids.len() < 2 {
-            self.status = "Select two or more layers".into();
-            return;
-        }
-        // Paint order, bottom first.
-        let order = self.doc.paint_order();
-        ids.sort_by_key(|id| order.iter().position(|x| x == id));
-        let operands: Vec<Contours> = ids.iter().map(|id| node_contours(&self.doc, *id)).collect();
-        let result = boolean(op, &operands);
-        let style_from = if op == BoolOp::Subtract {
-            ids[0]
-        } else {
-            *ids.last().unwrap()
-        };
-        let top = *ids.last().unwrap();
-        let parent = self.doc.get(top).and_then(|n| n.parent);
-        let index = self
-            .doc
-            .children(parent)
-            .iter()
-            .position(|x| *x == top)
-            .map(|i| i + 1);
-        let style = self.doc.get(style_from).unwrap().style.clone();
-        let Some(b) = contour_bounds(&result) else {
-            // Empty result (e.g. disjoint intersect): just remove the operands.
-            self.edit(op.label(), |tx| {
-                for id in &ids {
-                    tx.remove(*id);
-                }
-            });
-            self.selection.clear();
-            return;
-        };
-        let id = self.edit(op.label(), |tx| {
-            let o = tx.doc().parent_origin(parent);
-            let nid = tx.alloc_id();
-            let subpaths: Vec<SubPath> = result
-                .iter()
-                .map(|c| SubPath {
-                    points: c
-                        .iter()
-                        .map(|p| PathPoint::corner(v2(p[0], p[1]) - b.min()))
-                        .collect(),
-                    closed: true,
-                })
-                .collect();
-            let mut n = Node::new(
-                nid,
-                NodeKind::Path {
-                    subpaths,
-                    fill_rule: FillRule::EvenOdd,
-                },
-                b.translate(V2::ZERO - o),
-            );
-            n.style = style;
-            n.style.rough = None;
-            n.name = op.label().into();
-            tx.insert(n, parent, index);
-            for id in &ids {
-                tx.remove(*id);
-            }
-            nid
-        });
-        self.selection = vec![id];
-    }
-
     /// Convert selected shapes (and text) to editable vector paths (Cmd+E).
     pub fn flatten_selection(&mut self) {
         let ids: Vec<NodeId> = self
@@ -261,7 +162,12 @@ impl Editor {
             .filter(|id| {
                 self.doc
                     .get(*id)
-                    .is_some_and(|n| !n.is_container() && !matches!(n.kind, NodeKind::Path { .. }))
+                    .is_some_and(|n| match &n.kind {
+                        // An empty result has no outline to keep.
+                        NodeKind::Boolean { subpaths, .. } => !subpaths.is_empty(),
+                        NodeKind::Path { .. } => false,
+                        _ => !n.is_container(),
+                    })
             })
             .collect();
         if ids.is_empty() {
@@ -270,6 +176,18 @@ impl Editor {
         self.edit("Flatten", |tx| {
             for id in ids {
                 let n = tx.doc().get(id).unwrap().clone();
+                if let NodeKind::Boolean { op, subpaths, .. } = &n.kind {
+                    // The group's result is already a path: keep it, drop the operands.
+                    for c in &n.children {
+                        tx.remove(*c);
+                    }
+                    let m = tx.node_mut(id).unwrap();
+                    m.kind = NodeKind::Path { subpaths: subpaths.clone(), fill_rule: FillRule::EvenOdd };
+                    if m.name == op.label() {
+                        m.name = "Vector".into();
+                    }
+                    continue;
+                }
                 let wr = tx.doc().world_rect(id).unwrap();
                 let path = match &n.kind {
                     NodeKind::Text { .. } => {

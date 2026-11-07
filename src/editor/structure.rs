@@ -471,7 +471,11 @@ impl Editor {
         {
             let mut tx = self.tx();
             for g in &groups {
-                layout::normalize_group(&mut tx, *g);
+                if tx.doc().get(*g).is_some_and(|n| n.is_boolean()) {
+                    super::boolean::refresh(&mut tx, *g);
+                } else {
+                    layout::normalize_group(&mut tx, *g);
+                }
             }
             for c in &comps {
                 let instances: Vec<NodeId> = tx
