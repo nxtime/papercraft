@@ -5,6 +5,7 @@ pub mod gpu;
 pub mod headless;
 pub mod layers;
 pub mod mesh;
+pub mod rotate;
 pub mod rough;
 pub mod scene;
 pub mod tess;

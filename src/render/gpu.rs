@@ -507,7 +507,7 @@ impl CanvasRenderer {
             match &it.mark {
                 Some(Mark::Begin(g)) => {
                     open.push((cmds.len(), None));
-                    cmds.push(WorldCmd::Begin(g.clone(), it.clip, g.shape));
+                    cmds.push(WorldCmd::Begin(g.clone(), it.clip, g.outline_bounds()));
                     continue;
                 }
                 Some(Mark::End) => {

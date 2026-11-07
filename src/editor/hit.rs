@@ -1,6 +1,6 @@
 //! Hit testing in world space.
 
-use crate::geom::{Rect, V2, v2};
+use crate::geom::{Rect, V2, rotate_about, v2};
 use crate::ink;
 use crate::model::{Document, NodeId, NodeKind};
 use crate::render::draw;
@@ -12,10 +12,13 @@ const HANDLE_RADIUS_PX: f64 = 7.0;
 
 /// Whether `p` (world) is inside the clip regions of all of the node's ancestors.
 pub fn inside_ancestor_clips(doc: &Document, id: NodeId, p: V2) -> bool {
-    doc.ancestors(id).into_iter().all(|a| {
-        let n = doc.get(a).unwrap();
-        !matches!(n.kind, NodeKind::Frame { clip: true })
-            || doc.world_rect(a).is_some_and(|r| r.contains(p))
+    // From the page down, so each clip is tested in its own unrotated frame.
+    let mut p = p;
+    doc.ancestors(id).into_iter().rev().all(|a| {
+        let Some(n) = doc.get(a) else { return true };
+        let Some(r) = doc.world_rect(a) else { return true };
+        p = rotate_about(p, r.center(), -n.style.rotation);
+        !matches!(n.kind, NodeKind::Frame { clip: true }) || r.contains(p)
     })
 }
 
@@ -26,6 +29,11 @@ pub fn node_contains(doc: &Document, id: NodeId, p: V2, zoom: f64) -> bool {
 
 /// [`node_contains`] with the tolerance for thin geometry given in screen px (a finger needs more).
 pub fn node_contains_slop(doc: &Document, id: NodeId, p: V2, zoom: f64, slop_px: f64) -> bool {
+    shape_contains(doc, id, doc.to_unrotated(id, p, true), zoom, slop_px)
+}
+
+/// [`node_contains_slop`] for a point already in the node's unrotated frame.
+fn shape_contains(doc: &Document, id: NodeId, p: V2, zoom: f64, slop_px: f64) -> bool {
     let Some(n) = doc.get(id) else { return false };
     let Some(r) = doc.world_rect(id) else {
         return false;
@@ -84,12 +92,18 @@ pub fn hit_test(doc: &Document, p: V2, zoom: f64) -> Option<NodeId> {
 
 /// [`hit_test`] with the tolerance for thin geometry given in screen px.
 pub fn hit_test_slop(doc: &Document, p: V2, zoom: f64, slop_px: f64) -> Option<NodeId> {
+    // `p` is carried into each node's unrotated frame on the way down: a rotation turns the
+    // node and everything in it, so the outline that counts is the rotated one.
     fn walk(doc: &Document, ids: &[NodeId], p: V2, zoom: f64, slop_px: f64) -> Option<NodeId> {
         for &id in ids.iter().rev() {
             let Some(n) = doc.get(id) else { continue };
             if !n.visible || n.locked {
                 continue;
             }
+            let p = match doc.world_rect(id) {
+                Some(r) => rotate_about(p, r.center(), -n.style.rotation),
+                None => p,
+            };
             if matches!(n.kind, NodeKind::Frame { clip: true })
                 && !doc.world_rect(id).is_some_and(|r| r.contains(p))
             {
@@ -98,7 +112,7 @@ pub fn hit_test_slop(doc: &Document, p: V2, zoom: f64, slop_px: f64) -> Option<N
             if let Some(hit) = walk(doc, &n.children, p, zoom, slop_px) {
                 return Some(hit);
             }
-            if node_contains_slop(doc, id, p, zoom, slop_px) {
+            if shape_contains(doc, id, p, zoom, slop_px) {
                 return Some(id);
             }
         }

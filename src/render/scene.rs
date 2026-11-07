@@ -2,10 +2,12 @@
 
 use super::draw;
 use super::mesh::{Batch, MeshBuilder};
+use super::rotate::{extend_chain, rotate_pieces, rotated_bounds, rotated_shape};
 use super::tess::{Piece, Tess};
 use crate::editor::{Editor, PresentOverlay, hit, snap::Guide};
 use crate::geom::{Camera, Rect, V2, v2};
 use crate::model::BlendMode;
+use crate::model::rotation::Rot;
 use crate::model::{Color, Document, NodeId, NodeKind, TextAlign};
 use crate::text;
 use lyon::tessellation::{FillRule, LineCap};
@@ -107,6 +109,8 @@ pub enum Mark {
 pub struct Group {
     /// The node's shape, world space: the mask of a rounded clip, the area a background blur shows.
     pub shape: Rect,
+    /// Degrees the shape is turned by around its centre (a rotated node or one inside it).
+    pub angle: f64,
     pub radii: [f64; 4],
     /// Clip the layer to the rounded shape.
     pub mask: bool,
@@ -114,6 +118,14 @@ pub struct Group {
     pub blur: f64,
     pub backdrop_blur: f64,
     pub blend: BlendMode,
+}
+
+impl Group {
+    /// Bounding box of the shape as drawn.
+    pub fn outline_bounds(&self) -> Rect {
+        let c = self.shape.center();
+        rotated_bounds(self.shape, &[Rot { centre: c, deg: self.angle }])
+    }
 }
 
 impl Item {
@@ -130,6 +142,8 @@ struct Entry {
     wr: Rect,
     opacity: f64,
     bucket: i32,
+    /// Rotations the pieces were turned by.
+    chain: Vec<Rot>,
     pieces: Arc<Vec<Piece>>,
     used: bool,
 }
@@ -240,8 +254,9 @@ impl SceneCache {
         for id in roots.unwrap_or(&all) {
             let op = draw::inherited_opacity(doc, *id);
             let origin = doc.parent_origin(doc.get(*id).and_then(|n| n.parent));
+            let chain = doc.rotation_chain(*id, false);
             self.walk(
-                doc, *id, origin, None, op, bucket, &mut tess, cull, &mut out,
+                doc, *id, origin, None, op, &chain, bucket, &mut tess, cull, &mut out,
             );
         }
         // Evict entries for deleted or long-unseen nodes when the cache grows large.
@@ -264,7 +279,8 @@ impl SceneCache {
         out.push(Item::plain(dim.id, pieces, None, BlendMode::default()));
         let origin = doc.parent_origin(doc.get(o.id).and_then(|n| n.parent)) + o.shift;
         let opacity = draw::inherited_opacity(doc, o.id);
-        self.walk(doc, o.id, origin, Some(o.window), opacity, bucket, &mut tess, None, &mut out);
+        let chain = doc.rotation_chain(o.id, false);
+        self.walk(doc, o.id, origin, Some(o.window), opacity, &chain, bucket, &mut tess, None, &mut out);
         out
     }
 
@@ -277,17 +293,21 @@ impl SceneCache {
         origin: V2,
         clip: Option<Rect>,
         parent_opacity: f64,
+        parent_chain: &[Rot],
         bucket: i32,
         tess: &mut Tess,
         cull: Option<Rect>,
         out: &mut Vec<Item>,
     ) {
         let Some(n) = doc.get(id) else { return };
+        let chain = extend_chain(parent_chain, n.style.rotation, &n.rect.translate(origin));
         let blurs = n.style.blur > 0.0 || n.style.backdrop_blur > 0.0;
         let begin = out.len();
         if blurs {
+            let (shape, angle) = rotated_shape(n.rect.translate(origin), &chain);
             let g = Group {
-                shape: n.rect.translate(origin),
+                shape,
+                angle,
                 radii: shape_radii(n),
                 mask: false,
                 blur: n.style.blur.max(0.0),
@@ -296,7 +316,7 @@ impl SceneCache {
             };
             out.push(Item::mark(id, clip, Mark::Begin(Arc::new(g))));
         }
-        self.walk_node(doc, id, origin, clip, parent_opacity, bucket, tess, cull, out, blurs);
+        self.walk_node(doc, id, origin, clip, parent_opacity, &chain, bucket, tess, cull, out, blurs);
         if blurs {
             end_group(out, begin, id, clip, n.style.backdrop_blur > 0.0);
         }
@@ -310,6 +330,7 @@ impl SceneCache {
         origin: V2,
         clip: Option<Rect>,
         parent_opacity: f64,
+        chain: &[Rot],
         bucket: i32,
         tess: &mut Tess,
         cull: Option<Rect>,
@@ -322,7 +343,7 @@ impl SceneCache {
         }
         let wr = n.rect.translate(origin);
         let opacity = parent_opacity * n.style.opacity;
-        let bounds = draw::draw_bounds(n, wr);
+        let bounds = rotated_bounds(draw::draw_bounds(n, wr), chain);
         let visible = cull.is_none_or(|c| c.intersects(&bounds))
             && clip.is_none_or(|c| c.intersects(&bounds));
         // Level of detail: a layer under half a pixel at this bucket shows as nothing, so it
@@ -330,18 +351,19 @@ impl SceneCache {
         let tiny = bounds.w.max(bounds.h) * 2f64.powi(bucket) < MIN_SCREEN_PX;
         if visible && !tiny && !n.is_group() {
             let hit = self.entries.get(&id).is_some_and(|e| {
-                e.bucket == bucket && e.wr == wr && e.opacity == opacity
+                e.bucket == bucket && e.wr == wr && e.opacity == opacity && e.chain == chain
             });
             if !hit {
                 self.last_misses += 1;
                 let d = draw::node_draw(n, wr, opacity);
-                let pieces = Arc::new(tess.ops(&d.ops));
+                let pieces = Arc::new(rotate_pieces(tess.ops(&d.ops), chain));
                 self.entries.insert(
                     id,
                     Entry {
                         wr,
                         opacity,
                         bucket,
+                        chain: chain.to_vec(),
                         pieces,
                         used: true,
                     },
@@ -355,8 +377,10 @@ impl SceneCache {
                 let own_layer = !grouped && !n.style.blend.fixed_function();
                 let blend = if grouped || own_layer { BlendMode::Normal } else { n.style.blend };
                 if own_layer {
+                    let (shape, angle) = rotated_shape(wr, chain);
                     let g = Group {
-                        shape: wr,
+                        shape,
+                        angle,
                         radii: shape_radii(n),
                         mask: false,
                         blur: 0.0,
@@ -376,7 +400,8 @@ impl SceneCache {
         }
         let child_clip = match n.kind {
             NodeKind::Frame { clip: true } => {
-                match clip.map_or(Some(wr), |c| c.intersection(&wr)) {
+                let outline = rotated_bounds(wr, chain);
+                match clip.map_or(Some(outline), |c| c.intersection(&outline)) {
                     Some(c) => Some(c),
                     None => return,
                 }
@@ -384,35 +409,38 @@ impl SceneCache {
             _ => clip,
         };
         if matches!(n.kind, NodeKind::Frame { clip: true })
-            && cull.is_some_and(|c| !c.intersects(&wr))
+            && cull.is_some_and(|c| !c.intersects(&rotated_bounds(wr, chain)))
         {
             return;
         }
         let o = wr.min() - crate::geom::v2(0.0, n.scroll_y);
         // Rounded corners cannot be a scissor: the children go to a layer masked by the shape.
         let radii = shape_radii(n);
-        let masked = matches!(n.kind, NodeKind::Frame { clip: true }) && radii.iter().any(|r| *r > 0.0);
+        // A rotated frame cannot be a scissor either.
+        let masked = matches!(n.kind, NodeKind::Frame { clip: true })
+            && (radii.iter().any(|r| *r > 0.0) || !chain.is_empty());
         let begin = out.len();
         if masked {
-            let g = Group { shape: wr, radii, mask: true, blur: 0.0, backdrop_blur: 0.0, blend: BlendMode::Normal };
+            let (shape, angle) = rotated_shape(wr, chain);
+            let g = Group { shape, angle, radii, mask: true, blur: 0.0, backdrop_blur: 0.0, blend: BlendMode::Normal };
             out.push(Item::mark(id, child_clip, Mark::Begin(Arc::new(g))));
         }
         for c in &n.children {
             // Absolute children of a scrolled frame stay put (`Document::world_rect`).
             let pinned = doc.get(*c).is_some_and(|k| k.layout_child.absolute);
             let co = if pinned { wr.min() } else { o };
-            self.walk(doc, *c, co, child_clip, opacity, bucket, tess, cull, out);
+            self.walk(doc, *c, co, child_clip, opacity, chain, bucket, tess, cull, out);
         }
         if masked {
             end_group(out, begin, id, child_clip, false);
         }
         if visible && draw::border_on_top(n) {
-            let hit = self.borders.get(&id).is_some_and(|e| e.bucket == bucket && e.wr == wr && e.opacity == opacity);
+            let hit = self.borders.get(&id).is_some_and(|e| e.bucket == bucket && e.wr == wr && e.opacity == opacity && e.chain == chain);
             if !hit {
                 self.last_misses += 1;
                 let d = draw::border_draw(n, wr, opacity);
-                let pieces = Arc::new(tess.ops(&d.ops));
-                self.borders.insert(id, Entry { wr, opacity, bucket, pieces, used: true });
+                let pieces = Arc::new(rotate_pieces(tess.ops(&d.ops), chain));
+                self.borders.insert(id, Entry { wr, opacity, bucket, chain: chain.to_vec(), pieces, used: true });
             }
             let e = &self.borders[&id];
             if !e.pieces.is_empty() {
