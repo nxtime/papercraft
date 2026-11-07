@@ -24,11 +24,22 @@ fn px_tokens(tokens: &BTreeMap<String, String>) -> Vec<(&str, f64)> {
         .collect()
 }
 
-/// The variable holding `value`: one whose name fits the field, else the only one with that value.
+const HINT_GROUPS: [&[&str]; 3] = [&SPACING_HINTS, &RADIUS_HINTS, &FONT_HINTS];
+
+fn fits(name: &str, hints: &[&str]) -> bool {
+    let name = name.to_lowercase();
+    hints.iter().any(|h| name.contains(h))
+}
+
+/// The variable holding `value`: one whose name fits the field, else the only one with that value
+/// whose name points at no kind of field, so a gap never follows `radius-sm` because both are 8px.
 fn pick<'a>(tokens: &[(&'a str, f64)], value: f64, hints: &[&str]) -> Option<&'a str> {
     let same: Vec<&str> = tokens.iter().filter(|(_, v)| (v - value).abs() < 1e-6).map(|(k, _)| *k).collect();
-    let hinted = same.iter().find(|k| hints.iter().any(|h| k.to_lowercase().contains(h)));
-    hinted.copied().or_else(|| (same.len() == 1).then(|| same[0]))
+    if let Some(k) = same.iter().find(|k| fits(k, hints)) {
+        return Some(k);
+    }
+    let neutral: Vec<&str> = same.into_iter().filter(|k| !HINT_GROUPS.iter().any(|g| fits(k, g))).collect();
+    (neutral.len() == 1).then(|| neutral[0])
 }
 
 /// Number variables for the literal gap, padding, radius and font size of `n` (its layout as
@@ -86,4 +97,20 @@ pub fn matching_text_style(doc: &Document, n: &Node) -> Option<String> {
                 && (s.letter_spacing - ts.letter_spacing).abs() < 1e-6
         })
         .map(|(name, _)| name.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_lone_variable_of_another_kind_is_not_borrowed() {
+        let only_radius = [("radius-sm", 8.0)];
+        assert_eq!(pick(&only_radius, 8.0, &SPACING_HINTS), None, "a gap never follows radius-sm");
+        assert_eq!(pick(&only_radius, 8.0, &RADIUS_HINTS), Some("radius-sm"));
+        let neutral = [("radius-sm", 8.0), ("size-2", 8.0)];
+        assert_eq!(pick(&neutral, 8.0, &SPACING_HINTS), Some("size-2"), "a neutral name still fits");
+        let both = [("radius-sm", 8.0), ("space-2", 8.0)];
+        assert_eq!(pick(&both, 8.0, &SPACING_HINTS), Some("space-2"));
+    }
 }
