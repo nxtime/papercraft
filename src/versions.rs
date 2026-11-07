@@ -123,6 +123,23 @@ pub fn load(project: &Path, id: &str) -> Option<Document> {
     Some(f.doc)
 }
 
+/// What changed from saved version `a` to version `b`, or to `live` (the page as it is now) when
+/// `b` is `None`. Returns the earlier document too: the canvas ghosts removed layers from it.
+/// Reads only; nothing is written to the project or the page.
+pub fn compare(
+    project: &Path,
+    a: &str,
+    b: Option<&str>,
+    live: &Document,
+) -> Option<(Document, crate::mcp::diff::PageDiff)> {
+    let before = load(project, a)?;
+    let diff = match b {
+        Some(b) => crate::mcp::diff::diff_pages(&before, &load(project, b)?),
+        None => crate::mcp::diff::diff_pages(&before, live),
+    };
+    Some((before, diff))
+}
+
 /// Renames a saved version in place.
 pub fn rename(project: &Path, id: &str, name: &str) -> std::io::Result<()> {
     let path = file_of(project, id);
@@ -138,6 +155,30 @@ pub fn delete(project: &Path, id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compare_pairs_two_versions_and_the_live_page() {
+        let dir =
+            std::env::temp_dir().join(format!("papercraft-versions-{:016x}", fastrand::u64(..)));
+        let mut doc = Document::default();
+        let a = save(&dir, "p1", "A", false, &doc).unwrap();
+        let frame = doc.alloc_id();
+        let n = crate::model::Node::new(
+            frame,
+            crate::model::NodeKind::Frame { clip: true },
+            crate::geom::Rect::new(0.0, 0.0, 320.0, 200.0),
+        );
+        doc.nodes.insert(frame, n);
+        doc.children_mut(None).unwrap().push(frame);
+        let b = save(&dir, "p1", "B", false, &doc).unwrap();
+        let (_, d) = compare(&dir, &a.id, Some(&b.id), &doc).unwrap();
+        assert_eq!(d.added, 1);
+        let (before, d) = compare(&dir, &b.id, None, &Document::default()).unwrap();
+        assert_eq!((d.removed, before.root.len()), (1, 1));
+        assert_eq!(d.groups[0].frame, frame);
+        assert!(compare(&dir, "missing", None, &doc).is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn versions_round_trip_and_list_newest_first() {

@@ -425,6 +425,13 @@ pub struct Node {
     /// the other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_action: Option<super::LinkAction>,
+    /// The link fires while the pointer is over the layer (and undoes itself on leaving) instead
+    /// of on click. Only frame jumps and overlays can be hover links.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub link_hover: bool,
+    /// A frame jump tweens layers that share a name between the two frames instead of gliding.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub link_smart: bool,
     /// Variable bindings by field name (`stroke`, `text-color`, `width`, `height`, `gap`,
     /// `padding`, `padding-top`/`right`/`bottom`/`left`, `radius`, `font-size`, `line-height`,
     /// `opacity`, `visible`) mapped to the variable's CSS name.
@@ -607,6 +614,8 @@ impl Node {
             comments: Vec::new(),
             link: None,
             link_action: None,
+            link_hover: false,
+            link_smart: false,
             bindings: BTreeMap::new(),
             component_key: None,
             code: None,

@@ -33,7 +33,10 @@ const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v, |v| v, |v| v];
 /// older app would drop either on save, so it must refuse the page.
 /// v5: layers can carry accessibility annotations (`a11y`). v6: named text styles (`text_styles`,
 /// a layer's `style_ref`). An older app would drop either on save.
-pub const PAGE_VERSION: u32 = 6;
+/// v7: prototype links can fire on hover (`link_hover`) and tween matching layers
+/// (`link_smart`); an older app would turn them into plain click links on save.
+pub const PAGE_VERSION: u32 = 7;
+const PAGE_V6: u32 = 6;
 const PAGE_V5: u32 = 5;
 /// What a page that uses nothing newer is saved as, so a newer app does not lock older ones out
 /// of pages it merely touched (see [`page_version`]).
@@ -45,14 +48,20 @@ fn needs_v4(nodes: &[Node]) -> bool {
     nodes.iter().any(|n| n.text_style.font.is_some() || n.link_action.is_some())
 }
 
+fn needs_v7(nodes: &[Node]) -> bool {
+    nodes.iter().any(|n| n.link_hover || n.link_smart)
+}
+
 fn needs_v6(doc: &Document) -> bool {
     !doc.text_styles.is_empty() || doc.nodes.values().any(|n| n.text_style.style_ref.is_some())
 }
 
 /// The version a page is written as: the oldest one that can hold everything in it.
 fn page_version(doc: &Document, nodes: &[Node]) -> u32 {
-    if needs_v6(doc) {
+    if needs_v7(nodes) {
         PAGE_VERSION
+    } else if needs_v6(doc) {
+        PAGE_V6
     } else if nodes.iter().any(|n| n.a11y.is_some()) {
         PAGE_V5
     } else if needs_v4(nodes) {
@@ -198,7 +207,7 @@ struct PageFile {
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
-const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v, |v| v];
+const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v, |v| v, |v| v];
 /// Formats accepted as older versions of a page.
 const PAGE_ALIASES: &[&str] = &[LEGACY_FORMAT];
 
@@ -287,7 +296,7 @@ fn is_current_page(s: &str) -> bool {
         version: Option<u32>,
     }
     serde_json::from_str::<Head>(s)
-        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | PAGE_V5 | PAGE_V4 | PAGE_BASE_VERSION)))
+        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | PAGE_V6 | PAGE_V5 | PAGE_V4 | PAGE_BASE_VERSION)))
 }
 
 fn page_from_file(mut f: PageFile) -> Result<(PageData, PageModes), FormatError> {
@@ -520,6 +529,22 @@ mod tests {
         let json = page_to_json(&p);
         assert!(json.contains("\"version\":6"));
         assert_eq!(page_from_json(&json).unwrap().doc.text_styles["Heading / L"], st);
+    }
+
+    #[test]
+    fn hover_and_smart_links_make_a_v7_page_and_roundtrip() {
+        let v6 = r#"{"format":"paper-rs-page","version":6,"id":"a","name":"P","next_id":2,"root":[1],"nodes":[
+            {"id":1,"name":"T","type":"rect","rect":{"x":0,"y":0,"w":5,"h":5},"link":1}]}"#;
+        let mut p = page_from_json(v6).unwrap();
+        let n = p.doc.get(NodeId(1)).unwrap();
+        assert!(!n.link_hover && !n.link_smart, "an older page keeps clicking and gliding");
+        assert!(page_to_json(&p).contains("\"version\":3"), "nothing new: old format");
+        let n = p.doc.nodes.get_mut(&NodeId(1)).unwrap();
+        (n.link_hover, n.link_smart) = (true, true);
+        let json = page_to_json(&p);
+        assert!(json.contains("\"version\":7"));
+        let back = page_from_json(&json).unwrap();
+        assert!(back.doc.get(NodeId(1)).unwrap().link_hover && back.doc.get(NodeId(1)).unwrap().link_smart);
     }
 
     #[test]

@@ -546,7 +546,32 @@ fn prototype_tab(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId]) {
             apply(ed, "link", ids, |n| {
                 n.link = v;
                 n.link_action = None;
+                // Without a frame link there is nothing to fire early or to tween.
+                if v.is_none() {
+                    n.link_hover = false;
+                    n.link_smart = false;
+                }
             });
+        }
+    });
+    // A hover trigger and a smart transition belong to a frame link or an overlay.
+    let opens = first.link.is_some() || matches!(first.link_action, Some(crate::model::LinkAction::Overlay { .. }));
+    if !opens {
+        return;
+    }
+    let triggers = [(false, "On click"), (true, "While hovering")];
+    row(ui, "Trigger", |ui| {
+        if let Some(v) = combo(ui, "link-trigger", first.link_hover, &triggers, 140.0) {
+            apply(ed, "link trigger", ids, |n| n.link_hover = v);
+        }
+    });
+    if first.link.is_none() {
+        return;
+    }
+    let transitions = [(false, "Glide"), (true, "Smart (match layer names)")];
+    row(ui, "Transition", |ui| {
+        if let Some(v) = combo(ui, "link-transition", first.link_smart, &transitions, 140.0) {
+            apply(ed, "link transition", ids, |n| n.link_smart = v);
         }
     });
 }

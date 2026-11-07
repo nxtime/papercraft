@@ -104,8 +104,8 @@ It is an alpha. It is good for building screens, design systems and sketches, an
 </table>
 
 **Prototyping and review**
-* Prototype links between frames and a **Present** mode that follows them with a camera glide.
-* **Version history:** named and automatic saved versions per page; rename, restore, delete.
+* Prototype links between frames and a **Present** mode that follows them with a camera glide, hover links and smart transitions.
+* **Version history:** named and automatic saved versions per page; rename, restore, delete, compare two versions or one against the current page.
 * **Agent runs:** editing tool calls group into a run. PaperCraft saves an auto-version before the first edit, lists the run, and lets you review it (added, changed and removed layers, outlined on the canvas), revert one change, revert the whole run or accept it.
 * **Comments** on the canvas.
 

@@ -46,7 +46,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 23 | Prototyping links and flows | **done** | Prototype tab in the inspector; Present mode follows links with a camera glide. Smart transitions and hover states todo. |
+| 23 | Prototyping links and flows | **done** | Prototype tab in the inspector; Present mode follows links with a camera glide. While-hovering links (reverted on leave) and smart transitions (layers with the same name tween position, size, opacity and fill) are in; pressed states for components todo. |
 | 24 | Responsive constraints and breakpoint preview | partial | Constraints exist in the editor; `export_site` merges frames named `Home @mobile` or `Home @768` into one page with media queries. No breakpoint preview in the editor. |
 | 25 | Shadows, blur and effects | partial | Drop shadow is an inspector effect. Layer and background blur todo (needs a renderer pass). |
 | 26 | Margin and grid layout | partial | Wrapped-line cross alignment, per-line fill/align, and `layout_grid` track layout (`src/layout.rs`) implemented; CSS margin still ignored. |
@@ -60,7 +60,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 32 | Version history | **done** | Named and automatic saved versions per page: rename, restore, delete (`src/versions.rs`). Restore now includes variables and tokens; compare todo. |
+| 32 | Version history | **done** | Named and automatic saved versions per page: rename, restore, delete (`src/versions.rs`). Restore now includes variables and tokens; right-click a version to compare it with the current page, or pick two versions (read-only, list only for two saved versions). |
 | 33 | Figma import | **done** | `.fig` binary (Kiwi wire decoder + zip container) and Figma REST API JSON import in `src/io/fig.rs`. |
 | 34 | Multiplayer and cloud sync | partial | Optional shared projects through the relay, with merge of concurrent edits to one page. Presence (cursors, selections) todo. Stays optional. |
 | 35 | Release builds for Windows and Linux | **done** | Releases ship Windows (MSI and portable zip), macOS and Linux builds. |
@@ -80,7 +80,7 @@ Spec: [specs/agent-runs/spec.md](specs/agent-runs/spec.md), tasks: [specs/agent-
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 39 | Agent runs and auto-versions | **done** | Editing calls group into runs; edited pages get auto-versions; runs persist, revert per page, and prune to 50. |
-| 40 | Review agent changes | **done** | Id-paired diff, grouped review, canvas overlay, per-change revert and accept all; version compare UI remains todo. |
+| 40 | Review agent changes | **done** | Id-paired diff, grouped review, canvas overlay, per-change revert and accept all; version compare reuses the same diff and overlay. |
 | 41 | Agent presence on the canvas | partial | Layers an agent touches get a fading outline and a cursor labelled with the verb and client; the chat can stop its own run. Pausing an external MCP client is todo. |
 | 42 | `get_context` tool | **done** | Selection, outline with token estimates, variables, components and lint summary in one call, so an agent orients in one round trip. Big reads take `maxTokens` and report `estimatedTokens` and `truncated`. |
 | 43 | Comments assigned to agents | todo | `@agent` in a thread triggers an edit and a reply. Needs threaded comments. |
