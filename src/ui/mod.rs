@@ -15,6 +15,7 @@ pub mod chat_msgs;
 pub mod compare;
 pub mod confirm;
 pub mod design;
+pub mod breakpoint;
 pub mod help_sheet;
 pub mod home;
 pub mod inspector;
@@ -1091,6 +1092,7 @@ fn overlays(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect, 
     if st.show_help {
         help_sheet::show(ui.ctx(), st, canvas);
     }
+    breakpoint::show(ui.ctx(), ed, st, canvas);
     settings::show(ui.ctx(), ed, st);
     canvas_prefs::sync(ed, st);
     variables::show(ui.ctx(), ed, st);

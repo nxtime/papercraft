@@ -753,6 +753,12 @@ impl App {
                     self.export(spec);
                 }
                 AppRequest::Export(spec) => self.export(spec),
+                AppRequest::PreviewBreakpoint => {
+                    let Some(gpu) = self.offscreen() else {
+                        continue;
+                    };
+                    self.ed.render_breakpoint(&gpu);
+                }
                 AppRequest::CopyAsPng => {
                     let roots = self.export_roots();
                     let Some(gpu) = self.offscreen() else {

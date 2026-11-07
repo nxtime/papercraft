@@ -675,6 +675,10 @@ impl Web {
                 AppRequest::ExportFormat(f) => self.export_format(f),
                 AppRequest::Export(spec) => self.export(spec),
                 AppRequest::CopyAsPng => self.copy_as_png(),
+                AppRequest::PreviewBreakpoint => {
+                    self.ed.status = "Breakpoint preview needs the desktop app".into();
+                    self.ed.breakpoint = None;
+                }
             }
         }
     }

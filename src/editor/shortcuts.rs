@@ -79,6 +79,7 @@ pub enum Action {
     ExportPresentation,
     CopyAsPng,
     CopyAsSvg,
+    BreakpointPreview,
 }
 
 impl Action {
@@ -444,6 +445,7 @@ pub fn category(a: Action) -> &'static str {
         | A::TogglePanels
         | A::ToggleChat
         | A::ToggleHelp
+        | A::BreakpointPreview
         | A::NextPage
         | A::PrevPage => "View",
         A::Bold | A::Italic | A::Underline | A::Strikethrough => "Text",
@@ -626,6 +628,7 @@ pub fn menus() -> Vec<(&'static str, Vec<MenuEntry>)> {
                 I("Snapping", A::ToggleSnapping),
                 I("Dot Grid", A::ToggleGrid),
                 I("Annotations", A::ToggleAnnotations),
+                I("Breakpoint Preview", A::BreakpointPreview),
                 I("Show/Hide UI", A::ToggleUi),
                 I("Show/Hide Panels", A::TogglePanels),
                 I("Design / Chat Mode", A::ToggleChat),
@@ -681,7 +684,7 @@ mod tests {
                             // Delete is bound to the Delete key; everything should be reachable.
                             assert!(
                                 super::chord_of(*a).is_some()
-                                    || matches!(a, super::Action::ExportSvg | super::Action::ExportPresentation),
+                                    || matches!(a, super::Action::ExportSvg | super::Action::ExportPresentation | super::Action::BreakpointPreview),
                                 "{label} has no shortcut"
                             );
                         }

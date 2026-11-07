@@ -3,6 +3,7 @@
 //! It consumes platform-agnostic [`InputEvent`]s, so every interaction can be scripted in tests.
 
 pub mod annotations;
+pub mod breakpoints;
 pub mod changes;
 pub mod commands;
 pub mod design;
@@ -128,6 +129,8 @@ pub enum AppRequest {
     ExportFormat(crate::io::export::Format),
     /// Render the selection and put the PNG on the clipboard.
     CopyAsPng,
+    /// Render the breakpoint preview again (frame and width are in `Editor::breakpoint`).
+    PreviewBreakpoint,
     /// Back to the projects home screen.
     Home,
     New,
@@ -244,6 +247,8 @@ pub struct Editor {
     pub marquee: Option<Rect>,
     /// The overlay Present mode has open, if any.
     pub present_overlay: Option<PresentOverlay>,
+    /// The open breakpoint preview window, if any.
+    pub breakpoint: Option<breakpoints::Preview>,
     pub hover: Option<NodeId>,
     pub pointer: V2,
     pub ink_width: f64,
@@ -365,6 +370,7 @@ impl Editor {
             guides: Vec::new(),
             marquee: None,
             present_overlay: None,
+            breakpoint: None,
             hover: None,
             pointer: V2::ZERO,
             ink_width: 3.0,
@@ -2229,6 +2235,7 @@ impl Editor {
                 .push(AppRequest::ExportFormat(crate::io::export::Format::Presentation)),
             A::CopyAsPng => self.requests.push(AppRequest::CopyAsPng),
             A::CopyAsSvg => self.copy_as_svg(),
+            A::BreakpointPreview => self.open_breakpoint_preview(),
             A::ToggleSnapping => {
                 self.snapping = !self.snapping;
                 self.status = format!("Snapping {}", if self.snapping { "on" } else { "off" });
