@@ -853,7 +853,7 @@ pub fn definitions() -> Vec<Value> {
              the first installed family in the list, Inter by default.\n\
              - Boxes: background(-color/-image: colors, linear/radial gradients, url()), border \
              (and border-top/right/bottom/left), border-radius, opacity, overflow:hidden, \
-             mix-blend-mode, width/height (px, %, fit-content), min-width/max-width/min-height/max-height.\n\
+             mix-blend-mode, filter: blur(), backdrop-filter: blur(), width/height (px, %, fit-content), min-width/max-width/min-height/max-height.\n\
              - <img src> takes paper-asset:///abs/path, file:// URLs, absolute paths, data: URIs or public http(s) URLs (PNG, JPEG, GIF or WebP up to 10 MB; \
              private and loopback addresses are refused and a failed download is a warning). \
              <svg> markup is imported as vector layers.\n\
@@ -1596,12 +1596,12 @@ flex-wrap, gap, row-gap, column-gap, padding*, justify-content, align-items,
 align-self (start, center, end, stretch), flex-grow, overflow, background, background-color,
 background-image (url(), linear-gradient(), radial-gradient()), background-size/object-fit,
 border, border-top/border-right/border-bottom/border-left, border-color/width/style,
-border-radius (1–4 values), opacity, mix-blend-mode, color, font-size, font-weight, font-style,
+border-radius (1–4 values), opacity, mix-blend-mode, filter: blur(), backdrop-filter: blur(), color, font-size, font-weight, font-style,
 line-height, letter-spacing, text-align, text-decoration (including `text-decoration-color` and
 `text-decoration-style: wavy`, e.g. `text-decoration: underline wavy var(--warning)`).
 Rewritten (reported in warnings): margin (gaps or spacers; `auto` pushes), display:grid (rows
 of cells; fr tracks grow), inline boxes (chips), <input>/<textarea> (a box with its placeholder).
-Ignored (reported back): box-shadow, transform, filters, transitions.";
+Ignored (reported back): box-shadow, transform, filter functions other than blur, transitions.";
 
 pub const GUIDE_WHITEBOARD: &str = "\
 # Whiteboard elements

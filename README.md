@@ -46,7 +46,7 @@ It is an alpha. It is good for building screens, design systems and sketches, an
 ## Features
 
 **Canvas and layout**
-* Frames with clipping, groups, vector shapes with the Pen and Bézier editing, boolean operations, gradients, image fills, strokes, per-corner radii, opacity and blend modes, drop shadows, rich text, smart guides, measurements, align and distribute.
+* Frames with clipping, groups, vector shapes with the Pen and Bézier editing, boolean operations, gradients, image fills, strokes, per-corner radii, opacity and blend modes, drop shadows, layer and background blur, rich text, smart guides, measurements, align and distribute.
 * Auto layout (direction, gap, padding, hug, fill, wrap, space-between) and constraints.
 * A layers tree you can drag to reorder or re-parent, an inspector with Design and Prototype tabs, and a command palette over every action, page and layer (⌘K).
 * Whiteboard mode: hand-drawn (rough.js-style) shapes, arrows bound to shapes, elbow connectors, sticky notes, freehand ink and a laser pointer on the same canvas.
@@ -277,7 +277,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 
 * **No rotation.** Nodes are axis-aligned boxes; rotated imports are baked into paths.
 * **Text** is Inter only, with no shaping (no ligatures, complex scripts or RTL) and no font picker. IME preedit is not displayed.
-* **Rendering approximations.** Frame clipping is a rectangle, so rounded frames do not clip their corners. Overlay, dodge, burn, light, difference, exclusion and the HSL blend modes draw as Normal on the canvas (they are exact in SVG and PDF export). There is no layer or background blur yet.
+* **Rendering approximations.** Layer and background blur, rounded frame clips and the backdrop blend modes draw through offscreen layers, nested three deep; a deeper group draws into its parent without its blur, mask or blend. PDF export drops blurs.
 * **Variables:** gradients keep fixed colors, and there are no text styles (named type styles that update every text layer).
 * **Components:** properties (text, bool, icon, enum) and `merge_variants` cover variants, but there are no variant sets with several axes, and no responsive per-breakpoint variants or breakpoint preview.
 * **Prototyping:** links and flows work in Present mode; smart transitions and hover states do not exist yet.
