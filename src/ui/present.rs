@@ -253,7 +253,7 @@ pub fn start_present(ed: &mut Editor, st: &mut UiState) {
 }
 
 fn exit_present(ed: &mut Editor, st: &mut UiState) {
-    finish_tween(ed, st);
+    finish_tween(st);
     st.present = false;
     ed.present_overlay = None;
     if let Some(t) = st.present_nav.prev_tool.take() {
@@ -264,7 +264,7 @@ fn exit_present(ed: &mut Editor, st: &mut UiState) {
 /// Shows the current frame. `smart_from`: the frame left, whose same-named layers tween into
 /// this one in place of the camera glide.
 fn show_present_frame(ed: &mut Editor, st: &mut UiState, smart_from: Option<NodeId>) {
-    finish_tween(ed, st);
+    finish_tween(st);
     // The glide skips sync_overlay, which would leave a closed overlay drawn until it ends.
     ed.present_overlay = None;
     let frames = present_frames(ed);
@@ -283,7 +283,6 @@ fn show_present_frame(ed: &mut Editor, st: &mut UiState, smart_from: Option<Node
         // The layers carry the motion, so the camera cuts.
         st.present_glide = None;
         st.present_glide_ready = true;
-        apply_tween(ed, &pairs, 0.0);
         st.present_tween = Some((pairs, web_time::Instant::now()));
         return;
     }
@@ -295,32 +294,39 @@ fn show_present_frame(ed: &mut Editor, st: &mut UiState, smart_from: Option<Node
     st.present_glide_ready = true;
 }
 
-fn apply_tween(ed: &mut Editor, pairs: &[smart::Pair], t: f64) {
-    let touched = smart::apply(&mut ed.doc, pairs, t);
-    ed.mark(crate::editor::Changed::Nodes(touched.into()));
+/// Drops a running smart transition. The document never holds the tween outside a paint, so
+/// there is nothing to put back.
+fn finish_tween(st: &mut UiState) {
+    st.present_tween = None;
 }
 
-/// Puts the document back as it is and drops a running smart transition.
-fn finish_tween(ed: &mut Editor, st: &mut UiState) {
-    if let Some((pairs, _)) = st.present_tween.take() {
-        apply_tween(ed, &pairs, 1.0);
-    }
-}
-
-fn step_present_tween(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
+fn step_present_tween(ctx: &egui::Context, st: &mut UiState) {
     let Some((_, start)) = &st.present_tween else { return };
-    let t = (start.elapsed().as_secs_f32() / smart::SMART_SECS).min(1.0);
-    if t >= 1.0 || !motion::enabled(ctx) {
-        finish_tween(ed, st);
+    if start.elapsed().as_secs_f32() >= smart::SMART_SECS || !motion::enabled(ctx) {
+        finish_tween(st);
         return;
-    }
-    if let Some((pairs, _)) = &st.present_tween {
-        apply_tween(ed, pairs, f64::from(motion::ease_in_out_cubic(t)));
     }
     ctx.request_repaint();
 }
 
-/// Moves the camera along the glide started by [`show_present_frame`].
+/// Writes the running smart transition into the document for this frame's paint only; hand the
+/// result to `unpaint_tween` right after painting.
+pub fn paint_tween(ed: &mut Editor, st: &UiState) -> Option<smart::Saved> {
+    let (pairs, start) = st.present_tween.as_ref()?;
+    let t = (start.elapsed().as_secs_f32() / smart::SMART_SECS).min(1.0);
+    let saved = smart::apply(&mut ed.doc, pairs, f64::from(motion::ease_in_out_cubic(t)));
+    ed.mark(crate::editor::Changed::Nodes(pairs.iter().map(smart::Pair::id).collect()));
+    Some(saved)
+}
+
+/// Takes the tween back out after the paint, so saves, sync and agent calls see the real layers.
+pub fn unpaint_tween(ed: &mut Editor, saved: Option<smart::Saved>) {
+    if let Some(saved) = saved {
+        let touched = smart::restore(&mut ed.doc, saved);
+        ed.mark(crate::editor::Changed::Nodes(touched.into()));
+    }
+}
+
 fn step_present_glide(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     let Some((from, to, start)) = st.present_glide else {
         return;
@@ -414,7 +420,7 @@ fn hover_at(ed: &Editor) -> Option<(Click, Rect, bool)> {
 /// arrow keys work too.
 pub fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui::Rect) {
     step_present_glide(ctx, ed, st);
-    step_present_tween(ctx, ed, st);
+    step_present_tween(ctx, st);
     let frames = present_frames(ed);
     let total = frames.len();
     let (left, right, esc, backspace) = ctx.input(|i| {

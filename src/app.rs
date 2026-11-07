@@ -866,6 +866,7 @@ impl App {
         let work = Instant::now();
         let view = frame.texture.create_view(&Default::default());
         let size = [g.config.width, g.config.height];
+        let tween = crate::ui::present::paint_tween(&mut self.ed, &self.st);
         g.painter.paint(
             &g.device,
             &g.queue,
@@ -876,6 +877,7 @@ impl App {
             &self.ed,
             !self.st.show_grid_off,
         );
+        crate::ui::present::unpaint_tween(&mut self.ed, tween);
         self.st.perf.record(self.start.elapsed().as_secs_f64(), layout_ms + work.elapsed().as_secs_f32() * 1000.0);
         self.relief_due |= g.painter.cache.last_misses > RELIEF_MISSES;
         g.window.pre_present_notify();
