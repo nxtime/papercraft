@@ -885,6 +885,7 @@ impl Web {
             }
         };
         let view = frame.texture.create_view(&Default::default());
+        let tween = crate::ui::present::paint_tween(&mut self.ed, &self.st);
         self.painter.paint(
             &self.device,
             &self.queue,
@@ -895,6 +896,7 @@ impl Web {
             &self.ed,
             !self.st.show_grid_off,
         );
+        crate::ui::present::unpaint_tween(&mut self.ed, tween);
         self.queue.present(frame);
     }
 }

@@ -1,7 +1,8 @@
 //! Smart transitions in Present mode: layers that share a name (and kind) between the frame being
 //! left and the one being shown move, resize, fade and recolour from their old look to their own.
-//! The tween writes into the live document for its short run and puts every value back after, so
-//! nothing it does is an edit or an undo step.
+//! The tween is written into the document only for the paint of a frame and taken out right after
+//! (`apply` then `restore`), so saves, sync and agent calls between frames never see it, and it is
+//! never an edit or an undo step.
 
 use crate::geom::Rect;
 use crate::model::{Color, Document, NodeId, Paint};
@@ -21,9 +22,16 @@ pub struct Pair {
     id: NodeId,
     from: Look,
     to: Look,
-    /// The layer's own fills, put back when the tween ends.
-    fills: Vec<Paint>,
 }
+
+impl Pair {
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+}
+
+/// What `apply` overwrote, for `restore`.
+pub struct Saved(Vec<(NodeId, Rect, f64, Vec<Paint>)>);
 
 fn solid(fills: &[Paint]) -> Option<Color> {
     match fills.first() {
@@ -69,35 +77,42 @@ pub fn plan(doc: &Document, from: NodeId, to: NodeId) -> Vec<Pair> {
         let to_look = Look { rect: n.rect, opacity: n.style.opacity, fill: solid(&n.style.fills) };
         let same = from_look.rect == to_look.rect && from_look.opacity == to_look.opacity && from_look.fill == to_look.fill;
         if !same {
-            out.push(Pair { id, from: from_look, to: to_look, fills: n.style.fills.clone() });
+            out.push(Pair { id, from: from_look, to: to_look });
         }
     }
     out
 }
 
-/// Sets every paired layer to `t` (0 = old look, 1 = its own, restoring its fills exactly).
-/// Returns the layers it touched, for the renderer's change log.
-pub fn apply(doc: &mut Document, pairs: &[Pair], t: f64) -> Vec<NodeId> {
-    let mut touched = Vec::new();
+/// Sets every paired layer to `t` (0 = old look, 1 = its own) and returns what was there.
+pub fn apply(doc: &mut Document, pairs: &[Pair], t: f64) -> Saved {
+    let mut saved = Vec::with_capacity(pairs.len());
     for p in pairs {
         let Some(n) = doc.nodes.get_mut(&p.id) else { continue };
-        if t >= 1.0 {
-            n.rect = p.to.rect;
-            n.style.opacity = p.to.opacity;
-            n.style.fills = p.fills.clone();
-        } else {
-            n.rect = Rect::new(
-                mix(p.from.rect.x, p.to.rect.x, t),
-                mix(p.from.rect.y, p.to.rect.y, t),
-                mix(p.from.rect.w, p.to.rect.w, t),
-                mix(p.from.rect.h, p.to.rect.h, t),
-            );
-            n.style.opacity = mix(p.from.opacity, p.to.opacity, t);
-            if let (Some(a), Some(b)) = (p.from.fill, p.to.fill) {
-                n.style.fills = vec![Paint::solid(mix_color(a, b, t))];
-            }
+        saved.push((p.id, n.rect, n.style.opacity, n.style.fills.clone()));
+        n.rect = Rect::new(
+            mix(p.from.rect.x, p.to.rect.x, t),
+            mix(p.from.rect.y, p.to.rect.y, t),
+            mix(p.from.rect.w, p.to.rect.w, t),
+            mix(p.from.rect.h, p.to.rect.h, t),
+        );
+        n.style.opacity = mix(p.from.opacity, p.to.opacity, t);
+        if let (Some(a), Some(b)) = (p.from.fill, p.to.fill) {
+            n.style.fills = vec![Paint::solid(mix_color(a, b, t))];
         }
-        touched.push(p.id);
+    }
+    Saved(saved)
+}
+
+/// Puts back exactly what `apply` overwrote. Returns the layers it touched, for the change log.
+pub fn restore(doc: &mut Document, saved: Saved) -> Vec<NodeId> {
+    let mut touched = Vec::with_capacity(saved.0.len());
+    for (id, rect, opacity, fills) in saved.0 {
+        if let Some(n) = doc.nodes.get_mut(&id) {
+            n.rect = rect;
+            n.style.opacity = opacity;
+            n.style.fills = fills;
+            touched.push(id);
+        }
     }
     touched
 }
@@ -136,27 +151,40 @@ mod tests {
         let plan = plan(&d, f1, f2);
         assert_eq!(plan.len(), 1, "`Only here` has no namesake");
         let before = d.get(b).unwrap().clone();
-        apply(&mut d, &plan, 0.0);
+        let saved = apply(&mut d, &plan, 0.0);
         let n = d.get(b).unwrap();
         assert_eq!((n.rect.x, n.rect.y, n.rect.w), (10.0, 10.0, 50.0), "starts at the old spot in the new frame");
         assert_eq!(n.style.fill(), Some(Color::rgb(255, 0, 0)));
-        apply(&mut d, &plan, 0.5);
+        restore(&mut d, saved);
+        let saved = apply(&mut d, &plan, 0.5);
         let n = d.get(b).unwrap();
         assert_eq!((n.rect.x, n.rect.w), (55.0, 100.0));
         assert_eq!(n.style.fill(), Some(Color::rgb(128, 0, 128)));
-        apply(&mut d, &plan, 1.0);
+        restore(&mut d, saved);
         let n = d.get(b).unwrap();
         assert_eq!((n.rect, n.style.fills.clone()), (before.rect, before.style.fills), "put back exactly");
     }
 
     #[test]
+    fn an_edit_between_frames_survives_the_tween() {
+        let (mut d, f1, f2, _, b) = two_frames();
+        let plan = plan(&d, f1, f2);
+        let saved = apply(&mut d, &plan, 0.3);
+        restore(&mut d, saved);
+        // An agent call lands between two painted frames.
+        d.nodes.get_mut(&b).unwrap().rect.x = 999.0;
+        let saved = apply(&mut d, &plan, 0.6);
+        restore(&mut d, saved);
+        assert_eq!(d.get(b).unwrap().rect.x, 999.0);
+    }
+
+    #[test]
     fn a_name_pairs_once_and_kinds_must_match() {
-        let (mut d, f1, f2, ..) = two_frames();
+        let (mut d, f1, ..) = two_frames();
         let f3 = add(&mut d, None, "C", NodeKind::Frame { clip: true }, Rect::new(900.0, 0.0, 10.0, 10.0), None);
         add(&mut d, Some(f3), "Card", NodeKind::Rect, Rect::new(1.0, 1.0, 5.0, 5.0), None);
         add(&mut d, Some(f3), "Card", NodeKind::Rect, Rect::new(2.0, 2.0, 5.0, 5.0), None);
         assert_eq!(plan(&d, f1, f3).len(), 1, "one `Card` in A feeds one in C");
         assert!(plan(&d, f1, f1).is_empty(), "same frame: nothing moves");
-        let _ = f2;
     }
 }
