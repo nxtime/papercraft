@@ -21,10 +21,15 @@ export const test = base.extend({
   app: async ({ browser, relay }, use) => {
     const token = randomBytes(24).toString('hex');
     const context = await browser.newContext({ viewport: VIEW, deviceScaleFactor: 3, hasTouch: true, isMobile: true });
+    // PAPERCRAFT_E2E_GL=1 hides WebGPU so the app falls back to WebGL2.
+    if (process.env.PAPERCRAFT_E2E_GL === '1') await context.addInitScript(() => { Object.defineProperty(navigator, 'gpu', { value: undefined }); });
     await context.addInitScript((t) => { try { localStorage.setItem('papercraft.relay.token', t); } catch { /* storage blocked */ } }, token);
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e)));
+    // Shader compile errors and wgpu validation failures ("Invalid CommandBuffer") are console errors.
+    const consoleErrors = [];
+    page.on('console', (m) => { if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) consoleErrors.push(m.text()); });
     await page.goto(relay.origin + '/');
     await page.waitForSelector('canvas#papercraft');
     const mcp = await connectMcp(relay.origin, token);
@@ -45,7 +50,7 @@ export const test = base.extend({
     const touch = await touchSession(page);
     const shot = (name) => page.screenshot({ path: `${SHOTS}/${name}.png` });
     const viewport = async () => findDeep(await mcp.call('get_basic_info'), (o) => Array.isArray(o.rect) && 'zoom' in o);
-    await use({ page, mcp, touch, shot, viewport, errors, token });
+    await use({ page, mcp, touch, shot, viewport, errors, consoleErrors, token });
     await context.close();
   },
 });
