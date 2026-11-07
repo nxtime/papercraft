@@ -28,7 +28,7 @@ impl Editor {
             return true;
         }
         self.touch = true;
-        let on_handle = self.selection_bounds().is_some_and(|b| {
+        let on_handle = !self.selection_rotated() && self.selection_bounds().is_some_and(|b| {
             let bs = self.camera.world_rect_to_screen(&b);
             hit::handle_at_radius(&bs, pos, self.handle_radius()).is_some()
         });
