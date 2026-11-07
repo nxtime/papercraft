@@ -52,6 +52,10 @@ pub fn parse(styles: &Styles, fs: f64, warn: &mut Vec<String>) -> Option<Margins
         m.auto[i] = auto;
     };
     for (k, v) in styles {
+        // Before parsing: other properties' values (colours, `rotate()`) are not margins to warn about.
+        if !k.starts_with("margin") {
+            continue;
+        }
         let parts = css::split_ws(&css::substitute_vars(v).0);
         let vals: Vec<(f64, bool)> = parts.iter().map(|p| side(p, fs, warn)).collect();
         let [a, rest @ ..] = vals.as_slice() else { continue };
