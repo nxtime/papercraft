@@ -277,7 +277,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 
 * **No rotation.** Nodes are axis-aligned boxes; rotated imports are baked into paths.
 * **Text** is Inter only, with no shaping (no ligatures, complex scripts or RTL) and no font picker. IME preedit is not displayed.
-* **Rendering approximations.** Layer and background blur, rounded frame clips and the backdrop blend modes draw through offscreen layers, nested three deep; a deeper group draws into its parent without its blur, mask or blend. PDF export drops blurs.
+* **Rendering approximations.** Layer and background blur, rounded frame clips and the backdrop blend modes draw through offscreen layers, nested three deep; a deeper group draws into its parent without its blur, mask or blend. PDF export and Fig import ignore blur.
 * **Variables:** gradients keep fixed colors, and there are no text styles (named type styles that update every text layer).
 * **Components:** properties (text, bool, icon, enum) and `merge_variants` cover variants, but there are no variant sets with several axes, and no responsive per-breakpoint variants or breakpoint preview.
 * **Prototyping:** links and flows work in Present mode; smart transitions and hover states do not exist yet.
