@@ -1692,7 +1692,7 @@ fn build_spec_tree(
     }
     if matches!(
         n.kind,
-        NodeKind::Path { .. } | NodeKind::Line { .. } | NodeKind::Connector { .. }
+        NodeKind::Path { .. } | NodeKind::Boolean { .. } | NodeKind::Line { .. } | NodeKind::Connector { .. }
     ) {
         let svg = inline_svg(doc, n.id);
         // The SVG is a little larger than the node's box (stroke caps, rounding); report where it sits.

@@ -13,6 +13,7 @@
 //!   relay server itself (native only).
 
 pub mod bounds;
+mod boolean;
 pub mod budget;
 pub mod codegen;
 pub mod context;

@@ -417,6 +417,7 @@ fn dispatch(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 }
                 "design_lessons" => design_lessons(host, &a),
                 "delete_nodes" => delete_nodes(ed, &a),
+                "boolean_nodes" => super::boolean::boolean_nodes(ed, &a),
                 "duplicate_nodes" => duplicate_nodes(ed, &a),
                 "move_nodes" => move_nodes(ed, &a),
                 "select_nodes" => select_nodes(ed, &a),
@@ -526,7 +527,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 /// Tools that change the layers they name: refused on layers hidden inside a screen.
 pub(crate) const GUARDED: &[&str] = &[
-    "update_styles", "set_text_content", "delete_nodes", "move_nodes", "write_html", "bind_variable",
+    "update_styles", "set_text_content", "delete_nodes", "boolean_nodes", "move_nodes", "write_html", "bind_variable",
     "swap_instance", "detach_instance", "set_instance_props", "create_instance", "create_shape",
 ];
 
@@ -762,7 +763,7 @@ fn node_brief(ed: &Editor, page: usize, id: NodeId) -> Value {
     let doc = ed.page_doc(page);
     let n = doc.get(id).unwrap();
     let w = doc.world_rect(id).unwrap_or(n.rect);
-    json!({
+    let mut v = json!({
         "id": node_key(ed, page, id),
         "name": n.name,
         "type": n.kind.type_name(),
@@ -770,7 +771,11 @@ fn node_brief(ed: &Editor, page: usize, id: NodeId) -> Value {
         "worldX": r2(w.x), "worldY": r2(w.y),
         "width": r2(n.rect.w), "height": r2(n.rect.h),
         "childCount": n.children.len(),
-    })
+    });
+    if let NodeKind::Boolean { op, .. } = &n.kind {
+        v["op"] = json!(op.name());
+    }
+    v
 }
 
 /// The top-level frame a node belongs to.
