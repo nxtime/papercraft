@@ -60,6 +60,7 @@ fn copy_props(main: &Node, inst: &mut Node, overrides: &[String], is_root: bool)
         inst.style.shadow = s.shadow;
         inst.style.blur = s.blur;
         inst.style.backdrop_blur = s.backdrop_blur;
+        inst.style.rotation = s.rotation;
     }
     inst.style.rough = s.rough;
     match (&main.kind, &mut inst.kind) {

@@ -71,7 +71,8 @@ pub fn export_bounds(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
             }) {
                 continue;
             }
-            rects.push(draw::draw_bounds(nd, wr));
+            let chain = doc.rotation_chain(id, true);
+            rects.push(crate::render::rotate::rotated_bounds(draw::draw_bounds(nd, wr), &chain));
         }
     }
     Rect::union_all(&rects).map(|r| {
@@ -314,7 +315,11 @@ impl Writer<'_> {
         if nd.style.backdrop_blur > 0.0 {
             css.push(format!("backdrop-filter:blur({}px)", n(nd.style.backdrop_blur)));
         }
-        let blend = if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) };
+        let mut blend = if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) };
+        if nd.style.rotation != 0.0 {
+            let c = wr.center();
+            blend.push_str(&format!(" transform=\"rotate({} {} {})\"", n(nd.style.rotation), n(c.x), n(c.y)));
+        }
         let label = esc(&nd.name);
         let aria = match &nd.kind {
             NodeKind::Text { text, .. } => format!(" aria-label=\"{}\"", esc(text)),
@@ -504,6 +509,18 @@ mod tests {
         let svg = export(&ed.doc, None, None).unwrap();
         assert!(svg.contains("data:image/png;base64,"));
         assert!(svg.contains("<image"));
+    }
+
+    #[test]
+    fn rotation_is_written_around_the_centre_and_grows_the_bounds() {
+        let mut ed = crate::editor::Editor::default();
+        let mut node = crate::model::Node::new(NodeId(0), NodeKind::Rect, Rect::new(0.0, 0.0, 100.0, 20.0));
+        node.style.rotation = 90.0;
+        let id = ed.add_node(node, None);
+        let svg = export(&ed.doc, None, None).unwrap();
+        assert!(svg.contains("transform=\"rotate(90 50 10)\""), "{svg}");
+        let b = export_bounds(&ed.doc, &[id]).unwrap();
+        assert!(b.h >= 100.0 && b.w <= 21.0, "{b:?}");
     }
 
     #[test]

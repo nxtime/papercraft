@@ -86,9 +86,11 @@ mod tests {
     use crate::model::{Color, Node, NodeId, NodeKind};
 
     fn editor_with_rect() -> (Editor, NodeId) {
-        let mut e = Editor::default();
-        e.viewport = v2(1000.0, 800.0);
-        e.camera = Camera { pan: V2::ZERO, zoom: 1.0 };
+        let mut e = Editor {
+            viewport: v2(1000.0, 800.0),
+            camera: Camera { pan: V2::ZERO, zoom: 1.0 },
+            ..Editor::default()
+        };
         let mut n = Node::new(NodeId(0), NodeKind::Rect, Rect::new(100.0, 100.0, 200.0, 100.0));
         n.style.set_fill(Some(Color::BLACK));
         let id = e.add_node(n, None);
