@@ -34,8 +34,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libssl3 libdbus
  && useradd --system --uid 10001 papercraft
 ENV DISABLE_AUTOUPDATER=1
 COPY --from=build /src/target/release/papercraft-relay /usr/local/bin/papercraft-relay
-COPY --from=build /src/web/index.html /srv/web/index.html
+COPY --from=build /src/web/index.html /src/web/manifest.webmanifest /srv/web/
 COPY --from=build /src/web/pkg /srv/web/pkg
+COPY --from=build /src/web/icons /srv/web/icons
 USER 10001
 EXPOSE 8787
 ENTRYPOINT ["papercraft-relay", "--static", "/srv/web", "--data", "/data"]
