@@ -778,7 +778,7 @@ fn errors_are_reported_not_panics() {
 
 #[test]
 fn screenshot_returns_png() {
-    if papercraft::render::gpu::Headless::new().is_err() {
+    if papercraft::render::headless::Headless::new().is_err() {
         eprintln!("no GPU adapter; skipping");
         return;
     }
@@ -1054,7 +1054,7 @@ async fn stdio_bridge_lists_tools_without_the_app() {
 /// A design written the way an agent would, rendered for the docs (`milestone7_mcp.png`).
 #[test]
 fn agent_design_screenshot() {
-    if papercraft::render::gpu::Headless::new().is_err() {
+    if papercraft::render::headless::Headless::new().is_err() {
         eprintln!("no GPU adapter; skipping");
         return;
     }
@@ -1493,7 +1493,7 @@ fn file_outputs_must_have_the_extension_the_tool_writes() {
         ("export_combined_pdf", json!({"nodeIds": [ab["id"]], "path": docx})),
         ("get_screenshot", json!({"out": docx})),
     ] {
-        if tool == "get_screenshot" && papercraft::render::gpu::Headless::new().is_err() {
+        if tool == "get_screenshot" && papercraft::render::headless::Headless::new().is_err() {
             continue;
         }
         let err = exec::call(&mut h, tool, &args).unwrap_err();

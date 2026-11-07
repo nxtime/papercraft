@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn updater_visuals() {
-        let Ok(gpu) = crate::render::gpu::Headless::new() else {
+        let Ok(gpu) = crate::render::headless::Headless::new() else {
             return;
         };
         let cases = [

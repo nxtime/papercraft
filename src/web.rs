@@ -22,7 +22,7 @@ use crate::mcp::exec::{self, Host, ShotRequest};
 use crate::mcp::relay_proto::Reply;
 use crate::project::{Project, Store};
 use crate::render::frame::{self, Painter};
-use crate::render::gpu::Headless;
+use crate::render::headless::Headless;
 use crate::session::Session;
 use crate::theme;
 use crate::ui::UiState;

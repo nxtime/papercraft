@@ -149,7 +149,7 @@ fn notes_in_screenshots_grow_the_bounds_to_the_cards() {
     assert!(!b.intersects(&doc.world_rect(num(&other)).unwrap()));
     assert!(noted.validate().is_ok());
 
-    if papercraft::render::gpu::Headless::new().is_err() {
+    if papercraft::render::headless::Headless::new().is_err() {
         eprintln!("no GPU adapter; skipping the render half");
         return;
     }

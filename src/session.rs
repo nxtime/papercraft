@@ -4,7 +4,7 @@
 
 use crate::editor::Editor;
 use crate::project::{FormatError, PageRef, Project, Store, now_ms};
-use crate::render::gpu::Headless;
+use crate::render::headless::Headless;
 use std::path::Path;
 use std::time::Duration;
 use web_time::Instant;

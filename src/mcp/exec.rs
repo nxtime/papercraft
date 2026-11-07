@@ -20,7 +20,7 @@ use crate::model::{
 };
 use crate::project::{Project, Store};
 use crate::variables::{self, DesignSystem, Kind, Value as DsVal};
-use crate::render::gpu::Headless;
+use crate::render::headless::Headless;
 use crate::session::Session;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

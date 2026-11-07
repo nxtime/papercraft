@@ -164,7 +164,7 @@ impl Painter {
 
 /// Render the full app (chrome + canvas) offscreen, for screenshots and visual tests.
 pub fn capture(
-    gpu: &super::gpu::Headless,
+    gpu: &super::headless::Headless,
     ed: &mut Editor,
     st: &mut UiState,
     size_points: [f32; 2],

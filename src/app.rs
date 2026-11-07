@@ -5,7 +5,7 @@ use crate::geom::{V2, v2};
 use crate::io::{file, png};
 use crate::project::Store;
 use crate::render::frame::{self, Painter};
-use crate::render::gpu::Headless;
+use crate::render::headless::Headless;
 use crate::session::Session;
 use crate::theme;
 use crate::ui::home::HomeAction;

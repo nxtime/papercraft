@@ -505,4 +505,16 @@ mod tests {
         assert!(svg.contains("data:image/png;base64,"));
         assert!(svg.contains("<image"));
     }
+
+    #[test]
+    fn blur_is_written_as_css_filters() {
+        let mut ed = crate::editor::Editor::default();
+        let mut n = crate::model::Node::new(NodeId(0), NodeKind::Rect, Rect::new(0.0, 0.0, 5.0, 5.0));
+        n.style.blur = 3.0;
+        n.style.backdrop_blur = 9.0;
+        n.style.blend = BlendMode::Multiply;
+        ed.add_node(n, None);
+        let svg = export(&ed.doc, None, None).unwrap();
+        assert!(svg.contains("mix-blend-mode:multiply;filter:blur(3px);backdrop-filter:blur(9px)"), "{svg}");
+    }
 }

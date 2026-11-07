@@ -2682,4 +2682,21 @@ mod tests {
         assert_eq!(spec["libraryComponents"][0]["usedBy"].as_array().unwrap().len(), 2);
         assert!(spec["enforcementRules"].as_array().unwrap().iter().any(|r| r.as_str().unwrap().contains("MUST use the shadcn component")));
     }
+
+    #[test]
+    fn blur_reaches_tailwind_classes_and_the_ai_spec() {
+        let mut doc = Document::default();
+        let root = doc.alloc_id();
+        let mut frame = Node::new(root, NodeKind::Frame { clip: true }, Rect::new(0.0, 0.0, 100.0, 100.0));
+        frame.style.blur = 4.0;
+        frame.style.backdrop_blur = 12.0;
+        doc.nodes.insert(root, frame);
+        doc.root.push(root);
+        let cls = tw_classes(&doc, doc.get(root).unwrap(), true);
+        assert!(cls.contains("blur-[4px]") && cls.contains("backdrop-blur-[12px]"), "{cls}");
+        let spec = to_ai_spec(&doc, root, "react").unwrap().to_string();
+        assert!(spec.contains("\"blur\":4") && spec.contains("\"backdropBlur\":12"), "{spec}");
+        doc.nodes.get_mut(&root).unwrap().style.blur = 0.0;
+        assert!(!tw_classes(&doc, doc.get(root).unwrap(), true).contains("blur-[4px]"));
+    }
 }
