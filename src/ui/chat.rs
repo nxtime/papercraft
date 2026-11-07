@@ -534,7 +534,7 @@ pub struct ChatState {
     /// CLI/ACP chats: the summary key their agent session last got, so a change is sent once.
     ds_sent: HashMap<String, u64>,
     /// Offscreen renderer for chip crops; set by the app each frame (None in tests and the web).
-    pub gpu: Option<crate::render::gpu::Headless>,
+    pub gpu: Option<crate::render::headless::Headless>,
     /// Pick mode: the next canvas click (or Shift+drag) becomes a chip.
     pub picking: bool,
     /// The on-canvas Ask box (⌘K on a selection).

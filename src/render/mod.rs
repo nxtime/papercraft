@@ -1,6 +1,8 @@
 pub mod draw;
 pub mod frame;
+pub mod blend;
 pub mod gpu;
+pub mod headless;
 pub mod layers;
 pub mod mesh;
 pub mod rough;

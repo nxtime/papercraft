@@ -262,7 +262,7 @@ fn component_nodes(doc: &Document, root: NodeId, key: &str) -> Vec<Node> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn preview(gpu: &crate::render::gpu::Headless, doc: &Document, root: NodeId) -> Option<String> {
+fn preview(gpu: &crate::render::headless::Headless, doc: &Document, root: NodeId) -> Option<String> {
     let r = doc.world_rect(root)?;
     let scale = (PREVIEW_PX / r.w.max(r.h).max(1.0)).min(2.0);
     let img = crate::io::png::render(gpu, doc, Some(&[root]), scale, None).ok()?;
@@ -274,7 +274,7 @@ fn build(
     project_dir: &Path,
     ed: &Editor,
     description: &str,
-    gpu: Option<&crate::render::gpu::Headless>,
+    gpu: Option<&crate::render::headless::Headless>,
 ) -> Result<(Published, Option<Published>), String> {
     let manifest = Project::open(project_dir).map_err(|e| e.to_string())?.manifest;
     let prev = previous(project_dir);
@@ -402,7 +402,7 @@ pub fn publish_with_previews(
     project_dir: &Path,
     ed: &Editor,
     description: &str,
-    gpu: Option<&crate::render::gpu::Headless>,
+    gpu: Option<&crate::render::headless::Headless>,
 ) -> Result<Published, String> {
     let (next, _) = build(project_dir, ed, description, gpu)?;
     write_json(&project_dir.join(LIBRARY_FILE), &next)?;

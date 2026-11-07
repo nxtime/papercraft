@@ -13,7 +13,7 @@ struct Harness {
     output: egui::FullOutput,
     time: f64,
     capture: Option<(
-        papercraft::render::gpu::Headless,
+        papercraft::render::headless::Headless,
         papercraft::render::frame::Painter,
         wgpu::Texture,
     )>,
@@ -154,7 +154,7 @@ impl Harness {
     }
 
     fn enable_capture(&mut self) -> bool {
-        let Ok(gpu) = papercraft::render::gpu::Headless::new() else {
+        let Ok(gpu) = papercraft::render::headless::Headless::new() else {
             return false;
         };
         let painter = papercraft::render::frame::Painter::new(

@@ -2,7 +2,7 @@
 //! tests).
 
 use crate::model::{Color, Document, NodeId};
-use crate::render::gpu::Headless;
+use crate::render::headless::Headless;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -38,7 +38,7 @@ pub fn export(host: &mut dyn Host, a: &Value) -> ToolResult {
     files.insert("components.json".into(), call(host, "get_components", json!({}))?.into_bytes());
     files.insert("open-questions.md".into(), open_questions(&inv, &questions).into_bytes());
 
-    let gpu = if images { host.gpu().map(Ok).unwrap_or_else(crate::render::gpu::Headless::new) } else { Err("images: false".into()) };
+    let gpu = if images { host.gpu().map(Ok).unwrap_or_else(crate::render::headless::Headless::new) } else { Err("images: false".into()) };
     let mut index = Vec::new();
     let mut shots = 0;
     for page in inv["pages"].as_array().into_iter().flatten() {
@@ -130,7 +130,7 @@ fn hash(bytes: &[u8]) -> String {
 }
 
 /// The screen at scale 1 on white, unrolled when its content scrolls (as the deck shows it).
-fn shot(g: &crate::render::gpu::Headless, doc: &Document, id: NodeId) -> Result<Vec<u8>, String> {
+fn shot(g: &crate::render::headless::Headless, doc: &Document, id: NodeId) -> Result<Vec<u8>, String> {
     let unrolled = crate::io::deck::unroll::unrolled(doc, &[id]);
     let doc = unrolled.as_ref().unwrap_or(doc);
     let roots = crate::io::export::with_layers_on_top(doc, &[id]);

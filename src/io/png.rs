@@ -3,7 +3,7 @@
 use super::svg::export_bounds;
 use crate::geom::{Camera, Rect, V2, v2};
 use crate::model::{Color, Document, NodeId};
-use crate::render::gpu::Headless;
+use crate::render::headless::Headless;
 use crate::render::scene::{self, View};
 
 /// Largest exported edge, in pixels.

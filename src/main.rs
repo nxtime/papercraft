@@ -6,7 +6,7 @@ use papercraft::editor::Editor;
 use papercraft::io::{export, file, import, png, svg};
 use papercraft::model::Color;
 use papercraft::project::{MANIFEST, Store};
-use papercraft::render::{frame, gpu::Headless};
+use papercraft::render::{frame, headless::Headless};
 use papercraft::session::Session;
 use papercraft::ui::UiState;
 use papercraft::ui::home::HomeView;

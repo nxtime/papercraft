@@ -306,7 +306,7 @@ impl exec::Host for BrokenGpu {
     fn rename_project(&mut self, name: &str) -> Result<std::path::PathBuf, String> {
         self.0.rename_project(name)
     }
-    fn gpu(&mut self) -> Option<papercraft::render::gpu::Headless> {
+    fn gpu(&mut self) -> Option<papercraft::render::headless::Headless> {
         panic!("device lost")
     }
 }

@@ -4,7 +4,7 @@
 use papercraft::editor::{Button, Editor, InputEvent, Key, Modifiers};
 use papercraft::geom::{Camera, Rect, V2, v2};
 use papercraft::model::Color;
-use papercraft::render::gpu::Headless;
+use papercraft::render::headless::Headless;
 use papercraft::render::scene;
 use std::path::PathBuf;
 use std::sync::OnceLock;

@@ -132,7 +132,7 @@ bad {"x":
 
 #[test]
 fn offline_screenshot_when_gpu_exists() {
-    if papercraft::render::gpu::Headless::new().is_err() {
+    if papercraft::render::headless::Headless::new().is_err() {
         return;
     }
     let store = temp_store("shot");

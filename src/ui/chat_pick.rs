@@ -6,7 +6,7 @@ use super::{SelChip, chip_label, push_chip};
 use crate::editor::{Editor, InputEvent};
 use crate::geom::{Rect, v2};
 use crate::model::{Color, Document, NodeId};
-use crate::render::gpu::Headless;
+use crate::render::headless::Headless;
 use crate::theme;
 use crate::ui::{UiState, kit};
 use egui::RichText;
