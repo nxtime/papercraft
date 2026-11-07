@@ -26,7 +26,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 11 | Swap instance, detach by tool | **done** | `swap_instance` and `detach_instance` MCP tools + UI controls in Design tab and Inspector. |
 | 12 | Cross-page and shared libraries | **done** | Instances of a main on any page; publish a project as a library, enable, update and disable it in other projects (Libraries modal, `*_library` tools). |
 | 13 | Export design tokens | **done** | `get_variables` with `format: "css"`, `"json"` (W3C DTCG + modes), or `"tailwind"` (`@theme`), plus Copy CSS / Copy JSON in Design tab. |
-| 14 | Apply a design system to existing work | partial | `lint_design {fix: true}` links matching literal colors to variables and snaps spacing/type scale. |
+| 14 | Apply a design system to existing work | partial | `lint_design {fix: true}` links matching literal colors to variables, snaps spacing/type scale, binds literal gap, padding, radius and font-size numbers to number variables of the same value, and applies an exactly matching text style; each change is listed in `fixes`. |
 
 ## 2. Agent workflow
 
@@ -47,9 +47,9 @@ Agents can already build a design system through the tools; people cannot yet ma
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 23 | Prototyping links and flows | **done** | Prototype tab in the inspector; Present mode follows links with a camera glide. While-hovering links (reverted on leave) and smart transitions (layers with the same name tween position, size, opacity and fill) are in; pressed states for components todo. |
-| 24 | Responsive constraints and breakpoint preview | partial | Constraints exist in the editor; `export_site` merges frames named `Home @mobile` or `Home @768` into one page with media queries. No breakpoint preview in the editor. |
+| 24 | Responsive constraints and breakpoint preview | partial | Constraints exist in the editor; `export_site` merges frames named `Home @mobile` or `Home @768` into one page with media queries. View > Breakpoint Preview shows the selected screen at 375 / 768 / 1280 or a variant's width from a copy of the document (desktop app; not on the web build). |
 | 25 | Shadows, blur and effects | partial | Drop shadow is an inspector effect. Layer and background blur todo (needs a renderer pass). |
-| 26 | Margin and grid layout | partial | Wrapped-line cross alignment, per-line fill/align, and `layout_grid` track layout (`src/layout.rs`) implemented; CSS margin still ignored. |
+| 26 | Margin and grid layout | partial | Wrapped-line cross alignment, per-line fill/align, and `layout_grid` track layout (`src/layout.rs`) implemented; `write_html` honours CSS margin (shorthand, per side, `auto`; block siblings collapse, flex margins add). |
 | 27 | Font choice | **done** | `install_font` adds a .ttf or .otf to the project; `font-family` applies it to a text layer. |
 | 28 | Rotation | todo | Nodes are axis-aligned. |
 | 29 | Overlay, dodge, burn, light blend modes on the canvas | todo | Exact in SVG and PDF export, approximated as Normal on the canvas. |
