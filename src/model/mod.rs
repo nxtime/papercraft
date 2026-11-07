@@ -14,7 +14,7 @@ pub use document::{Document, VarState};
 pub use link::LinkAction;
 pub use type_style::TypeStyle;
 pub use node::{
-    Binding, CodeLink, PropDef, PropOption, Color, Comment, FillRule, Head, Node, NodeId, NodeKind, PathPoint, Route, Shadow,
+    Binding, BoolOp, CodeLink, PropDef, PropOption, Color, Comment, FillRule, Head, Node, NodeId, NodeKind, PathPoint, Route, Shadow,
     StrokePoint, Style, SubPath, TextAlign,
 };
 pub use paint::*;

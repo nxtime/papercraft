@@ -216,6 +216,43 @@ pub enum TextAlign {
     Right,
 }
 
+/// How a boolean group combines its operands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BoolOp {
+    Union,
+    Subtract,
+    Intersect,
+    Exclude,
+}
+
+impl BoolOp {
+    pub const ALL: [BoolOp; 4] = [BoolOp::Union, BoolOp::Subtract, BoolOp::Intersect, BoolOp::Exclude];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BoolOp::Union => "Union",
+            BoolOp::Subtract => "Subtract",
+            BoolOp::Intersect => "Intersect",
+            BoolOp::Exclude => "Exclude",
+        }
+    }
+
+    /// The lowercase name used by the file format, MCP and the spec.
+    pub fn name(self) -> &'static str {
+        match self {
+            BoolOp::Union => "union",
+            BoolOp::Subtract => "subtract",
+            BoolOp::Intersect => "intersect",
+            BoolOp::Exclude => "exclude",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<BoolOp> {
+        BoolOp::ALL.into_iter().find(|o| o.name() == s.to_ascii_lowercase())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum NodeKind {
@@ -242,6 +279,18 @@ pub enum NodeKind {
     },
     /// Groups children; its rect is always the union of the children's rects.
     Group,
+    /// Live boolean of its children (the operands, bottom first). Its own fill and stroke paint
+    /// the result; the operands are not drawn. `subpaths` is that result, node-local, kept up to
+    /// date by `Editor::fixup` and read as a path by drawing, hit testing and export.
+    Boolean {
+        op: BoolOp,
+        #[serde(default)]
+        subpaths: Vec<SubPath>,
+        /// Hash of the operand outlines `subpaths` was computed from: unchanged operands skip
+        /// the polygon clipping. Not saved; a loaded group recomputes once when touched.
+        #[serde(skip)]
+        sig: u64,
+    },
     /// Vector path (pen tool, boolean results, imported SVG). Points are node-local.
     Path {
         subpaths: Vec<SubPath>,
@@ -385,6 +434,7 @@ impl NodeKind {
             NodeKind::Text { .. } => "Text",
             NodeKind::Stroke { .. } => "Drawing",
             NodeKind::Group => "Group",
+            NodeKind::Boolean { .. } => "Boolean",
             NodeKind::Path { .. } => "Vector",
             NodeKind::Polygon { .. } => "Polygon",
             NodeKind::Star { .. } => "Star",
@@ -594,6 +644,7 @@ impl Node {
             | NodeKind::Ellipse
             | NodeKind::Polygon { .. }
             | NodeKind::Star { .. }
+            | NodeKind::Boolean { .. }
             | NodeKind::Path { .. } => Style::with_fill(gray),
             NodeKind::Line { .. } => Style {
                 stroke: Some(Color::INK),
@@ -643,13 +694,18 @@ impl Node {
         }
     }
 
+    /// Groups and boolean groups: a box that is exactly its children (moved and scaled as one).
     pub fn is_group(&self) -> bool {
-        matches!(self.kind, NodeKind::Group)
+        matches!(self.kind, NodeKind::Group | NodeKind::Boolean { .. })
     }
 
-    /// Frames and groups hold children.
+    pub fn is_boolean(&self) -> bool {
+        matches!(self.kind, NodeKind::Boolean { .. })
+    }
+
+    /// Frames, groups and boolean groups hold children.
     pub fn is_container(&self) -> bool {
-        matches!(self.kind, NodeKind::Frame { .. } | NodeKind::Group)
+        matches!(self.kind, NodeKind::Frame { .. } | NodeKind::Group | NodeKind::Boolean { .. })
     }
 
     pub fn is_frame(&self) -> bool {

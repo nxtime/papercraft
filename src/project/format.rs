@@ -37,7 +37,9 @@ const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v, |v| v, |v| v];
 /// (`link_smart`); an older app would turn them into plain click links on save.
 /// v8: layer blur and background blur (`blur`, `backdrop_blur`); an older app would drop them.
 /// v9: node rotation (`rotation`); an older app would draw the node upright and save it so.
-pub const PAGE_VERSION: u32 = 9;
+/// v10: boolean groups (`boolean` layers); an older app would not read them, or would flatten the operands on save.
+pub const PAGE_VERSION: u32 = 10;
+const PAGE_V9: u32 = 9;
 const PAGE_V8: u32 = 8;
 const PAGE_V7: u32 = 7;
 const PAGE_V6: u32 = 6;
@@ -50,6 +52,10 @@ const PAGE_V4: u32 = 4;
 /// Whether a page holds something an older app would drop on save: a named font or a link action.
 fn needs_v4(nodes: &[Node]) -> bool {
     nodes.iter().any(|n| n.text_style.font.is_some() || n.link_action.is_some())
+}
+
+fn needs_v10(nodes: &[Node]) -> bool {
+    nodes.iter().any(Node::is_boolean)
 }
 
 fn needs_v9(nodes: &[Node]) -> bool {
@@ -70,8 +76,10 @@ fn needs_v6(doc: &Document) -> bool {
 
 /// The version a page is written as: the oldest one that can hold everything in it.
 fn page_version(doc: &Document, nodes: &[Node]) -> u32 {
-    if needs_v9(nodes) {
+    if needs_v10(nodes) {
         PAGE_VERSION
+    } else if needs_v9(nodes) {
+        PAGE_V9
     } else if needs_v8(nodes) {
         PAGE_V8
     } else if needs_v7(nodes) {
@@ -223,7 +231,7 @@ struct PageFile {
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
-const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v];
+const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v];
 /// Formats accepted as older versions of a page.
 const PAGE_ALIASES: &[&str] = &[LEGACY_FORMAT];
 
@@ -312,7 +320,7 @@ fn is_current_page(s: &str) -> bool {
         version: Option<u32>,
     }
     serde_json::from_str::<Head>(s)
-        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | PAGE_V7 | PAGE_V6 | PAGE_V5 | PAGE_V4 | PAGE_BASE_VERSION)))
+        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | PAGE_V9 | PAGE_V8 | PAGE_V7 | PAGE_V6 | PAGE_V5 | PAGE_V4 | PAGE_BASE_VERSION)))
 }
 
 fn page_from_file(mut f: PageFile) -> Result<(PageData, PageModes), FormatError> {
@@ -593,7 +601,25 @@ mod tests {
         assert!(json.contains("\"version\":9"));
         let back = page_from_json(&json).unwrap();
         assert_eq!(back.doc.get(NodeId(1)).unwrap().style.rotation, 30.0);
-        let too_new = json.replace("\"version\":9", "\"version\":10");
+        assert!(json.contains("\"version\":9"));
+        let too_new = json.replace("\"version\":9", "\"version\":11");
+        assert!(matches!(page_from_json(&too_new), Err(FormatError::TooNew { .. })));
+    }
+
+    #[test]
+    fn a_boolean_group_makes_a_v10_page_and_roundtrips() {
+        let v9 = r#"{"format":"paper-rs-page","version":9,"id":"a","name":"P","next_id":4,"root":[1],"nodes":[
+            {"id":1,"name":"B","type":"boolean","op":"subtract","rect":{"x":0,"y":0,"w":5,"h":5},"children":[2,3]},
+            {"id":2,"name":"A","type":"rect","rect":{"x":0,"y":0,"w":5,"h":5},"parent":1},
+            {"id":3,"name":"C","type":"rect","rect":{"x":1,"y":1,"w":2,"h":2},"parent":1}]}"#;
+        let p = page_from_json(v9).unwrap();
+        let json = page_to_json(&p);
+        assert!(json.contains("\"version\":10"), "a boolean group needs v10");
+        let back = page_from_json(&json).unwrap();
+        let n = back.doc.get(NodeId(1)).unwrap();
+        assert!(matches!(n.kind, crate::model::NodeKind::Boolean { op: crate::model::BoolOp::Subtract, .. }));
+        assert_eq!(n.children, vec![NodeId(2), NodeId(3)]);
+        let too_new = json.replace("\"version\":10", "\"version\":11");
         assert!(matches!(page_from_json(&too_new), Err(FormatError::TooNew { .. })));
     }
 
