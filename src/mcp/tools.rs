@@ -1441,6 +1441,16 @@ pub fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "boolean_nodes",
+            "Combine shapes into a live boolean group that keeps them as editable children:              `op` union, subtract, intersect or exclude with two or more `nodeIds` (shapes,              frames, groups or text; not lines or arrows). Subtract cuts the others out of the              lowest layer. The group paints the result with its own fill and stroke and updates              when a child moves, resizes or changes. Pass one existing boolean group with `op`              to change the operation, or `flatten: true` to bake the result into a plain path              and drop the children. Returns the group id.",
+            json!({"nodeIds": ids("Two or more shapes to combine, or one boolean group to change."),
+                   "op": {"type": "string", "enum": ["union", "subtract", "intersect", "exclude"]},
+                   "flatten": {"type": "boolean", "description": "Bake an existing boolean group into a path."},
+                   "pageId": page_id()}),
+            &["nodeIds"],
+            false,
+        ),
+        tool(
             "duplicate_nodes",
             "Deep-clone nodes, including across pages (via `toPageId` or a cross-page `parentId`; \
              `<x-paper-clone node-id=\"<page>:<id>\"/>` also works across pages). Each copy goes \
@@ -1638,7 +1648,7 @@ fn classify(name: &str, args: &Value) -> Option<bool> {
         | "create_collection" | "delete_variables" | "bind_variable" | "set_strings" | "set_text_style"
         | "enable_library" | "update_library" | "disable_library"
         | "set_variable_mode" | "import_design_system" | "import_components" | "create_component"
-        | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "apply_ui_kit" | "set_code_link"
+        | "create_instance" | "swap_instance" | "detach_instance" | "delete_nodes" | "boolean_nodes" | "apply_ui_kit" | "set_code_link"
         | "set_component_props" | "set_instance_props" | "merge_variants" | "set_prototype_links" | "set_accessibility" | "set_screens"
         | "duplicate_nodes" | "move_nodes" | "undo" | "redo" => true,
         _ => return None,

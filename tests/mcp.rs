@@ -2578,3 +2578,35 @@ fn a_text_style_updates_every_layer_that_follows_it_in_one_undo_step() {
     assert!(h.ed.doc.text_styles.is_empty());
     assert!(h.ed.doc.nodes.values().all(|n| n.text_style.style_ref.is_none()));
 }
+
+#[test]
+fn boolean_nodes_makes_a_live_group_and_validates_input() {
+    let mut h = host();
+    let rect = |h: &mut exec::SessionHost, x: i32| {
+        call(h, "create_shape", json!({"type": "rectangle", "x": x, "y": 0, "width": 100, "height": 100}))
+    };
+    let (a, b) = (rect(&mut h, 0), rect(&mut h, 50));
+    let line = call(&mut h, "create_shape", json!({"type": "line", "points": [[0, 200], [50, 200]]}));
+
+    assert!(call_err(&mut h, "boolean_nodes", json!({"nodeIds": [a["id"]], "op": "union"})).contains("at least two"));
+    assert!(call_err(&mut h, "boolean_nodes", json!({"nodeIds": [a["id"], b["id"]], "op": "blend"})).contains("unknown op"));
+    assert!(call_err(&mut h, "boolean_nodes", json!({"nodeIds": [a["id"], b["id"]]})).contains("`op`"));
+    assert!(call_err(&mut h, "boolean_nodes", json!({"nodeIds": [a["id"], line["id"]], "op": "union"})).contains("no area"));
+    assert!(call_err(&mut h, "boolean_nodes", json!({"nodeIds": [a["id"], b["id"]], "op": "union", "flatten": true})).contains("flatten"));
+
+    let g = call(&mut h, "boolean_nodes", json!({"nodeIds": [a["id"], b["id"]], "op": "subtract"}));
+    let gid = num(&g["id"]);
+    assert_eq!(h.ed.doc.get(gid).unwrap().kind.type_name(), "Boolean");
+    assert_eq!(h.ed.doc.get(gid).unwrap().children.len(), 2);
+    let info = call(&mut h, "get_node_info", json!({"nodeId": g["id"]}));
+    assert!(info.to_string().contains("Boolean"), "{info}");
+    assert!(info.to_string().contains("subtract"), "{info}");
+
+    call(&mut h, "boolean_nodes", json!({"nodeIds": [g["id"]], "op": "union"}));
+    assert!(matches!(h.ed.doc.get(gid).unwrap().kind, papercraft::model::NodeKind::Boolean { op: papercraft::model::BoolOp::Union, .. }));
+    assert!(call_err(&mut h, "boolean_nodes", json!({"nodeIds": [g["id"]]})).contains("flatten"));
+
+    call(&mut h, "boolean_nodes", json!({"nodeIds": [g["id"]], "flatten": true}));
+    let n = h.ed.doc.get(gid).unwrap();
+    assert!(matches!(n.kind, papercraft::model::NodeKind::Path { .. }) && n.children.is_empty());
+}
