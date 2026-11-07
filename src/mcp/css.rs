@@ -954,7 +954,7 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
             "transform" => {
                 let (by, turn, lost) = transform(v, fs);
                 shift = (shift.0 + by.0, shift.1 + by.1);
-                n.style.rotation = turn;
+                n.style.rotation = turn % 360.0;
                 a.ignored.extend(lost.into_iter().map(|f| format!("transform: {f}")));
                 true
             }
@@ -1652,8 +1652,13 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
     a
 }
 
-/// An angle in degrees: `deg`, `rad`, `turn`, `grad`, or a bare `0`.
+/// An angle in degrees within one turn: `deg`, `rad`, `turn`, `grad`, or a bare `0`.
 fn angle(t: &str) -> Option<f64> {
+    // `parse` accepts `inf` and `NaN`, which would poison every point mapped through the turn.
+    angle_any(t).filter(|d| d.is_finite()).map(|d| d % 360.0)
+}
+
+fn angle_any(t: &str) -> Option<f64> {
     let t = t.trim().to_ascii_lowercase();
     let unit = |u: &str, per: f64| t.strip_suffix(u)?.trim().parse::<f64>().ok().map(|x| x * per);
     // `grad` and `turn` before `rad`/`deg`: no unit is a suffix of another except `grad`/`rad`.
@@ -2210,6 +2215,12 @@ mod tests {
         assert_eq!(computed(&n, None, true)["transform"], "rotate(180deg)");
         let a = apply(&mut n, &parse_inline("transform: rotate(3em)"), &Context::default());
         assert_eq!(a.ignored, ["transform: rotate (needs deg, rad or turn)"]);
+        for bad in ["rotate(infdeg)", "rotate(NaNdeg)", "rotate(1e400deg)"] {
+            let a = apply(&mut n, &parse_inline(&format!("transform: {bad}")), &Context::default());
+            assert_eq!((n.style.rotation, a.ignored.len()), (0.0, 1), "{bad}");
+        }
+        apply(&mut n, &parse_inline("transform: rotate(200deg) rotate(530deg)"), &Context::default());
+        assert!((n.style.rotation - 10.0).abs() < 1e-9, "folded into one turn: {}", n.style.rotation);
     }
 
     #[test]
