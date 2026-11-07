@@ -36,7 +36,9 @@ const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v, |v| v, |v| v];
 /// v7: prototype links can fire on hover (`link_hover`) and tween matching layers
 /// (`link_smart`); an older app would turn them into plain click links on save.
 /// v8: layer blur and background blur (`blur`, `backdrop_blur`); an older app would drop them.
-pub const PAGE_VERSION: u32 = 8;
+/// v9: node rotation (`rotation`); an older app would draw the node upright and save it so.
+pub const PAGE_VERSION: u32 = 9;
+const PAGE_V8: u32 = 8;
 const PAGE_V7: u32 = 7;
 const PAGE_V6: u32 = 6;
 const PAGE_V5: u32 = 5;
@@ -48,6 +50,10 @@ const PAGE_V4: u32 = 4;
 /// Whether a page holds something an older app would drop on save: a named font or a link action.
 fn needs_v4(nodes: &[Node]) -> bool {
     nodes.iter().any(|n| n.text_style.font.is_some() || n.link_action.is_some())
+}
+
+fn needs_v9(nodes: &[Node]) -> bool {
+    nodes.iter().any(|n| n.style.rotation != 0.0)
 }
 
 fn needs_v8(nodes: &[Node]) -> bool {
@@ -64,8 +70,10 @@ fn needs_v6(doc: &Document) -> bool {
 
 /// The version a page is written as: the oldest one that can hold everything in it.
 fn page_version(doc: &Document, nodes: &[Node]) -> u32 {
-    if needs_v8(nodes) {
+    if needs_v9(nodes) {
         PAGE_VERSION
+    } else if needs_v8(nodes) {
+        PAGE_V8
     } else if needs_v7(nodes) {
         PAGE_V7
     } else if needs_v6(doc) {
@@ -215,7 +223,7 @@ struct PageFile {
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
-const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v, |v| v, |v| v, |v| v];
+const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v];
 /// Formats accepted as older versions of a page.
 const PAGE_ALIASES: &[&str] = &[LEGACY_FORMAT];
 
@@ -568,6 +576,25 @@ mod tests {
         let back = page_from_json(&json).unwrap();
         let s = &back.doc.get(NodeId(1)).unwrap().style;
         assert_eq!((s.blur, s.backdrop_blur), (4.0, 8.0));
+    }
+
+    #[test]
+    fn rotation_makes_a_v9_page_and_roundtrips() {
+        let v8 = r#"{"format":"paper-rs-page","version":8,"id":"a","name":"P","next_id":2,"root":[1],"nodes":[
+            {"id":1,"name":"T","type":"rect","rect":{"x":0,"y":0,"w":5,"h":5}}]}"#;
+        let mut p = page_from_json(v8).unwrap();
+        assert!(page_to_json(&p).contains("\"version\":3"), "no rotation: old format");
+        let n = p.doc.nodes.get_mut(&NodeId(1)).unwrap();
+        n.style.blur = 2.0;
+        assert!(page_to_json(&p).contains("\"version\":8"), "blur alone stays v8");
+        let n = p.doc.nodes.get_mut(&NodeId(1)).unwrap();
+        n.style.rotation = 30.0;
+        let json = page_to_json(&p);
+        assert!(json.contains("\"version\":9"));
+        let back = page_from_json(&json).unwrap();
+        assert_eq!(back.doc.get(NodeId(1)).unwrap().style.rotation, 30.0);
+        let too_new = json.replace("\"version\":9", "\"version\":10");
+        assert!(matches!(page_from_json(&too_new), Err(FormatError::TooNew { .. })));
     }
 
     #[test]

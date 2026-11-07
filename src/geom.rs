@@ -147,6 +147,43 @@ impl Rect {
     }
 }
 
+/// `p` turned by `deg` clockwise (y points down, as in CSS) around `c`.
+pub fn rotate_about(p: V2, c: V2, deg: f64) -> V2 {
+    let (s, k) = deg.to_radians().sin_cos();
+    let d = p - c;
+    v2(c.x + d.x * k - d.y * s, c.y + d.x * s + d.y * k)
+}
+
+impl Rect {
+    /// Corners: top-left, top-right, bottom-right, bottom-left.
+    pub fn corners(&self) -> [V2; 4] {
+        [
+            v2(self.x, self.y),
+            v2(self.right(), self.y),
+            v2(self.right(), self.bottom()),
+            v2(self.x, self.bottom()),
+        ]
+    }
+}
+
+/// Bounding box of points.
+pub fn bounds_of(points: &[V2]) -> Option<Rect> {
+    let first = *points.first()?;
+    let (mut lo, mut hi) = (first, first);
+    for p in points {
+        lo = v2(lo.x.min(p.x), lo.y.min(p.y));
+        hi = v2(hi.x.max(p.x), hi.y.max(p.y));
+    }
+    Some(Rect::new(lo.x, lo.y, hi.x - lo.x, hi.y - lo.y))
+}
+
+/// Whether `p` is inside the convex quad `q` (either winding).
+pub fn quad_contains(q: &[V2; 4], p: V2) -> bool {
+    let side = |a: V2, b: V2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    let signs = [side(q[0], q[1]), side(q[1], q[2]), side(q[2], q[3]), side(q[3], q[0])];
+    signs.iter().all(|s| *s >= 0.0) || signs.iter().all(|s| *s <= 0.0)
+}
+
 pub const MIN_ZOOM: f64 = 0.01;
 pub const MAX_ZOOM: f64 = 256.0;
 
