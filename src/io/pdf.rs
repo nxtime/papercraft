@@ -491,14 +491,16 @@ impl PageWriter<'_> {
         // A turned layer (or one inside one) is not where its unturned box says, so it is kept.
         let outside = self.cull.is_some_and(|c| !wr.intersects(&c))
             && doc.rotation_chain(id, true).is_empty();
-        if outside && (clip || n.children.is_empty()) {
+        // A boolean group paints its result; its operands are not drawn.
+        let leaf = n.children.is_empty() || n.is_boolean();
+        if outside && (clip || leaf) {
             return;
         }
         if !outside {
             let d = draw::node_draw(n, wr, op);
             self.ops(&d.ops, d.blend);
         }
-        if n.children.is_empty() {
+        if leaf {
             return;
         }
         if clip {

@@ -182,3 +182,17 @@ fn a_rotated_blurred_node_keeps_its_centre_and_loses_its_old_corner() {
     assert!(close(px(&img, v2(200.0, 150.0)), Color::BLACK, 12));
     assert!(!close(px(&img, v2(153.0, 103.0)), Color::BLACK, 60));
 }
+
+#[test]
+fn a_boolean_group_paints_its_result_not_its_operands() {
+    let Some(g) = gpu() else { return };
+    let mut e = editor(400.0, 300.0);
+    let a = rect(&mut e, Rect::new(50.0, 50.0, 200.0, 200.0), Color::BLACK, None);
+    let b = rect(&mut e, Rect::new(150.0, 150.0, 200.0, 100.0), Color::rgb(255, 0, 0), None);
+    e.select(vec![a, b]);
+    e.boolean(papercraft::model::BoolOp::Subtract);
+    let img = render_canvas(g, &e);
+    assert!(close(px(&img, v2(100.0, 100.0)), Color::BLACK, 3), "the minuend's fill paints the result");
+    assert!(!close(px(&img, v2(200.0, 200.0)), Color::BLACK, 30), "the cut-out is empty");
+    assert!(!close(px(&img, v2(300.0, 200.0)), Color::rgb(255, 0, 0), 30), "the subtrahend is not drawn");
+}

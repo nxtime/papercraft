@@ -354,3 +354,18 @@ fn m6_cli_exports_pdf_and_imports_excalidraw() {
     );
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+fn a_boolean_group_exports_as_one_path() {
+    use papercraft::geom::Rect;
+    use papercraft::model::{BoolOp, Node, NodeId, NodeKind};
+    let mut e = papercraft::editor::Editor::default();
+    let ids: Vec<NodeId> = [0.0, 50.0]
+        .map(|x| e.add_node(Node::new(NodeId(0), NodeKind::Rect, Rect::new(x, x, 100.0, 100.0)), None))
+        .into();
+    e.select(ids);
+    e.boolean(BoolOp::Subtract);
+    let svg = papercraft::io::svg::export(&e.doc, None, None).unwrap();
+    assert_eq!(svg.matches("<path").count(), 1, "{svg}");
+    assert!(!svg.contains("<rect"), "the operands are not drawn: {svg}");
+}

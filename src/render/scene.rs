@@ -349,7 +349,7 @@ impl SceneCache {
         // Level of detail: a layer under half a pixel at this bucket shows as nothing, so it
         // is not tessellated (its children are looked at on their own).
         let tiny = bounds.w.max(bounds.h) * 2f64.powi(bucket) < MIN_SCREEN_PX;
-        if visible && !tiny && !n.is_group() {
+        if visible && !tiny && !matches!(n.kind, NodeKind::Group) {
             let hit = self.entries.get(&id).is_some_and(|e| {
                 e.bucket == bucket && e.wr == wr && e.opacity == opacity && e.chain == chain
             });
@@ -395,7 +395,8 @@ impl SceneCache {
                 }
             }
         }
-        if n.children.is_empty() {
+        // The operands of a boolean group are not drawn: the group paints their result.
+        if n.children.is_empty() || n.is_boolean() {
             return;
         }
         let child_clip = match n.kind {
