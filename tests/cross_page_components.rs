@@ -348,10 +348,15 @@ fn a_clipping_frame_draws_its_border_over_its_filled_children() {
     let card = call(&mut h, "write_html", json!({"targetNodeId": ab["id"], "html": "<div style=\"display:flex;flex-direction:column;border:1px solid #ccc;border-radius:14px;overflow:hidden;width:300px\"><div style=\"align-self:stretch;height:40px;background:#eee\"></div><div style=\"align-self:stretch;height:40px;background:#fff\"></div></div>"}))["createdNodeIds"][0].clone();
     let card = num(&card);
     let items = papercraft::render::scene::SceneCache::default().items(&h.ed.doc, None, 1.0, None);
-    let order: Vec<NodeId> = items.iter().map(|i| i.id).collect();
+    // Drawn items only: the rounded clip's layer markers draw nothing themselves.
+    let order: Vec<NodeId> = items.iter().filter(|i| i.mark.is_none()).map(|i| i.id).collect();
     let kids = h.ed.doc.get(card).unwrap().children.clone();
     let last_kid = order.iter().rposition(|i| kids.contains(i)).unwrap();
     assert_eq!(order.iter().rposition(|i| *i == card), Some(last_kid + 1), "the border comes after the rows: {order:?}");
+    // And after the layer that composites the clipped rows, or the rows would cover it.
+    let end = items.iter().rposition(|i| i.id == card && i.mark.is_some()).expect("a rounded clip draws through a layer");
+    let border = items.iter().rposition(|i| i.id == card && i.mark.is_none()).unwrap();
+    assert!(border > end, "the border is drawn over the composited rows");
 }
 
 #[test]
