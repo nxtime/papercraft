@@ -247,9 +247,9 @@ impl BlendMode {
             BlendMode::Luminosity => "Luminosity",
         }
     }
-    /// Modes the GPU canvas composites exactly with fixed-function blending. The others are
-    /// drawn as Normal on the canvas and exported exactly to SVG.
-    pub fn gpu_exact(self) -> bool {
+    /// Modes fixed-function GPU blending expresses; the rest need a backdrop read (an offscreen
+    /// layer composited by shader).
+    pub fn fixed_function(self) -> bool {
         matches!(
             self,
             BlendMode::Normal

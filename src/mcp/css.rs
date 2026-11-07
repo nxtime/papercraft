@@ -779,6 +779,17 @@ pub fn substitute_vars(v: &str) -> (String, Vec<String>) {
     (out, missing)
 }
 
+/// `filter` / `backdrop-filter`: `none` or a lone `blur(<length>)`; other filter functions are
+/// unsupported (None).
+fn parse_blur(v: &str, font_size: f64) -> Option<f64> {
+    let v = v.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(0.0);
+    }
+    let inner = v.strip_prefix("blur(")?.strip_suffix(')')?;
+    length(inner.trim(), font_size).filter(|b| *b >= 0.0)
+}
+
 /// `box-shadow`: `none`, or `x y [blur [spread]] color` (first layer; `inset` is not supported).
 /// Outer None means unsupported.
 fn parse_shadow(v: &str) -> Option<Option<crate::model::Shadow>> {
@@ -871,7 +882,7 @@ pub fn override_keys(styles: &[(String, String)]) -> Vec<&'static str> {
             "width" | "height" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "size",
             "left" | "top" | "right" | "bottom" | "x" | "y" => "position",
             "borderRadius" => "radius",
-            "opacity" | "mixBlendMode" => "opacity",
+            "opacity" | "mixBlendMode" | "filter" | "backdropFilter" => "opacity",
             "fontSize"
             | "fontWeight"
             | "fontStyle"
@@ -1216,6 +1227,17 @@ fn apply_resolved(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> A
             "boxShadow" => match parse_shadow(v) {
                 Some(s) => {
                     n.style.shadow = s;
+                    true
+                }
+                None => false,
+            },
+            "filter" | "backdropFilter" => match parse_blur(v, fs) {
+                Some(b) => {
+                    if k == "filter" {
+                        n.style.blur = b;
+                    } else {
+                        n.style.backdrop_blur = b;
+                    }
                     true
                 }
                 None => false,
@@ -2024,6 +2046,12 @@ pub fn computed(n: &Node, parent_layout: Option<&AutoLayout>, is_root: bool) -> 
             ),
         );
     }
+    if n.style.blur > 0.0 {
+        put("filter", format!("blur({})", px(n.style.blur)));
+    }
+    if n.style.backdrop_blur > 0.0 {
+        put("backdropFilter", format!("blur({})", px(n.style.backdrop_blur)));
+    }
     if n.style.opacity < 1.0 {
         put(
             "opacity",
@@ -2099,7 +2127,7 @@ mod tests {
             &parse_inline(
                 "display:flex; flex-direction:column; gap:12px; padding:8px 16px; \
                  justify-content:center; align-items:flex-end; width:320px; height:fit-content; \
-                 background:#ff0000; border:2px dashed #000; border-radius:12px; box-shadow: 0 0 1px red",
+                 background:#ff0000; border:2px dashed #000; border-radius:12px; box-shadow: 0 0 1px red; filter: blur(4px); backdrop-filter: blur(12px)",
             ),
             &Context::default(),
         );
@@ -2114,10 +2142,14 @@ mod tests {
         assert_eq!(n.style.stroke_width, 2.0);
         assert!(!n.style.dash.is_empty());
         assert_eq!(n.style.corner_radius, 12.0);
+        assert_eq!((n.style.blur, n.style.backdrop_blur), (4.0, 12.0));
         assert!(a.ignored.is_empty(), "{:?}", a.ignored);
         let back = computed(&n, None, true);
         assert_eq!(back["flexDirection"], "column");
         assert_eq!(back["borderRadius"], "12px");
+        assert_eq!(back["filter"], "blur(4px)");
+        assert_eq!(back["backdropFilter"], "blur(12px)");
+        assert_eq!(parse_blur("grayscale(1)", 16.0), None);
     }
 
     #[test]

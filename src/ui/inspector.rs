@@ -2197,8 +2197,16 @@ fn effects(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             }
         });
     });
-    let Some(sh) = shadow else { return };
     let w = half(ui);
+    ui.horizontal(|ui| {
+        if let Some(v) = num_field(ui, ed, "Blur", first.style.blur, 0.5, 0.0..=500.0, w) {
+            apply(ed, "blur", ids, |n| n.style.blur = v);
+        }
+        if let Some(v) = num_field(ui, ed, "BG blur", first.style.backdrop_blur, 0.5, 0.0..=500.0, w) {
+            apply(ed, "background blur", ids, |n| n.style.backdrop_blur = v);
+        }
+    });
+    let Some(sh) = shadow else { return };
     let set = |ed: &mut Editor, f: fn(&mut crate::model::Shadow, f64), v: f64| {
         apply(ed, "shadow", ids, |n| {
             if let Some(s) = &mut n.style.shadow {

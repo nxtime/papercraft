@@ -365,6 +365,12 @@ pub(crate) fn tw_classes(doc: &Document, n: &Node, is_root: bool) -> String {
     } else if let Some(r) = tw_radius(n.style.corner_radius) {
         c.push(r);
     }
+    if n.style.blur > 0.0 {
+        c.push(format!("blur-[{}px]", px_num(n.style.blur)));
+    }
+    if n.style.backdrop_blur > 0.0 {
+        c.push(format!("backdrop-blur-[{}px]", px_num(n.style.backdrop_blur)));
+    }
     if let Some(sh) = n.style.shadow {
         c.push(format!(
             "shadow-[{}px_{}px_{}px_{}px_{}]",
@@ -1787,6 +1793,12 @@ fn build_spec_tree(
         if n.scroll {
             // How far the content reaches past the frame: code needs it for `overflow: auto`.
             m.insert("scroll".into(), json!(crate::editor::scroll_range(doc, n.id).round()));
+        }
+        if n.style.blur > 0.0 {
+            m.insert("blur".into(), json!(n.style.blur));
+        }
+        if n.style.backdrop_blur > 0.0 {
+            m.insert("backdropBlur".into(), json!(n.style.backdrop_blur));
         }
         if let Some(sh) = n.style.shadow {
             m.insert(

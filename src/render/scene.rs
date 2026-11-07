@@ -91,6 +91,39 @@ pub struct Item {
     /// World-space clip rectangle (from clipping frames).
     pub clip: Option<Rect>,
     pub blend: BlendMode,
+    /// Marks an offscreen layer's start or end (such items have no pieces); see [`Group`].
+    pub mark: Option<Mark>,
+}
+
+#[derive(Clone)]
+pub enum Mark {
+    Begin(Arc<Group>),
+    End,
+}
+
+/// Items between a [`Mark::Begin`] and its [`Mark::End`] are drawn to their own layer, which is
+/// then masked, blurred and composited over what is underneath (and over a blurred copy of it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    /// The node's shape, world space: the mask of a rounded clip, the area a background blur shows.
+    pub shape: Rect,
+    pub radii: [f64; 4],
+    /// Clip the layer to the rounded shape.
+    pub mask: bool,
+    /// Gaussian sigmas in world px.
+    pub blur: f64,
+    pub backdrop_blur: f64,
+    pub blend: BlendMode,
+}
+
+impl Item {
+    fn plain(id: NodeId, pieces: Arc<Vec<Piece>>, clip: Option<Rect>, blend: BlendMode) -> Item {
+        Item { id, pieces, clip, blend, mark: None }
+    }
+
+    fn mark(id: NodeId, clip: Option<Rect>, mark: Mark) -> Item {
+        Item { id, pieces: Arc::default(), clip, blend: BlendMode::Normal, mark: Some(mark) }
+    }
 }
 
 struct Entry {
@@ -228,13 +261,14 @@ impl SceneCache {
         let mut dim = crate::model::Node::new(NodeId(0), NodeKind::Rect, view);
         dim.style.fills = vec![crate::model::Paint::solid(Color::rgba(0, 0, 0, BACKDROP_ALPHA))];
         let pieces = Arc::new(tess.ops(&draw::node_draw(&dim, view, 1.0).ops));
-        out.push(Item { id: dim.id, pieces, clip: None, blend: BlendMode::default() });
+        out.push(Item::plain(dim.id, pieces, None, BlendMode::default()));
         let origin = doc.parent_origin(doc.get(o.id).and_then(|n| n.parent)) + o.shift;
         let opacity = draw::inherited_opacity(doc, o.id);
         self.walk(doc, o.id, origin, Some(o.window), opacity, bucket, &mut tess, None, &mut out);
         out
     }
 
+    /// Wraps a node whose blur or backdrop blur applies to it and its children in a layer.
     #[allow(clippy::too_many_arguments)]
     fn walk(
         &mut self,
@@ -247,6 +281,40 @@ impl SceneCache {
         tess: &mut Tess,
         cull: Option<Rect>,
         out: &mut Vec<Item>,
+    ) {
+        let Some(n) = doc.get(id) else { return };
+        let blurs = n.style.blur > 0.0 || n.style.backdrop_blur > 0.0;
+        let begin = out.len();
+        if blurs {
+            let g = Group {
+                shape: n.rect.translate(origin),
+                radii: shape_radii(n),
+                mask: false,
+                blur: n.style.blur.max(0.0),
+                backdrop_blur: n.style.backdrop_blur.max(0.0),
+                blend: n.style.blend,
+            };
+            out.push(Item::mark(id, clip, Mark::Begin(Arc::new(g))));
+        }
+        self.walk_node(doc, id, origin, clip, parent_opacity, bucket, tess, cull, out, blurs);
+        if blurs {
+            end_group(out, begin, id, clip, n.style.backdrop_blur > 0.0);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk_node(
+        &mut self,
+        doc: &Document,
+        id: NodeId,
+        origin: V2,
+        clip: Option<Rect>,
+        parent_opacity: f64,
+        bucket: i32,
+        tess: &mut Tess,
+        cull: Option<Rect>,
+        out: &mut Vec<Item>,
+        grouped: bool,
     ) {
         let Some(n) = doc.get(id) else { return };
         if !n.visible {
@@ -282,12 +350,25 @@ impl SceneCache {
             let e = self.entries.get_mut(&id).unwrap();
             e.used = true;
             if !e.pieces.is_empty() {
-                out.push(Item {
-                    id,
-                    pieces: e.pieces.clone(),
-                    clip,
-                    blend: n.style.blend,
-                });
+                // A blend the fixed-function pipeline cannot express reads the backdrop: the
+                // node alone goes to a layer. Inside a blur layer the layer carries the blend.
+                let own_layer = !grouped && !n.style.blend.fixed_function();
+                let blend = if grouped || own_layer { BlendMode::Normal } else { n.style.blend };
+                if own_layer {
+                    let g = Group {
+                        shape: wr,
+                        radii: shape_radii(n),
+                        mask: false,
+                        blur: 0.0,
+                        backdrop_blur: 0.0,
+                        blend: n.style.blend,
+                    };
+                    out.push(Item::mark(id, clip, Mark::Begin(Arc::new(g))));
+                }
+                out.push(Item::plain(id, e.pieces.clone(), clip, blend));
+                if own_layer {
+                    out.push(Item::mark(id, clip, Mark::End));
+                }
             }
         }
         if n.children.is_empty() {
@@ -308,11 +389,22 @@ impl SceneCache {
             return;
         }
         let o = wr.min() - crate::geom::v2(0.0, n.scroll_y);
+        // Rounded corners cannot be a scissor: the children go to a layer masked by the shape.
+        let radii = shape_radii(n);
+        let masked = matches!(n.kind, NodeKind::Frame { clip: true }) && radii.iter().any(|r| *r > 0.0);
+        let begin = out.len();
+        if masked {
+            let g = Group { shape: wr, radii, mask: true, blur: 0.0, backdrop_blur: 0.0, blend: BlendMode::Normal };
+            out.push(Item::mark(id, child_clip, Mark::Begin(Arc::new(g))));
+        }
         for c in &n.children {
             // Absolute children of a scrolled frame stay put (`Document::world_rect`).
             let pinned = doc.get(*c).is_some_and(|k| k.layout_child.absolute);
             let co = if pinned { wr.min() } else { o };
             self.walk(doc, *c, co, child_clip, opacity, bucket, tess, cull, out);
+        }
+        if masked {
+            end_group(out, begin, id, child_clip, false);
         }
         if visible && draw::border_on_top(n) {
             let hit = self.borders.get(&id).is_some_and(|e| e.bucket == bucket && e.wr == wr && e.opacity == opacity);
@@ -324,9 +416,27 @@ impl SceneCache {
             }
             let e = &self.borders[&id];
             if !e.pieces.is_empty() {
-                out.push(Item { id, pieces: e.pieces.clone(), clip, blend: n.style.blend });
+                out.push(Item::plain(id, e.pieces.clone(), clip, if grouped { BlendMode::Normal } else { n.style.blend }));
             }
         }
+    }
+}
+
+/// Corner radii of a node's shape (an ellipse is a rounded rect with half-size radii).
+fn shape_radii(n: &crate::model::Node) -> [f64; 4] {
+    if matches!(n.kind, NodeKind::Ellipse) {
+        [n.rect.w.min(n.rect.h) * 0.5; 4]
+    } else {
+        n.style.corner_radii()
+    }
+}
+
+/// Close the group opened at `begin`. An empty one is dropped unless it blurs the backdrop (a glass frame draws nothing).
+fn end_group(out: &mut Vec<Item>, begin: usize, id: NodeId, clip: Option<Rect>, keep: bool) {
+    if out.len() == begin + 1 && !keep {
+        out.pop();
+    } else {
+        out.push(Item::mark(id, clip, Mark::End));
     }
 }
 

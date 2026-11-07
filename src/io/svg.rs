@@ -303,11 +303,18 @@ impl Writer<'_> {
         let wr = doc.world_rect(id).unwrap();
         let ind = "  ".repeat(depth + 1);
         let op = opacity * nd.style.opacity;
-        let blend = if nd.style.blend != BlendMode::Normal {
-            format!(" style=\"mix-blend-mode:{}\"", nd.style.blend.css())
-        } else {
-            String::new()
-        };
+        // CSS properties browsers honor on SVG elements; PDF has no equivalent and drops them.
+        let mut css = Vec::new();
+        if nd.style.blend != BlendMode::Normal {
+            css.push(format!("mix-blend-mode:{}", nd.style.blend.css()));
+        }
+        if nd.style.blur > 0.0 {
+            css.push(format!("filter:blur({}px)", n(nd.style.blur)));
+        }
+        if nd.style.backdrop_blur > 0.0 {
+            css.push(format!("backdrop-filter:blur({}px)", n(nd.style.backdrop_blur)));
+        }
+        let blend = if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) };
         let label = esc(&nd.name);
         let aria = match &nd.kind {
             NodeKind::Text { text, .. } => format!(" aria-label=\"{}\"", esc(text)),

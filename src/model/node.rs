@@ -115,6 +115,12 @@ pub struct Style {
     /// Drop shadow (CSS `box-shadow`, first layer only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<Shadow>,
+    /// Layer blur (CSS `filter: blur()`): the Gaussian sigma in px over the node and its children.
+    #[serde(skip_serializing_if = "is_default")]
+    pub blur: f64,
+    /// Background blur (CSS `backdrop-filter: blur()`): sigma in px of what shows through the node.
+    #[serde(skip_serializing_if = "is_default")]
+    pub backdrop_blur: f64,
 }
 
 /// A soft drop shadow behind a box.
@@ -148,6 +154,8 @@ impl Default for Style {
             blend: BlendMode::Normal,
             rough: None,
             shadow: None,
+            blur: 0.0,
+            backdrop_blur: 0.0,
         }
     }
 }

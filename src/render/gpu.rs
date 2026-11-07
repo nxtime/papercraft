@@ -1,7 +1,8 @@
 //! wgpu pipeline for canvas batches, plus offscreen rendering for screenshots and PNG export.
 
 use super::mesh::Vertex;
-use super::scene::{CanvasFrame, Item};
+use super::layers::{self, Layers};
+use super::scene::{CanvasFrame, Group, Item, Mark};
 use super::tess;
 use crate::assets;
 use crate::geom::Rect;
@@ -142,7 +143,15 @@ fn blend_state(key: usize) -> wgpu::BlendState {
 /// (index range, world clip, blend key, image) of one cached world draw.
 type WorldDraw = (std::ops::Range<u32>, Option<Rect>, usize, Option<String>);
 
-struct Draw {
+/// One step of the cached world scene: a draw, or the start or end of an offscreen layer.
+enum WorldCmd {
+    Draw(WorldDraw),
+    /// The group, the clip it sits in and the world bounds of what it draws.
+    Begin(Arc<Group>, Option<Rect>, Rect),
+    End,
+}
+
+pub(super) struct Draw {
     range: std::ops::Range<u32>,
     /// Screen-space scissor (logical px), already intersected with the viewport.
     clip: Option<Rect>,
@@ -151,32 +160,65 @@ struct Draw {
     world: bool,
 }
 
+/// A full-screen triangle that composites a layer (scissored to `clip`, logical px).
+pub(super) struct Quad {
+    pub bg: wgpu::BindGroup,
+    pub pipeline: wgpu::RenderPipeline,
+    pub clip: Rect,
+}
+
+pub(super) enum Op {
+    Draw(Draw),
+    Quad(Quad),
+}
+
+/// A layer about to be drawn: how to composite it, in screen terms.
+pub(super) struct GroupRun {
+    pub group: Arc<Group>,
+    /// Area the composite covers (logical px, inside the viewport and the clip).
+    pub rect: Rect,
+    /// `rect` grown by the blur reach: the area blurs read and write.
+    pub wide: Rect,
+    /// Gaussian sigmas, physical px.
+    pub sigma: f32,
+    pub backdrop_sigma: f32,
+    /// The node's shape and corner radii, physical px.
+    pub shape: [f32; 4],
+    pub radii: [f32; 4],
+}
+
+pub(super) enum Cmd {
+    Op(Op),
+    Begin(GroupRun),
+    End,
+}
+
 /// Cached world-space geometry: reused while the item list is unchanged (panning, idle).
 struct WorldBuffers {
     signature: Vec<(usize, Option<[u64; 4]>, usize)>,
     vb: Option<wgpu::Buffer>,
     ib: Option<wgpu::Buffer>,
-    /// (index range, world clip, blend key, image) per draw.
-    draws: Vec<WorldDraw>,
+    cmds: Vec<WorldCmd>,
 }
 
 pub struct CanvasRenderer {
-    pipelines: Vec<wgpu::RenderPipeline>,
+    pub(super) pipelines: Vec<wgpu::RenderPipeline>,
+    pub(super) layers: Option<Layers>,
     world_globals: wgpu::Buffer,
     screen_globals: wgpu::Buffer,
-    world_bg: wgpu::BindGroup,
-    screen_bg: wgpu::BindGroup,
+    pub(super) world_bg: wgpu::BindGroup,
+    pub(super) screen_bg: wgpu::BindGroup,
     ramp_tex: wgpu::Texture,
-    ramp_bg: wgpu::BindGroup,
+    pub(super) ramp_bg: wgpu::BindGroup,
     ramp_version: u64,
     img_layout: wgpu::BindGroupLayout,
     img_sampler: wgpu::Sampler,
-    blank_img: wgpu::BindGroup,
+    pub(super) blank_img: wgpu::BindGroup,
     /// Uploaded images and when each was last drawn.
-    images: HashMap<String, (wgpu::BindGroup, Instant)>,
+    pub(super) images: HashMap<String, (wgpu::BindGroup, Instant)>,
     world: Option<WorldBuffers>,
     msaa: Option<(wgpu::TextureView, [u32; 2])>,
-    format: wgpu::TextureFormat,
+    pub(super) format: wgpu::TextureFormat,
     /// World geometry uploads (for tests: panning must not re-upload).
     pub uploads: u64,
 }
@@ -381,6 +423,7 @@ impl CanvasRenderer {
             .collect();
         CanvasRenderer {
             pipelines,
+            layers: None,
             world_globals,
             screen_globals,
             world_bg,
@@ -481,8 +524,14 @@ impl CanvasRenderer {
         let sig: Vec<(usize, Option<[u64; 4]>, usize)> = items
             .iter()
             .map(|it| {
+                let id = match &it.mark {
+                    // Groups are rebuilt every frame: compare what they hold, not the pointer.
+                    Some(Mark::Begin(g)) => layers::group_key(g),
+                    Some(Mark::End) => 1,
+                    None => Arc::as_ptr(&it.pieces) as usize,
+                };
                 (
-                    Arc::as_ptr(&it.pieces) as usize,
+                    id,
                     it.clip
                         .map(|c| [c.x.to_bits(), c.y.to_bits(), c.w.to_bits(), c.h.to_bits()]),
                     blend_key(it.blend),
@@ -495,22 +544,53 @@ impl CanvasRenderer {
         self.uploads += 1;
         let mut vertices: Vec<Vertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
-        let mut draws: Vec<WorldDraw> = Vec::new();
+        let mut cmds: Vec<WorldCmd> = Vec::new();
+        // Open groups: where their Begin sits and the bounds of what they drew so far.
+        let mut open: Vec<(usize, Option<Rect>)> = Vec::new();
         for it in items {
+            match &it.mark {
+                Some(Mark::Begin(g)) => {
+                    open.push((cmds.len(), None));
+                    cmds.push(WorldCmd::Begin(g.clone(), it.clip, g.shape));
+                    continue;
+                }
+                Some(Mark::End) => {
+                    if let Some((at, content)) = open.pop() {
+                        let bounds = match &mut cmds[at] {
+                            WorldCmd::Begin(g, _, bounds) => {
+                                *bounds = layers::group_bounds(g, content);
+                                *bounds
+                            }
+                            _ => continue,
+                        };
+                        if let Some((_, parent)) = open.last_mut() {
+                            *parent = Some(parent.map_or(bounds, |p| p.union(&bounds)));
+                        }
+                        cmds.push(WorldCmd::End);
+                    }
+                    continue;
+                }
+                None => {}
+            }
             let bk = blend_key(it.blend);
             for p in it.pieces.iter() {
+                if let Some((_, content)) = open.last_mut() {
+                    if let Some(r) = layers::mesh_bounds(&p.mesh.vertices) {
+                        *content = Some(content.map_or(r, |c| c.union(&r)));
+                    }
+                }
                 let base = vertices.len() as u32;
                 let start = indices.len() as u32;
                 vertices.extend_from_slice(&p.mesh.vertices);
                 indices.extend(p.mesh.indices.iter().map(|i| i + base));
                 let end = indices.len() as u32;
-                match draws.last_mut() {
-                    Some(d)
+                match cmds.last_mut() {
+                    Some(WorldCmd::Draw(d))
                         if d.1 == it.clip && d.2 == bk && d.3 == p.image && d.0.end == start =>
                     {
                         d.0.end = end
                     }
-                    _ => draws.push((start..end, it.clip, bk, p.image.clone())),
+                    _ => cmds.push(WorldCmd::Draw((start..end, it.clip, bk, p.image.clone()))),
                 }
             }
         }
@@ -541,7 +621,7 @@ impl CanvasRenderer {
             signature: sig,
             vb,
             ib,
-            draws,
+            cmds,
         });
     }
 
@@ -629,29 +709,56 @@ impl CanvasRenderer {
                 r.h * cam.zoom,
             )
         };
-        let world_draws: Vec<Draw> = self
-            .world
-            .as_ref()
-            .map(|w| {
-                w.draws
-                    .iter()
-                    .filter_map(|(range, clip, blend, image)| {
-                        let sc = match clip {
-                            Some(c) => vp.intersection(&to_screen(c))?,
-                            None => vp,
-                        };
-                        Some(Draw {
-                            range: range.clone(),
-                            clip: Some(sc),
-                            blend: *blend,
-                            image: image.clone(),
-                            world: true,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let px_per_world = cam.zoom as f32 * scale;
+        let mut cmds: Vec<Cmd> = under.into_iter().map(|d| Cmd::Op(Op::Draw(d))).collect();
+        let mut layered = false;
+        for c in self.world.iter().flat_map(|w| w.cmds.iter()) {
+            let area = |clip: &Option<Rect>| match clip {
+                Some(c) => vp.intersection(&to_screen(c)),
+                None => Some(vp),
+            };
+            match c {
+                WorldCmd::Draw((range, clip, blend, image)) => {
+                    let Some(sc) = area(clip) else { continue };
+                    cmds.push(Cmd::Op(Op::Draw(Draw {
+                        range: range.clone(),
+                        clip: Some(sc),
+                        blend: *blend,
+                        image: image.clone(),
+                        world: true,
+                    })));
+                }
+                WorldCmd::Begin(group, clip, bounds) => {
+                    layered = true;
+                    // A group clipped away entirely still needs its Begin and End balanced.
+                    let empty = Rect::new(0.0, 0.0, 0.0, 0.0);
+                    let area = area(clip).unwrap_or(empty);
+                    let rect = area.intersection(&to_screen(bounds)).unwrap_or(empty);
+                    cmds.push(Cmd::Begin(layers::group_run(
+                        group,
+                        rect,
+                        area,
+                        to_screen(&group.shape),
+                        px_per_world,
+                        scale,
+                    )));
+                }
+                WorldCmd::End => cmds.push(Cmd::End),
+            }
+        }
+        cmds.extend(over.into_iter().map(|d| Cmd::Op(Op::Draw(d))));
 
+        if layered {
+            self.render_layered(device, encoder, target, size, scale, clear, cmds, &sbuf);
+            return;
+        }
+        let ops: Vec<Op> = cmds
+            .into_iter()
+            .filter_map(|c| match c {
+                Cmd::Op(o) => Some(o),
+                _ => None,
+            })
+            .collect();
         let msaa = self.msaa_view(device, size).clone();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("canvas"),
@@ -675,8 +782,36 @@ impl CanvasRenderer {
             multiview_mask: None,
         });
         pass.set_bind_group(1, &self.ramp_bg, &[]);
+        self.encode(&mut pass, &ops, &sbuf, size, scale);
+    }
+
+    /// Record `ops` into `pass` (the ramp bind group must be set).
+    pub(super) fn encode(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        ops: &[Op],
+        sbuf: &Option<(wgpu::Buffer, wgpu::Buffer)>,
+        size: [u32; 2],
+        scale: f32,
+    ) {
         let mut current_pipeline = usize::MAX;
-        for d in under.iter().chain(&world_draws).chain(&over) {
+        for op in ops {
+            let d = match op {
+                Op::Draw(d) => d,
+                Op::Quad(q) => {
+                    let (x, y, w, h) = scissor(Some(q.clip), size, scale);
+                    if w > 0 && h > 0 {
+                        pass.set_pipeline(&q.pipeline);
+                        pass.set_bind_group(0, &q.bg, &[]);
+                        pass.set_scissor_rect(x, y, w, h);
+                        pass.draw(0..3, 0..1);
+                    }
+                    // The quad's pipeline has another layout: set the canvas state again.
+                    pass.set_bind_group(1, &self.ramp_bg, &[]);
+                    current_pipeline = usize::MAX;
+                    continue;
+                }
+            };
             let (vb, ib) = if d.world {
                 match self
                     .world
@@ -687,23 +822,12 @@ impl CanvasRenderer {
                     None => continue,
                 }
             } else {
-                match &sbuf {
+                match sbuf {
                     Some((v, i)) => (v, i),
                     None => continue,
                 }
             };
-            let (x, y, w, h) = match d.clip {
-                Some(c) => {
-                    let x0 = (c.x * scale as f64).floor().clamp(0.0, size[0] as f64);
-                    let y0 = (c.y * scale as f64).floor().clamp(0.0, size[1] as f64);
-                    let x1 = (c.right() * scale as f64).ceil().clamp(0.0, size[0] as f64);
-                    let y1 = (c.bottom() * scale as f64)
-                        .ceil()
-                        .clamp(0.0, size[1] as f64);
-                    (x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32)
-                }
-                None => (0, 0, size[0], size[1]),
-            };
+            let (x, y, w, h) = scissor(d.clip, size, scale);
             if w == 0 || h == 0 || d.range.is_empty() {
                 continue;
             }
@@ -732,6 +856,17 @@ impl CanvasRenderer {
             pass.draw_indexed(d.range.clone(), 0, 0..1);
         }
     }
+}
+
+/// A logical-px rect as a scissor in physical px, kept inside the target.
+pub(super) fn scissor(c: Option<Rect>, size: [u32; 2], scale: f32) -> (u32, u32, u32, u32) {
+    let Some(c) = c else { return (0, 0, size[0], size[1]) };
+    let s = scale as f64;
+    let x0 = (c.x * s).floor().clamp(0.0, size[0] as f64);
+    let y0 = (c.y * s).floor().clamp(0.0, size[1] as f64);
+    let x1 = (c.right() * s).ceil().clamp(0.0, size[0] as f64);
+    let y1 = (c.bottom() * s).ceil().clamp(0.0, size[1] as f64);
+    (x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32)
 }
 
 /// A device without a window, for tests, screenshots and PNG export.

@@ -48,12 +48,12 @@ Agents can already build a design system through the tools; people cannot yet ma
 |---|---|---|---|
 | 23 | Prototyping links and flows | **done** | Prototype tab in the inspector; Present mode follows links with a camera glide. While-hovering links (reverted on leave) and smart transitions (layers with the same name tween position, size, opacity and fill) are in; pressed states for components todo. |
 | 24 | Responsive constraints and breakpoint preview | partial | Constraints exist in the editor; `export_site` merges frames named `Home @mobile` or `Home @768` into one page with media queries. View > Breakpoint Preview shows the selected screen at 375 / 768 / 1280 or a variant's width from a copy of the document (desktop app; not on the web build). |
-| 25 | Shadows, blur and effects | partial | Drop shadow is an inspector effect. Layer and background blur todo (needs a renderer pass). |
+| 25 | Shadows, blur and effects | **done** | Drop shadow, layer blur and background blur are inspector effects (`filter: blur()` and `backdrop-filter: blur()` in CSS, Tailwind and SVG; PDF export drops the blurs). Rendered through offscreen layers (`src/render/layers.rs`). |
 | 26 | Margin and grid layout | partial | Wrapped-line cross alignment, per-line fill/align, and `layout_grid` track layout (`src/layout.rs`) implemented; `write_html` honours CSS margin (shorthand, per side, `auto`; block siblings collapse, flex margins add). |
 | 27 | Font choice | **done** | `install_font` adds a .ttf or .otf to the project; `font-family` applies it to a text layer. |
 | 28 | Rotation | todo | Nodes are axis-aligned. |
-| 29 | Overlay, dodge, burn, light blend modes on the canvas | todo | Exact in SVG and PDF export, approximated as Normal on the canvas. |
-| 30 | Rounded frame clipping | todo | Clipping is a rectangle. |
+| 29 | Overlay, dodge, burn, light blend modes on the canvas | **done** | All 16 modes draw on the canvas; the ones the GPU cannot blend in fixed function read the backdrop through an offscreen layer. |
+| 30 | Rounded frame clipping | **done** | A clipping frame with a corner radius (per corner too) masks its children to the rounded shape on the canvas; nested clips work. Layers nest three deep, deeper ones draw into their parent unmasked. |
 | 31 | Non-destructive booleans | todo | The result is a flattened path. |
 
 ## 4. Files and collaboration
