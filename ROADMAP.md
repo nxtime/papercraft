@@ -62,7 +62,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 |---|---|---|---|
 | 32 | Version history | **done** | Named and automatic saved versions per page: rename, restore, delete (`src/versions.rs`). Restore now includes variables and tokens; right-click a version to compare it with the current page, or pick two versions (read-only, list only for two saved versions). |
 | 33 | Figma import | **done** | `.fig` binary (Kiwi wire decoder + zip container) and Figma REST API JSON import in `src/io/fig.rs`. |
-| 34 | Multiplayer and cloud sync | partial | Optional shared projects through the relay, with merge of concurrent edits to one page. Presence (cursors, selections) todo. Stays optional. |
+| 34 | Multiplayer and cloud sync | **done** | Optional shared projects through the relay, with merge of concurrent edits to one page. Presence: other devices' cursors and selections, each with the device name and a colour, fading when idle and gone when the device leaves; in memory only (never in the document, the files or undo), native and browser alike. Stays optional. |
 | 35 | Release builds for Windows and Linux | **done** | Releases ship Windows (MSI and portable zip), macOS and Linux builds. |
 
 ## 5. Quality
@@ -81,7 +81,7 @@ Spec: [specs/agent-runs/spec.md](specs/agent-runs/spec.md), tasks: [specs/agent-
 |---|---|---|---|
 | 39 | Agent runs and auto-versions | **done** | Editing calls group into runs; edited pages get auto-versions; runs persist, revert per page, and prune to 50. |
 | 40 | Review agent changes | **done** | Id-paired diff, grouped review, canvas overlay, per-change revert and accept all; version compare reuses the same diff and overlay. |
-| 41 | Agent presence on the canvas | partial | Layers an agent touches get a fading outline and a cursor labelled with the verb and client; the chat can stop its own run. Pausing an external MCP client is todo. |
+| 41 | Agent presence on the canvas | **done** | Layers an agent touches get a fading outline and a cursor labelled with the verb and client; the chat can stop its own run. An external MCP client that called lately gets a Pause control on the canvas: its editing calls wait (reads go on) until you resume, or are refused with a "paused by the user" error after 100 s; none is lost or half applied. |
 | 42 | `get_context` tool | **done** | Selection, outline with token estimates, variables, components and lint summary in one call, so an agent orients in one round trip. Big reads take `maxTokens` and report `estimatedTokens` and `truncated`. |
 | 43 | Comments assigned to agents | todo | `@agent` in a thread triggers an edit and a reply. Needs threaded comments. |
 | 44 | In-app prompt bar | **done** | Chat mode: Claude Code, Codex or your own Anthropic key; see `docs/chat.md`. |

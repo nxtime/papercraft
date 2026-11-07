@@ -769,6 +769,7 @@ impl Web {
             &self.ed,
         );
         self.dirty |= self.st.sync_runs(&self.ctx, &mut self.runs, &self.ed);
+        self.st.presence = self.session.presence();
         if self.relay.tick(now) {
             self.dirty = true;
         }

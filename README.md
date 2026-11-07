@@ -284,7 +284,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 * **Booleans are destructive:** the result is a new vector path with flattened curves.
 * **`write_html`** ignores margin, tables and transforms (it reports them as `ignoredStyles`) and does not fetch remote images; pass a local path or a `data:` URI.
 * **Agents:** one project is open at a time in the app, and `move_nodes` stays on one page. The in-app Chat mode runs Claude Code, Codex, ACP agents or your own Anthropic key. Agents that are not in Chat connect over MCP or the CLI.
-* **Sharing** has no live presence (cursors, selections) yet.
+* **Presence** on a shared project shows the other devices' cursors and selections on the page you are looking at (not which page the others are on), and needs a relay that has the presence route; with an older relay it is simply off. Pausing an agent covers external MCP clients; a call waits at most 100 s before it is refused.
 * **Scale:** cached frames take about 3 ms at 10k visible nodes; it is not tuned for 100k.
 * **Pen pressure** is simulated from stroke velocity on macOS tablets, because winit 0.30 does not expose it for mouse-like pen events.
 * **Releases** cover Windows x64, macOS on Apple silicon and Linux x86_64; other platforms build from source. The Windows downloads are unsigned and the macOS builds are not notarized.

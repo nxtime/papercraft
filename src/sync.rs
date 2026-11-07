@@ -105,7 +105,7 @@ impl Share {
         })
     }
 
-    fn base(&self) -> String {
+    pub fn base(&self) -> String {
         format!("{}/p/{}", self.server, self.token)
     }
 }
@@ -114,14 +114,14 @@ impl Share {
 /// (`crypto.getRandomValues` in the browser) and never from a seeded PRNG. Failing to get
 /// entropy stops the share instead of minting a guessable link.
 #[cfg(not(target_arch = "wasm32"))]
-fn new_token() -> String {
+pub(crate) fn new_token() -> String {
     let mut bytes = [0u8; relay_proto::TOKEN_BYTES];
     getrandom::fill(&mut bytes).expect("the operating system has no random number generator");
     relay_proto::hex(&bytes)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn new_token() -> String {
+pub(crate) fn new_token() -> String {
     crate::web::new_token()
 }
 
@@ -458,6 +458,8 @@ pub struct Status {
     stop: AtomicBool,
     /// Set by the shell while the open project holds unsaved edits: see [`sync_once_holding`].
     hold: AtomicBool,
+    /// Cursors and selections of the other devices on this project (memory only).
+    pub presence: Arc<crate::presence::Link>,
     inner: Mutex<Inner>,
 }
 
@@ -618,6 +620,12 @@ impl Sync {
             ..Status::default()
         });
         net::spawn(run(dir.to_path_buf(), status.clone()));
+        if let Some(share) = Share::load(dir) {
+            net::spawn(crate::presence::run(share.base(), status.presence.clone(), {
+                let status = status.clone();
+                move || status.stop.load(Ordering::Relaxed)
+            }));
+        }
         self.running.insert(dir.to_path_buf(), status);
     }
 
@@ -719,7 +727,7 @@ impl Sync {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-mod net {
+pub(crate) mod net {
     use std::sync::OnceLock;
     use std::time::Duration;
 
@@ -762,7 +770,7 @@ mod net {
 }
 
 #[cfg(target_arch = "wasm32")]
-mod net {
+pub(crate) mod net {
     use std::time::Duration;
     use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
