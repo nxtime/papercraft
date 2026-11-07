@@ -5,6 +5,7 @@ pub mod document;
 pub mod link;
 pub mod node;
 pub mod paint;
+pub mod rotation;
 pub mod rough;
 pub mod type_style;
 

@@ -121,6 +121,10 @@ pub struct Style {
     /// Background blur (CSS `backdrop-filter: blur()`): sigma in px of what shows through the node.
     #[serde(skip_serializing_if = "is_default")]
     pub backdrop_blur: f64,
+    /// Rotation in degrees, clockwise, around the node's centre (CSS `transform: rotate()`).
+    /// Visual only: layout, constraints and `rect` stay in unrotated coordinates.
+    #[serde(skip_serializing_if = "is_default")]
+    pub rotation: f64,
 }
 
 /// A soft drop shadow behind a box.
@@ -156,6 +160,7 @@ impl Default for Style {
             shadow: None,
             blur: 0.0,
             backdrop_blur: 0.0,
+            rotation: 0.0,
         }
     }
 }
