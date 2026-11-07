@@ -35,3 +35,8 @@ npm run test:phone       # after mobile-ui is merged: PAPERCRAFT_E2E_PHONE=1, ev
 
 Scenario 9 (Chat with a fake agent) is `test.skip` with a TODO until server-agent's chat frames
 and test stand-in exist. Not part of CI.
+
+## Canvas effects (`tests/render-fx.spec.mjs`)
+
+Rounded clip, layer blur, background blur and multiply, checked by pixel probes and console errors.
+Run it on WebGPU (default) and on WebGL2 with `PAPERCRAFT_E2E_GL=1`, which hides `navigator.gpu`.
