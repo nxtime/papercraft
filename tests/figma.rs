@@ -336,7 +336,8 @@ fn booleans_and_flatten() {
     e.boolean(BoolOp::Subtract);
     let id = e.selection[0];
     let n = e.doc.get(id).unwrap();
-    assert!(matches!(n.kind, NodeKind::Path { .. }));
+    // A live group: the operands stay as children (Flatten bakes it into a path).
+    assert!(matches!(n.kind, NodeKind::Boolean { .. }) && n.children == [a, b], "{:?}", n.kind);
     assert_eq!(
         n.style.fill(),
         Some(RED),
