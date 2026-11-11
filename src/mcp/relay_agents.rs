@@ -9,12 +9,13 @@
 
 use super::relay_proto::{AgentInfo, FromTab, ToTab};
 use crate::chat::events::{Event, Turn, TurnConfig};
+use crate::chat::models::{self, FREE_AUTO, MAX_FALLBACKS};
 use crate::chat::{acp, agents, claude_code, valid_id};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 pub const CLAUDE: &str = "claude-code";
@@ -249,7 +250,21 @@ fn launch(agent: &str, cfg: &TurnConfig, opencode_bin: Option<PathBuf>, text: &s
     }
     let program = opencode_bin.or_else(|| crate::chat::path::which("opencode")).ok_or("opencode was not found on the server")?;
     let args: Vec<String> = agents::find(OPENCODE).map(|d| d.launch.iter().map(|a| (*a).to_string()).collect()).unwrap_or_default();
-    Ok(Box::new(acp::start(cfg, &program, &args, &agents::hosted_env(), text, tx)?))
+    let env = agents::hosted_env();
+    let mut cfg = cfg.clone();
+    if cfg.model.is_none() || cfg.model.as_deref() == Some(FREE_AUTO) {
+        // shortcut: listed once per relay process; a redeploy picks up new free models.
+        static FREE: OnceLock<Vec<String>> = OnceLock::new();
+        let free = FREE.get_or_init(|| models::free_order(&models::fetch_opencode(&program, &env).unwrap_or_default(), &[]));
+        (cfg.model, cfg.fallbacks) = free_pick(free);
+    }
+    Ok(Box::new(acp::start(&cfg, &program, &args, &env, text, tx)?))
+}
+
+/// "Free (auto)" on the server: the most capable free model, then the next ones as fallbacks.
+/// The tab cannot resolve it, since only the server knows which models its opencode offers.
+fn free_pick(free: &[String]) -> (Option<String>, Vec<String>) {
+    (free.first().cloned(), free.iter().skip(1).take(MAX_FALLBACKS).cloned().collect())
 }
 
 /// Forwards events until the turn ends, the tab leaves or the agent goes quiet.
@@ -299,5 +314,12 @@ mod tests {
         assert_eq!(cfg.enabled, [CLAUDE, OPENCODE]);
         assert!(AgentsConfig::new("claude,bash", PathBuf::from("x")).is_err());
         assert!(AgentsConfig::new(" ", PathBuf::from("x")).is_err());
+    }
+
+    #[test]
+    fn free_auto_starts_on_the_first_free_model_and_falls_back_to_the_next() {
+        let free: Vec<String> = ["a", "b", "c", "d"].map(String::from).into();
+        assert_eq!(free_pick(&free), (Some("a".into()), vec!["b".into(), "c".into()]));
+        assert_eq!(free_pick(&[]), (None, vec![]));
     }
 }
