@@ -20,7 +20,7 @@ USAGE:
 OPTIONS:
   --listen <addr>       address to serve on (default: $PAPERCRAFT_RELAY_LISTEN or 0.0.0.0:8787)
   --static <dir>        serve the built web app from <dir> (e.g. the repo's web/ directory)
-  --allow-origin <o>    only let this browser origin connect a tab (default: any)
+  --allow-origin <o>    only let these browser origins (comma-separated) connect a tab (default: any)
   --data <dir>          keep shared projects in <dir> (off without it): /p/{token}/...
   --library             with --data: a personal library. Every project in <dir> is listed at
                         /library and synced to every device that opens this server, with no

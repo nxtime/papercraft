@@ -2166,7 +2166,8 @@ fn header(ui: &mut Ui, st: &mut UiState) -> Option<egui::Rect> {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            if kit::lottie_button(ui, "settings", "Chat settings", 26.0).clicked() {
+            // The server picks the agents in a browser: there is nothing to set up here.
+            if !cfg!(target_arch = "wasm32") && kit::lottie_button(ui, "settings", "Chat settings", 26.0).clicked() {
                 st.settings.open_chat();
             }
             let list = theme::icon_button(ui, Icon::Restore, 26.0, false).on_hover_text("Chat history");

@@ -197,6 +197,7 @@ impl Web {
         if !demo && let Ok(origin) = loc.origin() {
             session.follow_library(&origin);
         }
+        st.perf.gpu = format!("{} ({:?})", adapter_info.name, adapter_info.backend);
         Ok(Web {
             painter: Painter::new(&device, format),
             canvas,
@@ -902,6 +903,7 @@ impl Web {
             !self.st.show_grid_off,
         );
         crate::ui::present::unpaint_tween(&mut self.ed, tween);
+        self.st.perf.record((now - self.start_ms) / 1000.0, (now_ms() - now) as f32);
         self.queue.present(frame);
     }
 }
