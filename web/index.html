@@ -23,8 +23,15 @@
 <div id="safe-area"></div>
 <canvas id="papercraft"></canvas>
 <script type="module">
-  import init from "./pkg/papercraft.js";
-  init();
+  // The glue and the wasm must come from the same build: a browser that kept an older
+  // papercraft.js fails to link the new wasm. pkg/build.txt names the build, so each deploy
+  // loads both under new URLs.
+  const build = await fetch("./pkg/build.txt", { cache: "no-store" })
+    .then((r) => (r.ok ? r.text() : ""))
+    .catch(() => "");
+  const v = encodeURIComponent(build.trim() || Date.now());
+  const { default: init } = await import(`./pkg/papercraft.js?v=${v}`);
+  init({ module_or_path: `./pkg/papercraft_bg.wasm?v=${v}` });
 </script>
 </body>
 </html>

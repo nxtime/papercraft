@@ -298,6 +298,16 @@ async fn static_files_are_served_with_their_type() {
     assert_eq!(r.status(), 200);
     assert_eq!(r.headers().get("content-type").unwrap(), "application/wasm");
 
+    // index.html loads the glue and the wasm under a build stamp: the query names the file
+    // it already names without one.
+    let r = http
+        .get(format!("{base}/pkg/papercraft_bg.wasm?v=0123abcd"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers().get("content-type").unwrap(), "application/wasm");
+
     let r = http
         .get(format!("{base}/pkg/missing.js"))
         .send()
