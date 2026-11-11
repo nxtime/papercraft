@@ -11,6 +11,7 @@
 mod dom;
 mod files;
 mod relay;
+mod routing;
 mod touch;
 pub(crate) use relay::new_token;
 
@@ -77,6 +78,7 @@ struct Web {
     toast_until: Option<f64>,
     /// The status text last seen and when it first appeared, to let it fade.
     status_seen: (String, f64),
+    routing: routing::Routing,
 }
 
 type Shared = Rc<RefCell<Web>>;
@@ -225,6 +227,7 @@ impl Web {
             mirror,
             toast_until: None,
             status_seen: (String::new(), 0.0),
+            routing: Default::default(),
         })
     }
 
@@ -840,6 +843,7 @@ impl Web {
             || self.st.home.as_ref().is_some_and(|h| !h.actions.is_empty());
         self.handle_requests();
         self.handle_home_actions();
+        self.sync_route(now);
         self.handle_agent_actions(now);
         self.tick_sync(now);
         if self.st.library.dirty {
@@ -1091,9 +1095,12 @@ fn run(web: Shared) {
     let resized = |w: Shared| -> Closure<dyn FnMut(web_sys::Event)> {
         Closure::new(move |_| w.borrow_mut().dirty = true)
     };
-    let cb = resized(web.clone());
-    let _ = window().add_event_listener_with_callback("resize", cb.as_ref().unchecked_ref());
-    cb.forget();
+    // Back, forward and an edited URL change the hash without any input either (see `routing`).
+    for name in ["resize", "hashchange", "popstate"] {
+        let cb = resized(web.clone());
+        let _ = window().add_event_listener_with_callback(name, cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
     if let Some(vv) = window().visual_viewport() {
         for name in ["resize", "scroll"] {
             let cb = resized(web.clone());
