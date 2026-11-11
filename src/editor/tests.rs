@@ -720,3 +720,20 @@ fn ancestors_and_validate_stop_on_a_parent_loop() {
     assert!(e.doc.is_ancestor(b, a));
     assert!(e.doc.validate().is_err(), "a loop is reported, not followed");
 }
+
+#[test]
+fn ime_preedit_is_drawn_at_the_caret_while_editing() {
+    let mut e = ed();
+    press(&mut e, 't');
+    down(&mut e, 100.0, 100.0, 0.0);
+    up(&mut e, 100.0, 100.0, 10.0);
+    e.handle(InputEvent::Text("ab".into()));
+    let indices = |e: &Editor| {
+        let mut mb = crate::render::mesh::MeshBuilder::default();
+        crate::render::scene::overlay(&mut mb, e, crate::geom::V2::ZERO);
+        mb.finish().iter().map(|b| b.mesh.indices.len()).sum::<usize>()
+    };
+    let plain = indices(&e);
+    e.preedit = Some("\u{3042}\u{3044}".into());
+    assert!(indices(&e) > plain, "the composition adds a backing, glyphs and an underline");
+}
