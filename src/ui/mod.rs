@@ -808,10 +808,10 @@ fn round_corners(
 
 /// Lay out the chrome and return the remaining canvas rectangle (logical px).
 impl UiState {
-    /// Switch Design | Chat and remember it for the open project. Chat needs the desktop app
-    /// and an open project.
+    /// Switch Design | Chat and remember it for the open project. Chat needs an open project,
+    /// and in a browser a relay that runs agents.
     pub fn set_chat_mode(&mut self, on: bool) {
-        let on = on && !cfg!(target_arch = "wasm32") && self.project_dir.is_some();
+        let on = on && chat::chat_allowed() && self.project_dir.is_some();
         self.chat_mode = on;
         if let Some(dir) = &self.project_dir {
             chat::remember_mode(dir, on);

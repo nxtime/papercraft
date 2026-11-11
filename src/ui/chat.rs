@@ -629,7 +629,7 @@ impl ChatState {
         let prefs = Prefs::load();
         #[cfg(not(target_arch = "wasm32"))]
         let tools = self.tools.take();
-        let on = !cfg!(target_arch = "wasm32")
+        let on = chat_allowed()
             && dir.as_ref().is_some_and(|d| prefs.chat.contains(&d.to_string_lossy().into_owned()));
         let detect = self.detect.take();
         let hosted = std::mem::take(&mut self.hosted);
@@ -2535,9 +2535,15 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
     }
 }
 
+/// Whether Chat mode can open: always in the desktop app, and in a browser once the relay has
+/// said it runs agents.
+pub fn chat_allowed() -> bool {
+    !cfg!(target_arch = "wasm32") || chat_hosted::available()
+}
+
 /// The `Design | Chat` switch for the top bar. Returns the new mode when the user picked one.
 pub fn mode_switch(ui: &mut Ui, chat_mode: bool) -> Option<bool> {
-    let off = (cfg!(target_arch = "wasm32") && !chat_hosted::available()).then_some(WEB_NOTE);
+    let off = (!chat_allowed()).then_some(WEB_NOTE);
     kit::segmented(ui, &[("Design", None), ("Chat", off)], usize::from(chat_mode)).map(|i| i == 1)
 }
 
