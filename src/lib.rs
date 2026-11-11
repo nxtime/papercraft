@@ -36,6 +36,7 @@ pub mod pause;
 pub mod presence;
 pub mod project;
 pub mod render;
+pub mod route;
 pub mod session;
 pub mod sync;
 pub mod shaping;

@@ -130,4 +130,4 @@ console_error_panic_hook = "0.1"
 console_log = "1"
 # zstd without C, for the browser: reads the packed files native builds write.
 ruzstd = "0.8"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "KeyboardEvent", "PointerEvent", "WheelEvent", "ClipboardEvent", "DataTransfer", "MediaQueryList", "Location", "Performance", "Navigator", "Clipboard", "CssStyleDeclaration", "console", "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "Storage", "Crypto", "DragEvent", "FileList", "File", "Blob", "Request", "RequestInit", "Response", "VisualViewport"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "KeyboardEvent", "PointerEvent", "WheelEvent", "ClipboardEvent", "DataTransfer", "MediaQueryList", "Location", "History", "Performance", "Navigator", "Clipboard", "CssStyleDeclaration", "console", "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "Storage", "Crypto", "DragEvent", "FileList", "File", "Blob", "Request", "RequestInit", "Response", "VisualViewport"] }
