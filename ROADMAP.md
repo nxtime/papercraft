@@ -5,7 +5,8 @@ file lists what is still missing, in priority order, with an honest status. Ever
 against the code on 2026-11-11 (0.11.1): `src/mcp/tools.rs` for tools, the UI code, and the limits the notes quote. Milestone history is in
 [PROGRESS.md](PROGRESS.md); known rendering and import limits are in the README.
 
-Status: **done** (works today), **partial** (some of it works), **todo**.
+Status: **done** (works today), **partial** (some of it works), **todo**. Open rows carry a target date: an
+estimate set on 2026-11-11; a row may land early, and a date that slips is moved here.
 
 ## 1. Design systems (the current focus)
 
@@ -26,7 +27,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 11 | Swap instance, detach by tool | **done** | `swap_instance` and `detach_instance` MCP tools + UI controls in Design tab and Inspector. |
 | 12 | Cross-page and shared libraries | **done** | Instances of a main on any page; publish a project as a library, enable, update and disable it in other projects (Libraries modal, `*_library` tools). |
 | 13 | Export design tokens | **done** | `get_variables` with `format: "css"`, `"json"` (W3C DTCG + modes), or `"tailwind"` (`@theme`), plus Copy CSS / Copy JSON in Design tab. |
-| 14 | Apply a design system to existing work | partial | `lint_design {fix: true}` links matching literal colors to variables, snaps spacing/type scale, binds literal gap, padding, radius and font-size numbers to number variables of the same value, and applies an exactly matching text style; each change is listed in `fixes`. |
+| 14 | Apply a design system to existing work | partial | `lint_design {fix: true}` links matching literal colors to variables, snaps spacing/type scale, binds literal gap, padding, radius and font-size numbers to number variables of the same value, and applies an exactly matching text style; each change is listed in `fixes`. **Target: end of March 2027.** |
 
 ## 2. Agent workflow
 
@@ -36,7 +37,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 16 | Agent skills | **done** | `skills/papercraft`, `skills/papercraft-design` and `skills/papercraft-critique`. |
 | 17 | Accessibility annotations | **done** | `set_accessibility`: alt text, decorative, roles, heading levels and reading order on layers, checked by `lint_design` and used by `export_site`. |
 | 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |
-| 19 | Plugin and skill marketplace | todo | Skills are copied by hand today. |
+| 19 | Plugin and skill marketplace | todo | Skills are copied by hand today. **Target: end of June 2027.** |
 | 20 | Screenshot diffing | **done** | `diff_frames` tool (`src/mcp/diff.rs`) for structural/property frame diffing + `diff_rgba` pixel diffing with highlight PNG. |
 | 21 | Moving nodes between pages | **done** | `move_nodes {toPageId}` keeps instances linked, notes attached, and remaps prototype links and connectors. |
 | 22 | Remote images in `write_html` | **done** | http(s) images are fetched from public addresses only, with redirects re-checked, a 10 MB cap and a 15 s deadline. |
@@ -47,9 +48,9 @@ Agents can already build a design system through the tools; people cannot yet ma
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 23 | Prototyping links and flows | **done** | Prototype tab in the inspector; Present mode follows links with a camera glide. While-hovering links (reverted on leave) and smart transitions (layers with the same name tween position, size, opacity and fill) are in; pressed states for components todo. |
-| 24 | Responsive constraints and breakpoint preview | partial | Constraints exist in the editor; `export_site` merges frames named `Home @mobile` or `Home @768` into one page with media queries. View > Breakpoint Preview shows the selected screen at 375 / 768 / 1280 or a variant's width from a copy of the document (desktop app; not on the web build). |
+| 24 | Responsive constraints and breakpoint preview | partial | Constraints exist in the editor; `export_site` merges frames named `Home @mobile` or `Home @768` into one page with media queries. View > Breakpoint Preview shows the selected screen at 375 / 768 / 1280 or a variant's width from a copy of the document (desktop app; not on the web build). **Target: end of January 2027 (in the browser too).** |
 | 25 | Shadows, blur and effects | **done** | Drop shadow, layer blur and background blur are inspector effects (`filter: blur()` and `backdrop-filter: blur()` in CSS, Tailwind and SVG; PDF export drops the blurs). Rendered through offscreen layers (`src/render/layers.rs`). |
-| 26 | Margin and grid layout | partial | Wrapped-line cross alignment, per-line fill/align, and `layout_grid` track layout (`src/layout.rs`) implemented; `write_html` honours CSS margin (shorthand, per side, `auto`; block siblings collapse, flex margins add). |
+| 26 | Margin and grid layout | partial | Wrapped-line cross alignment, per-line fill/align, and `layout_grid` track layout (`src/layout.rs`) implemented; `write_html` honours CSS margin (shorthand, per side, `auto`; block siblings collapse, flex margins add). **Target: end of March 2027.** |
 | 27 | Font choice | **done** | `install_font` adds a .ttf or .otf to the project; `font-family` applies it to a text layer. |
 | 28 | Rotation | **done** | `rotation` in degrees around the centre (CSS `rotate()`; layout and `rect` stay unrotated), page format v9. Rendered, hit-tested and clipped along the rotated outline; the canvas has a rotate knob (Shift snaps to 15°) and the inspector a Rotate field; `transform: rotate()` in HTML, CSS, Tailwind `rotate-[..]`, SVG and PDF. Known limits: resizing a turned layer by handles (use W/H), snapping, guides, connectors and drop targets ignore the turn, and a multi-selection has no knob. |
 | 29 | Overlay, dodge, burn, light blend modes on the canvas | **done** | All 16 modes draw on the canvas; the ones the GPU cannot blend in fixed function read the backdrop through an offscreen layer. |
@@ -69,9 +70,9 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 36 | Pen pressure on macOS tablets | todo | winit 0.30 does not expose pressure for mouse-like pen events. |
+| 36 | Pen pressure on macOS tablets | todo | winit 0.30 does not expose pressure for mouse-like pen events. **Target: none; it waits on winit.** |
 | 37 | Text shaping, ligatures, RTL | **done** | HarfRust shaping (ligatures, kerning, Arabic joining, marks) and Unicode bidi in one layout that wrapping, carets, selection, rendering and exports share; the IME composition shows at the caret. Limits: no bundled Arabic/Hebrew face (add one as a font), an RTL paragraph is not right-aligned by default, arrow keys move by logical order, one caret per boundary, no per-run language or font features. |
-| 38 | Performance beyond 10k visible nodes | todo | Cached frames take about 3 ms at 10k nodes; not tuned for 100k. |
+| 38 | Performance beyond 10k visible nodes | todo | Cached frames take about 3 ms at 10k nodes; not tuned for 100k. **Target: end of March 2027.** |
 
 ## 6. Agent runs (next)
 
@@ -83,7 +84,7 @@ Spec: [specs/agent-runs/spec.md](specs/agent-runs/spec.md), tasks: [specs/agent-
 | 40 | Review agent changes | **done** | Id-paired diff, grouped review, canvas overlay, per-change revert and accept all; version compare reuses the same diff and overlay. |
 | 41 | Agent presence on the canvas | **done** | Layers an agent touches get a fading outline and a cursor labelled with the verb and client; the chat can stop its own run. An external MCP client that called lately gets a Pause control on the canvas: its editing calls wait (reads go on) until you resume, or are refused with a "paused by the user" error after 100 s; none is lost or half applied. |
 | 42 | `get_context` tool | **done** | Selection, outline with token estimates, variables, components and lint summary in one call, so an agent orients in one round trip. Big reads take `maxTokens` and report `estimatedTokens` and `truncated`. |
-| 43 | Comments assigned to agents | todo | `@agent` in a thread triggers an edit and a reply. Needs threaded comments. |
+| 43 | Comments assigned to agents | todo | `@agent` in a thread triggers an edit and a reply. Needs threaded comments. **Target: end of May 2027.** |
 | 44 | In-app prompt bar | **done** | Chat mode: Claude Code, Codex or your own Anthropic key; see `docs/chat.md`. |
 | 45 | Correct tool annotations | **done** | `lint_design` no longer sends `readOnlyHint`; `fix: true` edits are classified. |
 
@@ -103,8 +104,30 @@ Spec: [specs/accounts-and-sharing/spec.md](specs/accounts-and-sharing/spec.md). 
 |---|---|---|---|
 | 49 | Browser app | **done** | The editor runs in the browser (WebGPU, WebGL2 fallback) with a phone layout, touch input and a home-screen app; `papercraft-relay --agents` runs Claude Code or OpenCode for a tab with only the PaperCraft tools; see `deploy/README.md`. Desktop-only tools (Breakpoint Preview, plugins, updates) are hidden. |
 | 50 | Links to designs | **done** | `#/d/<project>/<page>` opens a design and page; back, forward and pasted links work, and links survive renames. |
-| 51 | Model picker in the web chat | todo | Show and pick the hosted agent's model, as the desktop chat does. |
-| 52 | Your own model keys in the browser | todo | The API-endpoint chat in the browser, calling the provider directly with a key kept in that browser, so the server owner never pays for it. |
-| 53 | Settings on the home screen | todo | Theme, chat and keys before a design is open. |
-| 54 | Accounts | todo | Sign-in through the server's identity provider, a library per account, admin and member roles, and tokens for the desktop app, phones and MCP clients. |
-| 55 | Project visibility | todo | Private (default), shared with a link or named accounts to edit together, or public read-only, which only an admin can set. |
+| 51 | Model picker in the web chat | todo | Show and pick the hosted agent's model, as the desktop chat does. **Target: end of November 2026.** |
+| 52 | Your own model keys in the browser | todo | The API-endpoint chat in the browser, calling the provider directly with a key kept in that browser, so the server owner never pays for it. **Target: mid-December 2026.** |
+| 53 | Settings on the home screen | todo | Theme, chat and keys before a design is open. **Target: mid-December 2026.** |
+| 54 | Accounts | todo | Sign-in through the server's identity provider, a library per account, admin and member roles, and tokens for the desktop app, phones and MCP clients. **Target: end of January 2027.** |
+| 55 | Project visibility | todo | Private (default), shared with a link or named accounts to edit together, or public read-only, which only an admin can set. **Target: end of February 2027.** |
+
+## 9. More features
+
+Ideas that fit PaperCraft and are not built yet, with the same kind of target date.
+
+| # | Item | Status | Notes |
+|---|---|---|---|
+| 56 | Pressed and focus states in prototypes | todo | The part of row 23 still missing: components react to press and keyboard focus in Present mode. **Target: mid-December 2026.** |
+| 57 | Works offline in the browser | todo | A service worker keeps the app and open designs usable without a connection, and sync catches up when it returns. **Target: end of December 2026.** |
+| 58 | Threaded comments on the canvas | todo | Pin a thread to a layer or a point, reply, resolve and mention people; the base row 43 needs. **Target: mid-January 2027.** |
+| 59 | Image crop, masks and adjustments | todo | Crop and reposition an image inside its frame, mask with any shape, and adjust exposure, contrast and saturation without changing the file. **Target: end of February 2027.** |
+| 60 | Right-to-left by default | todo | RTL paragraphs align right on their own and an Arabic and a Hebrew face ship with the app (row 37 limits). **Target: end of February 2027.** |
+| 61 | Usage limits for hosted agents | todo | Per-account turn and token limits on the server's agents, so a shared server stays fair (needs row 54). **Target: end of February 2027.** |
+| 62 | Variable fonts and OpenType features | todo | Weight, width and other axes as sliders, plus stylistic sets and tabular figures per text layer. **Target: end of March 2027.** |
+| 63 | Admin audit log | todo | Who shared, published or changed a project's visibility, and when (needs rows 54 and 55). **Target: end of March 2027.** |
+| 64 | Design tokens to a Git repository | todo | Push variables as CSS, JSON or Tailwind to a repository as a pull request, and pull changes back. **Target: end of March 2027.** |
+| 65 | Prototype export to video and GIF | todo | Record a Present-mode flow, transitions included, as MP4 or GIF for reviews and docs. **Target: end of April 2027.** |
+| 66 | Design branches | todo | Branch a page, explore, then review the difference and merge it back with the version-compare view. **Target: end of April 2027.** |
+| 67 | The app in more languages | todo | The interface itself translated, starting with Portuguese and Spanish. **Target: end of April 2027.** |
+| 68 | Screen readers in the app | todo | The panels and canvas layers exposed to screen readers through AccessKit, with full keyboard use. **Target: end of May 2027.** |
+| 69 | Native phone apps | todo | iOS and Android apps around the browser build, with offline designs and share-sheet import. **Target: end of June 2027.** |
+
