@@ -80,11 +80,13 @@ fn backend_for(id: &str) -> Backend {
 }
 
 /// The scan result the chat column expects, for agents that run on the server.
-pub(super) fn detect_for(agents: &[AgentInfo]) -> super::Detect {
+pub(super) fn detect_for(agents: &[AgentInfo], own: &crate::chat::own::OwnStore) -> super::Detect {
     let ready = AgentState::Ready { path: "server".into(), version: String::new() };
     super::Detect {
         claude: agents.iter().any(|a| a.id == CLAUDE).then(|| (PathBuf::from("server"), String::new())),
         agents: agents.iter().filter(|a| a.id != CLAUDE).map(|a| AgentStatus { id: a.id.clone(), state: ready.clone() }).collect(),
+        endpoints: own.endpoints.iter().map(|o| super::EndpointState { id: o.endpoint.id.clone(), key: !o.key.is_empty(), ready: o.is_ready() }).collect(),
+        default_endpoint: own.endpoints.first().map(|o| o.endpoint.id.clone()).unwrap_or_default(),
         ..Default::default()
     }
 }
@@ -93,10 +95,8 @@ impl ChatState {
     /// The relay's hello: which agents it runs.
     pub fn set_hosted_agents(&mut self, agents: Vec<AgentInfo>) {
         AVAILABLE.store(!agents.is_empty(), Ordering::Relaxed);
-        self.detect = Some(detect_for(&agents));
         self.hosted.agents = agents;
-        // A chat that picked its default before the agents were known picks again.
-        self.defaults_for.clear();
+        self.refresh_detect();
     }
 
     /// An event of chat `chat` from the relay. Events of a turn that is no longer ours are dropped.
@@ -173,6 +173,7 @@ pub(super) fn picker(ui: &mut Ui, st: &mut UiState) {
                 st.chat.set_backend(backend_for(&a.id));
             }
         }
+        super::chat_own::chips(ui, st);
         if let Some(b) = st.chat.chat.as_ref().map(|c| &c.backend).filter(|b| b.kind == BackendKind::Acp) {
             let name = b.model.as_deref().map_or_else(|| "Default".into(), |m| super::acp_model_name(b.agent.as_deref(), m, &st.settings.chat));
             let label: String = format!("Model: {name}").chars().take(MODEL_CHARS).collect();
@@ -182,6 +183,7 @@ pub(super) fn picker(ui: &mut Ui, st: &mut UiState) {
     if let Some(chip) = chip {
         model_menu(&chip, st);
     }
+    super::chat_own::form(ui.ctx(), st);
 }
 
 /// The model list of the desktop agent panel, in a menu under the model chip.
@@ -211,7 +213,7 @@ pub(super) fn unavailable(ui: &mut Ui) {
     let p = theme::pal(ui);
     ui.add_space(24.0);
     ui.label(RichText::new(NONE_HERE).font(theme::semibold(theme::BODY)));
-    ui.label(RichText::new("Start papercraft-relay with --agents claude,opencode to chat here, or connect your own agent from the Agent menu.").size(theme::SECONDARY).color(p.secondary));
+    ui.label(RichText::new("Pick Add model above to chat with your own API key, or start papercraft-relay with --agents claude,opencode.").size(theme::SECONDARY).color(p.secondary));
 }
 
 #[cfg(test)]
@@ -224,9 +226,9 @@ mod tests {
 
     #[test]
     fn the_scan_lists_the_hosted_agents_as_ready() {
-        let d = detect_for(&infos());
+        let d = detect_for(&infos(), &Default::default());
         assert!(d.has_backend(&backend_for(CLAUDE)) && d.has_backend(&backend_for(OPENCODE)));
-        assert!(!detect_for(&[]).any());
+        assert!(!detect_for(&[], &Default::default()).any());
     }
 
     #[test]

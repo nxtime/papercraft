@@ -10,15 +10,16 @@ pub mod codex;
 pub mod ds_digest;
 pub mod endpoint;
 pub mod events;
+#[cfg(target_arch = "wasm32")]
+pub mod fetch;
 pub mod install;
 pub mod keys;
 pub mod models;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod openai;
+pub mod own;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod path;
 pub mod store;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod tools;
 
 use serde::{Deserialize, Serialize};

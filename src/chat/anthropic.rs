@@ -186,21 +186,18 @@ impl SseParser {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use api::{build_body, build_headers, start, tools_json};
+pub use api::start;
+pub use request::{build_body, build_headers, tool_result, tools_json, user_content};
 
-/// The Messages API backend: request building and the streaming tool loop. The same loop serves
-/// `api.anthropic.com` and any Anthropic-compatible URL; Claude-only fields go to the former only.
-#[cfg(not(target_arch = "wasm32"))]
-mod api {
+/// The Messages API request: headers, body and tools. The desktop loop and the browser's share it.
+/// Claude-only fields go to `api.anthropic.com` only.
+mod request {
     use super::*;
-    use crate::chat::endpoint;
     use crate::chat::events::TurnConfig;
-    use crate::chat::tools::{self, ApiTurn, Ctl, Halt, Sink, CONTINUE_NOTE, CUT_OFF, MAX_TOOL_ROUNDS, STOPPED_BY_USER};
+    use crate::chat::tools;
     use crate::mcp::Out;
     use base64::{engine::general_purpose::STANDARD, Engine};
-    use std::sync::mpsc::{Receiver, Sender};
 
-    const BASE_URL_ENV: &str = "PAPERCRAFT_ANTHROPIC_BASE_URL";
     const API_VERSION: &str = "2023-06-01";
     const BETA_FALLBACK: &str = "server-side-fallback-2026-07-01";
     const DEFAULT_EFFORT: &str = "medium";
@@ -216,13 +213,13 @@ mod api {
     }
 
     /// Tools a design turn uses most, always loaded; the rest are found through tool search.
-    const CORE_TOOLS: [&str; 25] = [
+    pub(super) const CORE_TOOLS: [&str; 25] = [
         "get_basic_info", "get_selection", "get_node_info", "get_children", "get_tree_summary", "get_screenshot",
         "find_nodes", "get_guide", "get_variables", "get_components", "search_icons", "zoom_image", "ask_user", "get_feedback",
         "create_artboard", "write_html", "update_styles", "set_text_content", "create_instance", "delete_nodes",
         "duplicate_nodes", "move_nodes", "rename_nodes", "lint_design", "finish_working_on_nodes",
     ];
-    const TOOL_SEARCH: &str = "tool_search_tool_bm25_20251119";
+    pub(super) const TOOL_SEARCH: &str = "tool_search_tool_bm25_20251119";
     const BETA_CONTEXT_EDIT: &str = "context-management-2025-06-27";
     /// Context editing: clear old tool uses past this many input tokens, keep the latest few, and
     /// clear enough each time to be worth the cache write it costs.
@@ -230,11 +227,13 @@ mod api {
     const CLEAR_KEEP: u64 = 4;
     const CLEAR_AT_LEAST: u64 = 15_000;
     /// Searches and fetches a research turn may make.
+    #[cfg(not(target_arch = "wasm32"))]
     const WEB_MAX_USES: u32 = 5;
 
     /// Web search and fetch (server tools) for a research turn. Haiku takes the basic versions;
     /// the others the ones with dynamic filtering.
-    pub fn web_tools(model: &str) -> [Value; 2] {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn web_tools(model: &str) -> [Value; 2] {
         let (search, fetch) = if model.contains("haiku") { ("web_search_20250305", "web_fetch_20250910") } else { ("web_search_20260209", "web_fetch_20260209") };
         [
             json!({"type": search, "name": "web_search", "max_uses": WEB_MAX_USES}),
@@ -327,7 +326,7 @@ mod api {
         body
     }
 
-    fn tool_result(id: &str, r: &Result<Vec<Out>, String>) -> Value {
+    pub fn tool_result(id: &str, r: &Result<Vec<Out>, String>) -> Value {
         match r {
             Ok(outs) => json!({"type": "tool_result", "tool_use_id": id, "content": tools::out_blocks(outs)}),
             Err(e) => json!({"type": "tool_result", "tool_use_id": id, "is_error": true, "content": [{"type": "text", "text": e}]}),
@@ -335,7 +334,7 @@ mod api {
     }
 
     /// A plain string, or image blocks followed by the text when images are attached.
-    fn user_content(prompt: &str, images: &[crate::chat::events::ImageAttachment]) -> Value {
+    pub fn user_content(prompt: &str, images: &[crate::chat::events::ImageAttachment]) -> Value {
         if images.is_empty() {
             return json!(prompt);
         }
@@ -346,6 +345,21 @@ mod api {
         blocks.push(json!({"type": "text", "text": prompt}));
         Value::Array(blocks)
     }
+
+}
+
+/// The Messages API backend: the streaming tool loop. The same loop serves `api.anthropic.com` and
+/// any Anthropic-compatible URL.
+#[cfg(not(target_arch = "wasm32"))]
+mod api {
+    use super::request::web_tools;
+    use super::*;
+    use crate::chat::endpoint;
+    use crate::chat::events::TurnConfig;
+    use crate::chat::tools::{self, ApiTurn, Ctl, Halt, Sink, CONTINUE_NOTE, CUT_OFF, MAX_TOOL_ROUNDS, STOPPED_BY_USER};
+    use std::sync::mpsc::{Receiver, Sender};
+
+    const BASE_URL_ENV: &str = "PAPERCRAFT_ANTHROPIC_BASE_URL";
 
     pub fn start(cfg: &TurnConfig, prompt: &str, tx: Sender<Event>) -> Result<ApiTurn, String> {
         let key = endpoint::get_key(&cfg.endpoint);
@@ -562,7 +576,7 @@ mod api {
                         Err(STOPPED_BY_USER.to_string())
                     })
                 };
-                self.emit(Ctl::end_event(id, &r));
+                self.emit(tools::end_event(id, &r));
                 results.push(tool_result(id, &r));
             }
             (results, stopped)
@@ -580,6 +594,8 @@ mod api {
         use std::sync::mpsc::channel;
         use std::sync::{Arc, Mutex};
         use std::time::Duration;
+        use crate::mcp::Out;
+        use crate::chat::anthropic::request::{CORE_TOOLS, TOOL_SEARCH};
 
         #[test]
         fn attachments_become_image_blocks_before_the_text() {

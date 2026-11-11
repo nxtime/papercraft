@@ -8,7 +8,7 @@
 //! follows as an extra `user` message right after the tool messages of that round.
 
 use super::events::Event;
-use super::{Usage, endpoint};
+use super::Usage;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -158,17 +158,16 @@ impl ChatParser {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use api::{build_body, build_headers, start, tools_json};
+pub use api::start;
+pub use request::{build_body, build_headers, push_round, tools_json, user_content, Round};
 
-/// The Chat Completions backend: request building and the streaming tool loop.
-#[cfg(not(target_arch = "wasm32"))]
-mod api {
+/// The Chat Completions request and the history it grows: shared by the desktop loop and the browser's.
+mod request {
     use super::*;
     use crate::chat::events::TurnConfig;
-    use crate::chat::tools::{self, ApiTurn, Ctl, Halt, Sink, CONTINUE_NOTE, CUT_OFF, MAX_TOOL_ROUNDS, STOPPED_BY_USER};
+    use crate::chat::tools;
     use crate::mcp::Out;
     use base64::{Engine, engine::general_purpose::STANDARD};
-    use std::sync::mpsc::{Receiver, Sender};
 
     const IMAGE_OMITTED: &str = "[image omitted]";
     const IMAGE_NOTE: &str = "Image result of the tool call(s) above (a tool message cannot carry an image):";
@@ -215,7 +214,7 @@ mod api {
     }
 
     /// A plain string, or the images then the text when images are attached.
-    fn user_content(prompt: &str, images: &[crate::chat::events::ImageAttachment]) -> Value {
+    pub fn user_content(prompt: &str, images: &[crate::chat::events::ImageAttachment]) -> Value {
         if images.is_empty() {
             return json!(prompt);
         }
@@ -241,6 +240,56 @@ mod api {
         }
     }
 
+    /// What one model call produced.
+    pub struct Round {
+        pub text: String,
+        pub uses: Vec<ToolUse>,
+        pub finish: Option<String>,
+        pub usage: Option<Usage>,
+        pub prompt: u64,
+    }
+
+    /// The assistant message, then one `tool` message per call, then the images (if any) as a
+    /// user message. `results` has one entry per call, in order.
+    pub fn push_round(messages: &mut Vec<Value>, round: &Round, results: &[Result<Vec<Out>, String>]) {
+        if round.text.is_empty() && round.uses.is_empty() {
+            return;
+        }
+        let mut msg = json!({"role": "assistant", "content": if round.text.is_empty() { Value::Null } else { json!(round.text) }});
+        if !round.uses.is_empty() {
+            msg["tool_calls"] = round
+                .uses
+                .iter()
+                .map(|u| json!({"type": "function", "id": u.id, "function": {"name": u.name, "arguments": u.input.clone().unwrap_or_else(|_| json!({})).to_string()}}))
+                .collect();
+        }
+        messages.push(msg);
+        let mut images: Vec<Value> = vec![];
+        for (u, r) in round.uses.iter().zip(results) {
+            messages.push(json!({"role": "tool", "tool_call_id": u.id, "content": tool_text(r)}));
+            for o in r.iter().flatten() {
+                if let Out::Image { data, mime } = o {
+                    images.push(json!({"type": "image_url", "image_url": {"url": data_uri(mime, data)}}));
+                }
+            }
+        }
+        if !images.is_empty() {
+            images.insert(0, json!({"type": "text", "text": IMAGE_NOTE}));
+            messages.push(json!({"role": "user", "content": images}));
+        }
+    }
+}
+
+/// The Chat Completions backend: the streaming tool loop.
+#[cfg(not(target_arch = "wasm32"))]
+mod api {
+    use super::*;
+    use crate::chat::endpoint;
+    use crate::chat::events::TurnConfig;
+    use crate::chat::tools::{self, ApiTurn, Ctl, Halt, Sink, CONTINUE_NOTE, CUT_OFF, MAX_TOOL_ROUNDS, STOPPED_BY_USER};
+    use crate::mcp::Out;
+    use std::sync::mpsc::{Receiver, Sender};
+
     pub fn start(cfg: &TurnConfig, prompt: &str, tx: Sender<Event>) -> Result<ApiTurn, String> {
         let key = endpoint::get_key(&cfg.endpoint).unwrap_or_default();
         start_with_key(cfg, prompt, key, tx)
@@ -263,14 +312,6 @@ mod api {
         sink: Sink,
         messages: Vec<Value>,
         approvals: Receiver<(String, bool)>,
-    }
-
-    struct Round {
-        text: String,
-        uses: Vec<ToolUse>,
-        finish: Option<String>,
-        usage: Option<Usage>,
-        prompt: u64,
     }
 
     impl Worker {
@@ -308,34 +349,8 @@ mod api {
             self.emit(Event::TurnEnd { usage, session: None, stop_reason: Some(stop_reason.into()) });
         }
 
-        /// The assistant message, then one `tool` message per call, then the images (if any) as a
-        /// user message. `results` has one entry per call, in order.
         fn push_round(&mut self, round: &Round, results: &[Result<Vec<Out>, String>]) {
-            if round.text.is_empty() && round.uses.is_empty() {
-                return;
-            }
-            let mut msg = json!({"role": "assistant", "content": if round.text.is_empty() { Value::Null } else { json!(round.text) }});
-            if !round.uses.is_empty() {
-                msg["tool_calls"] = round
-                    .uses
-                    .iter()
-                    .map(|u| json!({"type": "function", "id": u.id, "function": {"name": u.name, "arguments": u.input.clone().unwrap_or_else(|_| json!({})).to_string()}}))
-                    .collect();
-            }
-            self.messages.push(msg);
-            let mut images: Vec<Value> = vec![];
-            for (u, r) in round.uses.iter().zip(results) {
-                self.messages.push(json!({"role": "tool", "tool_call_id": u.id, "content": tool_text(r)}));
-                for o in r.iter().flatten() {
-                    if let Out::Image { data, mime } = o {
-                        images.push(json!({"type": "image_url", "image_url": {"url": data_uri(mime, data)}}));
-                    }
-                }
-            }
-            if !images.is_empty() {
-                images.insert(0, json!({"type": "text", "text": IMAGE_NOTE}));
-                self.messages.push(json!({"role": "user", "content": images}));
-            }
+            push_round(&mut self.messages, round, results);
         }
 
         async fn turn(&mut self) {
@@ -453,7 +468,7 @@ mod api {
                         Err(STOPPED_BY_USER.to_string())
                     }),
                 };
-                self.emit(Ctl::end_event(&u.id, &r));
+                self.emit(tools::end_event(&u.id, &r));
                 results.push(r);
             }
             (results, stopped)

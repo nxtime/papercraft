@@ -8,7 +8,7 @@
 //! `Headless::read_async`: the executor answers `get_screenshot` with a
 //! `mcp::exec::NEEDS_RENDER` marker and the shell replies when the render finishes.
 
-mod dom;
+pub(crate) mod dom;
 mod files;
 mod relay;
 mod routing;
@@ -433,9 +433,23 @@ impl Web {
         }
     }
 
+    /// The next queued tool call: the relay's, else one of a chat on the person's own key.
+    fn next_call(&mut self) -> Option<crate::mcp::relay_proto::Call> {
+        self.relay.next_call().or_else(|| self.st.chat.own.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take())
+    }
+
+    /// Gives a reply to the relay, or to the turn in this tab that made the call.
+    fn reply(&self, reply: Reply) {
+        if crate::chat::own::Calls::is_own(reply.id) {
+            self.st.chat.own.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner).answer(reply);
+        } else {
+            self.relay.send(&reply);
+        }
+    }
+
     /// Run the tool calls the relay queued, on the main thread at the start of the frame.
     fn pump_calls(&mut self) {
-        while let Some(call) = self.relay.next_call() {
+        while let Some(call) = self.next_call() {
             self.dirty = true;
             let mut runs = std::mem::take(&mut self.runs);
             let result = runs.call(
@@ -462,9 +476,9 @@ impl Web {
             match result {
                 Err(e) => match ShotRequest::from_marker(&e) {
                     Some(req) => self.start_screenshot(call.id, req),
-                    None => self.relay.send(&Reply::err(call.id, e)),
+                    None => self.reply(Reply::err(call.id, e)),
                 },
-                Ok(out) => self.relay.send(&Reply::ok(call.id, out)),
+                Ok(out) => self.reply(Reply::ok(call.id, out)),
             }
         }
     }
@@ -474,7 +488,7 @@ impl Web {
         let doc = match req.mode.as_deref() {
             Some(m) => match self.ed.page_doc_in_mode(req.page, m) {
                 Ok(d) => d,
-                Err(e) => return self.relay.send(&Reply::err(id, e)),
+                Err(e) => return self.reply(Reply::err(id, e)),
             },
             None => self.ed.page_doc(req.page).clone(),
         };
@@ -487,7 +501,7 @@ impl Web {
                     Ok(out) => Reply::ok(id, out),
                     Err(e) => Reply::err(id, e),
                 };
-                w.relay.send(&reply);
+                w.reply(reply);
             },
         );
     }
