@@ -70,7 +70,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 36 | Pen pressure on macOS tablets | todo | winit 0.30 does not expose pressure for mouse-like pen events. |
-| 37 | Text shaping, ligatures, RTL | todo | No shaping. IME preedit is not shown. |
+| 37 | Text shaping, ligatures, RTL | done | HarfRust shaping (ligatures, kerning, Arabic joining, marks) and Unicode bidi in one layout that wrapping, carets, selection, rendering and exports share; the IME composition shows at the caret. Limits: no bundled Arabic/Hebrew face (add one as a font), an RTL paragraph is not right-aligned by default, arrow keys move by logical order, one caret per boundary, no per-run language or font features. |
 | 38 | Performance beyond 10k visible nodes | todo | Cached frames take about 3 ms at 10k nodes; not tuned for 100k. |
 
 ## 6. Agent runs (next)
