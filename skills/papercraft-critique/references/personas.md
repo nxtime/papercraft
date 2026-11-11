@@ -102,8 +102,10 @@ Per screen and component, pass, fail or n/a:
 * The users' words, not internal jargon; verbs on buttons ("Save changes", not "OK").
 * No placeholder or lorem text, no "Item 1".
 * Errors: what happened and what to do. Empty states: what this is and the first action.
-* Neutral wording about people whose gender is unknown (their name, or they).
-* Consistent terms: one word per concept across all screens.
+* Neutral wording about people whose gender is unknown (their name, or they). Templated copy
+  built from a name (toasts, banners, invite messages) never uses he/she: the template cannot know.
+* Consistent terms: one word per concept across all screens. One state has one name on its
+  status tag, queue title and stat (not "To review" on the tag and "To score" on the dashboard).
 
 ## end-user: a walkthrough as the audience
 
