@@ -76,6 +76,10 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-11-11: 0.11.1 (links to designs)
+
+* The browser app names what is open in the URL: `#/d/<project>/<page>` opens a design and its page, back and forward move between them, and a pasted link opens what it names (waiting for a design still syncing from the library). The ROADMAP was checked row by row and gained section 8 (the browser app, accounts and sharing), section 9 (more features) and a target date on every open row.
+
 ### 2026-11-11: 0.11.0 (rotation, booleans, blur, text shaping, the browser app)
 
 * Rotation: a rotate knob, rotated hit testing, marquee and outlines, and rotation in the inspector, HTML, CSS, Tailwind, SVG and PDF (page format v9).
