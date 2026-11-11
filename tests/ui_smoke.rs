@@ -20,6 +20,56 @@ fn frame(ctx: &egui::Context, mut f: impl FnMut(&mut egui::Ui)) {
     out.textures_delta.clear();
 }
 
+/// Where `text` was painted in the last frame, if anywhere on screen.
+fn painted(out: &egui::FullOutput, text: &str) -> Option<Rect> {
+    out.shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if t.galley.text() == text => {
+            Some(t.galley.rect.translate(t.pos.to_vec2()).intersect(c.clip_rect)).filter(|r| r.is_positive())
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn home_actions_sit_in_the_header_row_beside_the_title() {
+    let input = || egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1920.0, 1080.0))),
+        ..Default::default()
+    };
+    // Solid and floating panels, the server library the browser build uses, and Catppuccin,
+    // which always floats.
+    for (choice, translucent, library) in [
+        (Choice::Dark, false, false),
+        (Choice::Dark, true, false),
+        (Choice::Dark, true, true),
+        (Choice::Catppuccin(Flavor::Mocha), true, true),
+    ] {
+        let ctx = egui::Context::default();
+        ui::setup_style(&ctx);
+        theme::apply_choice(&ctx, choice);
+        let mut ed = Editor::default();
+        let mut st = UiState::default();
+        st.translucent_sidebar = translucent;
+        let mut hv = home::HomeView::default();
+        hv.library = library;
+        st.home = Some(hv);
+        let case = format!("{choice:?}, translucent {translucent}, library {library}");
+        // Two frames: the first one measures, the second lays out with the sizes it learned.
+        let mut out = ctx.run_ui(input(), |ui| {
+            ui::draw(ui, &mut ed, &mut st);
+        });
+        out.textures_delta.clear();
+        let out = ctx.run_ui(input(), |ui| {
+            ui::draw(ui, &mut ed, &mut st);
+        });
+        let title = painted(&out, "Recent designs").expect("title drawn");
+        let import = painted(&out, "Import…").unwrap_or_else(|| panic!("Import… drawn on screen ({case})"));
+        assert!(import.center().y < title.bottom() + 24.0, "Import… {import:?} sits in the title row {title:?} ({case})");
+        assert!(import.left() > 960.0, "Import… {import:?} sits at the right ({case})");
+    }
+    theme::apply_choice(&egui::Context::default(), Choice::Dark);
+}
+
 #[test]
 fn home_window_buttons_sit_inside_the_header_and_take_clicks() {
     let ctx = egui::Context::default();
