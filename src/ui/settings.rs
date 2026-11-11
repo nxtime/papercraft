@@ -276,6 +276,16 @@ impl SettingsUi {
     }
 }
 
+impl SettingsUi {
+    /// Open the dialog from the home screen, where there is no canvas to set up.
+    pub fn open_on_home(&mut self) {
+        self.open = true;
+        if self.page == Page::Canvas {
+            self.page = Page::Appearance;
+        }
+    }
+}
+
 impl Default for SettingsUi {
     fn default() -> Self {
         Self {
@@ -309,6 +319,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
         return;
     }
     let live = st.settings.open;
+    let on_home = st.home.is_some();
     let p = theme::pal_from_ctx(ctx);
     let frame = egui::Frame::new().fill(p.sidebar).corner_radius(crate::theme::r(24.0));
     let modal = egui::Modal::new(egui::Id::new("settings-modal"))
@@ -345,6 +356,8 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
                             .into_iter()
                             // A browser tab has no local agents to set up and no plugin cache.
                             .filter(|(page, ..)| !cfg!(target_arch = "wasm32") || !matches!(page, Page::Chat | Page::Plugins))
+                            // Canvas options act on an open design.
+                            .filter(|(page, ..)| *page != Page::Canvas || !on_home)
                             {
                                 if kit::nav_item(ui, icon, label, st.settings.page == page) {
                                     st.settings.page = page;

@@ -71,6 +71,41 @@ fn home_actions_sit_in_the_header_row_beside_the_title() {
 }
 
 #[test]
+fn home_settings_button_opens_settings_over_home_at_any_width() {
+    for width in [1280.0, 360.0] {
+        let ctx = egui::Context::default();
+        ui::setup_style(&ctx);
+        let mut ed = Editor::default();
+        let mut st = UiState::default();
+        st.home = Some(home::HomeView::default());
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 800.0));
+        let run = |ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, events| {
+            let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                ui::draw(ui, ed, st);
+            });
+            out.textures_delta.clear();
+            out
+        };
+        run(&ctx, &mut ed, &mut st, vec![]);
+        let out = run(&ctx, &mut ed, &mut st, vec![]);
+        let button = painted(&out, "Settings").unwrap_or_else(|| panic!("Settings drawn on home at {width}"));
+        assert!(screen.contains_rect(button), "Settings {button:?} stays on screen at {width}");
+        assert!(!st.settings.open);
+
+        let at = button.center();
+        let click = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        for events in [vec![egui::Event::PointerMoved(at)], vec![click(true)], vec![click(false)], vec![], vec![]] {
+            run(&ctx, &mut ed, &mut st, events);
+        }
+        assert!(st.settings.open, "clicking Settings opens the window at {width}");
+        let out = run(&ctx, &mut ed, &mut st, vec![]);
+        assert!(painted(&out, "Appearance").is_some(), "theme page shown over home at {width}");
+        assert!(painted(&out, "Canvas").is_none(), "Canvas needs a design, so home hides it at {width}");
+    }
+}
+
+#[test]
 fn home_window_buttons_sit_inside_the_header_and_take_clicks() {
     let ctx = egui::Context::default();
     ui::setup_style(&ctx);
