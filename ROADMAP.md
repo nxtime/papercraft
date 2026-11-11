@@ -1,8 +1,8 @@
 # Roadmap
 
 PaperCraft is an early alpha: a local-first infinite-canvas design app that agents can drive. This
-file lists what is still missing, in priority order, with an honest status. Done items are checked
-against `src/mcp/tools.rs` and the UI code (2026-10-12); rows 7, 8, 12, 15, 23, 25, 32, 34, 39, 40, 44, 45, 46 and section 6 were updated 2026-10-21; rows 15, 47 and 48 on 2026-10-22. Milestone history is in
+file lists what is still missing, in priority order, with an honest status. Every row was checked
+against the code on 2026-11-11 (0.11.1): `src/mcp/tools.rs` for tools, the UI code, and the limits the notes quote. Milestone history is in
 [PROGRESS.md](PROGRESS.md); known rendering and import limits are in the README.
 
 Status: **done** (works today), **partial** (some of it works), **todo**.
@@ -33,7 +33,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 15 | MCP and CLI tool surface | **done** | 107 tools, one undo step per call, `papercraft-cli list / schema / call`. |
-| 16 | Agent skills | **done** | `skills/papercraft` and `skills/papercraft-design`. |
+| 16 | Agent skills | **done** | `skills/papercraft`, `skills/papercraft-design` and `skills/papercraft-critique`. |
 | 17 | Accessibility annotations | **done** | `set_accessibility`: alt text, decorative, roles, heading levels and reading order on layers, checked by `lint_design` and used by `export_site`. |
 | 18 | Code export from frames | **done** | `get_jsx` supports `format: "inline"`, `"tailwind"` (Tailwind utility classes), and `"html"` (HTML + CSS rules with `:root` variables). |
 | 19 | Plugin and skill marketplace | todo | Skills are copied by hand today. |
@@ -63,14 +63,14 @@ Agents can already build a design system through the tools; people cannot yet ma
 | 32 | Version history | **done** | Named and automatic saved versions per page: rename, restore, delete (`src/versions.rs`). Restore now includes variables and tokens; right-click a version to compare it with the current page, or pick two versions (read-only, list only for two saved versions). |
 | 33 | Figma import | **done** | `.fig` binary (Kiwi wire decoder + zip container) and Figma REST API JSON import in `src/io/fig.rs`. |
 | 34 | Multiplayer and cloud sync | **done** | Optional shared projects through the relay, with merge of concurrent edits to one page. Presence: other devices' cursors and selections, each with the device name and a colour, fading when idle and gone when the device leaves; in memory only (never in the document, the files or undo), native and browser alike. Stays optional. |
-| 35 | Release builds for Windows and Linux | **done** | Releases ship Windows (MSI and portable zip), macOS and Linux builds. |
+| 35 | Release builds for Windows, macOS and Linux | **done** | Each release ships Windows (MSI, portable exe and zip), macOS (dmg) and Linux (tar.gz), plus the CLI and the relay; the landing page picks up the latest release. |
 
 ## 5. Quality
 
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 36 | Pen pressure on macOS tablets | todo | winit 0.30 does not expose pressure for mouse-like pen events. |
-| 37 | Text shaping, ligatures, RTL | done | HarfRust shaping (ligatures, kerning, Arabic joining, marks) and Unicode bidi in one layout that wrapping, carets, selection, rendering and exports share; the IME composition shows at the caret. Limits: no bundled Arabic/Hebrew face (add one as a font), an RTL paragraph is not right-aligned by default, arrow keys move by logical order, one caret per boundary, no per-run language or font features. |
+| 37 | Text shaping, ligatures, RTL | **done** | HarfRust shaping (ligatures, kerning, Arabic joining, marks) and Unicode bidi in one layout that wrapping, carets, selection, rendering and exports share; the IME composition shows at the caret. Limits: no bundled Arabic/Hebrew face (add one as a font), an RTL paragraph is not right-aligned by default, arrow keys move by logical order, one caret per boundary, no per-run language or font features. |
 | 38 | Performance beyond 10k visible nodes | todo | Cached frames take about 3 ms at 10k nodes; not tuned for 100k. |
 
 ## 6. Agent runs (next)
@@ -94,3 +94,17 @@ Spec: [specs/agent-runs/spec.md](specs/agent-runs/spec.md), tasks: [specs/agent-
 | 47 | Design annotations | **done** | Notes with leader lines and categories, templates per project and page, view modes (⌘⇧A), Annotate tool (N), side view, inspector section, six MCP tools; see `docs/annotations.md`. |
 | 48 | ACP agents in Chat | **done** | Any ACP agent on the PATH (OpenCode works; Cursor needs `cursor-agent login`), npx agents after enabling, custom agents; see `docs/chat.md`. |
 | 48b | Free agents | **done** | OpenCode and Pi on free models with `Free (auto)` rotation, Pi provider keys, an install dialog per OS; see `specs/free-agents`. |
+
+## 8. The browser app, accounts and sharing
+
+Spec: [specs/accounts-and-sharing/spec.md](specs/accounts-and-sharing/spec.md). Steps ship in this order.
+
+| # | Item | Status | Notes |
+|---|---|---|---|
+| 49 | Browser app | **done** | The editor runs in the browser (WebGPU, WebGL2 fallback) with a phone layout, touch input and a home-screen app; `papercraft-relay --agents` runs Claude Code or OpenCode for a tab with only the PaperCraft tools; see `deploy/README.md`. Desktop-only tools (Breakpoint Preview, plugins, updates) are hidden. |
+| 50 | Links to designs | **done** | `#/d/<project>/<page>` opens a design and page; back, forward and pasted links work, and links survive renames. |
+| 51 | Model picker in the web chat | todo | Show and pick the hosted agent's model, as the desktop chat does. |
+| 52 | Your own model keys in the browser | todo | The API-endpoint chat in the browser, calling the provider directly with a key kept in that browser, so the server owner never pays for it. |
+| 53 | Settings on the home screen | todo | Theme, chat and keys before a design is open. |
+| 54 | Accounts | todo | Sign-in through the server's identity provider, a library per account, admin and member roles, and tokens for the desktop app, phones and MCP clients. |
+| 55 | Project visibility | todo | Private (default), shared with a link or named accounts to edit together, or public read-only, which only an admin can set. |
