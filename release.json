@@ -1,62 +1,62 @@
 {
-  "tag": "v0.11.0",
-  "name": "PaperCraft 0.11.0",
-  "publishedAt": "2026-11-11T17:42:28Z",
-  "url": "https://github.com/nxtime/papercraft/releases/tag/v0.11.0",
+  "tag": "v0.11.1",
+  "name": "PaperCraft 0.11.1",
+  "publishedAt": "2026-11-11T21:12:04Z",
+  "url": "https://github.com/nxtime/papercraft/releases/tag/v0.11.1",
   "assets": [
     {
-      "name": "papercraft-0.11.0-linux-x86_64.tar.gz",
-      "size": 235798174,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.0/papercraft-0.11.0-linux-x86_64.tar.gz",
-      "digest": "sha256:1d68664b087405eb706ca56a3b9beb261c8182c970db38ec6e8786c96c6d9be9"
+      "name": "papercraft-0.11.1-linux-x86_64.tar.gz",
+      "size": 235729882,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.1/papercraft-0.11.1-linux-x86_64.tar.gz",
+      "digest": "sha256:50df0c28ee3ef407090328ed0374bccb7f26b73c79a7765da6524e9e4042f8d8"
     },
     {
-      "name": "papercraft-0.11.0-macos-aarch64.dmg",
-      "size": 19065619,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.0/papercraft-0.11.0-macos-aarch64.dmg",
-      "digest": "sha256:79726840bfcd4c06533ed56e2e4ec93f394ca2a4bfbe7bf9e30c6685a7a51fca"
+      "name": "papercraft-0.11.1-macos-aarch64.dmg",
+      "size": 19068137,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.1/papercraft-0.11.1-macos-aarch64.dmg",
+      "digest": "sha256:fe7d9cb858f15c898b1e07f208a278e17f99793959f7da740722eab0f7af7097"
     },
     {
-      "name": "papercraft-0.11.0-windows-x64-portable.exe",
-      "size": 51058688,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.0/papercraft-0.11.0-windows-x64-portable.exe",
-      "digest": "sha256:47f90efefa9a623c88d876c616398575e7925abf2f495dce6e43e8c6c21de3bd"
+      "name": "papercraft-0.11.1-windows-x64-portable.exe",
+      "size": 51059200,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.1/papercraft-0.11.1-windows-x64-portable.exe",
+      "digest": "sha256:8423a3b4a4839bc7625634ea7023bdfdbf3de990c99e74a74c791e8590807954"
     },
     {
-      "name": "papercraft-0.11.0-windows-x64-portable.zip",
-      "size": 40663330,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.0/papercraft-0.11.0-windows-x64-portable.zip",
-      "digest": "sha256:6c4bedc4a0fd2917016110d3347fedd0fa92d2bd458e9638fac0c279376e2148"
+      "name": "papercraft-0.11.1-windows-x64-portable.zip",
+      "size": 40680751,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.1/papercraft-0.11.1-windows-x64-portable.zip",
+      "digest": "sha256:e5a7501b74cc4540565268604787dde21ee7f0d320564f8d6a207c0db151ff5c"
     },
     {
-      "name": "papercraft-0.11.0-windows-x64.msi",
-      "size": 28213248,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.0/papercraft-0.11.0-windows-x64.msi",
-      "digest": "sha256:7834c02e462ce2f9593fa6c12e1e2c49521caa95a2e326d3ddca863f77533993"
+      "name": "papercraft-0.11.1-windows-x64.msi",
+      "size": 28254208,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.1/papercraft-0.11.1-windows-x64.msi",
+      "digest": "sha256:6be5412b6a5b1dfcd21225407fd2641451d11dcd5d118f0dc710fadf280b11cf"
     },
     {
-      "name": "papercraft-cli-0.11.0-linux-x86_64.tar.gz",
-      "size": 114094020,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.0/papercraft-cli-0.11.0-linux-x86_64.tar.gz",
-      "digest": "sha256:8e91cab4920c414417faa36c4b3f3f67f88cc896edf8f25e8213f0ea04ee8594"
+      "name": "papercraft-cli-0.11.1-linux-x86_64.tar.gz",
+      "size": 114041958,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.1/papercraft-cli-0.11.1-linux-x86_64.tar.gz",
+      "digest": "sha256:e0b026956589d6c16331b15a655326c08067ac7da0af787f156ac6f378a3ff35"
     },
     {
-      "name": "papercraft-cli-0.11.0-macos-aarch64.zip",
-      "size": 16786819,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.0/papercraft-cli-0.11.0-macos-aarch64.zip",
-      "digest": "sha256:595c2b53c530b71c47e230fc0b02418130aa70e5be5dde73b1b246ec8396c452"
+      "name": "papercraft-cli-0.11.1-macos-aarch64.zip",
+      "size": 16803214,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.1/papercraft-cli-0.11.1-macos-aarch64.zip",
+      "digest": "sha256:bfae3b37149a9fb87b8ed6260e33817f9d68da4e9de26b58c9a29fffddfc20c0"
     },
     {
-      "name": "papercraft-cli-0.11.0-windows-x64.zip",
-      "size": 17570390,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.0/papercraft-cli-0.11.0-windows-x64.zip",
-      "digest": "sha256:fa3329967f33910b25bead5574cb61ebfd26df9b826b90bf7a31d38758b7bd8d"
+      "name": "papercraft-cli-0.11.1-windows-x64.zip",
+      "size": 17573573,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.1/papercraft-cli-0.11.1-windows-x64.zip",
+      "digest": "sha256:58d927040beacbecb480cf5c87bf21ff5538b8a0ef22c89d5cbabda4b9d93b3f"
     },
     {
-      "name": "papercraft-relay-0.11.0-windows-x64.zip",
-      "size": 3270815,
-      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.0/papercraft-relay-0.11.0-windows-x64.zip",
-      "digest": "sha256:96c2f18156894a4d5d6eefac17a93ed6bdfe9aca9c94d6a4d6cb0f59cdfd5299"
+      "name": "papercraft-relay-0.11.1-windows-x64.zip",
+      "size": 3277586,
+      "url": "https://github.com/nxtime/papercraft/releases/download/v0.11.1/papercraft-relay-0.11.1-windows-x64.zip",
+      "digest": "sha256:9c45309031a5220a0cc8538be670fb0490860f1b5031d460ba8162bdf32fc0b7"
     }
   ]
 }
