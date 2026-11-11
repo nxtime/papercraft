@@ -130,7 +130,7 @@ pub const PERSONAS: &[Persona] = &[
         id: "copy",
         role: "Content designer",
         asks: "Is every word clear, specific and kind?",
-        method: "Plain language in the users' words, specific buttons (verbs, not OK), no placeholder or lorem text, errors that name the problem and the fix, empty states that say what to do next, neutral wording about people whose gender is unknown.",
+        method: "Plain language in the users' words, specific buttons (verbs, not OK), no placeholder or lorem text, errors that name the problem and the fix, empty states that say what to do next, neutral wording about people whose gender is unknown (templated copy built from a name never uses he/she), one name per state across screens (the status tag, queue title and stat use the same word).",
     },
     Persona {
         id: "end-user",
