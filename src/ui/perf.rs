@@ -150,16 +150,16 @@ impl Perf {
         let (avg, worst) = self.frame_ms();
         let budget = 1000.0 / self.prefs.judge_fps() as f32;
         let warn = |bad: bool| if bad { p.danger } else { p.text };
-        let na = || "n/a".to_string();
+        // A metric the platform cannot measure (RAM and CPU in a browser) is left out, not shown as n/a.
         let rows = [
-            ("FPS", format!("{} drawn \u{b7} {:.0} possible", self.fps(), self.capacity()), warn(self.is_slow())),
-            ("Frame", format!("{avg:.1} ms avg \u{b7} {worst:.1} ms worst"), warn(avg > budget)),
-            ("RAM", self.ram.map_or_else(na, |m| format!("{m:.0} MB")), p.text),
-            ("CPU", self.cpu.map_or_else(na, |c| format!("{c:.0}%")), p.text),
-            ("GPU", if self.gpu.is_empty() { na() } else { self.gpu.clone() }, p.text),
+            ("FPS", Some(format!("{} drawn \u{b7} {:.0} possible", self.fps(), self.capacity())), warn(self.is_slow())),
+            ("Frame", Some(format!("{avg:.1} ms avg \u{b7} {worst:.1} ms worst")), warn(avg > budget)),
+            ("RAM", self.ram.map(|m| format!("{m:.0} MB")), p.text),
+            ("CPU", self.cpu.map(|c| format!("{c:.0}%")), p.text),
+            ("GPU", (!self.gpu.is_empty()).then(|| self.gpu.clone()), p.text),
         ];
         egui::Grid::new("perf-stats").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-            for (label, value, ink) in rows {
+            for (label, value, ink) in rows.into_iter().filter_map(|(l, v, i)| Some((l, v?, i))) {
                 ui.label(RichText::new(label).size(theme::SECONDARY).color(p.tertiary));
                 ui.label(RichText::new(value).size(theme::SECONDARY).color(ink).monospace());
                 ui.end_row();
@@ -169,6 +169,7 @@ impl Perf {
 }
 
 /// The caps worth offering: none above the display, except the one already chosen.
+#[cfg(not(target_arch = "wasm32"))]
 fn offered_rates(display_hz: Option<u32>, chosen: u32) -> Vec<u32> {
     THRESHOLDS.into_iter().filter(|&fps| fps == chosen || display_hz.is_none_or(|hz| fps <= hz)).collect()
 }
@@ -179,6 +180,22 @@ pub fn settings_page(ui: &mut Ui, perf: &mut Perf) {
     kit::setting_row(ui, "Show overlay", "FPS, frame time, RAM, CPU and GPU over the canvas.", |ui| {
         kit::toggle(ui, &mut perf.prefs.overlay);
     });
+    // A browser paces frames by requestAnimationFrame, so a cap would not apply there.
+    #[cfg(not(target_arch = "wasm32"))]
+    refresh_rate(ui, perf);
+    ui.add_space(16.0);
+    kit::section_header(ui, "Now", None);
+    ui.add_space(4.0);
+    perf.stats(ui);
+    // Keep the readout live while the page is open.
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(SAMPLE_SECS));
+    if perf.prefs != before {
+        perf.prefs.save();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn refresh_rate(ui: &mut Ui, perf: &mut Perf) {
     ui.add_space(12.0);
     kit::section_header(ui, "Refresh rate", None);
     ui.add_space(4.0);
@@ -195,15 +212,6 @@ pub fn settings_page(ui: &mut Ui, perf: &mut Perf) {
     });
     let display = perf.display_hz.map_or(String::new(), |hz| format!(" This display runs at {hz} Hz."));
     ui.label(RichText::new(format!("The most frames PaperCraft draws per second, so a fast monitor does not spend power on frames you cannot use. Auto follows the display.{display} A badge shows on the canvas while frames take longer than this rate allows.")).size(theme::SECONDARY).color(theme::pal(ui).tertiary));
-    ui.add_space(16.0);
-    kit::section_header(ui, "Now", None);
-    ui.add_space(4.0);
-    perf.stats(ui);
-    // Keep the readout live while the page is open.
-    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(SAMPLE_SECS));
-    if perf.prefs != before {
-        perf.prefs.save();
-    }
 }
 
 /// The overlay in the canvas's top-right corner, or, with the overlay off, a warning badge

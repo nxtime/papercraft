@@ -202,15 +202,18 @@ impl Relay {
         Some(link)
     }
 
-    /// `/tab/*` is a browser route: with `--allow-origin` only that exact origin may connect.
+    /// `/tab/*` is a browser route: with `--allow-origin` only those exact origins may connect.
     fn origin_ok(&self, headers: &HeaderMap) -> bool {
-        let Some(want) = &self.allow_origin else {
-            return true;
-        };
-        match headers.get(header::ORIGIN) {
-            Some(v) => v.to_str().map(|o| o == want).unwrap_or(false),
-            None => true,
-        }
+        origin_allowed(self.allow_origin.as_deref(), headers.get(header::ORIGIN).map(|v| v.to_str().unwrap_or("")))
+    }
+}
+
+/// Whether a tab from `origin` may connect: any when no list is set, otherwise one of the
+/// comma-separated `allowed` origins (a public host and a tailnet host can serve one relay).
+fn origin_allowed(allowed: Option<&str>, origin: Option<&str>) -> bool {
+    match (allowed, origin) {
+        (None, _) | (_, None) => true,
+        (Some(list), Some(o)) => list.split(',').map(str::trim).any(|w| !w.is_empty() && w == o),
     }
 }
 fn not_found(body: &'static str) -> Response {
@@ -578,6 +581,17 @@ pub fn spawn_full(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tabs_connect_only_from_the_listed_origins() {
+        let list = Some("https://pc.example.com, https://pc-relay.example.com");
+        assert!(origin_allowed(None, Some("https://anything.example")));
+        assert!(origin_allowed(list, None), "no Origin: not a browser");
+        assert!(origin_allowed(list, Some("https://pc.example.com")));
+        assert!(origin_allowed(list, Some("https://pc-relay.example.com")));
+        assert!(!origin_allowed(list, Some("https://evil.example")));
+        assert!(!origin_allowed(Some("https://pc.example.com,"), Some("")), "an unreadable Origin never matches");
+    }
 
     #[test]
     fn static_paths_stay_inside_the_root() {

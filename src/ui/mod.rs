@@ -301,7 +301,7 @@ fn account_footer(ui: &mut Ui, st: &mut UiState) {
                 egui::Label::new(RichText::new(name).font(theme::semibold(theme::BODY))).truncate(),
             );
             let sub = if st.save_state.is_empty() {
-                "Local project".to_string()
+                if cfg!(target_arch = "wasm32") { "Saved in this browser" } else { "Local project" }.to_string()
             } else {
                 st.save_state.clone()
             };

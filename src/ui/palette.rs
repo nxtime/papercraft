@@ -154,9 +154,15 @@ pub fn entries(ed: &Editor, st: &UiState) -> Vec<Entry> {
         detail: String::new(),
         cmd: Command::ToggleLibrary,
     });
+    // A browser gets updates by reloading the page.
+    #[cfg(not(target_arch = "wasm32"))]
+    out.push(Entry {
+        label: "Check for updates".into(),
+        detail: String::new(),
+        cmd: Command::Updates,
+    });
     for (label, cmd) in [
         ("Go to projects home", Command::Home),
-        ("Check for updates", Command::Updates),
         ("Present this page", Command::Present),
         (
             "Show history",

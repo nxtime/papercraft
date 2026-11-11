@@ -198,10 +198,16 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: 
                     }
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                         ui.add_space(4.0);
-                        let path = RichText::new(hv.root.display().to_string())
-                            .size(theme::SECONDARY - 1.0)
-                            .color(p.tertiary);
-                        ui.label(path).on_hover_text("Projects folder");
+                        // In a browser the root is the store's virtual folder, not a place to find.
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let root = hv.root.display().to_string();
+                            let path = RichText::new(&root)
+                                .size(theme::SECONDARY - 1.0)
+                                .color(p.tertiary);
+                            ui.add(egui::Label::new(path).truncate())
+                                .on_hover_text(format!("Projects folder: {root}"));
+                        }
                         #[cfg(not(target_arch = "wasm32"))]
                         if sidebar_item(ui, Icon::Restore, "Check for updates", None, false) {
                             hv.show_updates = true;
@@ -233,12 +239,9 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: 
                     phone_nav(ui, hv);
                     ui.add_space(8.0);
                 }
-                let header = if phone {
-                    egui::Layout::top_down(egui::Align::Min)
-                } else {
-                    egui::Layout::left_to_right(egui::Align::Center)
-                };
-                ui.with_layout(header, |ui| {
+                // `horizontal`/`vertical`, not `with_layout`: a layout given the whole panel
+                // centres the actions in its full height and pushes the grid off screen.
+                let header = |ui: &mut Ui| {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.label(
@@ -258,12 +261,7 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: 
                             .color(p.secondary),
                         );
                     });
-                    let actions = if phone {
-                        egui::Layout::left_to_right(egui::Align::Center)
-                    } else {
-                        egui::Layout::right_to_left(egui::Align::Center)
-                    };
-                    ui.with_layout(actions, |ui| {
+                    let actions = |ui: &mut Ui| {
                         if custom_titlebar {
                             let size = egui::vec2(3.0 * super::WIN_BTN_W, super::HOME_WIN_BTN_H);
                             hv.window_slot =
@@ -308,8 +306,21 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: 
                                 hv.actions.push(HomeAction::Import);
                             }
                         }
-                    });
-                });
+                    };
+                    // Right to left in both layouts: same button order, window buttons at the
+                    // right edge. On a phone the row of its own keeps it one line tall.
+                    let rtl = egui::Layout::right_to_left(egui::Align::Center);
+                    if phone {
+                        ui.horizontal(|ui| ui.with_layout(rtl, actions));
+                    } else {
+                        ui.with_layout(rtl, actions);
+                    }
+                };
+                if phone {
+                    ui.vertical(header);
+                } else {
+                    ui.horizontal(header);
+                }
                 ui.add_space(18.0);
                 egui::ScrollArea::vertical()
                     .auto_shrink(false)
@@ -657,19 +668,13 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
             }
         } else {
             ui.horizontal(|ui| {
-                let name = ui.add(
-                    egui::Label::new(
-                        RichText::new(&e.manifest.name).font(theme::semibold(theme::BODY)),
-                    )
-                    .truncate()
-                    .sense(egui::Sense::click()),
-                );
+                let name = card_title(ui, &e.manifest.name, egui::Sense::click());
                 if name.double_clicked() {
                     hv.renaming = Some((e.dir.clone(), e.manifest.name.clone()));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let more =
-                        theme::icon_button(ui, Icon::More, 20.0, false).on_hover_text("More");
+                        theme::icon_button(ui, Icon::More, CARD_ICON, false).on_hover_text("More");
                     egui::Popup::menu(&more)
                         .gap(crate::theme::POPUP_GAP)
                         .show(|ui| {
@@ -699,6 +704,24 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
             );
         }
     });
+}
+
+/// Side of the icon button that follows a card's title.
+const CARD_ICON: f32 = 20.0;
+
+/// A card's truncated title, leaving room for its icon button: a truncated label takes all the
+/// width it is given and would push the button past the card.
+fn card_title(ui: &mut Ui, name: &str, sense: egui::Sense) -> egui::Response {
+    let room = ui.available_width() - CARD_ICON - ui.spacing().item_spacing.x;
+    ui.scope(|ui| {
+        ui.set_max_width(room.max(0.0));
+        ui.add(
+            egui::Label::new(RichText::new(name).font(theme::semibold(theme::BODY)))
+                .truncate()
+                .sense(sense),
+        )
+    })
+    .inner
 }
 
 fn card_menu(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
@@ -792,14 +815,9 @@ fn trash_grid(ui: &mut Ui, hv: &mut HomeView) {
                     });
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&e.manifest.name).font(theme::semibold(theme::BODY)),
-                            )
-                            .truncate(),
-                        );
+                        card_title(ui, &e.manifest.name, egui::Sense::hover());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if theme::icon_button(ui, Icon::Restore, 20.0, false)
+                            if theme::icon_button(ui, Icon::Restore, CARD_ICON, false)
                                 .on_hover_text("Restore")
                                 .clicked()
                             {

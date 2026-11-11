@@ -341,7 +341,11 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
                                 (Page::Plugins, Icon::Library, "Plugins"),
                                 (Page::Performance, Icon::Zap, "Performance"),
                                 (Page::Updates, Icon::Restore, "Updates"),
-                            ] {
+                            ]
+                            .into_iter()
+                            // A browser tab has no local agents to set up and no plugin cache.
+                            .filter(|(page, ..)| !cfg!(target_arch = "wasm32") || !matches!(page, Page::Chat | Page::Plugins))
+                            {
                                 if kit::nav_item(ui, icon, label, st.settings.page == page) {
                                     st.settings.page = page;
                                 }
@@ -1494,7 +1498,7 @@ use native::chat_page;
 #[cfg(target_arch = "wasm32")]
 fn chat_page(ui: &mut Ui, _ctx: &egui::Context, _settings: &mut SettingsUi) {
     let p = theme::pal(ui);
-    ui.label(RichText::new("Chat needs the PaperCraft desktop app.").color(p.secondary));
+    ui.label(RichText::new("In a browser the server runs the agents: pick one in the chat panel.").color(p.secondary));
 }
 
 /// A round colour swatch, ringed when chosen.
