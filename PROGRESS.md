@@ -76,6 +76,15 @@ are credited in `THIRD_PARTY.md`.
 * **Not carried over**: comments, design tokens, AI image generation, video export, teams;
   moving layers between pages; remote image URLs (see README Known gaps).
 
+### 2026-11-11: 0.11.0 (rotation, booleans, blur, text shaping, the browser app)
+
+* Rotation: a rotate knob, rotated hit testing, marquee and outlines, and rotation in the inspector, HTML, CSS, Tailwind, SVG and PDF (page format v9).
+* Live boolean groups (union, subtract, intersect, exclude) with a cached result, an op picker, entering and flatten; drawn and exported as one path; `boolean_nodes` tool (page format v10).
+* Rounded clips, layer and background blur, and backdrop blend modes.
+* Text is shaped with HarfRust (ligatures, kerning, Arabic joining, marks) and ordered with Unicode bidi, and the IME composition shows at the caret.
+* Shared projects show the other devices' cursors and selections, and an external agent can be paused from the canvas. Version compare, hover links and smart transitions in Present mode, and a Breakpoint Preview window.
+* The browser app: a phone layout with a tab bar, bottom sheet and touch input, a home-screen app manifest, and a WebGL2 fallback. `papercraft-relay --agents` runs Claude Code or OpenCode for a tab (Free (auto) resolved on the server); builds load under a per-build stamp so a browser never mixes two. 107 tools.
+
 ### 2026-11-06: 0.10.0 (websites, languages, Present mode, safety)
 
 * `export_site` turns frames into a website in one call: plain HTML, Astro, Vue (Nuxt or Vite), React (Next or Vite) or Angular; css, scss or tailwind, and vanilla-extract, styled-components or emotion for React; static pages or a single-page app; a folder per language. Fonts are subset to WOFF2 with metric-matched fallbacks, pages reflow below the designed width, and the host files cache hashed assets for a year.
