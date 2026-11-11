@@ -987,9 +987,14 @@ mod tests {
 
     /// Draws the panel, then clicks the first text that reads `label`; returns the panel's act.
     fn click_text(i: &PanelIn, label: &str) -> Option<Act> {
+        click_text_after(i, "", label)
+    }
+
+    /// Clicks `label` in the panel with `query` typed in its search.
+    fn click_text_after(i: &PanelIn, query: &str, label: &str) -> Option<Act> {
         let ctx = egui::Context::default();
         crate::ui::setup_style(&ctx);
-        let mut ps = PanelState::default();
+        let mut ps = PanelState { query: query.into(), ..Default::default() };
         let mut frame = |events: Vec<egui::Event>| {
             let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1280.0, 2400.0))), events, ..Default::default() };
             let mut act = None;
@@ -1035,6 +1040,19 @@ mod tests {
         let i = PanelIn { detect: &Detect::default(), prefs: &prefs, backend: &backend, running: false, column: col, backdrop: col, chip, composer_top: 2300.0 };
         let act = click_text(&i, "Model B");
         assert!(matches!(&act, Some(Act::SetBackend(b)) if b.model.as_deref() == Some("paid/b")), "a click on a model row picks it");
+    }
+
+    #[test]
+    fn a_typed_model_id_the_agent_does_not_list_can_be_picked() {
+        let mut prefs = ChatPrefs::default();
+        prefs.agents.entry("opencode".into()).or_default().catalog = crate::chat::models::from_options(&[("listed/a".into(), "Model A".into())]);
+        let backend = Backend { kind: BackendKind::Acp, agent: Some("opencode".into()), ..Default::default() };
+        let col = Rect::from_min_size(pos2(10.0, 60.0), vec2(450.0, 2300.0));
+        let chip = Rect::from_min_size(pos2(10.0, 90.0), vec2(120.0, 22.0));
+        let i = PanelIn { detect: &Detect::default(), prefs: &prefs, backend: &backend, running: false, column: col, backdrop: col, chip, composer_top: 2300.0 };
+        let act = click_text_after(&i, " ollama/my-model ", "Use");
+        assert!(matches!(&act, Some(Act::SetBackend(b)) if b.model.as_deref() == Some("ollama/my-model")), "the typed id is picked, trimmed");
+        assert!(std::panic::catch_unwind(|| click_text_after(&i, "listed/a", "Use")).is_err(), "a listed id is not offered twice");
     }
 
     #[test]

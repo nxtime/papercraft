@@ -4,13 +4,14 @@
 //! streamed events into the chat like any other backend's. The shell (`web.rs`) moves the frames
 //! between the socket and this state; nothing here touches the network.
 
-use super::{ChatState, NEW_CHAT, TITLE_CHARS, TurnHandle, TurnWindow, chat_msgs, kit};
+use super::chat_agents::PanelIn;
+use super::{ChatState, NEW_CHAT, TITLE_CHARS, TurnHandle, TurnWindow, chat_models, chat_msgs, kit};
 use crate::chat::agents::{AgentState, AgentStatus};
 use crate::chat::events::{Event, Turn};
 use crate::chat::{Backend, BackendKind, Message, Role};
 use crate::mcp::relay_proto::{AgentInfo, FromTab};
 use crate::project::format::now_ms;
-use crate::theme;
+use crate::theme::{self, Icon};
 use crate::ui::UiState;
 use egui::{RichText, Ui};
 use std::path::PathBuf;
@@ -22,6 +23,10 @@ const CLAUDE: &str = "claude-code";
 const OPENCODE: &str = "opencode";
 const LOST: &str = "Lost the connection to the server.";
 const NONE_HERE: &str = "This server does not run agents.";
+/// The model chip is cut to this many characters; the menu shows the full names.
+const MODEL_CHARS: usize = 40;
+const MENU_W: f32 = 320.0;
+const MENU_MAX_H: f32 = 360.0;
 
 /// Whether the relay advertised any agent: the Design | Chat switch is enabled only then.
 static AVAILABLE: AtomicBool = AtomicBool::new(false);
@@ -156,10 +161,11 @@ impl ChatState {
     }
 }
 
-/// The agent picker under the chat title.
+/// The agent picker under the chat title, then the model of an ACP agent.
 pub(super) fn picker(ui: &mut Ui, st: &mut UiState) {
     let running = st.chat.is_running();
     let current = st.chat.chat.as_ref().and_then(|c| hosted_id(&c.backend)).map(str::to_owned);
+    let mut chip = None;
     ui.horizontal_wrapped(|ui| {
         for a in st.chat.hosted.agents.clone() {
             let on = current.as_deref() == Some(a.id.as_str());
@@ -167,7 +173,37 @@ pub(super) fn picker(ui: &mut Ui, st: &mut UiState) {
                 st.chat.set_backend(backend_for(&a.id));
             }
         }
+        if let Some(b) = st.chat.chat.as_ref().map(|c| &c.backend).filter(|b| b.kind == BackendKind::Acp) {
+            let name = b.model.as_deref().map_or_else(|| "Default".into(), |m| super::acp_model_name(b.agent.as_deref(), m, &st.settings.chat));
+            let label: String = format!("Model: {name}").chars().take(MODEL_CHARS).collect();
+            chip = Some(kit::chip(ui, &label, false).on_hover_text("Pick a model, or type the id of your own"));
+        }
     });
+    if let Some(chip) = chip {
+        model_menu(&chip, st);
+    }
+}
+
+/// The model list of the desktop agent panel, in a menu under the model chip.
+fn model_menu(chip: &egui::Response, st: &mut UiState) {
+    let Some(backend) = st.chat.chat.as_ref().map(|c| c.backend.clone()) else { return };
+    let mut act = None;
+    let shown = egui::Popup::menu(chip).gap(theme::POPUP_GAP).width(MENU_W).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        theme::popup_backing(ui);
+        kit::icon_field(ui, Icon::Search, &mut st.chat.panel.query, "Search, or type a model id");
+        ui.add_space(4.0);
+        let detect = st.chat.detect.clone().unwrap_or_default();
+        let i = PanelIn { detect: &detect, prefs: &st.settings.chat, backend: &backend, running: st.chat.is_running(), column: chip.rect, backdrop: chip.rect, chip: chip.rect, composer_top: chip.rect.bottom() };
+        let query = st.chat.panel.query.clone();
+        egui::ScrollArea::vertical().max_height(MENU_MAX_H).show(ui, |ui| act = chat_models::list(ui, &i, &query, &mut st.chat.panel.all_models));
+    });
+    if let Some(a) = act {
+        st.chat.panel.query.clear();
+        st.chat.act(&chip.ctx, a, &mut st.settings);
+        egui::Popup::close_all(&chip.ctx);
+    } else if shown.is_none() {
+        st.chat.panel.query.clear();
+    }
 }
 
 /// What the chat column says when the relay runs no agents.
