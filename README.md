@@ -276,7 +276,7 @@ Draw a frame around existing shapes and it adopts them; dragging a layer into or
 **Known limits:**
 
 * **Rotation is visual.** A turned layer keeps its unrotated `rect` for layout and constraints; snapping, guides, connectors and frame drop targets ignore the turn, and resize handles are hidden on a turned layer (use W and H in the inspector). Skew, scale and 3D transforms do not exist; rotated imports are still baked into paths.
-* **Text** is Inter only, with no shaping (no ligatures, complex scripts or RTL) and no font picker. IME preedit is not displayed.
+* **Text** is shaped (ligatures, kerning, Arabic joining, right-to-left and mixed-direction lines) but only Inter is bundled, so Arabic, Hebrew and other scripts it lacks need an added font. Right-to-left paragraphs are not right-aligned by default and the arrow keys move in logical order.
 * **Rendering approximations.** Layer and background blur, rounded frame clips and the backdrop blend modes draw through offscreen layers, nested three deep; a deeper group draws into its parent without its blur, mask or blend. PDF export and Fig import ignore blur.
 * **Variables:** gradients keep fixed colors, and there are no text styles (named type styles that update every text layer).
 * **Components:** properties (text, bool, icon, enum) and `merge_variants` cover variants, but there are no variant sets with several axes, and no responsive per-breakpoint variants or breakpoint preview.
