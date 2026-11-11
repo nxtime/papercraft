@@ -22,8 +22,9 @@ pub fn default_model(prefs: &crate::ui::settings::ChatPrefs, id: &str) -> Option
 }
 
 /// "Default" (the agent's own choice), "Free (auto)" for agents with free models, the chat's model
-/// when the agent no longer lists it, then the catalog (free models only until `all` is set). A
-/// click picks the model for this chat and for new chats on the agent.
+/// when the agent no longer lists it, then the catalog (free models only until `all` is set), and
+/// "Use <query>" when the query is not a listed id. A click picks the model for this chat and for
+/// new chats on the agent.
 pub fn list(ui: &mut Ui, i: &PanelIn, query: &str, all: &mut bool) -> Option<Act> {
     let b = i.backend;
     let catalog = b.agent.as_ref().and_then(|a| i.prefs.agents.get(a)).map_or(&[][..], |a| a.catalog.as_slice());
@@ -74,6 +75,11 @@ pub fn list(ui: &mut Ui, i: &PanelIn, query: &str, all: &mut bool) -> Option<Act
         if row(ui, &m.name, &detail, current == Some(m.id.as_str()), Some(format!("{}{image}", m.id))).clicked() {
             out = Some(pick(Some(&m.id)));
         }
+    }
+    // A model the agent does not list (a new release, a private deployment) is typed in by id.
+    let typed = query.trim();
+    if !typed.is_empty() && !catalog.iter().any(|m| m.id == typed) && row(ui, &format!("Use \u{201c}{typed}\u{201d}"), "your own model id", false, Some("The agent must know this id, as provider/model".into())).clicked() {
+        out = Some(pick(Some(typed)));
     }
     if catalog.is_empty() {
         let p = theme::pal(ui);
