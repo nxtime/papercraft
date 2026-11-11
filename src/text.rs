@@ -6,6 +6,7 @@
 
 use crate::geom::{V2, v2};
 use crate::model::{CharStyle, Color, TextAlign, TextStyle};
+use crate::shaping;
 use crate::vector::VPath;
 use lyon::path::Path;
 use lyon::tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVertex, VertexBuffers};
@@ -95,6 +96,9 @@ pub struct Line {
     pub end: usize,
     /// Left x of each char boundary in the line (len = end - start + 1).
     pub carets: Vec<f64>,
+    /// Left and right x of each char in the line (len = end - start); with right-to-left text
+    /// they are not in order.
+    pub spans: Vec<(f64, f64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +155,18 @@ fn advance(c: char, font_size: f64) -> (u16, f64) {
     (gid, adv)
 }
 
+/// The char to shape in place of `c` in `face`: `?` when the face has no glyph for it, except
+/// for invisible format chars, which shaping hides by itself.
+fn shaped_char(face: FaceId, c: char) -> char {
+    let invisible = matches!(c, '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}');
+    if c.is_ascii() || invisible || face_of(face).glyph_index(c).is_some() {
+        c
+    } else {
+        '?'
+    }
+}
+
 /// Lay out plain text with optional wrapping at `max_width`.
 pub fn layout(text: &str, font_size: f64, max_width: Option<f64>, align: TextAlign) -> TextLayout {
     layout_rich(
@@ -179,19 +195,23 @@ pub fn layout_rich(
     let ls = ts.letter_spacing;
     let font = ts.font.as_deref();
     let faces = [0, 1, 2, 3].map(|s| crate::fonts::style_face(font, s & 1 != 0, s & 2 != 0));
-    let adv: Vec<(FaceId, u16, f64)> = chars
+    let used: Vec<(FaceId, char)> = chars
         .iter()
         .zip(&styles)
         .map(|(c, s)| {
-            let (f, g, a) = advance_in(faces[face_id(s.bold, s.italic) as usize], *c, s.size);
-            (f, g, a + ls)
+            let (f, _, _) = advance_in(faces[face_id(s.bold, s.italic) as usize], *c, s.size);
+            (f, shaped_char(f, *c))
         })
         .collect();
+    let (used_faces, shape_chars): (Vec<FaceId>, Vec<char>) = used.into_iter().unzip();
+    let sizes: Vec<f64> = styles.iter().map(|s| s.size).collect();
     let lh_of = |size: f64| match ts.line_height {
         Some(m) => size * m,
         None => line_height_in(faces[0], size),
     };
-    // Break into lines: hard breaks on '\n', soft breaks at spaces when wrapping.
+    // Break into lines: hard breaks on '\n', soft breaks at spaces when wrapping. A char's
+    // width for wrapping is its share of the shaped cluster it sits in.
+    let mut levels = vec![0u8; chars.len()];
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     let mut start = 0;
     while start <= chars.len() {
@@ -199,13 +219,21 @@ pub fn layout_rich(
             .iter()
             .position(|c| *c == '\n')
             .map_or(chars.len(), |p| start + p);
+        levels[start..hard_end].copy_from_slice(&shaping::levels(&chars[start..hard_end]));
         let mut line_start = start;
         if let Some(maxw) = max_width {
+            let mut adv = vec![0.0; hard_end - start];
+            for r in shaping::runs_in(start, hard_end, &levels, &used_faces, &sizes) {
+                for cl in shaping::clusters(&r, &shaping::shape_px(&r, &shape_chars, ls)) {
+                    let w = (cl.x1 - cl.x0) / (cl.b - cl.a) as f64;
+                    adv[cl.a - start..cl.b - start].fill(w);
+                }
+            }
             let mut x = 0.0;
             let mut last_space: Option<usize> = None;
             let mut i = line_start;
             while i < hard_end {
-                let a = adv[i].2;
+                let a = adv[i - start];
                 if chars[i] == ' ' {
                     last_space = Some(i);
                 }
@@ -236,40 +264,58 @@ pub fn layout_rich(
     let mut top = 0.0;
     for (s, e) in ranges.iter().copied() {
         // Line metrics from the largest size on the line (or the char before an empty line).
-        let sizes = styles[s..e].iter().map(|c| c.size);
-        let max_size = sizes
-            .clone()
+        let max_size = sizes[s..e]
+            .iter()
+            .copied()
             .fold(None, |m: Option<f64>, z| Some(m.map_or(z, |m| m.max(z))))
-            .unwrap_or_else(|| {
-                styles
-                    .get(s.saturating_sub(1))
-                    .map_or(font_size, |c| c.size)
-            });
+            .unwrap_or_else(|| styles.get(s.saturating_sub(1)).map_or(font_size, |c| c.size));
         let lh = lh_of(max_size);
         let natural = line_height_in(faces[0], max_size);
         let baseline = top + ascent_in(faces[0], max_size) + (lh - natural) * 0.5;
+        let runs = shaping::runs_in(s, e, &levels, &used_faces, &sizes);
+        let order = shaping::visual_order(&runs.iter().map(|r| r.level).collect::<Vec<_>>());
         let mut x = 0.0;
-        let mut carets = vec![0.0];
-        for i in s..e {
-            let st = styles[i];
-            let (face, gid, a) = adv[i];
-            glyphs.push(PlacedGlyph {
-                gid,
-                face,
-                size: st.size,
-                color: st.color,
-                x,
-                baseline,
-                advance: a,
-                char_index: i,
-                underline: st.underline,
-                underline_color: st.underline_color,
-                underline_wavy: st.underline_wavy,
-                strike: st.strike,
-            });
-            x += a;
-            carets.push(x);
+        let mut spans = vec![(0.0, 0.0); e - s];
+        for r in order.into_iter().map(|i| &runs[i]) {
+            let shaped = shaping::shape_px(r, &shape_chars, ls);
+            let mut pen = x;
+            for g in &shaped {
+                let st = styles[g.cluster];
+                glyphs.push(PlacedGlyph {
+                    gid: g.gid,
+                    face: r.face,
+                    size: r.size,
+                    color: st.color,
+                    x: pen + g.dx,
+                    baseline: baseline - g.dy,
+                    advance: g.advance,
+                    char_index: g.cluster,
+                    underline: st.underline,
+                    underline_color: st.underline_color,
+                    underline_wavy: st.underline_wavy,
+                    strike: st.strike,
+                });
+                pen += g.advance;
+            }
+            for cl in shaping::clusters(r, &shaped) {
+                for k in 0..cl.b - cl.a {
+                    let (l, rt) = cl.char_span(k, r.rtl());
+                    spans[cl.a + k - s] = (x + l, x + rt);
+                }
+            }
+            x = pen;
         }
+        // A boundary's caret sits at the leading edge of the char after it, and the last one at
+        // the trailing edge of the final char, so a left-to-right line reads off its char starts.
+        let odd = |i: usize| levels[s + i] % 2 == 1;
+        let mut carets: Vec<f64> = (0..spans.len())
+            .map(|i| if odd(i) { spans[i].1 } else { spans[i].0 })
+            .collect();
+        carets.push(match spans.len() {
+            0 => 0.0,
+            n if odd(n - 1) => spans[n - 1].0,
+            n => spans[n - 1].1,
+        });
         max_line_w = max_line_w.max(x);
         lines.push(Line {
             top,
@@ -279,6 +325,7 @@ pub fn layout_rich(
             start: s,
             end: e,
             carets,
+            spans,
         });
         top += lh;
     }
@@ -289,6 +336,10 @@ pub fn layout_rich(
             let dx = (box_w - line.width) * k;
             for c in &mut line.carets {
                 *c += dx;
+            }
+            for (l, r) in &mut line.spans {
+                *l += dx;
+                *r += dx;
             }
             for g in glyphs
                 .iter_mut()
@@ -327,7 +378,8 @@ impl TextLayout {
         self.lines.len() - 1
     }
 
-    /// Highlight rectangles (x, top, w, h) for the char range `[a, b)`.
+    /// Highlight rectangles (x, top, w, h) for the char range `[a, b)`: one per visual stretch
+    /// of selected chars, so a selection through mixed-direction text may take several per line.
     pub fn selection_rects(&self, a: usize, b: usize) -> Vec<(f64, f64, f64, f64)> {
         let (a, b) = (a.min(b), a.max(b));
         let mut out = Vec::new();
@@ -337,14 +389,29 @@ impl TextLayout {
             if s > e || (s == e && !(a < l.start && b > l.end)) {
                 continue;
             }
-            let x0 = l.carets[s - l.start];
-            let x1 = l.carets[e - l.start];
             let extra = if b > l.end && l.end < usize::MAX {
                 4.0
             } else {
                 0.0
             };
-            out.push((x0, l.top, (x1 - x0 + extra).max(1.0), l.height));
+            let mut spans: Vec<(f64, f64)> = l.spans[s - l.start..e - l.start].to_vec();
+            if spans.is_empty() {
+                let x = l.carets[s - l.start];
+                spans.push((x, x));
+            }
+            spans.sort_by(|p, q| p.0.total_cmp(&q.0));
+            let mut stretches: Vec<(f64, f64)> = Vec::new();
+            for (x0, x1) in spans {
+                match stretches.last_mut() {
+                    Some(last) if x0 <= last.1 + 0.01 => last.1 = last.1.max(x1),
+                    _ => stretches.push((x0, x1)),
+                }
+            }
+            let last = stretches.len() - 1;
+            for (i, (x0, x1)) in stretches.into_iter().enumerate() {
+                let more = if i == last { extra } else { 0.0 };
+                out.push((x0, l.top, (x1 - x0 + more).max(1.0), l.height));
+            }
         }
         out
     }
