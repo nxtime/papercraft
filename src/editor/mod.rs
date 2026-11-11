@@ -252,6 +252,8 @@ pub struct Editor {
     pub mods: Modifiers,
     pub space_down: bool,
     pub text_edit: Option<TextEdit>,
+    /// The IME's composition string, shown at the caret until it is committed.
+    pub preedit: Option<String>,
     pub guides: Vec<Guide>,
     /// World-space marquee rectangle while dragging.
     pub marquee: Option<Rect>,
@@ -377,6 +379,7 @@ impl Editor {
             mods: Modifiers::NONE,
             space_down: false,
             text_edit: None,
+            preedit: None,
             guides: Vec::new(),
             marquee: None,
             present_overlay: None,

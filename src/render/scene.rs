@@ -529,6 +529,16 @@ pub fn draw_text(
 /// A section's outline: neutral grey, readable on light and dark canvases.
 const SECTION_OUTLINE: [f32; 4] = [0.5, 0.5, 0.55, 0.35];
 
+/// The IME composition drawn at the caret on the canvas background, underlined, over the text
+/// it will push aside once committed.
+fn preedit(mb: &mut MeshBuilder, text: &str, font_size: f64, at: V2, z: f64, accent: [f32; 4]) {
+    let l = text::layout(text, font_size, None, TextAlign::Left);
+    let (w, h) = (l.width * z, l.height * z);
+    mb.rect(Rect::new(at.x, at.y, w, h), rgba(canvas_colors().0));
+    draw_text(mb, text, font_size, None, TextAlign::Left, at, z, accent);
+    mb.rect(Rect::new(at.x, at.y + h - 1.5, w, 1.5), accent);
+}
+
 /// Interactive overlay: hover, selection, handles, marquee, guides, labels, caret.
 pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
     let v = View {
@@ -629,10 +639,13 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
                 }
             }
             let (x, top, h) = l.caret(te.caret);
-            mb.rect(
-                Rect::new(o.x + x * z - 0.75, o.y + top * z, 1.5, h * z),
-                accent,
-            );
+            match ed.preedit.as_deref() {
+                Some(pre) => preedit(mb, pre, l.font_size, v2(o.x + x * z, o.y + top * z), z, accent),
+                None => mb.rect(
+                    Rect::new(o.x + x * z - 0.75, o.y + top * z, 1.5, h * z),
+                    accent,
+                ),
+            }
         }
     } else if let Some(b) = ed.selection_bounds() {
         let sb = v.rect_to_screen(&b);

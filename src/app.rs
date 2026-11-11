@@ -1447,7 +1447,16 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 redraw = true;
             }
+            WindowEvent::Ime(winit::event::Ime::Preedit(s, _)) => {
+                self.ed.preedit = (!s.is_empty() && self.ed.text_edit.is_some()).then_some(s);
+                redraw = true;
+            }
+            WindowEvent::Ime(winit::event::Ime::Disabled) => {
+                self.ed.preedit = None;
+                redraw = true;
+            }
             WindowEvent::Ime(winit::event::Ime::Commit(s)) => {
+                self.ed.preedit = None;
                 if !self.ctx.egui_wants_keyboard_input() {
                     self.ed.handle(InputEvent::Text(s));
                 }
