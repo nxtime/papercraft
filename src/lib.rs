@@ -38,6 +38,7 @@ pub mod project;
 pub mod render;
 pub mod session;
 pub mod sync;
+pub mod shaping;
 pub mod text;
 pub mod theme;
 pub mod ui;
