@@ -847,9 +847,13 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             st.updater.show(ui.ctx());
         }
         let slot = hv.window_slot;
+        if std::mem::take(&mut hv.show_settings) {
+            st.settings.open_on_home();
+        }
         if st.custom_titlebar {
             home_window_chrome(ui, st, slot);
         }
+        settings::show(ui.ctx(), ed, st);
         return egui::Rect::NOTHING;
     }
     for ev in std::mem::take(&mut ed.ui_events) {

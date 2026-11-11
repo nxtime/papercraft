@@ -51,6 +51,8 @@ pub struct HomeView {
     pub show_trash: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub show_updates: bool,
+    /// The header's Settings button was pressed; the shell opens the window.
+    pub show_settings: bool,
     pub renaming: Option<(PathBuf, String)>,
     /// Requests for the app, drained after each frame.
     pub actions: Vec<HomeAction>,
@@ -266,6 +268,16 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: 
                             let size = egui::vec2(3.0 * super::WIN_BTN_W, super::HOME_WIN_BTN_H);
                             hv.window_slot =
                                 Some(ui.allocate_exact_size(size, egui::Sense::hover()).0);
+                        }
+                        if super::kit::button(
+                            ui,
+                            super::kit::ButtonKind::Secondary,
+                            None,
+                            "Settings",
+                        )
+                        .clicked()
+                        {
+                            hv.show_settings = true;
                         }
                         if hv.show_trash {
                             ui.add_enabled_ui(!hv.trash.is_empty(), |ui| {
