@@ -2,21 +2,31 @@
 //! approvals, running a tool on the UI thread, the turn handle, the event sink and the HTTP
 //! request with its stop polling.
 
-use super::events::{Event, ToolDispatch, Turn};
+use super::events::Event;
 use crate::mcp::Out;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
+#[cfg(not(target_arch = "wasm32"))]
+use super::events::{ToolDispatch, Turn};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 pub const MAX_TOOL_ROUNDS: usize = 40;
 /// How often blocking waits look at the stop flag (stop must end the turn within 3 s).
+#[cfg(not(target_arch = "wasm32"))]
 pub const POLL: Duration = Duration::from_millis(100);
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg(not(target_arch = "wasm32"))]
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
 /// An HTTP error body is a short JSON message; never buffer more than this.
+#[cfg(not(target_arch = "wasm32"))]
 const ERROR_BODY_MAX: usize = 64 * 1024;
 pub const STOPPED_BY_USER: &str = "stopped by user; this call was not completed or its outcome is unknown";
 pub const DENIED: &str = "The user denied this action.";
@@ -27,9 +37,8 @@ pub const CUT_OFF: &str = "output limit reached before the call finished; not ru
 
 /// The app's tools as `{name, description, inputSchema}`, in `tool_list()` order.
 pub fn tool_specs() -> Vec<Value> {
-    crate::mcp::server::tool_list()
-        .iter()
-        .filter_map(|t| serde_json::to_value(t).ok())
+    crate::mcp::tools::definitions()
+        .into_iter()
         .map(|t| json!({"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}))
         .collect()
 }
@@ -148,6 +157,7 @@ pub fn out_blocks(outs: &[Out]) -> Vec<Value> {
 }
 
 /// What a tool run needs from its worker.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Ctl<'a> {
     pub stop: &'a AtomicBool,
     pub approvals: &'a Receiver<(String, bool)>,
@@ -155,6 +165,7 @@ pub struct Ctl<'a> {
     pub emit: &'a dyn Fn(Event),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Ctl<'_> {
     fn stopped(&self) -> bool {
         self.stop.load(Ordering::SeqCst)
@@ -200,18 +211,19 @@ impl Ctl<'_> {
             }
         }
     }
+}
 
-    /// The `ToolEnd` event for a finished call.
-    pub fn end_event(id: &str, r: &Result<Vec<Out>, String>) -> Event {
-        match r {
-            Ok(outs) => Event::ToolEnd { id: id.into(), result: Some(Value::Array(out_blocks(outs))), error: None },
-            Err(e) => Event::ToolEnd { id: id.into(), result: None, error: Some(e.clone()) },
-        }
+/// The `ToolEnd` event for a finished call.
+pub fn end_event(id: &str, r: &Result<Vec<Out>, String>) -> Event {
+    match r {
+        Ok(outs) => Event::ToolEnd { id: id.into(), result: Some(Value::Array(out_blocks(outs))), error: None },
+        Err(e) => Event::ToolEnd { id: id.into(), result: None, error: Some(e.clone()) },
     }
 }
 
 // ---------------------------------------------------------------------- turn handle, sink
 
+#[cfg(not(target_arch = "wasm32"))]
 /// A running API turn. `approve` answers a `NeedsApproval` event.
 pub struct ApiTurn {
     pub(crate) stop: Arc<AtomicBool>,
@@ -219,6 +231,7 @@ pub struct ApiTurn {
     approvals: Sender<(String, bool)>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ApiTurn {
     pub fn approve(&self, id: &str, ok: bool) {
         let _ = self.approvals.send((id.to_string(), ok));
@@ -240,6 +253,7 @@ impl ApiTurn {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Turn for ApiTurn {
     /// The worker polls the flag every 100 ms and drops the connection.
     fn stop(&mut self) {
@@ -250,6 +264,7 @@ impl Turn for ApiTurn {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Sends events; the turn's `TurnEnd` or `Error` is held back until `flush`, so the history is on
 /// disk before the app sees the end (it deletes or reopens the chat right then).
 pub struct Sink {
@@ -258,6 +273,7 @@ pub struct Sink {
     terminal: std::cell::RefCell<Option<Event>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Sink {
     pub fn new(tx: Sender<Event>, stop: Arc<AtomicBool>) -> Self {
         Self { tx, stop, terminal: Default::default() }
@@ -288,9 +304,9 @@ impl Sink {
 pub fn persist(path: Option<&std::path::PathBuf>, messages: &[Value]) {
     let Some(p) = path else { return };
     if let Some(dir) = p.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        let _ = crate::vfs::create_dir_all(dir);
     }
-    let r = serde_json::to_vec(messages).map_err(|e| e.to_string()).and_then(|b| std::fs::write(p, b).map_err(|e| e.to_string()));
+    let r = serde_json::to_vec(messages).map_err(|e| e.to_string()).and_then(|b| crate::vfs::write(p, b).map_err(|e| e.to_string()));
     if let Err(e) = r {
         log::warn!("chat history not saved: {e}");
     }
@@ -298,7 +314,7 @@ pub fn persist(path: Option<&std::path::PathBuf>, messages: &[Value]) {
 
 /// Reads `chats/<id>.api.json`; a missing file is an empty history.
 pub fn load_history(path: Option<&std::path::PathBuf>) -> Result<Vec<Value>, String> {
-    match path.map(std::fs::read) {
+    match path.map(crate::vfs::read) {
         Some(Ok(b)) => serde_json::from_slice(&b).map_err(|e| format!("chat history is unreadable: {e}")),
         _ => Ok(vec![]),
     }
@@ -306,6 +322,7 @@ pub fn load_history(path: Option<&std::path::PathBuf>) -> Result<Vec<Value>, Str
 
 // ---------------------------------------------------------------------- HTTP
 
+#[cfg(not(target_arch = "wasm32"))]
 pub enum Halt {
     Stopped,
     /// An error event was already sent.
@@ -313,13 +330,16 @@ pub enum Halt {
     Fail(String),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).read_timeout(READ_TIMEOUT).build().map_err(|e| format!("http client: {e}"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Header names that carry the key; marked sensitive so they never show up in debug output.
 const SENSITIVE: [&str; 2] = ["x-api-key", "authorization"];
 
+#[cfg(not(target_arch = "wasm32"))]
 /// POSTs `body`; on a non-2xx answer returns `Fail("<label> error <status>: <message>")`.
 /// Stop is polled every 100 ms, also while the error body is read.
 pub async fn post(stop: &AtomicBool, client: &reqwest::Client, url: &str, headers: Vec<(&'static str, String)>, body: &Value, label: &str) -> Result<reqwest::Response, Halt> {
@@ -360,6 +380,7 @@ pub async fn post(stop: &AtomicBool, client: &reqwest::Client, url: &str, header
     Err(Halt::Fail(format!("{label} error {status}: {}", msg.unwrap_or(text))))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Feeds the response body to `feed` as UTF-8 text until it returns true (the reply is complete) or
 /// the body ends. Stop drops the connection.
 pub async fn read_stream(stop: &AtomicBool, mut resp: reqwest::Response, mut feed: impl FnMut(&str) -> bool) -> Result<(), Halt> {
@@ -383,6 +404,7 @@ pub async fn read_stream(stop: &AtomicBool, mut resp: reqwest::Response, mut fee
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Runs `fut` on a fresh current-thread runtime, as the workers do.
 pub fn block_on<F: std::future::Future<Output = ()>>(fut: F) -> Result<(), String> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("could not start the network runtime: {e}"))?;

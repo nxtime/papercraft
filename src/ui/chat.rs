@@ -18,6 +18,8 @@ mod chat_models;
 mod chat_install;
 #[path = "chat_hosted.rs"]
 pub mod chat_hosted;
+#[path = "chat_own.rs"]
+pub mod chat_own;
 #[path = "chat_pick.rs"]
 pub mod chat_pick;
 pub use chat_pick::{layer_chip, open_ask};
@@ -140,7 +142,6 @@ const DS_CHECK: Duration = Duration::from_secs(1);
 const TITLE_CHARS: usize = 40;
 const MAX_IMAGES: usize = 4;
 const NEW_CHAT: &str = "New chat";
-const WEB_NOTE: &str = "Chat needs the desktop app, or a server started with --agents";
 
 /// A running turn, whichever backend started it.
 pub enum TurnHandle {
@@ -541,6 +542,8 @@ pub struct ChatState {
     pub ask: Option<chat_pick::Ask>,
     /// Agents the relay runs for this tab (the browser build).
     pub hosted: chat_hosted::Hosted,
+    /// The person's own model keys, kept in this browser.
+    pub own: chat_own::Own,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -633,10 +636,12 @@ impl ChatState {
             && dir.as_ref().is_some_and(|d| prefs.chat.contains(&d.to_string_lossy().into_owned()));
         let detect = self.detect.take();
         let hosted = std::mem::take(&mut self.hosted);
+        let own = std::mem::take(&mut self.own);
         let chat_prefs = std::mem::take(&mut self.prefs);
         *self = ChatState {
             detect,
             hosted,
+            own,
             prefs: chat_prefs,
             project: dir,
             width: prefs.width.unwrap_or(0.0),
@@ -1268,7 +1273,7 @@ impl ChatState {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (ctx, prefs);
-            self.detect = Some(chat_hosted::detect_for(&self.hosted.agents));
+            self.refresh_detect();
         }
     }
 
@@ -1283,7 +1288,8 @@ impl ChatState {
             return;
         }
         let kind = d.pick(prefs.default_backend);
-        let ep = (kind == BackendKind::Anthropic).then(|| d.pick_endpoint()).flatten().map(|id| prefs.endpoint(Some(id)));
+        let own = &self.own.store;
+        let ep = (kind == BackendKind::Anthropic).then(|| d.pick_endpoint()).flatten().map(|id| own.get(id).map_or_else(|| prefs.endpoint(Some(id)), |o| &o.endpoint));
         c.backend = Backend {
             kind,
             model: ep.map(|e| e.model.clone()),
@@ -1519,7 +1525,11 @@ impl ChatState {
 
     #[cfg(target_arch = "wasm32")]
     pub fn send(&mut self, ctx: &egui::Context, prompt: &str) -> Result<(), String> {
-        self.send_hosted(ctx, prompt)
+        if self.chat.as_ref().is_some_and(|c| c.backend.kind == BackendKind::Anthropic) {
+            self.send_own(ctx, prompt)
+        } else {
+            self.send_hosted(ctx, prompt)
+        }
     }
 
     /// The last user message, to send again.
@@ -1596,9 +1606,9 @@ fn chat_skill(md: &str) -> String {
     out
 }
 
-/// The system prompt of an agent the relay runs for a tab: the chat's skill and rules, and no
-/// local folder, plugins or helpers (the project lives in the browser).
-#[cfg(not(target_arch = "wasm32"))]
+/// The system prompt of an agent the relay runs for a tab, or of a chat on the person's own key:
+/// the chat's skill and rules, and no local folder, plugins or helpers (the project lives in the
+/// browser).
 pub fn hosted_system_prompt() -> String {
     let skill = chat_skill(include_str!("../../skills/papercraft/SKILL.md"));
     format!("{skill}\n\n{CHAT_RULES}\n\nProject context: the open project is in the user's browser tab. Read and edit it only through the papercraft tools.")
@@ -2028,7 +2038,7 @@ fn column(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, backdrop: egui::Rect) 
     .top();
     if st.review_run.is_some() {
         super::panels::review(ui, ed, st);
-    } else if cfg!(target_arch = "wasm32") && st.chat.hosted.agents.is_empty() && st.chat.chat.as_ref().is_none_or(|c| c.messages.is_empty()) {
+    } else if cfg!(target_arch = "wasm32") && st.chat.hosted.agents.is_empty() && st.chat.own.store.endpoints.is_empty() && st.chat.chat.as_ref().is_none_or(|c| c.messages.is_empty()) {
         chat_hosted::unavailable(ui);
     } else if setup {
         let act = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| chat_agents::setup(ui, st.chat.detect.as_ref().expect("setup needs a scan"), &st.settings.chat)).inner;
@@ -2535,16 +2545,14 @@ fn composer(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, column: egui::Rect, 
     }
 }
 
-/// Whether Chat mode can open: always in the desktop app, and in a browser once the relay has
-/// said it runs agents.
+/// Whether Chat mode can open: always, since the browser can chat with the person's own key.
 pub fn chat_allowed() -> bool {
-    !cfg!(target_arch = "wasm32") || chat_hosted::available()
+    true
 }
 
 /// The `Design | Chat` switch for the top bar. Returns the new mode when the user picked one.
 pub fn mode_switch(ui: &mut Ui, chat_mode: bool) -> Option<bool> {
-    let off = (!chat_allowed()).then_some(WEB_NOTE);
-    kit::segmented(ui, &[("Design", None), ("Chat", off)], usize::from(chat_mode)).map(|i| i == 1)
+    kit::segmented(ui, &[("Design", None), ("Chat", None)], usize::from(chat_mode)).map(|i| i == 1)
 }
 
 #[cfg(test)]
