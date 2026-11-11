@@ -104,9 +104,9 @@ Spec: [specs/accounts-and-sharing/spec.md](specs/accounts-and-sharing/spec.md). 
 |---|---|---|---|
 | 49 | Browser app | **done** | The editor runs in the browser (WebGPU, WebGL2 fallback) with a phone layout, touch input and a home-screen app; `papercraft-relay --agents` runs Claude Code or OpenCode for a tab with only the PaperCraft tools; see `deploy/README.md`. Desktop-only tools (Breakpoint Preview, plugins, updates) are hidden. |
 | 50 | Links to designs | **done** | `#/d/<project>/<page>` opens a design and page; back, forward and pasted links work, and links survive renames. |
-| 51 | Model picker in the web chat | todo | Show and pick the hosted agent's model, as the desktop chat does. **Target: end of November 2026.** |
+| 51 | Model picker in the web chat | **done** | A Model chip under the agent chips opens the desktop panel's model list; typing an id the agent does not list offers "Use <id>" (browser and desktop). |
 | 52 | Your own model keys in the browser | todo | The API-endpoint chat in the browser, calling the provider directly with a key kept in that browser, so the server owner never pays for it. **Target: mid-December 2026.** |
-| 53 | Settings on the home screen | todo | Theme, chat and keys before a design is open. **Target: mid-December 2026.** |
+| 53 | Settings on the home screen | **done** | A Settings button in the home header opens the Settings window with no design open (Canvas, which acts on a design, is hidden there). In the browser the Chat page, with keys, arrives with row 52. |
 | 54 | Accounts | todo | Sign-in through the server's identity provider, a library per account, admin and member roles, and tokens for the desktop app, phones and MCP clients. **Target: end of January 2027.** |
 | 55 | Project visibility | todo | Private (default), shared with a link or named accounts to edit together, or public read-only, which only an admin can set. **Target: end of February 2027.** |
 
