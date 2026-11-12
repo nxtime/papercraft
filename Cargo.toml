@@ -122,9 +122,12 @@ arboard = { version = "3.6.1", features = ["image-data"] }
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = "0.17"
 
-# Android has no system OpenSSL to link: plain http only until the relay sync brings a TLS stack.
+# Android has no system OpenSSL to link: rustls on ring with the Mozilla roots bundled (owner
+# approval 2026-11-12), handed to reqwest preconfigured (`net::client_builder`).
 [target.'cfg(target_os = "android")'.dependencies]
-reqwest = { version = "0.13", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
 
 # Browser build (`src/web.rs`): canvas + WebGPU/WebGL surface, DOM events instead of winit.
 # Process RAM and CPU readings for the performance overlay (`ui::perf`).

@@ -15,6 +15,8 @@ const ROW_H: f32 = 46.0;
 const BADGE: f32 = 28.0;
 const PAD: f32 = 8.0;
 const PANEL_PAD: f32 = 16.0;
+/// Least gap between the panel and the screen edge.
+const EDGE_GAP: f32 = 8.0;
 const SEARCH_H: f32 = 34.0;
 const FOOTER_H: f32 = 30.0;
 const TITLE_H: f32 = 30.0;
@@ -101,7 +103,9 @@ fn matches_query(q: &str, parts: &[&str]) -> bool {
 pub fn group_agents(d: &Detect, prefs: &ChatPrefs, query: &str) -> Groups {
     let q = query.trim().to_lowercase();
     let mut g = Groups::default();
-    for def in agents::AGENTS {
+    // A phone or a browser tab cannot start programs: only API endpoints are offered there.
+    let local = crate::ui::phone::has_local_tools();
+    for def in agents::AGENTS.iter().filter(|_| local) {
         let hidden = prefs.agents.get(def.id).is_some_and(|a| a.hidden);
         if hidden || !matches_query(&q, &[def.name, def.id]) {
             continue;
@@ -141,7 +145,7 @@ pub fn group_agents(d: &Detect, prefs: &ChatPrefs, query: &str) -> Groups {
         };
         g.endpoints.push(Row { pick: Pick::Endpoint(ep.id.clone()), name: ep.name.clone(), version: String::new(), sub, status, docs: None });
     }
-    for c in &prefs.custom_agents {
+    for c in prefs.custom_agents.iter().filter(|_| local) {
         if !matches_query(&q, &[&c.name, &c.id]) {
             continue;
         }
@@ -552,6 +556,7 @@ pub(super) fn section(ui: &mut Ui, title: &str, count: Option<usize>, fold: Fold
 /// The panel over the chat column. Returns what the user did this frame.
 pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Act> {
     let p = theme::pal_from_ctx(ctx);
+    let local = crate::ui::phone::has_local_tools();
     let g = group_agents(i.detect, i.prefs, &ps.query);
     let flat = selectable(&g);
     let (down, up, enter, esc) = ctx.input_mut(|inp| {
@@ -587,7 +592,10 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
     let top = i.chip.bottom() + 6.0;
     let height = (i.composer_top - 10.0 - top).max(240.0);
     let list_h = height - 2.0 * PANEL_PAD - TITLE_H - SEARCH_H - FOOTER_H - 24.0;
-    let card = egui::Area::new("chat-agent-panel".into()).order(egui::Order::Foreground).fade_in(false).fixed_pos(pos2(i.column.left(), top));
+    // Kept on screen: on a phone the column is the whole width.
+    let screen = ctx.content_rect().shrink(EDGE_GAP);
+    let (left, width) = (i.column.left().max(screen.left()), i.column.width().min(screen.width()));
+    let card = egui::Area::new("chat-agent-panel".into()).order(egui::Order::Foreground).fade_in(false).fixed_pos(pos2(left, top));
     // Both areas are Foreground, and egui raises whichever was pressed last: the press of a
     // click on the backdrop left it above the panel, so the next opening showed only the dimmed
     // backdrop and every click closed it. As a sublayer the panel always sits right above it.
@@ -600,7 +608,8 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
             .inner_margin(PANEL_PAD)
             .shadow(egui::Shadow { offset: [0, 12], blur: SHADOW_BLUR, spread: 0, color: Color32::from_black_alpha(SHADOW_ALPHA) })
             .show_surface(ui, |ui| {
-                ui.set_width(i.column.width() - 2.0 * PANEL_PAD);
+                ui.set_width(width - 2.0 * PANEL_PAD);
+                ui.set_max_width(width - 2.0 * PANEL_PAD);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Choose an agent").font(theme::semibold(15.0)));
@@ -613,7 +622,8 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
                 ui.add_space(4.0);
                 let hint = if i.backend.kind == BackendKind::Acp { "Search agents and models" } else { "Search agents" };
                 let search = kit::icon_field(ui, Icon::Search, &mut ps.query, hint);
-                if std::mem::take(&mut ps.fresh) {
+                // On a phone the focus would raise the soft keyboard over the list.
+                if std::mem::take(&mut ps.fresh) && !kit::compact(ctx) {
                     search.request_focus();
                 }
                 if search.changed() {
@@ -641,13 +651,17 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
                     if !g.missing.is_empty() && ps.missing_open {
                         draw_rows(ui, &g.missing, &selected, ps.sel, &mut n, i.running, &mut act);
                     }
-                    if !g.endpoints.is_empty() && section(ui, "API endpoints", None, Fold::Action(Icon::Plus)) {
+                    if (!g.endpoints.is_empty() || !local) && section(ui, "API endpoints", None, Fold::Action(Icon::Plus)) {
                         act = Some(Act::Settings);
                     }
                     draw_rows(ui, &g.endpoints, &selected, ps.sel, &mut n, i.running, &mut act);
-                    section(ui, "Custom", None, Fold::None);
-                    draw_rows(ui, &g.custom, &selected, ps.sel, &mut n, i.running, &mut act);
-                    if nav_row(ui, "panel", Icon::Plus, "Add custom agent", "Command and arguments (ACP)", false) {
+                    if local {
+                        section(ui, "Custom", None, Fold::None);
+                        draw_rows(ui, &g.custom, &selected, ps.sel, &mut n, i.running, &mut act);
+                        if nav_row(ui, "panel", Icon::Plus, "Add custom agent", "Command and arguments (ACP)", false) {
+                            act = Some(Act::Settings);
+                        }
+                    } else if g.endpoints.is_empty() && nav_row(ui, "panel", Icon::Plus, "Add an API key", "Anthropic, OpenAI or any OpenAI-compatible URL", false) {
                         act = Some(Act::Settings);
                     }
                     if g.is_empty() && i.backend.kind != BackendKind::Acp {
@@ -659,7 +673,7 @@ pub fn panel(ctx: &egui::Context, ps: &mut PanelState, i: &PanelIn) -> Option<Ac
                 });
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.add_enabled_ui(!i.detect.scanning, |ui| kit::chip(ui, "Detect again", false)).inner.clicked() {
+                    if local && ui.add_enabled_ui(!i.detect.scanning, |ui| kit::chip(ui, "Detect again", false)).inner.clicked() {
                         act = Some(Act::DetectAgain);
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
