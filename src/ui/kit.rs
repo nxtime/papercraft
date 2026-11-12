@@ -533,10 +533,9 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
 /// Draws a 24 px control in a row [`TOUCH_MIN`] tall whose whole area flips `on`: the shared
 /// controls come at one size, a finger needs more.
 fn finger_sized(ui: &mut Ui, on: &mut bool, draw: impl FnOnce(&mut Ui, &mut bool) -> Response) -> Response {
-    let shown = ui.scope(|ui| {
-        ui.set_min_height(TOUCH_MIN);
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| draw(ui, on)).inner
-    });
+    // A sized row: `with_layout` would centre the control in all the height left below it.
+    let row = vec2(ui.available_width(), TOUCH_MIN);
+    let shown = ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| draw(ui, on));
     let mut tap = ui.interact(shown.response.rect, shown.response.id.with("tap"), Sense::click());
     if tap.clicked() {
         *on = !*on;
@@ -787,4 +786,23 @@ pub fn skeleton(painter: &egui::Painter, rect: egui::Rect, t: f32, alpha: f32) {
     mesh.add_triangle(2, 3, 4);
     mesh.add_triangle(3, 4, 5);
     painter.add(egui::Shape::mesh(mesh));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_phone_checkbox_is_one_finger_tall_and_leaves_room_below() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(390.0, 800.0));
+        let (mut row, mut next) = (egui::Rect::NOTHING, 0.0);
+        ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            row = checkbox(ui, &mut false, "Hand-drawn style").rect;
+            next = ui.label("next").rect.top();
+        }).textures_delta.clear();
+        assert_eq!(row.height(), TOUCH_MIN);
+        assert!(next < row.bottom() + 20.0, "next row at {next}, checkbox ends at {}", row.bottom());
+    }
 }

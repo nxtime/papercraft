@@ -236,7 +236,7 @@ impl Web {
     }
 
     fn over_canvas(&self, p: egui::Pos2) -> bool {
-        self.canvas_rect.contains(p) && !self.ctx.is_pointer_over_egui()
+        crate::ui::phone::canvas_takes(&self.ctx, self.canvas_rect, p)
     }
 
     fn to_canvas(&self, p: egui::Pos2) -> V2 {

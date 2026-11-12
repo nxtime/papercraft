@@ -226,7 +226,7 @@ impl App {
     }
 
     fn over_canvas(&self, p: V2) -> bool {
-        self.canvas.contains(egui::pos2(p.x as f32, p.y as f32)) && !self.ctx.is_pointer_over_egui()
+        crate::ui::phone::canvas_takes(&self.ctx, self.canvas, egui::pos2(p.x as f32, p.y as f32))
     }
 
     /// Before leaving a scratch (project-less) document. Projects autosave, so they never ask.
