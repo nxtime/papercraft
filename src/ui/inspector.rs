@@ -14,6 +14,8 @@ use crate::theme;
 use super::bind::BIND_W;
 use crate::variables::Kind;
 use egui::{RichText, Ui};
+#[cfg(target_os = "android")]
+use crate::dialogs as rfd;
 
 const LABEL_W: f32 = 64.0;
 

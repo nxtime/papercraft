@@ -38,6 +38,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
+#[cfg(target_os = "android")]
+use crate::dialogs as rfd;
 
 pub const COLUMN_DEFAULT: f32 = 480.0;
 pub const COLUMN_MIN: f32 = 420.0;
@@ -2353,8 +2355,8 @@ fn image_mime(name: &str) -> Option<&'static str> {
 /// Images from the clipboard (a paste with an image on it) and from files dropped on the column.
 #[cfg(not(target_arch = "wasm32"))]
 fn take_images(ui: &Ui, st: &mut ChatState, column: egui::Rect) {
-    let pasted = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
-    if pasted && let Some(png) = clipboard_png() {
+    #[cfg(not(target_os = "android"))]
+    if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))) && let Some(png) = clipboard_png() {
         st.add_image(format!("pasted-{}.png", now_ms()), "image/png", png);
     }
     if !ui.rect_contains_pointer(column) {
@@ -2368,7 +2370,7 @@ fn take_images(ui: &Ui, st: &mut ChatState, column: egui::Rect) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn clipboard_png() -> Option<Vec<u8>> {
     let img = arboard::Clipboard::new().ok()?.get_image().ok()?;
     let rgba = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())?;

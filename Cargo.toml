@@ -47,7 +47,6 @@ web-time = "1"
 bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
-rfd = "0.17"
 fastrand = "2"
 dirs = "6"
 craft-ui = { version = "0.1.0", git = "https://git.marcospaulo.dev.br/masi/craft-libs", rev = "9c470aa935c4ce48f2ba4f0a17f9410c0c8660fb" }
@@ -98,15 +97,12 @@ raw-window-handle = "0.6"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 egui-winit = "0.36"
 winit = "0.30"
-arboard = { version = "3.6.1", features = ["image-data"] }
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "base64", "transport-streamable-http-server", "transport-io", "client", "transport-streamable-http-client-reqwest"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time", "io-std", "fs"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws", "json", "query"] }
 tokio-util = "0.7"
 # Share tokens come from the OS generator (the version rand and uuid already compile).
 getrandom = "0.4"
-# Shared-project sync; the system TLS stack so https servers work without bundling one.
-reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 # Anthropic API key in the OS keychain (chat API backend). Linux uses the Secret Service (persistent; keyutils is not).
 # libc: SIGINT to the spawned chat CLIs.
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
@@ -115,6 +111,20 @@ libc = "0.2"
 zstd = "0.13"
 # Checks downloaded updates against the checksum GitHub publishes.
 sha2 = "0.10"
+
+# Shared-project sync; the system TLS stack so https servers work without bundling one.
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
+# The OS clipboard (Android's goes through the activity, `app::Host`).
+arboard = { version = "3.6.1", features = ["image-data"] }
+
+# Native file and message dialogs; Android has none (`dialogs` stands in).
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rfd = "0.17"
+
+# Android has no system OpenSSL to link: plain http only until the relay sync brings a TLS stack.
+[target.'cfg(target_os = "android")'.dependencies]
+reqwest = { version = "0.13", default-features = false }
 
 # Browser build (`src/web.rs`): canvas + WebGPU/WebGL surface, DOM events instead of winit.
 # Process RAM and CPU readings for the performance overlay (`ui::perf`).
