@@ -310,6 +310,7 @@ pub fn medium(size: f32) -> FontId {
 /// Figma-style inspector controls inside `ui`: flat tinted fields, no borders, 28px rows.
 pub fn figma_fields(ui: &mut egui::Ui) {
     let dark = ui.visuals().dark_mode;
+    let ui_ctx = ui.ctx().clone();
     let tint = |a: u8| {
         if dark {
             Color32::from_white_alpha(a)
@@ -319,7 +320,7 @@ pub fn figma_fields(ui: &mut egui::Ui) {
     };
     let (rest, hover, press) = (tint(14), tint(24), tint(34));
     let sp = ui.spacing_mut();
-    sp.interact_size.y = FIELD_H;
+    sp.interact_size.y = crate::ui::kit::touch_h(&ui_ctx, FIELD_H);
     sp.button_padding = vec2(8.0, 4.0);
     sp.item_spacing = vec2(8.0, 6.0);
     let v = ui.visuals_mut();
@@ -430,9 +431,9 @@ pub fn small_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 /// A compact secondary button, an optional icon before the label (an icon alone when `text`
 /// is empty), painted as a control surface so it takes the acrylic material.
 pub fn small_icon_button(ui: &mut egui::Ui, icon: Option<Icon>, text: &str) -> egui::Response {
-    const H: f32 = 28.0;
     const PAD: f32 = 10.0;
     const ICON: f32 = 14.0;
+    let h = crate::ui::kit::touch_h(ui.ctx(), 28.0);
     let font = FontId::proportional(BODY);
     let galley = ui
         .painter()
@@ -443,11 +444,11 @@ pub fn small_icon_button(ui: &mut egui::Ui, icon: Option<Icon>, text: &str) -> e
         (Some(_), false) => ICON + 6.0,
     };
     let w = if text.is_empty() {
-        H
+        h
     } else {
         galley.size().x + icon_w + 2.0 * PAD
     };
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, H), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, h), egui::Sense::click());
     if !ui.is_rect_visible(rect) {
         return resp;
     }
@@ -763,13 +764,17 @@ fn scale_path() -> Option<std::path::PathBuf> {
     Choice::path().map(|p| p.with_file_name("ui_scale"))
 }
 
-/// The saved interface scale, 1.0 when none (or an unsupported value) is stored.
+/// The interface scale a phone starts with: 13 px body text becomes about 16 px.
+pub const PHONE_UI_SCALE: f32 = 1.25;
+
+/// The saved interface scale; when none (or an unsupported value) is stored, the phone's
+/// default on Android and 1.0 elsewhere.
 pub fn load_ui_scale() -> f32 {
     scale_path()
         .and_then(|p| crate::vfs::read_to_string(p).ok())
         .and_then(|s| s.trim().parse::<f32>().ok())
         .filter(|v| UI_SCALES.iter().any(|s| (s - v).abs() < 1e-3))
-        .unwrap_or(1.0)
+        .unwrap_or(if cfg!(target_os = "android") { PHONE_UI_SCALE } else { 1.0 })
 }
 
 /// Applies `scale` to the whole UI and remembers it.
@@ -1889,7 +1894,10 @@ fn arc(c: Pos2, r: f32, a0: f32, a1: f32, n: usize) -> Vec<Pos2> {
 /// A borderless icon button: eased hover/pressed fill, accent fill when `selected`. Icons that
 /// have a Lottie animation play it once when the pointer enters the button.
 pub fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, selected: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::click());
+    // On a phone the tap area grows to a finger while the drawn button keeps its size.
+    let hit = crate::ui::kit::touch_h(ui.ctx(), size);
+    let (area, resp) = ui.allocate_exact_size(Vec2::splat(hit), egui::Sense::click());
+    let rect = Rect::from_center_size(area.center(), Vec2::splat(size));
     if ui.is_rect_visible(rect) {
         let p = pal(ui);
         let enabled = ui.is_enabled();

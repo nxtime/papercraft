@@ -78,7 +78,7 @@ enum Cell<'a> {
 /// A Figma-style segmented control: one tinted box split into equal cells. Returns the cell
 /// that was clicked.
 fn segmented(ui: &mut Ui, cells: &[(Cell, bool, &str)], width: f32) -> Option<usize> {
-    let h = theme::FIELD_H;
+    let h = super::kit::touch_h(ui.ctx(), theme::FIELD_H);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
     let p = theme::pal(ui);
     let rest = ui.visuals().widgets.inactive.bg_fill;
@@ -142,10 +142,11 @@ fn color_field(
     detach: &mut bool,
     width: f32,
 ) -> Option<Color> {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, theme::FIELD_H), egui::Sense::hover());
+    let field_h = super::kit::touch_h(ui.ctx(), theme::FIELD_H);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, field_h), egui::Sense::hover());
     theme::fill_control(ui, rect, theme::radius_md(), ui.visuals().widgets.inactive.bg_fill);
     let sw = egui::Rect::from_min_size(
-        rect.left_top() + egui::vec2(5.0, (theme::FIELD_H - 18.0) / 2.0),
+        rect.left_top() + egui::vec2(5.0, (field_h - 18.0) / 2.0),
         egui::Vec2::splat(18.0),
     );
     let mut out = None;
@@ -241,7 +242,7 @@ fn field(
 ) -> Option<f64> {
     let enabled = ui.is_enabled();
     let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(width, theme::FIELD_H),
+        egui::vec2(width, super::kit::touch_h(ui.ctx(), theme::FIELD_H)),
         egui::Sense::click_and_drag(),
     );
     let id = resp.id;
@@ -1994,7 +1995,7 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
         });
         for (si, s) in stops.iter().enumerate() {
             ui.horizontal(|ui| {
-                ui.spacing_mut().interact_size = egui::vec2(theme::FIELD_H, theme::FIELD_H);
+                ui.spacing_mut().interact_size = egui::Vec2::splat(super::kit::touch_h(ui.ctx(), theme::FIELD_H));
                 if let Some(c) = color_button(ui, ed, s.color) {
                     let mut ns = stops.clone();
                     ns[si].color = c;

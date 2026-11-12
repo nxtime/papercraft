@@ -22,6 +22,15 @@ pub struct Layout {
     pub canvas: egui::Rect,
 }
 
+/// Draws the UI inside the screen minus the system bars and the cutout (egui's content rect),
+/// with the window colour behind the bars. egui's root Ui spans the whole screen.
+pub fn draw_in_safe_area(ui: &mut egui::Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
+    let content = ui.ctx().content_rect();
+    ui.painter().rect_filled(ui.max_rect(), 0.0, crate::theme::pal(ui).window);
+    let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(content));
+    ui::draw(&mut inner, ed, st)
+}
+
 /// Run the egui UI, then sync the editor viewport to the canvas rect.
 pub fn layout(
     ctx: &egui::Context,
@@ -30,9 +39,7 @@ pub fn layout(
     st: &mut UiState,
 ) -> Layout {
     let mut canvas = egui::Rect::NOTHING;
-    let output = ctx.run_ui(input, |ui| {
-        canvas = ui::draw(ui, ed, st);
-    });
+    let output = ctx.run_ui(input, |ui| canvas = draw_in_safe_area(ui, ed, st));
     ed.viewport = v2(
         canvas.width().max(1.0) as f64,
         canvas.height().max(1.0) as f64,
