@@ -676,12 +676,7 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
         let (bw, bh) = own.filter(|_| turned).unwrap_or((b.w, b.h));
         let label = format!("{} × {}", fmt_num(bw), fmt_num(bh));
         let w = text::layout(&label, 11.0, None, TextAlign::Left).width;
-        let pill = Rect::new(
-            sb.center().x - w * 0.5 - 6.0,
-            sb.bottom() + 8.0,
-            w + 12.0,
-            18.0,
-        );
+        let pill = size_badge_rect(sb, f64::from(w), !ed.quick_knobs().is_empty());
         mb.fill_path(
             &MeshBuilder::rounded_rect_path(pill, 4.0),
             accent,
@@ -720,6 +715,13 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
     vector_edit_overlay(mb, ed, &v, accent);
     whiteboard_overlay(mb, ed, &v, accent);
     mb.set_clip(None);
+}
+
+/// The size badge under the selection `sb`, past the bottom quick-connect knob (centred 22 px
+/// out, 8 px radius) when there is one, so the "+" never covers the label.
+pub fn size_badge_rect(sb: Rect, text_w: f64, knobs: bool) -> Rect {
+    let gap = if knobs { 34.0 } else { 8.0 };
+    Rect::new(sb.center().x - text_w * 0.5 - 6.0, sb.bottom() + gap, text_w + 12.0, 18.0)
 }
 
 /// Arrow handles, bind targets, quick-connect knobs and the laser trail.

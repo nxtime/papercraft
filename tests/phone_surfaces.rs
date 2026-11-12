@@ -359,3 +359,35 @@ fn every_phone_surface_fits_the_safe_area_and_the_finger() {
     }
     assert!(report.is_empty(), "{} failures:\n{}", report.len(), report.join("\n"));
 }
+
+#[test]
+fn the_size_label_clears_the_plus_knob_under_a_selected_shape() {
+    let mut ed = Editor::default();
+    let id = ed.add_node(Node::new(NodeId(0), NodeKind::Rect, WRect::new(0.0, 0.0, 164.0, 182.0)), None);
+    ed.select(vec![id]);
+    let (_, knob) = ed.quick_knobs()[1];
+    let sb = ed.camera.world_rect_to_screen(&ed.doc.world_rect(id).unwrap());
+    let badge = papercraft::render::scene::size_badge_rect(sb, 60.0, true);
+    assert!(badge.y >= knob.y + 8.0, "badge top {} under the knob's bottom {}", badge.y, knob.y + 8.0);
+}
+
+#[test]
+fn the_recent_designs_cards_sit_centred_in_the_safe_area() {
+    for (w, h) in DEVICES {
+        let mut rig = Rig::new((w, h));
+        let mut hv = home::HomeView::default();
+        hv.entries = (0..3)
+            .map(|i| papercraft::project::Entry {
+                dir: format!("p{i}").into(),
+                manifest: papercraft::project::format::Manifest::new(&format!("Design {i}")),
+                thumbnail: None,
+            })
+            .collect();
+        rig.st.home = Some(hv);
+        rig.frames(Vec::new());
+        let content = rig.content();
+        let card = rig.audit.widgets.iter().filter(|w| w.click && w.rect.width() > 200.0 && w.rect.height() > 100.0).map(|w| w.rect).next().expect("a card");
+        let (left, right) = (card.left() - content.left(), content.right() - card.right());
+        assert!((left - right).abs() < 1.0 && left > 8.0, "{w}x{h}: card {card:?} has {left} left and {right} right of the safe area");
+    }
+}
