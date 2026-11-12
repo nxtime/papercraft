@@ -965,6 +965,19 @@ fn comments_json(n: &Node, with_resolved: bool) -> Vec<Value> {
             if let Some(r) = &c.reply {
                 v["reply"] = json!(r);
             }
+            if let Some(p) = c.point {
+                v["point"] = json!({"x": r2(p.x), "y": r2(p.y)});
+            }
+            if !c.mentions.is_empty() {
+                v["mentions"] = json!(c.mentions);
+            }
+            if !c.replies.is_empty() {
+                v["replies"] = json!(c
+                    .replies
+                    .iter()
+                    .map(|r| json!({"id": r.id, "author": r.author, "text": r.text, "mentions": r.mentions}))
+                    .collect::<Vec<_>>());
+            }
             v
         })
         .collect()
@@ -1042,29 +1055,33 @@ fn get_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
     }))
 }
 
+/// Start a thread on a layer (optionally at a point inside it), or with `commentId` reply to one.
 fn add_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
     let (page, id) = resolve(ed, a.req_str("nodeId")?, page_arg(ed, a)?)?;
     let body = a.req_str("text")?.chars().take(500).collect::<String>();
-    let author = a
-        .str("author")
-        .filter(|s| !s.is_empty())
-        .unwrap_or("agent")
-        .to_string();
+    let author = a.str("author").filter(|s| !s.is_empty()).unwrap_or("agent").to_string();
+    let thread = a.num("commentId").map(|n| n as u32);
+    let point = match a.get("point") {
+        Some(p) => Some(V2 {
+            x: p["x"].as_f64().ok_or("point needs numeric x and y")?,
+            y: p["y"].as_f64().ok_or("point needs numeric x and y")?,
+        }),
+        None => None,
+    };
+    let now = crate::project::format::now_ms();
     let cid = ed.with_page(page, |ed| {
-        ed.edit("Add feedback", |tx| {
+        ed.edit(if thread.is_some() { "Reply to feedback" } else { "Add feedback" }, |tx| {
             let n = tx.node_mut(id)?;
-            let next = n.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
-            n.comments.push(crate::model::Comment {
-                id: next,
-                text: body,
-                author,
-                resolved: false,
-                reply: None,
-            });
-            Some(next)
+            match thread {
+                Some(t) => n.reply_to(t, &author, &body, now),
+                None => Some(n.post_comment(&author, &body, now, point)),
+            }
         })
     });
-    text(json!({"nodeId": node_key(ed, page, id), "commentId": cid}))
+    let Some(cid) = cid else {
+        return Err(format!("layer has no comment {}", thread.unwrap_or(0)).into());
+    };
+    text(json!({"nodeId": node_key(ed, page, id), if thread.is_some() { "replyId" } else { "commentId" }: cid}))
 }
 
 fn resolve_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
@@ -1074,34 +1091,35 @@ fn resolve_feedback(ed: &mut Editor, a: &Args) -> ToolResult {
         .str("reply")
         .filter(|r| !r.is_empty())
         .map(|r| r.chars().take(500).collect::<String>());
-    let delete = a.get("delete").and_then(Value::as_bool) == Some(true);
+    let flag = |k: &str| a.get(k).and_then(Value::as_bool) == Some(true);
+    let (delete, reopen) = (flag("delete"), flag("reopen"));
+    let now = crate::project::format::now_ms();
     let n = ed.with_page(page, |ed| {
-        ed.edit("Resolve feedback", |tx| {
+        ed.edit(if reopen { "Reopen feedback" } else { "Resolve feedback" }, |tx| {
             let Some(node) = tx.node_mut(id) else {
                 return 0;
             };
-            let mut n = 0;
             if delete {
                 let before = node.comments.len();
                 node.comments.retain(|c| which.is_some_and(|w| w != c.id));
-                if which.is_none() {
-                    node.comments.clear();
-                }
                 return before - node.comments.len();
             }
-            for c in node
+            let ids: Vec<u32> = node
                 .comments
-                .iter_mut()
-                .filter(|c| !c.resolved && which.is_none_or(|w| w == c.id))
-            {
-                c.resolved = true;
-                c.reply = reply.clone();
-                n += 1;
+                .iter()
+                .filter(|c| c.resolved == reopen && which.is_none_or(|w| w == c.id))
+                .map(|c| c.id)
+                .collect();
+            for t in &ids {
+                if let Some(r) = reply.as_deref().filter(|_| !reopen) {
+                    node.reply_to(*t, "agent", r, now);
+                }
+                node.set_thread_resolved(*t, !reopen);
             }
-            n
+            ids.len()
         })
     });
-    text(json!({"nodeId": node_key(ed, page, id), "resolved": n}))
+    text(json!({"nodeId": node_key(ed, page, id), if reopen { "reopened" } else { "resolved" }: n}))
 }
 
 fn selection(ed: &mut Editor) -> ToolResult {

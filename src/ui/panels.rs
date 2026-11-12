@@ -297,41 +297,24 @@ fn versions_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 /// or add a note to the selected layer below.
 pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
-    struct Item {
-        node: NodeId,
-        cid: u32,
-        layer: String,
-        author: String,
-        text: String,
-        resolved: bool,
-        reply: Option<String>,
-    }
-    let mut items: Vec<Item> = Vec::new();
-    for n in ed.doc.nodes.values() {
-        for c in &n.comments {
-            items.push(Item {
-                node: n.id,
-                cid: c.id,
-                layer: n.name.clone(),
-                author: c.author.clone(),
-                text: c.text.clone(),
-                resolved: c.resolved,
-                reply: c.reply.clone(),
-            });
-        }
-    }
-    items.sort_by_key(|i| (i.resolved, i.node, i.cid));
-    let open = items.iter().filter(|i| !i.resolved).count();
+    let mut items: Vec<(NodeId, String, crate::model::Comment)> = ed
+        .doc
+        .nodes
+        .values()
+        .flat_map(|n| n.comments.iter().map(|c| (n.id, n.name.clone(), c.clone())))
+        .collect();
+    items.sort_by_key(|(n, _, c)| (c.resolved, *n, c.id));
+    let open = items.iter().filter(|i| !i.2.resolved).count();
     let total = items.len();
     items.retain(|i| match st.comment_filter {
-        CommentFilter::Open => !i.resolved,
-        CommentFilter::Resolved => i.resolved,
+        CommentFilter::Open => !i.2.resolved,
+        CommentFilter::Resolved => i.2.resolved,
         CommentFilter::All => true,
     });
     title(
         ui,
         &format!("Comments · {open} open"),
-        "Notes for the agent, and its replies.",
+        "Threads for people and agents: reply, resolve, @mention.",
     );
     ui.horizontal(|ui| {
         for (f, label) in [
@@ -365,15 +348,13 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             |_| {},
         );
     } else {
-        let mut resolve: Option<(NodeId, u32, bool)> = None;
-        let mut delete: Option<(NodeId, u32)> = None;
+        let mut select = None;
         egui::ScrollArea::vertical()
             .id_salt("comments")
             .max_height((ui.available_height() - reserve).max(80.0))
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                for it in &items {
-                    let mut select = false;
+                for (node, layer, c) in &items {
                     egui::Frame::new()
                         .fill(p.field)
                         .corner_radius(theme::radius_panel())
@@ -381,82 +362,16 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         .show_surface(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.spacing_mut().item_spacing.y = 6.0;
-                            ui.horizontal(|ui| {
-                                let name = ui.add(
-                                    egui::Label::new(
-                                        RichText::new(&it.layer).font(theme::semibold(theme::BODY)),
-                                    )
-                                    .truncate()
-                                    .sense(egui::Sense::click()),
-                                );
-                                select = name.on_hover_text("Select this layer").clicked();
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if kit::chip(ui, "Delete", false)
-                                            .on_hover_text("Delete this comment")
-                                            .clicked()
-                                        {
-                                            delete = Some((it.node, it.cid));
-                                        }
-                                        if it.resolved {
-                                            if kit::chip(ui, "Reopen", false)
-                                                .on_hover_text("Mark as open again")
-                                                .clicked()
-                                            {
-                                                resolve = Some((it.node, it.cid, false));
-                                            }
-                                        } else if kit::chip(ui, "Resolve", true)
-                                            .on_hover_text("Mark as resolved")
-                                            .clicked()
-                                        {
-                                            resolve = Some((it.node, it.cid, true));
-                                        }
-                                    },
-                                );
-                            });
-                            ui.label(
-                                RichText::new(format!("{}: {}", it.author, it.text))
-                                    .color(if it.resolved { p.secondary } else { p.text }),
-                            );
-                            if let Some(reply) = &it.reply {
-                                ui.label(
-                                    RichText::new(format!("↳ {reply}"))
-                                        .size(theme::SECONDARY)
-                                        .color(p.secondary),
-                                );
+                            if super::threads::thread(ui, ed, st, *node, c, Some(layer)).select_layer {
+                                select = Some(*node);
                             }
                         });
-                    if select {
-                        ed.selection = vec![it.node];
-                        ed.run(crate::editor::shortcuts::Action::ZoomSelection);
-                    }
                     ui.add_space(6.0);
                 }
             });
-        if let Some((node, cid, done)) = resolve {
-            ed.edit(
-                if done {
-                    "Resolve feedback"
-                } else {
-                    "Reopen feedback"
-                },
-                |tx| {
-                    if let Some(x) = tx
-                        .node_mut(node)
-                        .and_then(|n| n.comments.iter_mut().find(|x| x.id == cid))
-                    {
-                        x.resolved = done;
-                    }
-                },
-            );
-        }
-        if let Some((node, cid)) = delete {
-            ed.edit("Delete feedback", |tx| {
-                if let Some(n) = tx.node_mut(node) {
-                    n.comments.retain(|x| x.id != cid);
-                }
-            });
+        if let Some(node) = select {
+            ed.selection = vec![node];
+            ed.run(crate::editor::shortcuts::Action::ZoomSelection);
         }
     }
     ui.add_space(8.0);
@@ -477,19 +392,8 @@ pub fn comments(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             && !st.feedback_draft.trim().is_empty()
             && let Some(id) = target
         {
-            let text = std::mem::take(&mut st.feedback_draft).trim().to_string();
-            ed.edit("Add feedback", |tx| {
-                if let Some(n) = tx.node_mut(id) {
-                    let next = n.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
-                    n.comments.push(crate::model::Comment {
-                        id: next,
-                        text,
-                        author: "user".into(),
-                        resolved: false,
-                        reply: None,
-                    });
-                }
-            });
+            let text = std::mem::take(&mut st.feedback_draft);
+            super::threads::post(ed, id, &text);
         }
     });
 }

@@ -2610,3 +2610,30 @@ fn boolean_nodes_makes_a_live_group_and_validates_input() {
     let n = h.ed.doc.get(gid).unwrap();
     assert!(matches!(n.kind, papercraft::model::NodeKind::Path { .. }) && n.children.is_empty());
 }
+
+#[test]
+fn a_comment_thread_takes_replies_mentions_a_resolve_and_a_reopen() {
+    let (mut h, _) = two_frame_site();
+    let head = h.ed.doc.nodes.values().find(|n| n.name == "Headline").unwrap().id;
+    let key = exec::node_key(&h.ed, 0, head);
+    let added = call(&mut h, "add_feedback", json!({"nodeId": key, "text": "Too small, @ana?", "author": "user", "point": {"x": 4, "y": 6}}));
+    let cid = added["commentId"].as_u64().unwrap();
+    let reply = call(&mut h, "add_feedback", json!({"nodeId": key, "commentId": cid, "text": "Done, thanks @ana"}));
+    assert_eq!(reply["replyId"], 1, "{reply}");
+    call(&mut h, "resolve_feedback", json!({"nodeId": key, "commentId": cid, "reply": "bumped to 32px"}));
+
+    let all = call(&mut h, "get_feedback", json!({"includeResolved": true}));
+    let t = &all["items"][0]["feedback"][0];
+    assert_eq!(t["resolved"], true, "{all}");
+    assert_eq!(t["mentions"], json!(["ana"]), "{all}");
+    assert_eq!(t["point"], json!({"x": 4.0, "y": 6.0}), "{all}");
+    assert_eq!(t["replies"].as_array().unwrap().len(), 2, "{all}");
+    assert_eq!(t["replies"][1]["author"], "agent", "{all}");
+    assert_eq!(call(&mut h, "get_feedback", json!({}))["openCount"], 0);
+
+    call(&mut h, "resolve_feedback", json!({"nodeId": key, "reopen": true}));
+    assert_eq!(call(&mut h, "get_feedback", json!({}))["openCount"], 1);
+
+    let err = call_err(&mut h, "add_feedback", json!({"nodeId": key, "commentId": 99, "text": "x"}));
+    assert!(err.contains("no comment 99"), "{err}");
+}

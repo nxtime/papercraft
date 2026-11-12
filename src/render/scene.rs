@@ -616,9 +616,10 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
     {
         if let Some(wr) = ed.doc.world_rect(n.id) {
             let r = v.rect_to_screen(&wr);
-            let c = V2 {
-                x: r.right(),
-                y: r.y,
+            // A pinned thread sits at its point inside the layer, else on the corner.
+            let c = match n.comments.iter().find(|c| !c.resolved).and_then(|c| c.point) {
+                Some(pt) => V2 { x: r.x + pt.x * z, y: r.y + pt.y * z },
+                None => V2 { x: r.right(), y: r.y },
             };
             mb.circle(c, 9.0, [1.0, 1.0, 1.0, 0.95]);
             mb.circle(c, 7.0, [0.98, 0.74, 0.18, 1.0]);
