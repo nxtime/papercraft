@@ -448,7 +448,7 @@ fn feedback_flows_from_the_user_to_the_agent_and_back() {
     assert!(
         notes
             .iter()
-            .any(|c| c["resolved"] == true && c["reply"] == "now 32px bold")
+            .any(|c| c["resolved"] == true && c["replies"][0]["text"] == "now 32px bold")
     );
     assert_eq!(call(&mut h, "get_basic_info", json!({}))["openFeedback"], 1);
     call(&mut h, "undo", json!({}));
