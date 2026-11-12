@@ -102,6 +102,7 @@ fn design_tab_renders_and_variables_can_be_deleted() {
             author: "user".into(),
             resolved: false,
             reply: None,
+            ..Default::default()
         });
     });
     let mut st = UiState {

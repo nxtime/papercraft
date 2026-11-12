@@ -407,6 +407,7 @@ fn feedback_flows_from_the_user_to_the_agent_and_back() {
                 author: "user".into(),
                 resolved: false,
                 reply: None,
+                ..Default::default()
             });
     });
     assert_eq!(call(&mut h, "get_basic_info", json!({}))["openFeedback"], 1);
