@@ -1227,7 +1227,7 @@ mod tests {
         let f = frame(&mut e, "Sign in", Rect::new(0.0, 0.0, 300.0, 300.0));
         let c = child(&mut e, f, Rect::new(10.0, 10.0, 20.0, 20.0));
         assert!(open_notes_message(&e, f).is_none(), "nothing open");
-        let comment = |id, text: &str, resolved| crate::model::Comment { id, text: text.into(), author: "user".into(), resolved, reply: None };
+        let comment = |id, text: &str, resolved| crate::model::Comment { id, text: text.into(), author: "user".into(), resolved, ..Default::default() };
         e.edit("fb", |tx| {
             let n = tx.node_mut(c).unwrap();
             n.comments.push(comment(1, "Bigger button", false));

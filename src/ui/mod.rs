@@ -36,6 +36,7 @@ pub mod palette;
 pub mod panels;
 pub mod libraries;
 pub mod settings;
+pub mod threads;
 pub mod smart;
 pub mod variables;
 #[cfg(not(target_arch = "wasm32"))]
@@ -152,6 +153,8 @@ pub struct UiState {
     pub reveal: Option<NodeId>,
     /// Text typed into the inspector's feedback box.
     pub feedback_draft: String,
+    /// Reply being typed in each comment thread, by layer and thread id.
+    pub reply_drafts: std::collections::HashMap<(NodeId, u32), String>,
     /// Text in the layers panel's search box; only matching layers (and their parents) show.
     pub layer_filter: String,
     /// The Libraries modal is open (Assets header button).

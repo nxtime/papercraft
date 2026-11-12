@@ -480,7 +480,7 @@ pub struct Node {
     pub instance: Option<InstanceLink>,
     /// Feedback left on this layer by the user or an agent (see `get_feedback`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub comments: Vec<Comment>,
+    pub comments: Vec<super::Comment>,
     /// Prototype link: clicking this layer in Present mode jumps to this frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<NodeId>,
@@ -574,30 +574,6 @@ pub struct CodeLink {
     /// Rust for the egui export (statements on `ui`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub egui: String,
-}
-
-/// A note attached to a layer: what to change, from the user to an agent or back.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Comment {
-    /// Unique within the layer.
-    pub id: u32,
-    pub text: String,
-    /// "user" or "agent".
-    pub author: String,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub resolved: bool,
-    /// What was done about it, set when resolved.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reply: Option<String>,
-}
-
-impl Node {
-    pub fn open_comments(&self) -> usize {
-        self.comments.iter().filter(|c| !c.resolved).count()
-    }
-    pub fn resolved_comments(&self) -> usize {
-        self.comments.iter().filter(|c| c.resolved).count()
-    }
 }
 
 /// One anchor of a vector path, with optional bezier handles (node-local, absolute).

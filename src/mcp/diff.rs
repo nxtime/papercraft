@@ -1213,8 +1213,7 @@ mod tests {
                 id: 1,
                 text: "tighten".into(),
                 author: "user".into(),
-                resolved: false,
-                reply: None,
+                ..Default::default()
             });
         let p = diff_pages(&before, &after);
         assert!(!p.is_empty());

@@ -583,7 +583,6 @@ fn feedback_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, ids: &[NodeI
         return;
     }
     let id = ids[0];
-    let p = theme::pal(ui);
     let open = first.open_comments();
     section(
         ui,
@@ -594,50 +593,8 @@ fn feedback_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, ids: &[NodeI
         },
     );
     for c in first.comments.clone() {
-        ui.horizontal(|ui| {
-            let color = if c.resolved { p.tertiary } else { p.text };
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!("{}: {}", c.author, c.text))
-                        .size(theme::SECONDARY + 1.0)
-                        .color(color),
-                )
-                .wrap(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::theme::small_button(ui, "✕")
-                    .on_hover_text("Delete")
-                    .clicked()
-                {
-                    ed.edit("Delete feedback", |tx| {
-                        if let Some(n) = tx.node_mut(id) {
-                            n.comments.retain(|x| x.id != c.id);
-                        }
-                    });
-                }
-                if !c.resolved
-                    && crate::theme::small_button(ui, "✓")
-                        .on_hover_text("Resolve")
-                        .clicked()
-                {
-                    ed.edit("Resolve feedback", |tx| {
-                        if let Some(x) = tx
-                            .node_mut(id)
-                            .and_then(|n| n.comments.iter_mut().find(|x| x.id == c.id))
-                        {
-                            x.resolved = true;
-                        }
-                    });
-                }
-            });
-        });
-        if let Some(r) = &c.reply {
-            ui.label(
-                RichText::new(format!("  ↳ {r}"))
-                    .size(theme::SECONDARY)
-                    .color(p.secondary),
-            );
-        }
+        super::threads::thread(ui, ed, st, id, &c, None);
+        ui.add_space(4.0);
     }
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -647,19 +604,8 @@ fn feedback_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, ids: &[NodeI
             let r = super::kit::icon_field(ui, theme::Icon::Note, &mut st.feedback_draft, "Note for the agent…");
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (add || enter) && !st.feedback_draft.trim().is_empty() {
-                let text = std::mem::take(&mut st.feedback_draft).trim().to_string();
-                ed.edit("Add feedback", |tx| {
-                    if let Some(n) = tx.node_mut(id) {
-                        let next = n.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
-                        n.comments.push(crate::model::Comment {
-                            id: next,
-                            text,
-                            author: "user".into(),
-                            resolved: false,
-                            reply: None,
-                        });
-                    }
-                });
+                let text = std::mem::take(&mut st.feedback_draft);
+                super::threads::post(ed, id, &text);
             }
         });
     });
