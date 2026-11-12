@@ -179,6 +179,10 @@ pub struct Message {
     /// over a resumed session); `usage.cost_usd` holds this turn's share.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_cost: Option<f64>,
+    /// The model that ran this assistant turn, as the agent reported it (with "Free (auto)" the
+    /// one the server picked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Unix milliseconds.
     #[serde(default)]
     pub at: u64,
