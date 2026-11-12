@@ -80,8 +80,8 @@ fn paint_page_icon(ui: &Ui, rect: egui::Rect, icon: Option<&str>, ink: Color32) 
 
 fn icon_texture(ctx: &egui::Context, icon: &str) -> Option<egui::TextureHandle> {
     let (set, name) = icon.split_once(':')?;
-    let svg = crate::vfs::read(crate::icons::dir().join(set).join(format!("{name}.svg"))).ok()?;
-    super::chat::chat_agents::svg_texture(ctx, &format!("page-icon-{icon}"), &svg)
+    let svg = crate::icons::svg(&crate::icons::dir(), set, name)?;
+    super::chat::chat_agents::svg_texture(ctx, &format!("page-icon-{icon}"), svg.as_bytes())
 }
 
 pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {

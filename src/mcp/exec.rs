@@ -4119,6 +4119,44 @@ impl Builder<'_, '_> {
         Some(placed)
     }
 
+    /// An icon that cannot be placed stays visible: a dashed frame of the icon's size named
+    /// `missing icon: <name>`, so the agent finds it, and the closest names go with the error.
+    fn missing_icon(
+        &mut self,
+        el: &Element,
+        name: &str,
+        why: &str,
+        parent: &Parent,
+        index: &mut Option<usize>,
+    ) -> Option<NodeId> {
+        let size = el
+            .attr("size")
+            .or_else(|| el.attr("width"))
+            .and_then(|s| css::length(s, 16.0))
+            .unwrap_or(24.0);
+        let mut n = Node::new(
+            NodeId(0),
+            NodeKind::Frame { clip: false },
+            Rect::new(0.0, 0.0, size, size),
+        );
+        n.id = self.tx.alloc_id();
+        n.name = format!("missing icon: {name}");
+        n.style.fills.clear();
+        n.style.stroke = Some(Color::rgb(220, 60, 60));
+        n.style.stroke_width = 1.0;
+        n.style.dash = vec![3.0, 2.0];
+        let id = self.insert(n, parent, index);
+        let mut msg = format!("x-paper-icon: {why}");
+        let similar = crate::icons::closest(name);
+        if !similar.is_empty() && !why.contains("loading") {
+            msg.push_str(&format!(" (closest: {})", similar.join(", ")));
+        }
+        self.warnings.push(format!(
+            "{msg}; a dashed frame named `missing icon: {name}` marks the spot"
+        ));
+        Some(id)
+    }
+
     /// `<x-paper-icon name="lucide:check" size="20" color="var(--text)" stroke-width="2"/>`.
     fn icon_el(
         &mut self,
@@ -4131,10 +4169,7 @@ impl Builder<'_, '_> {
         let name = el.attr("name").unwrap_or("");
         let svg = match crate::icons::load(&crate::icons::dir(), name) {
             Ok(s) => s,
-            Err(e) => {
-                self.warnings.push(format!("x-paper-icon: {e}"));
-                return None;
-            }
+            Err(e) => return self.missing_icon(el, name, &e, parent, index),
         };
         let Some(mut svg_el) = html::parse(&svg).into_iter().find_map(|h| match h {
             Html::Element(e) if e.tag == "svg" => Some(e),
@@ -6876,6 +6911,9 @@ fn library_tool(host: &mut dyn Host, name: &str, a: &Args) -> ToolResult {
 
 fn search_icons(a: &Args) -> ToolResult {
     let root = crate::icons::dir();
+    if let Some(set) = a.str("set") {
+        crate::icons::want(set);
+    }
     let limit = a.num("limit").map_or(20, |n| n.clamp(1.0, 200.0) as usize);
     let mut v = json!({"installed": crate::icons::installed(&root)
         .into_iter()

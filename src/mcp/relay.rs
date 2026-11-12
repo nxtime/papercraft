@@ -407,6 +407,7 @@ const MIME_TYPES: &[(&str, &str)] = &[
     ("css", "text/css"),
     ("png", "image/png"),
     ("svg", "image/svg+xml"),
+    ("json", "application/json"),
 ];
 /// Fallback for anything not in [`MIME_TYPES`].
 const DEFAULT_MIME: &str = "application/octet-stream";

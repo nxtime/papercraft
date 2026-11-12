@@ -107,6 +107,9 @@ pub fn start() {
         if let Err(e) = crate::vfs::load().await {
             log::error!("papercraft web: cannot load saved projects: {e}");
         }
+        if let Ok(origin) = window().location().origin() {
+            crate::icons::set_source(&origin);
+        }
         match Web::new(canvas).await {
             Ok(web) => run(Rc::new(RefCell::new(web))),
             Err(e) => log::error!("papercraft web: {e}"),
