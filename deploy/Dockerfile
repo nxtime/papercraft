@@ -23,6 +23,12 @@ RUN rev=$(grep -o 'craft-libs?rev=[0-9a-f]*' Cargo.lock | head -n1 | cut -d= -f2
  '[source.vendored-sources]' 'directory = "/vendor"' > "$CARGO_HOME/config.toml"
 RUN sh web/build.sh && cargo build --release --locked --bin papercraft-relay
 
+# The open icon sets as one JSON bundle each (with their licences), fetched from npm like
+# `papercraft-cli icons add` does; the browser build loads them from /icon-sets/.
+FROM node:lts-slim AS icon-sets
+COPY deploy/icon-sets.mjs /icon-sets.mjs
+RUN node /icon-sets.mjs /icon-sets
+
 FROM debian:stable-slim
 # Node and the two agent CLIs `--agents` can start, at exact versions (bump them on purpose).
 ARG CLAUDE_CODE=2.1.319
@@ -37,6 +43,7 @@ COPY --from=build /src/target/release/papercraft-relay /usr/local/bin/papercraft
 COPY --from=build /src/web/index.html /src/web/manifest.webmanifest /src/web/sw.js /srv/web/
 COPY --from=build /src/web/pkg /srv/web/pkg
 COPY --from=build /src/web/icons /srv/web/icons
+COPY --from=icon-sets /icon-sets /srv/web/icon-sets
 USER 10001
 EXPOSE 8787
 ENTRYPOINT ["papercraft-relay", "--static", "/srv/web", "--data", "/data"]

@@ -1,11 +1,139 @@
 //! Open icon libraries on disk: `<icons dir>/<set>/<name>.svg`.
 //!
-//! The app never bundles or downloads icons: `papercraft-cli icons add <set>` fetches a set from
-//! the npm registry into the icons dir (`$PAPERCRAFT_ICONS`, else `<data dir>/papercraft/icons`), and
+//! The app never bundles icons: `papercraft-cli icons add <set>` fetches a set from the npm
+//! registry into the icons dir (`$PAPERCRAFT_ICONS`, else `<data dir>/papercraft/icons`), and
 //! `write_html` places them with `<x-paper-icon name="lucide:check">`. Each set keeps the
 //! licence file of the package it came from next to the icons.
+//!
+//! The browser has no icons dir. There the web server carries each set as one JSON bundle
+//! (`/icon-sets/<set>.json`, `{"license": "...", "icons": {name: svg}}`, built by
+//! `deploy/icon-sets.mjs`); [`set_source`] points the page at it, and a set is fetched the first
+//! time it is needed and kept in memory. Until it arrives, [`load`] says so instead of failing
+//! as if the icon did not exist.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// Sets held in memory (browser bundles), by id: icon name to SVG.
+static BUNDLES: Mutex<BTreeMap<String, BTreeMap<String, String>>> = Mutex::new(BTreeMap::new());
+/// Sets being fetched (`None`) or whose fetch failed (`Some(why)`).
+static FETCHES: Mutex<BTreeMap<String, Option<String>>> = Mutex::new(BTreeMap::new());
+/// Where the bundles are served from (the page's origin), once the browser knows it.
+static SOURCE: Mutex<Option<String>> = Mutex::new(None);
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Keep a downloaded bundle in memory. The licence text stays in the JSON on the server, next
+/// to the icons it covers; only the icons are needed here.
+pub fn add_bundle(set: &str, json: &[u8]) -> Result<(), String> {
+    #[derive(serde::Deserialize)]
+    struct Bundle {
+        icons: BTreeMap<String, String>,
+    }
+    spec(set).ok_or_else(|| format!("`{set}` is not an icon set"))?;
+    let b: Bundle = serde_json::from_slice(json).map_err(|e| format!("icon set `{set}`: {e}"))?;
+    lock(&BUNDLES).insert(set.to_string(), b.icons);
+    lock(&FETCHES).remove(set);
+    Ok(())
+}
+
+fn bundled(set: &str, name: &str) -> Option<String> {
+    lock(&BUNDLES).get(set)?.get(name).cloned()
+}
+
+/// The SVG markup of `name` in `set`, from disk or from a loaded bundle.
+pub fn svg(root: &Path, set: &str, name: &str) -> Option<String> {
+    crate::vfs::read_to_string(root.join(set).join(format!("{name}.svg")))
+        .ok()
+        .or_else(|| bundled(set, name))
+}
+
+/// Point the page at the server that carries the icon bundles and start the default set, so
+/// the common icons are ready before an agent asks for one.
+pub fn set_source(base: &str) {
+    *lock(&SOURCE) = Some(base.trim_end_matches('/').to_string());
+    want("lucide");
+}
+
+/// Start fetching `set` if it is not in memory and not on its way. Only the browser has a
+/// source to fetch from; elsewhere sets come from the icons dir.
+pub fn want(set: &str) {
+    if spec(set).is_none() || lock(&BUNDLES).contains_key(set) {
+        return;
+    }
+    let Some(base) = lock(&SOURCE).clone() else {
+        return;
+    };
+    if matches!(lock(&FETCHES).get(set), Some(None)) {
+        return;
+    }
+    lock(&FETCHES).insert(set.to_string(), None);
+    fetch(base, set.to_string());
+}
+
+#[cfg(target_arch = "wasm32")]
+fn fetch(base: String, set: String) {
+    crate::sync::net::spawn(async move {
+        let url = format!("{base}/icon-sets/{set}.json");
+        let got = match crate::sync::net::request("GET", &url, None).await {
+            Ok((200, body)) => add_bundle(&set, &body),
+            Ok((code, _)) => Err(format!("{url}: HTTP {code}")),
+            Err(e) => Err(format!("{url}: {e}")),
+        };
+        if let Err(why) = got {
+            lock(&FETCHES).insert(set, Some(why));
+        }
+    });
+}
+
+// shortcut: only the browser downloads; Android can add its branch once its TLS client lands.
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch(_base: String, set: String) {
+    lock(&FETCHES).insert(
+        set,
+        Some("downloading icon sets is not supported on this platform".into()),
+    );
+}
+
+/// Why `set` (or any set, when `None`) cannot answer yet: still downloading, or failed to.
+fn loading(set: Option<&str>) -> Option<String> {
+    let f = lock(&FETCHES);
+    let (id, state) = match set {
+        Some(s) => (s, f.get(s)?),
+        None => f.iter().next().map(|(k, v)| (k.as_str(), v))?,
+    };
+    Some(match state {
+        None => format!("icon set `{id}` is still loading; retry this in a moment"),
+        Some(why) => format!("icon set `{id}` could not be loaded: {why}"),
+    })
+}
+
+/// The closest icon names to a reference that does not exist, as `set:name`.
+pub fn closest(reference: &str) -> Vec<String> {
+    let (set, name) = match reference.split_once(':') {
+        Some((s, n)) => (Some(s), n),
+        None => (None, reference),
+    };
+    let root = dir();
+    let hits = search(&root, name, set, 5);
+    if !hits.is_empty() {
+        return hits;
+    }
+    // "check-mark" finds nothing as a whole; its words may.
+    name.split(|c: char| c == '-' || c == '_' || c.is_whitespace())
+        .filter(|w| w.len() > 2)
+        .map(|w| search(&root, w, set, 5))
+        .find(|h| !h.is_empty())
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+const NO_SETS: &str = "no icon sets could be loaded from the server";
+#[cfg(not(target_arch = "wasm32"))]
+const NO_SETS: &str = "no icon sets installed; run `papercraft-cli icons add lucide` (see `papercraft-cli icons list`)";
 
 /// A downloadable icon set: the npm package, the folder inside it, and its licence.
 pub struct SetSpec {
@@ -89,6 +217,11 @@ pub fn installed(root: &Path) -> Vec<(String, usize)> {
             (e.file_name().to_string_lossy().into_owned(), n)
         })
         .collect();
+    for (s, icons) in lock(&BUNDLES).iter() {
+        if !out.iter().any(|(o, _)| o == s) {
+            out.push((s.clone(), icons.len()));
+        }
+    }
     out.sort();
     out
 }
@@ -104,7 +237,11 @@ pub fn names(root: &Path, set: &str) -> Vec<String> {
             (p.extension()? == "svg").then(|| p.file_stem()?.to_str().map(String::from))?
         })
         .collect();
+    if let Some(b) = lock(&BUNDLES).get(set) {
+        v.extend(b.keys().cloned());
+    }
     v.sort();
+    v.dedup();
     v
 }
 
@@ -157,15 +294,19 @@ pub fn load(root: &Path, reference: &str) -> Result<String, String> {
         None => installed(root).into_iter().map(|(s, _)| s).collect(),
     };
     for s in &sets {
-        if let Ok(svg) = crate::vfs::read_to_string(root.join(s).join(format!("{name}.svg"))) {
+        if let Some(svg) = svg(root, s, name) {
             return Ok(svg);
         }
     }
+    // An icon of a set that has not arrived yet is not a missing icon.
+    if let Some(s) = set {
+        want(s);
+    }
+    if let Some(msg) = loading(set) {
+        return Err(msg);
+    }
     if installed(root).is_empty() {
-        return Err(
-            "no icon sets installed; run `papercraft-cli icons add lucide` (see `papercraft-cli icons list`)"
-                .into(),
-        );
+        return Err(NO_SETS.into());
     }
     let hint = search(root, name, set, 5);
     Err(format!(
@@ -182,8 +323,45 @@ pub fn load(root: &Path, reference: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    fn a_bundle_answers_load_names_and_search_like_a_folder() {
+        let root = std::env::temp_dir().join("papercraft-no-such-icons");
+        let json = br#"{"license":"MIT","icons":{"bolt":"<svg id=\"b\"/>","bolt-slash":"<svg/>"}}"#;
+        assert!(add_bundle("nope", json).is_err());
+        assert!(add_bundle("tabler", b"{").is_err());
+        add_bundle("tabler", json).unwrap();
+        assert_eq!(load(&root, "tabler:bolt").unwrap(), "<svg id=\"b\"/>");
+        assert_eq!(names(&root, "tabler"), ["bolt", "bolt-slash"]);
+        assert!(installed(&root).contains(&("tabler".into(), 2)));
+        assert_eq!(
+            search(&root, "bolt", Some("tabler"), 5),
+            ["tabler:bolt", "tabler:bolt-slash"]
+        );
+        assert!(load(&root, "tabler:zap").unwrap_err().contains("not found"));
+        lock(&BUNDLES).remove("tabler");
+    }
+
+    fn a_set_on_its_way_is_not_reported_as_a_missing_icon() {
+        let root = std::env::temp_dir().join("papercraft-no-such-icons");
+        lock(&FETCHES).insert("heroicons".into(), None);
+        assert!(
+            load(&root, "heroicons:home")
+                .unwrap_err()
+                .contains("still loading")
+        );
+        lock(&FETCHES).insert("heroicons".into(), Some("HTTP 404".into()));
+        assert!(
+            load(&root, "heroicons:home")
+                .unwrap_err()
+                .contains("could not be loaded")
+        );
+        lock(&FETCHES).remove("heroicons");
+    }
+
     #[test]
     fn rejects_path_tricks_and_ranks_exact_names_first() {
+        // One test: the bundle and fetch state is process-wide.
+        a_bundle_answers_load_names_and_search_like_a_folder();
+        a_set_on_its_way_is_not_reported_as_a_missing_icon();
         let root =
             std::env::temp_dir().join(format!("papercraft-icons-{:016x}", fastrand::u64(..)));
         let set = root.join("t");
