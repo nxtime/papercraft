@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
+mod phone;
+
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     #[default]
@@ -274,6 +276,10 @@ impl SettingsUi {
         self.open = true;
         self.page = Page::Chat;
     }
+
+    pub fn set_page(&mut self, page: Page) {
+        self.page = page;
+    }
 }
 
 impl SettingsUi {
@@ -319,7 +325,10 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
         return;
     }
     let live = st.settings.open;
-    let on_home = st.home.is_some();
+    if kit::compact(ctx) {
+        phone::show(ctx, ed, st, t);
+        return;
+    }
     let p = theme::pal_from_ctx(ctx);
     let frame = egui::Frame::new().fill(p.sidebar).corner_radius(crate::theme::r(24.0));
     let modal = egui::Modal::new(egui::Id::new("settings-modal"))
@@ -345,20 +354,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
                         ui.vertical(|ui| {
                             ui.label(RichText::new("Settings").font(theme::semibold(20.0)));
                             ui.add_space(12.0);
-                            for (page, icon, label) in [
-                                (Page::Appearance, Icon::Sketch, "Appearance"),
-                                (Page::Canvas, Icon::Grid, "Canvas"),
-                                (Page::Chat, Icon::Component, "Chat"),
-                                (Page::Plugins, Icon::Library, "Plugins"),
-                                (Page::Performance, Icon::Zap, "Performance"),
-                                (Page::Updates, Icon::Restore, "Updates"),
-                            ]
-                            .into_iter()
-                            // A browser tab has no local agents to set up and no plugin cache.
-                            .filter(|(page, ..)| !cfg!(target_arch = "wasm32") || !matches!(page, Page::Chat | Page::Plugins))
-                            // Canvas options act on an open design.
-                            .filter(|(page, ..)| *page != Page::Canvas || !on_home)
-                            {
+                            for (page, icon, label) in pages(st.home.is_some()) {
                                 if kit::nav_item(ui, icon, label, st.settings.page == page) {
                                     st.settings.page = page;
                                 }
@@ -398,21 +394,49 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     }
 }
 
+/// Room kept for the Save button after the token field.
+const KEY_SAVE_W: f32 = 80.0;
+
+/// The pages this build offers, in order.
+fn pages(on_home: bool) -> Vec<(Page, Icon, &'static str)> {
+    let local = super::phone::has_local_tools();
+    [
+        (Page::Appearance, Icon::Sketch, "Appearance"),
+        (Page::Canvas, Icon::Grid, "Canvas"),
+        (Page::Chat, Icon::Component, "Chat"),
+        (Page::Plugins, Icon::Library, "Plugins"),
+        (Page::Performance, Icon::Zap, "Performance"),
+        (Page::Updates, Icon::Restore, "Updates"),
+    ]
+    .into_iter()
+    // A browser tab or a phone has no local agents to set up, no plugin cache and no updater.
+    .filter(|(page, ..)| local || !matches!(page, Page::Plugins | Page::Updates))
+    // The browser's agents run on the server: its Chat page is a note.
+    .filter(|(page, ..)| !cfg!(target_arch = "wasm32") || *page != Page::Chat)
+    // Canvas options act on an open design.
+    .filter(|(page, ..)| *page != Page::Canvas || !on_home)
+    .collect()
+}
+
 /// The plugin catalogue: a card per plugin, two to a row and of one size, each with its switch.
 #[cfg(not(target_arch = "wasm32"))]
 fn plugins_page(ui: &mut Ui, prefs: &mut ChatPrefs) {
     let p = theme::pal(ui);
     let mut changed = false;
-    let w = (ui.available_width() - PLUGIN_GAP) / 2.0;
+    // A phone shows one card per row, full width.
+    let per_row = if kit::compact(ui.ctx()) { 1 } else { 2 };
+    let w = (ui.available_width() - PLUGIN_GAP * (per_row - 1) as f32) / per_row as f32;
+    // Cards of one height line up in a grid; a stacked card takes the height its text needs.
+    let card_h = if per_row == 1 { 0.0 } else { PLUGIN_CARD_H };
     ui.spacing_mut().item_spacing = egui::vec2(PLUGIN_GAP, PLUGIN_GAP);
-    for row in crate::plugins::PLUGINS.chunks(2) {
+    for row in crate::plugins::PLUGINS.chunks(per_row) {
         ui.horizontal(|ui| {
             for plugin in row {
                 let mut on = prefs.plugins.iter().any(|id| id == plugin.id);
-                ui.allocate_ui_with_layout(egui::vec2(w, PLUGIN_CARD_H), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.allocate_ui_with_layout(egui::vec2(w, card_h), egui::Layout::top_down(egui::Align::Min), |ui| {
                     egui::Frame::new().fill(p.backdrop).corner_radius(theme::radius_panel()).inner_margin(egui::Margin::same(14)).show_surface(ui, |ui| {
                         ui.set_width(w - 28.0);
-                        ui.set_height(PLUGIN_CARD_H - 28.0);
+                        ui.set_min_height((card_h - 28.0).max(0.0));
                         ui.spacing_mut().item_spacing.y = 4.0;
                         ui.horizontal(|ui| {
                             kit::badge(ui, plugin_icon(plugin.id), if on { theme::accent() } else { p.secondary }, 32.0);
@@ -457,17 +481,22 @@ fn plugin_icon(id: &str) -> Icon {
     }
 }
 
+fn page_text(page: Page) -> (&'static str, &'static str) {
+    match page {
+        Page::Appearance => ("Appearance", "Theme, accent, material, corners, font, scale and motion."),
+        Page::Canvas => ("Canvas", "How the canvas looks and moves."),
+        Page::Chat => ("Chat", "Agents, API endpoints and defaults for design by conversation."),
+        Page::Plugins => ("Plugins", "Assets the agent can place in a design. Fetched from each service once, then cached."),
+        Page::Performance => ("Performance", "Frame rate, memory, CPU and GPU, and a warning when frames get slow."),
+        Page::Updates => ("Updates", "Keep PaperCraft current."),
+    }
+}
+
+/// The desktop dialog's page: its title and close button, then the body.
 fn content(ui: &mut Ui, ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
-        let (title, sub) = match st.settings.page {
-            Page::Appearance => ("Appearance", "Theme, accent, material, corners, font, scale and motion."),
-            Page::Canvas => ("Canvas", "How the canvas looks and moves."),
-            Page::Chat => ("Chat", "Agents, API endpoints and defaults for design by conversation."),
-            Page::Plugins => ("Plugins", "Assets the agent can place in a design. Fetched from each service once, then cached."),
-            Page::Performance => ("Performance", "Frame rate, memory, CPU and GPU, and a warning when frames get slow."),
-            Page::Updates => ("Updates", "Keep PaperCraft current."),
-        };
+        let (title, sub) = page_text(st.settings.page);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new(title).font(theme::semibold(20.0)));
@@ -480,6 +509,17 @@ fn content(ui: &mut Ui, ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) 
         });
     });
     ui.add_space(16.0);
+    if st.settings.page == Page::Chat {
+        // The columns have no fixed height of their own, so the page gets the dialog's.
+        let height = modal_height(ctx) - PAGE_CHROME;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(height).min_scrolled_height(height).show(ui, |ui| chat_page(ui, ctx, &mut st.settings));
+    } else {
+        page_body(ui, ctx, ed, st);
+    }
+}
+
+/// What a page holds, under its title; the Chat page lays itself out and scrolls in its caller.
+fn page_body(ui: &mut Ui, ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     match st.settings.page {
         Page::Appearance => {
             kit::section_header(ui, "Theme", None);
@@ -609,11 +649,7 @@ fn content(ui: &mut Ui, ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) 
                 },
             );
         }
-        Page::Chat => {
-            // The columns have no fixed height of their own, so the page gets the dialog's.
-            let height = modal_height(ctx) - PAGE_CHROME;
-            egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(height).min_scrolled_height(height).show(ui, |ui| chat_page(ui, ctx, &mut st.settings));
-        }
+        Page::Chat => chat_page(ui, ctx, &mut st.settings),
         Page::Plugins => {
             #[cfg(not(target_arch = "wasm32"))]
             plugins_page(ui, &mut st.settings.chat);
@@ -651,14 +687,14 @@ fn content(ui: &mut Ui, ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) 
                 ui.add_space(6.0);
                 let s = &mut st.settings;
                 kit::setting_row(ui, "Repository", "Gitea or GitHub repository URL.", |ui| {
-                    if crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut s.chat.issue_repo).desired_width(320.0).margin(theme::INPUT_MARGIN))).lost_focus() {
+                    if crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut s.chat.issue_repo).desired_width(320.0f32.min(ui.available_width())).margin(theme::INPUT_MARGIN).min_size(kit::input_min(ui.ctx())))).lost_focus() {
                         s.chat.save();
                     }
                 });
                 let saved = crate::issues::token().is_some();
                 let desc = if saved { "Saved in the keychain." } else { "Optional: without one, your tea login for this server is used." };
                 kit::setting_row(ui, "Access token", desc, |ui| {
-                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut s.issue_token).password(true).hint_text(if saved { "•••• saved" } else { "token" }).desired_width(200.0).margin(theme::INPUT_MARGIN)));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(&mut s.issue_token).password(true).hint_text(if saved { "•••• saved" } else { "token" }).desired_width(200.0f32.min(ui.available_width() - KEY_SAVE_W)).margin(theme::INPUT_MARGIN).min_size(kit::input_min(ui.ctx()))));
                     if kit::button(ui, kit::ButtonKind::Secondary, None, if s.issue_token.is_empty() && saved { "Remove" } else { "Save" }).clicked() {
                         s.issue_note = Some(match crate::issues::set_token(&s.issue_token) {
                             Ok(()) => if s.issue_token.is_empty() { "Token removed".into() } else { "Token saved".into() },
@@ -747,13 +783,17 @@ mod native {
         /// Detects the agents again (the old result stays on screen until the new one lands) and
         /// reads the key tails.
         fn refresh(&mut self, prefs: &ChatPrefs, ctx: &egui::Context) {
-            let (tx, rx) = channel();
-            let (prefs_copy, ctx_copy) = (prefs.clone(), ctx.clone());
-            std::thread::spawn(move || {
-                let _ = tx.send(agents::detect_all(&prefs_copy));
-                ctx_copy.request_repaint();
-            });
-            self.probe = Some(rx);
+            if local_agents() {
+                let (tx, rx) = channel();
+                let (prefs_copy, ctx_copy) = (prefs.clone(), ctx.clone());
+                std::thread::spawn(move || {
+                    let _ = tx.send(agents::detect_all(&prefs_copy));
+                    ctx_copy.request_repaint();
+                });
+                self.probe = Some(rx);
+            } else {
+                self.agents = Some(Vec::new());
+            }
             self.key_tails = prefs.endpoints.iter().filter_map(|e| Some((e.id.clone(), key_tail(&endpoint::get_key(e)?)))).collect();
             self.key_tails.extend(keys::PROVIDERS.iter().filter_map(|p| Some((pi_key_id(p), key_tail(&keys::get(p)?)))));
             self.env_key = std::env::var(KEY_ENV).is_ok();
@@ -766,6 +806,11 @@ mod native {
                 self.probe = None;
             }
         }
+    }
+
+    /// Whether agent CLIs can run here at all; a phone has none to detect.
+    fn local_agents() -> bool {
+        crate::ui::phone::has_local_tools()
     }
 
     fn key_tail(key: &str) -> String {
@@ -835,12 +880,13 @@ mod native {
         ui.spacing_mut().item_spacing.y = 8.0;
 
         let mut detect = false;
-        section(ui, "Agents", "Found on your login shell PATH, like your terminal does.", |ui| {
-            detect = kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Restore), "Detect again").clicked();
-        });
-        card(ui, |ui| agents_card(ui, prefs, page, &scan, &mut ed));
-
-        ui.add_space(SECTION_GAP - 8.0);
+        if local_agents() {
+            section(ui, "Agents", "Found on your login shell PATH, like your terminal does.", |ui| {
+                detect = kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Restore), "Detect again").clicked();
+            });
+            card(ui, |ui| agents_card(ui, prefs, page, &scan, &mut ed));
+            ui.add_space(SECTION_GAP - 8.0);
+        }
         let mut add_endpoint = false;
         section(ui, "API endpoints", &format!("Bring your own key. Keys live in the {}.", keychain_name()), |ui| {
             add_endpoint = kit::button(ui, kit::ButtonKind::Secondary, Some(Icon::Plus), "Add endpoint").clicked();
@@ -927,18 +973,35 @@ mod native {
 
     // ---- layout pieces ----
 
-    /// Section title and subtitle on the left, `action` at the right.
+    /// Section title and subtitle on the left, `action` at the right (under them on a phone).
     fn section(ui: &mut Ui, title: &str, sub: &str, action: impl FnOnce(&mut Ui)) {
         let p = theme::pal(ui);
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), 40.0), Layout::left_to_right(Align::Center), |ui| {
-            ui.set_min_height(40.0);
+        let text = |ui: &mut Ui| {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.label(RichText::new(title).font(theme::semibold(16.0)));
-                ui.label(RichText::new(sub).size(12.0).color(p.secondary));
+                ui.add(egui::Label::new(RichText::new(sub).size(12.0).color(p.secondary)).wrap());
             });
+        };
+        if kit::compact(ui.ctx()) {
+            text(ui);
+            ui.horizontal_wrapped(action);
+            return;
+        }
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), 40.0), Layout::left_to_right(Align::Center), |ui| {
+            ui.set_min_height(40.0);
+            text(ui);
             ui.with_layout(Layout::right_to_left(Align::Center), action);
         });
+    }
+
+    /// Buttons at the end of a form: at the right edge, or wrapping from the left on a phone.
+    fn actions(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+        if kit::compact(ui.ctx()) {
+            ui.horizontal_wrapped(add);
+        } else {
+            ui.with_layout(Layout::right_to_left(Align::Center), add);
+        }
     }
 
     /// The raised surface of a section, 16 px inside.
@@ -966,39 +1029,60 @@ mod native {
     /// `agent` (id) shows that agent's logo, or its initial, in place of `icon`.
     fn row_header(ui: &mut Ui, icon: Icon, agent: Option<&str>, title: &str, version: &str, sub: &str, right: impl FnOnce(&mut Ui)) {
         let p = theme::pal(ui);
+        let identity = |ui: &mut Ui| {
+            match agent {
+                Some(id) => {
+                    let (rect, _) = ui.allocate_exact_size(vec2(ICON_BADGE, ICON_BADGE), egui::Sense::hover());
+                    theme::fill_control(ui, rect, theme::radius_panel(), p.field);
+                    crate::ui::chat::chat_agents::paint_agent_mark(ui, rect.shrink(ICON_BADGE * 0.28), id, title, p.text);
+                }
+                None => kit::badge(ui, icon, p.secondary, ICON_BADGE),
+            }
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.add(egui::Label::new(RichText::new(title).font(theme::semibold(theme::BODY + 1.0))).truncate());
+                    if !version.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(version).size(theme::SECONDARY).color(p.secondary)).truncate());
+                    }
+                });
+                ui.add(egui::Label::new(RichText::new(sub).size(theme::SECONDARY).color(p.secondary)).truncate());
+            });
+        };
+        if kit::compact(ui.ctx()) {
+            // The name takes the row; the status chips and switches wrap under it.
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                identity(ui);
+            });
+            ui.horizontal_wrapped(right);
+            return;
+        }
         ui.allocate_ui_with_layout(vec2(ui.available_width(), ROW_H), Layout::left_to_right(Align::Center), |ui| {
             ui.set_min_height(ROW_H);
             ui.spacing_mut().item_spacing.x = 12.0;
             let left_w = (ui.available_width() - RIGHT_W).max(0.0);
             ui.allocate_ui_with_layout(vec2(left_w, ROW_H), Layout::left_to_right(Align::Center), |ui| {
                 ui.set_width(left_w);
-                match agent {
-                    Some(id) => {
-                        let (rect, _) = ui.allocate_exact_size(vec2(ICON_BADGE, ICON_BADGE), egui::Sense::hover());
-                        theme::fill_control(ui, rect, theme::radius_panel(), p.field);
-                        crate::ui::chat::chat_agents::paint_agent_mark(ui, rect.shrink(ICON_BADGE * 0.28), id, title, p.text);
-                    }
-                    None => kit::badge(ui, icon, p.secondary, ICON_BADGE),
-                }
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.label(RichText::new(title).font(theme::semibold(theme::BODY + 1.0)));
-                        if !version.is_empty() {
-                            ui.add(egui::Label::new(RichText::new(version).size(theme::SECONDARY).color(p.secondary)).truncate());
-                        }
-                    });
-                    ui.add(egui::Label::new(RichText::new(sub).size(theme::SECONDARY).color(p.secondary)).truncate());
-                });
+                identity(ui);
             });
             ui.with_layout(Layout::right_to_left(Align::Center), right);
         });
     }
 
-    /// A label in the 160 px column and the field after it.
+    /// A label in the 160 px column and the field after it; on a phone the label sits above a
+    /// full-width field.
     fn field_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
         let p = theme::pal(ui);
+        if kit::compact(ui.ctx()) {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.label(RichText::new(label).color(p.secondary));
+                add(ui);
+            });
+            return;
+        }
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.allocate_ui_with_layout(vec2(LABEL_W, theme::FIELD_H), Layout::left_to_right(Align::Center), |ui| {
@@ -1014,11 +1098,11 @@ mod native {
     }
 
     fn note(ui: &mut Ui, text: &str) {
-        ui.label(RichText::new(text).size(theme::SECONDARY).color(theme::pal(ui).secondary));
+        ui.add(egui::Label::new(RichText::new(text).size(theme::SECONDARY).color(theme::pal(ui).secondary)).wrap());
     }
 
     fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> egui::Response {
-        crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(text).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(ui.available_width())))
+        crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(text).margin(theme::INPUT_MARGIN).min_size(kit::input_min(ui.ctx())).hint_text(hint).desired_width(ui.available_width())))
     }
 
     /// A text field for an optional string: edits show at once, `Enter` or leaving the field
@@ -1044,7 +1128,7 @@ mod native {
     }
 
     fn chevron(ui: &mut Ui, open: bool) -> bool {
-        theme::icon_button(ui, if open { Icon::ChevronUp } else { Icon::ChevronDown }, 24.0, false).clicked()
+        theme::icon_button(ui, if open { Icon::ChevronUp } else { Icon::ChevronDown }, kit::touch_h(ui.ctx(), 24.0), false).clicked()
     }
 
     fn flip(open: &mut HashSet<String>, key: String, clicked: bool) {
@@ -1207,7 +1291,7 @@ mod native {
                 ui.horizontal(|ui| {
                     let hint = tail.as_ref().map_or_else(|| "Paste a key".to_owned(), |t| format!("{KEY_MASK}{t}"));
                     let w = ui.available_width() - 2.0 * KEY_BUTTON_W;
-                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(draft).password(true).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(w)));
+                    crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(draft).password(true).margin(theme::INPUT_MARGIN).min_size(kit::input_min(ui.ctx())).hint_text(hint).desired_width(w)));
                     save = ui.add_enabled_ui(!draft.trim().is_empty(), |ui| kit::button(ui, kit::ButtonKind::Primary, None, "Save").clicked()).inner;
                     forget = tail.is_some() && kit::button(ui, kit::ButtonKind::Secondary, None, "Forget").clicked();
                 });
@@ -1239,7 +1323,7 @@ mod native {
             note(ui, "Started over stdio and spoken to as an ACP agent.");
         });
         field_row(ui, "Arguments", |ui| text_edit(ui, &mut c.args, "Optional, for example acp", ed));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        actions(ui, |ui| {
             if kit::button(ui, kit::ButtonKind::Danger, Some(Icon::Trash), "Remove").clicked() {
                 page.agent_remove = Some(row.id.clone());
             }
@@ -1291,7 +1375,7 @@ mod native {
                 field_row(ui, "Base URL", |ui| text_edit(ui, &mut ep.base_url, "https://api.anthropic.com or http://127.0.0.1:11434/v1", ed));
                 field_row(ui, "Model", |ui| text_edit(ui, &mut ep.model, "Model id", ed));
                 key_row(ui, ep, tail.as_deref(), page, scan, ed);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                actions(ui, |ui| {
                     if count > 1 && kit::button(ui, kit::ButtonKind::Danger, Some(Icon::Trash), "Remove endpoint").clicked() {
                         remove = Some(i);
                     }
@@ -1333,11 +1417,11 @@ mod native {
         };
         let draft = page.key_drafts.entry(ep.id.clone()).or_default();
         field_row(ui, "API key", |ui| {
-            crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(draft).password(true).margin(theme::INPUT_MARGIN).hint_text(hint).desired_width(ui.available_width())));
+            crate::theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(draft).password(true).margin(theme::INPUT_MARGIN).min_size(kit::input_min(ui.ctx())).hint_text(hint).desired_width(ui.available_width())));
             note(ui, &format!("Stored in the {}. Never written to the project or logs.", keychain_name()));
         });
         let mut save_clicked = false;
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        actions(ui, |ui| {
             save_clicked = ui.add_enabled_ui(!draft.trim().is_empty(), |ui| kit::button(ui, kit::ButtonKind::Primary, None, "Save").clicked()).inner;
             if tail.is_some() && kit::button(ui, kit::ButtonKind::Danger, Some(Icon::Trash), "Remove key").clicked() {
                 page.key_remove = Some(ep.id.clone());
@@ -1396,13 +1480,15 @@ mod native {
     }
 
     fn defaults_card(ui: &mut Ui, prefs: &mut ChatPrefs, ed: &mut Edits) {
-        field_row(ui, "Backend", |ui| {
-            let width = ui.available_width();
-            if let Some(b) = kit::select(ui, prefs.default_backend, &BACKENDS, width) {
-                prefs.default_backend = b;
-                ed.save = true;
-            }
-        });
+        if local_agents() {
+            field_row(ui, "Backend", |ui| {
+                let width = ui.available_width();
+                if let Some(b) = kit::select(ui, prefs.default_backend, &BACKENDS, width) {
+                    prefs.default_backend = b;
+                    ed.save = true;
+                }
+            });
+        }
         field_row(ui, "Endpoint", |ui| {
             let width = ui.available_width();
             let options: Vec<(usize, &str)> = prefs.endpoints.iter().enumerate().map(|(i, e)| (i, e.name.as_str())).collect();
@@ -1433,61 +1519,65 @@ mod native {
             }
             note(ui, "Variables, components and libraries with each turn, about 1,500 tokens.");
         });
-        field_row(ui, "Images", |ui| {
-            let width = ui.available_width();
-            // Google Flow shows when the user's `gf` CLI is installed (or already chosen).
-            let gf = prefs.image_gen == "gf" || crate::chat::path::which("gf").is_some();
-            let mut options = vec![("", "Off"), ("codex", "Codex (your ChatGPT plan)")];
-            if gf {
-                options.push(("gf", "Google Flow (gf)"));
-            }
-            options.push(("command", "Custom command"));
-            let current = options.iter().map(|(id, _)| *id).find(|id| *id == prefs.image_gen).unwrap_or("");
-            if let Some(v) = kit::select(ui, current, &options, width) {
-                prefs.image_gen = v.to_owned();
-                prefs.image_offer_seen = true;
-                ed.save = true;
-            }
-            if prefs.image_gen == "command" {
-                text_edit(ui, &mut prefs.image_command, "my-image-cli {prompt} --aspect {aspect} --out {out}", ed);
-                note(ui, "Runs once per image. {prompt}, {aspect} (square, portrait, landscape) and {ratio} (1:1, 3:4, 16:9) are passed as text; write the images into the {out} folder.");
-            } else if prefs.image_gen == "gf" {
-                note(ui, "Uses Google Flow in your signed-in Chrome. Sign in once with `gf auth login`.");
-            } else {
-                note(ui, "Lets the agent make card art, heroes and reference images. Off by default.");
-            }
-        });
+        if local_agents() {
+            field_row(ui, "Images", |ui| {
+                let width = ui.available_width();
+                // Google Flow shows when the user's `gf` CLI is installed (or already chosen).
+                let gf = prefs.image_gen == "gf" || crate::chat::path::which("gf").is_some();
+                let mut options = vec![("", "Off"), ("codex", "Codex (your ChatGPT plan)")];
+                if gf {
+                    options.push(("gf", "Google Flow (gf)"));
+                }
+                options.push(("command", "Custom command"));
+                let current = options.iter().map(|(id, _)| *id).find(|id| *id == prefs.image_gen).unwrap_or("");
+                if let Some(v) = kit::select(ui, current, &options, width) {
+                    prefs.image_gen = v.to_owned();
+                    prefs.image_offer_seen = true;
+                    ed.save = true;
+                }
+                if prefs.image_gen == "command" {
+                    text_edit(ui, &mut prefs.image_command, "my-image-cli {prompt} --aspect {aspect} --out {out}", ed);
+                    note(ui, "Runs once per image. {prompt}, {aspect} (square, portrait, landscape) and {ratio} (1:1, 3:4, 16:9) are passed as text; write the images into the {out} folder.");
+                } else if prefs.image_gen == "gf" {
+                    note(ui, "Uses Google Flow in your signed-in Chrome. Sign in once with `gf auth login`.");
+                } else {
+                    note(ui, "Lets the agent make card art, heroes and reference images. Off by default.");
+                }
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
-        field_row(ui, "Helper", |ui| {
-            use crate::mcp::delegate::{OPENCODE_COMMAND, PI_COMMAND};
-            let width = ui.available_width();
-            let cmd = prefs.helper_command.trim();
-            let current = if cmd.is_empty() {
-                ""
-            } else if cmd.starts_with("pi ") {
-                "pi"
-            } else if cmd.starts_with("opencode ") {
-                "opencode"
-            } else {
-                "command"
-            };
-            let options = [("", "Off"), ("pi", "pi"), ("opencode", "opencode"), ("command", "Custom command")];
-            if let Some(v) = kit::select(ui, current, &options, width) {
-                prefs.helper_command = match v {
-                    "pi" => PI_COMMAND.into(),
-                    "opencode" => OPENCODE_COMMAND.into(),
-                    "command" => "my-agent {prompt}".into(),
-                    _ => String::new(),
+        if local_agents() {
+            field_row(ui, "Helper", |ui| {
+                use crate::mcp::delegate::{OPENCODE_COMMAND, PI_COMMAND};
+                let width = ui.available_width();
+                let cmd = prefs.helper_command.trim();
+                let current = if cmd.is_empty() {
+                    ""
+                } else if cmd.starts_with("pi ") {
+                    "pi"
+                } else if cmd.starts_with("opencode ") {
+                    "opencode"
+                } else {
+                    "command"
                 };
-                ed.save = true;
-            }
-            if current.is_empty() {
-                note(ui, "A cheaper agent the chat agent hands review, reading and simple builds to. Off by default.");
-            } else {
-                text_edit(ui, &mut prefs.helper_command, "my-agent {prompt}", ed);
-                note(ui, "Any agent CLI with a shell that takes {prompt} and prints its answer; it drives PaperCraft with papercraft-cli. Change --model / -m to pick its model (opencode with ollama/... runs locally).");
-            }
-        });
+                let options = [("", "Off"), ("pi", "pi"), ("opencode", "opencode"), ("command", "Custom command")];
+                if let Some(v) = kit::select(ui, current, &options, width) {
+                    prefs.helper_command = match v {
+                        "pi" => PI_COMMAND.into(),
+                        "opencode" => OPENCODE_COMMAND.into(),
+                        "command" => "my-agent {prompt}".into(),
+                        _ => String::new(),
+                    };
+                    ed.save = true;
+                }
+                if current.is_empty() {
+                    note(ui, "A cheaper agent the chat agent hands review, reading and simple builds to. Off by default.");
+                } else {
+                    text_edit(ui, &mut prefs.helper_command, "my-agent {prompt}", ed);
+                    note(ui, "Any agent CLI with a shell that takes {prompt} and prints its answer; it drives PaperCraft with papercraft-cli. Change --model / -m to pick its model (opencode with ollama/... runs locally).");
+                }
+            });
+        }
         field_row(ui, "Turn budget", |ui| {
             let width = ui.available_width();
             if let Some(b) = kit::select(ui, prefs.turn_budget, &TURN_BUDGETS, width) {
@@ -1496,12 +1586,14 @@ mod native {
             }
             note(ui, "Stops a turn once its steps have read this much in all (each step re-reads the chat). 10M is about $2 on Opus with caching.");
         });
-        field_row(ui, "Agents", |ui| {
-            if kit::checkbox(ui, &mut prefs.cli_lean, "Lean sessions").changed() {
-                ed.save = true;
-            }
-            note(ui, "Claude Code and OpenCode start without your own rules, config, plugins and skills: a fraction of the tokens per turn. Sign-ins and API keys still work.");
-        });
+        if local_agents() {
+            field_row(ui, "Agents", |ui| {
+                if kit::checkbox(ui, &mut prefs.cli_lean, "Lean sessions").changed() {
+                    ed.save = true;
+                }
+                note(ui, "Claude Code and OpenCode start without your own rules, config, plugins and skills: a fraction of the tokens per turn. Sign-ins and API keys still work.");
+            });
+        }
     }
 }
 
@@ -1517,7 +1609,7 @@ fn chat_page(ui: &mut Ui, _ctx: &egui::Context, _settings: &mut SettingsUi) {
 /// A round colour swatch, ringed when chosen.
 fn accent_swatch(ui: &mut egui::Ui, c: egui::Color32, on: bool) -> egui::Response {
     const D: f32 = 24.0;
-    let (rect, r) = ui.allocate_exact_size(egui::vec2(D, D), egui::Sense::click());
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(D, kit::touch_h(ui.ctx(), D)), egui::Sense::click());
     let center = rect.center();
     ui.painter().circle_filled(center, D / 2.0 - 3.0, c);
     if on {
