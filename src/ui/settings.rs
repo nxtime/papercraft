@@ -1170,8 +1170,7 @@ mod native {
         if !more.is_empty() {
             let text = if page.show_more { "Show fewer agents".to_owned() } else { format!("Show {} more agents", more.len()) };
             ui.add_space(4.0);
-            let link = ui.add(egui::Label::new(RichText::new(text).color(theme::accent())).sense(egui::Sense::click()));
-            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            if kit::button(ui, kit::ButtonKind::Secondary, None, &text).clicked() {
                 page.show_more = !page.show_more;
             }
             if page.show_more {

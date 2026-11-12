@@ -26,7 +26,17 @@ pub struct Layout {
 /// with the window colour behind the bars. egui's root Ui spans the whole screen.
 pub fn draw_in_safe_area(ui: &mut egui::Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     let content = ui.ctx().content_rect();
-    ui.painter().rect_filled(ui.max_rect(), 0.0, crate::theme::pal(ui).window);
+    let (screen, window) = (ui.max_rect(), crate::theme::pal(ui).window);
+    // Only the bars: egui paints after the canvas pass, so a full-screen fill would hide it.
+    let bars = [
+        egui::Rect::from_x_y_ranges(screen.x_range(), screen.top()..=content.top()),
+        egui::Rect::from_x_y_ranges(screen.x_range(), content.bottom()..=screen.bottom()),
+        egui::Rect::from_x_y_ranges(screen.left()..=content.left(), content.y_range()),
+        egui::Rect::from_x_y_ranges(content.right()..=screen.right(), content.y_range()),
+    ];
+    for bar in bars.into_iter().filter(|r| r.width() > 0.0 && r.height() > 0.0) {
+        ui.painter().rect_filled(bar, 0.0, window);
+    }
     let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(content));
     ui::draw(&mut inner, ed, st)
 }
