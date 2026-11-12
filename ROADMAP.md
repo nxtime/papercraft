@@ -117,7 +117,7 @@ Ideas that fit PaperCraft and are not built yet, with the same kind of target da
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 56 | Pressed and focus states in prototypes | todo | The part of row 23 still missing: components react to press and keyboard focus in Present mode. **Target: mid-December 2026.** |
-| 57 | Works offline in the browser | todo | A service worker keeps the app and open designs usable without a connection, and sync catches up when it returns. **Target: end of December 2026.** |
+| 57 | Works offline in the browser | **done** | A service worker (`web/sw.js`) keeps the app starting without a connection; designs are already kept in the browser's store and the shared-project sync catches up when the relay returns (last writer wins, as before). The toolbar shows an Offline chip meanwhile. |
 | 58 | Threaded comments on the canvas | todo | Pin a thread to a layer or a point, reply, resolve and mention people; the base row 43 needs. **Target: mid-January 2027.** |
 | 59 | Image crop, masks and adjustments | todo | Crop and reposition an image inside its frame, mask with any shape, and adjust exposure, contrast and saturation without changing the file. **Target: end of February 2027.** |
 | 60 | Right-to-left by default | todo | RTL paragraphs align right on their own and an Arabic and a Hebrew face ship with the app (row 37 limits). **Target: end of February 2027.** |
