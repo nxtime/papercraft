@@ -635,7 +635,8 @@ fn swatches(ui: &mut Ui, current: Color) -> Option<Color> {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         for c in STICKY_COLORS {
-            let (r, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+            let side = super::kit::touch_h(ui.ctx(), 20.0);
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
             ui.painter().rect_filled(r, crate::theme::r(5.0), c32(c));
             if c == current {
                 ui.painter().rect_stroke(

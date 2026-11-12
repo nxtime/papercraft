@@ -598,7 +598,7 @@ pub fn select_icons<T: PartialEq + Copy>(
 pub fn slider(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>) -> Response {
     let p = theme::pal(ui);
     let (rect, mut resp) = ui.allocate_exact_size(
-        vec2(ui.available_width().min(160.0), 24.0),
+        vec2(ui.available_width().min(160.0), touch_h(ui.ctx(), 24.0)),
         Sense::click_and_drag(),
     );
     let (lo, hi) = (*range.start(), *range.end());
