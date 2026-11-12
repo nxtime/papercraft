@@ -6,7 +6,7 @@ use crate::editor::shortcuts::Action;
 use crate::editor::{Editor, PresentOverlay, Tool};
 use crate::geom::{v2, Camera, Rect, V2};
 use crate::model::link::valid_url;
-use crate::model::{LinkAction, Node, NodeId};
+use crate::model::{LinkAction, LinkTrigger, Node, NodeId};
 use crate::theme::{self, Surface as _};
 use egui::{Align2, RichText};
 
@@ -57,12 +57,15 @@ pub struct Nav {
     overlay: Option<OpenOverlay>,
     /// The tool to give back on exit: Present uses the hand so clicks never select or edit.
     prev_tool: Option<Tool>,
-    /// The hover link that is applied now, until the pointer leaves it.
+    /// The hover, press or focus link that is applied now, until its state ends.
     hover: Option<Hover>,
+    /// The layer with keyboard focus (Tab).
+    pub focus: Option<NodeId>,
 }
 
-/// A hover link in effect: what it was started from, so leaving can undo it.
+/// A hover, press or focus link in effect: what it was started from, so ending it can undo it.
 struct Hover {
+    kind: LinkTrigger,
     /// On screen (canvas px), where the pointer must stay. Kept in screen space because the
     /// camera moves to the frame the link shows.
     hotspot: Rect,
@@ -109,16 +112,16 @@ impl Nav {
         }
     }
 
-    /// Starts a hover link when the pointer enters `hotspot` (screen px). Only frame jumps and
-    /// overlays are hover links; anything else (an address, back) is ignored.
-    pub fn hover_enter(&mut self, click: Click, hotspot: Rect, smart: bool, frames: &[NodeId], camera: Camera) -> Effect {
+    /// Starts a hover, press or focus link (`kind`) when the pointer enters `hotspot` (screen
+    /// px). Only frame jumps and overlays can be held; anything else (an address, back) is ignored.
+    pub fn hover_enter(&mut self, kind: LinkTrigger, click: Click, hotspot: Rect, smart: bool, frames: &[NodeId], camera: Camera) -> Effect {
         if self.hover.is_some() || !matches!(click, Click::Go(_) | Click::Act(LinkAction::Overlay { .. })) {
             return Effect::None;
         }
         let from = self.index;
         let opened_overlay = matches!(click, Click::Act(LinkAction::Overlay { .. }));
         let effect = self.follow(click, frames, camera);
-        self.hover = Some(Hover { hotspot, from, opened_overlay, smart });
+        self.hover = Some(Hover { kind, hotspot, from, opened_overlay, smart });
         effect
     }
 
@@ -128,6 +131,11 @@ impl Nav {
         if self.hover.as_ref().is_none_or(|h| h.hotspot.contains(at)) {
             return Effect::None;
         }
+        self.hover_end()
+    }
+
+    /// Undoes the held link whatever the pointer does.
+    pub fn hover_end(&mut self) -> Effect {
         let Some(h) = self.hover.take() else { return Effect::None };
         if h.opened_overlay {
             return if self.close_overlay() { Effect::Overlay } else { Effect::None };
@@ -142,6 +150,16 @@ impl Nav {
 
     pub fn hovering(&self) -> bool {
         self.hover.is_some()
+    }
+
+    /// What holds the link in effect, if any.
+    pub fn hold_kind(&self) -> Option<LinkTrigger> {
+        self.hover.as_ref().map(|h| h.kind)
+    }
+
+    /// The overlay that is open, if any.
+    pub fn overlay_target(&self) -> Option<NodeId> {
+        self.overlay.as_ref().map(|o| o.target)
     }
 
     /// Whether the hover link in effect tweens layers (leaving tweens them back).
@@ -388,9 +406,9 @@ fn click_at(ed: &Editor, overlay: Option<&PresentOverlay>) -> Option<(Click, boo
     if root.is_some_and(|r| !chain.contains(&r)) {
         return None;
     }
-    // A hover link does nothing on click.
+    // Hover, press and focus links do nothing on click.
     let (click, node) = chain.iter().find_map(|id| {
-        let n = ed.doc.get(*id).filter(|n| !n.link_hover)?;
+        let n = ed.doc.get(*id).filter(|n| n.link_trigger() == LinkTrigger::Click)?;
         Some((click_of(n)?, n.link_smart))
     })?;
     match &click {
@@ -399,21 +417,79 @@ fn click_at(ed: &Editor, overlay: Option<&PresentOverlay>) -> Option<(Click, boo
     }
 }
 
-/// The hover link under the pointer: what it does, its hotspot on screen and whether it tweens.
+/// What a hover, press or focus link on `n` does: only a jump to a frame or an overlay of one.
+fn held_click(ed: &Editor, n: &Node) -> Option<Click> {
+    click_of(n).filter(|c| match c {
+        Click::Go(_) => true,
+        Click::Act(LinkAction::Overlay { target }) => ed.doc.get(*target).is_some_and(|t| t.is_frame()),
+        Click::Act(_) => false,
+    })
+}
+
+/// The `kind` link under the pointer: what it does, its hotspot on screen and whether it tweens.
 /// None while an overlay is open or when the target is not a frame.
-fn hover_at(ed: &Editor) -> Option<(Click, Rect, bool)> {
+fn hover_at(ed: &Editor, kind: LinkTrigger) -> Option<(Click, Rect, bool)> {
     if ed.present_overlay.is_some() {
         return None;
     }
     let hit = crate::editor::hit::hit_test(&ed.doc, ed.screen_to_world(ed.pointer), ed.camera.zoom)?;
-    let n = std::iter::once(hit).chain(ed.doc.ancestors(hit)).filter_map(|id| ed.doc.get(id)).find(|n| n.link_hover)?;
-    let click = click_of(n).filter(|c| match c {
-        Click::Go(_) => true,
-        Click::Act(LinkAction::Overlay { target }) => ed.doc.get(*target).is_some_and(|t| t.is_frame()),
-        Click::Act(_) => false,
-    })?;
+    let n = std::iter::once(hit).chain(ed.doc.ancestors(hit)).filter_map(|id| ed.doc.get(id)).find(|n| n.link_trigger() == kind)?;
+    let click = held_click(ed, n)?;
     let spot = ed.camera.world_rect_to_screen(&ed.doc.world_rect(n.id)?);
     Some((click, spot, n.link_smart))
+}
+
+/// The layers Tab visits in `root` (a frame or the open overlay): those with a link, in layer order.
+fn focus_order(ed: &Editor, root: NodeId) -> Vec<NodeId> {
+    ed.doc.subtree(root).into_iter().filter(|id| ed.doc.get(*id).is_some_and(|n| click_of(n).is_some())).collect()
+}
+
+/// The layer Tab (or Shift+Tab with `back`) moves focus to, wrapping; the first (last) when
+/// nothing in `order` has focus.
+fn next_focus(order: &[NodeId], current: Option<NodeId>, back: bool) -> Option<NodeId> {
+    let len = order.len();
+    let at = current.and_then(|c| order.iter().position(|id| *id == c));
+    let i = match (at, back) {
+        (Some(i), false) => (i + 1) % len,
+        (Some(i), true) => (i + len - 1) % len,
+        (None, false) => 0,
+        (None, true) => len.checked_sub(1)?,
+    };
+    order.get(i).copied()
+}
+
+/// Moves keyboard focus on Tab or Shift+Tab: ends the focus link of the layer left (which gives
+/// back its frame, so the order is the base frame's own), then holds the one of the layer reached.
+fn tab_focus(ed: &Editor, nav: &mut Nav, frames: &[NodeId], back: bool) -> Effect {
+    let ended = if nav.hold_kind() == Some(LinkTrigger::Focus) { nav.hover_end() } else { Effect::None };
+    let Some(root) = nav.overlay_target().or_else(|| frames.get(nav.index).copied()) else { return ended };
+    nav.focus = next_focus(&focus_order(ed, root), nav.focus, back);
+    let held = nav.focus.and_then(|id| ed.doc.get(id)).filter(|n| n.link_trigger() == LinkTrigger::Focus);
+    let Some((n, click)) = held.and_then(|n| held_click(ed, n).map(|c| (n, c))) else { return ended };
+    match nav.hover_enter(LinkTrigger::Focus, click, Rect::default(), n.link_smart, frames, ed.camera) {
+        Effect::None => ended,
+        e => e,
+    }
+}
+
+/// Enter or Space on the focused layer follows its click link.
+fn activate_focus(ed: &Editor, nav: &mut Nav, frames: &[NodeId]) -> Effect {
+    let click = nav.focus.and_then(|id| ed.doc.get(id)).filter(|n| n.link_trigger() == LinkTrigger::Click).and_then(click_of);
+    click.map_or(Effect::None, |c| nav.follow(c, frames, ed.camera))
+}
+
+/// Outlines the focused layer when no focus link is in effect (a focus link shows its own look).
+fn paint_focus_ring(ctx: &egui::Context, ed: &Editor, nav: &Nav, canvas: egui::Rect) {
+    let Some(id) = nav.focus.filter(|_| nav.hold_kind() != Some(LinkTrigger::Focus)) else { return };
+    let Some(mut w) = ed.doc.world_rect(id) else { return };
+    if let Some(o) = &ed.present_overlay {
+        w = Rect::new(w.x + o.shift.x, w.y + o.shift.y, w.w, w.h);
+    }
+    let s = ed.camera.world_rect_to_screen(&w);
+    let r = egui::Rect::from_min_size(canvas.min + egui::vec2(s.x as f32, s.y as f32), egui::vec2(s.w as f32, s.h as f32));
+    let p = theme::pal_from_ctx(ctx);
+    ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, "present-focus".into()))
+        .rect_stroke(r.expand(2.0), 4.0, egui::Stroke::new(2.0, p.text), egui::StrokeKind::Outside);
 }
 
 /// The presenter bar: back, previous and next frame, a counter and Exit; Esc, Backspace and the
@@ -423,12 +499,19 @@ pub fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
     step_present_tween(ctx, st);
     let frames = present_frames(ed);
     let total = frames.len();
-    let (left, right, esc, backspace) = ctx.input(|i| {
+    let (left, right, esc, backspace, tab, activate, down) = ctx.input_mut(|i| {
+        let tab = i
+            .consume_key(egui::Modifiers::SHIFT, egui::Key::Tab)
+            .then_some(true)
+            .or_else(|| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab).then_some(false));
         (
             i.key_pressed(egui::Key::ArrowLeft),
             i.key_pressed(egui::Key::ArrowRight),
             i.key_pressed(egui::Key::Escape),
             i.key_pressed(egui::Key::Backspace),
+            tab,
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || i.consume_key(egui::Modifiers::NONE, egui::Key::Space),
+            i.pointer.primary_down(),
         )
     });
     let mut step: i32 = i32::from(right) - i32::from(left);
@@ -452,14 +535,33 @@ pub fn presenter(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas:
     }
     let settled = st.present_glide.is_none() && st.present_tween.is_none();
     if effect == Effect::None && settled {
-        if st.present_nav.hovering() {
+        if let Some(back) = tab {
+            smart = true;
+            effect = tab_focus(ed, &mut st.present_nav, &frames, back);
+        } else if activate {
+            effect = activate_focus(ed, &mut st.present_nav, &frames);
+        } else if clicked && st.present_nav.hold_kind() == Some(LinkTrigger::Focus) {
+            st.present_nav.focus = None;
+            effect = st.present_nav.hover_end();
+        } else if let Some(kind) = st.present_nav.hold_kind() {
             smart = st.present_nav.hover_smart();
-            effect = st.present_nav.hover_leave(ed.pointer);
-        } else if let Some((c, spot, s)) = hover_at(ed) {
-            effect = st.present_nav.hover_enter(c, spot, s, &frames, ed.camera);
-            smart = s;
+            match kind {
+                LinkTrigger::Hover => effect = st.present_nav.hover_leave(ed.pointer),
+                LinkTrigger::Press if !down => effect = st.present_nav.hover_end(),
+                _ => {}
+            }
+        } else {
+            let found = [(LinkTrigger::Hover, true), (LinkTrigger::Press, down)]
+                .into_iter()
+                .filter(|(_, on)| *on)
+                .find_map(|(kind, _)| hover_at(ed, kind).map(|h| (kind, h)));
+            if let Some((kind, (c, spot, s))) = found {
+                effect = st.present_nav.hover_enter(kind, c, spot, s, &frames, ed.camera);
+                smart = s;
+            }
         }
     }
+    paint_focus_ring(ctx, ed, &st.present_nav, canvas);
     let p = theme::pal_from_ctx(ctx);
     egui::Area::new("presenter".into())
         .order(egui::Order::Foreground)
@@ -573,9 +675,9 @@ mod tests {
     fn hover_links_apply_until_the_pointer_leaves_the_hotspot() {
         let (mut n, f) = (nav(), frames());
         let spot = Rect::new(10.0, 10.0, 100.0, 40.0);
-        assert_eq!(n.hover_enter(Click::Go(NodeId(3)), spot, false, &f, CAM), Effect::Show);
+        assert_eq!(n.hover_enter(LinkTrigger::Hover, Click::Go(NodeId(3)), spot, false, &f, CAM), Effect::Show);
         assert_eq!((n.index, n.hovering()), (2, true));
-        assert_eq!(n.hover_enter(Click::Go(NodeId(2)), spot, false, &f, CAM), Effect::None, "one at a time");
+        assert_eq!(n.hover_enter(LinkTrigger::Hover, Click::Go(NodeId(2)), spot, false, &f, CAM), Effect::None, "one at a time");
         assert_eq!(n.hover_leave(v2(50.0, 30.0)), Effect::None, "still over it");
         assert_eq!(n.hover_leave(v2(500.0, 30.0)), Effect::Show);
         assert_eq!((n.index, n.can_back(), n.hovering()), (0, false, false), "back where it was, no history left");
@@ -587,12 +689,40 @@ mod tests {
         let (mut n, f) = (nav(), frames());
         let spot = Rect::new(0.0, 0.0, 10.0, 10.0);
         let url = Click::Act(LinkAction::Url { url: "https://a.dev".into() });
-        assert_eq!(n.hover_enter(url, spot, false, &f, CAM), Effect::None);
+        assert_eq!(n.hover_enter(LinkTrigger::Hover, url, spot, false, &f, CAM), Effect::None);
         assert!(!n.hovering());
         let open = Click::Act(LinkAction::Overlay { target: NodeId(4) });
-        assert_eq!(n.hover_enter(open, spot, false, &f, CAM), Effect::Overlay);
+        assert_eq!(n.hover_enter(LinkTrigger::Hover, open, spot, false, &f, CAM), Effect::Overlay);
         assert_eq!(n.hover_leave(v2(99.0, 99.0)), Effect::Overlay);
         assert!(!n.overlay_open());
+    }
+
+    #[test]
+    fn press_and_focus_links_hold_until_ended_whatever_the_pointer_does() {
+        let (mut n, f) = (nav(), frames());
+        let spot = Rect::new(0.0, 0.0, 10.0, 10.0);
+        assert_eq!(n.hover_enter(LinkTrigger::Press, Click::Go(NodeId(3)), spot, false, &f, CAM), Effect::Show);
+        assert_eq!((n.index, n.hold_kind()), (2, Some(LinkTrigger::Press)));
+        assert_eq!(n.hover_leave(v2(500.0, 30.0)), Effect::Show, "leaving the layer also lets go");
+        let mut n = nav();
+        n.hover_enter(LinkTrigger::Focus, Click::Go(NodeId(2)), Rect::default(), false, &f, CAM);
+        assert_eq!(n.hold_kind(), Some(LinkTrigger::Focus));
+        assert_eq!(n.hover_end(), Effect::Show);
+        assert_eq!((n.index, n.can_back(), n.hold_kind()), (0, false, None));
+        assert_eq!(n.hover_end(), Effect::None);
+    }
+
+    #[test]
+    fn tab_moves_focus_through_the_layers_and_wraps() {
+        let order = [NodeId(5), NodeId(6), NodeId(7)];
+        assert_eq!(next_focus(&order, None, false), Some(NodeId(5)));
+        assert_eq!(next_focus(&order, None, true), Some(NodeId(7)));
+        assert_eq!(next_focus(&order, Some(NodeId(7)), false), Some(NodeId(5)));
+        assert_eq!(next_focus(&order, Some(NodeId(5)), true), Some(NodeId(7)));
+        assert_eq!(next_focus(&order, Some(NodeId(6)), false), Some(NodeId(7)));
+        assert_eq!(next_focus(&order, Some(NodeId(99)), false), Some(NodeId(5)), "a layer from another frame starts over");
+        assert_eq!(next_focus(&[], None, false), None);
+        assert_eq!(next_focus(&[], Some(NodeId(1)), true), None);
     }
 
     #[test]

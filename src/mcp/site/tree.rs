@@ -465,8 +465,8 @@ impl<'a> Walk<'a> {
     /// static page cannot keep.
     fn link(&mut self, n: &Node, in_link: bool) -> Option<LinkTarget> {
         let label = format!("{} / {}", self.page_name, n.name);
-        if n.link_hover && (n.link.is_some() || n.link_action.is_some()) {
-            self.warnings.push(format!("{label}: a hover link only works in a prototype and is left out of the site"));
+        if n.link_trigger() != crate::model::LinkTrigger::Click && (n.link.is_some() || n.link_action.is_some()) {
+            self.warnings.push(format!("{label}: a hover, press or focus link only works in a prototype and is left out of the site"));
             return None;
         }
         let target = if let Some(to) = n.link {

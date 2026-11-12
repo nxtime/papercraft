@@ -1266,8 +1266,7 @@ pub fn definitions() -> Vec<Value> {
              (open a frame centred over the current one with a dimmed backdrop; one taller than the \
              viewport scrolls; backdrop click, Escape or a `close` link closes it), `url` (https, \
              http, mailto or tel only) or `action` (`back` to the previous screen, `close` to close \
-             the overlay). `trigger: \"hover\"` (with `to` or `overlay`) fires the link while the pointer is over \
-             the layer and undoes it on leaving; the default is `click`. `transition: \"smart\"` (with \
+             the overlay). `trigger` (with `to` or `overlay`): `hover` holds the link while the pointer is over              the layer, `press` while the pointer is down on it, `focus` while it has keyboard focus              (Tab and Shift+Tab move focus through linked layers, Enter or Space follows a click link); each undoes itself on leaving. The default is `click`. `transition: \"smart\"` (with \
              `to`) tweens layers whose names match between the two screens (position, size, opacity, \
              fill) instead of gliding the camera. None, or `to: null`, removes the link. All links are checked before any \
              is applied; targets on other pages are refused. Link every entry point you design \
@@ -1279,7 +1278,7 @@ pub fn definitions() -> Vec<Value> {
                     "overlay": {"type": "string", "description": "A frame on the same page to open as an overlay."},
                     "url": {"type": "string", "description": "External address: https, http, mailto or tel."},
                     "action": {"type": "string", "enum": ["back", "close"], "description": "back: previous screen. close: close the overlay."},
-                    "trigger": {"type": "string", "enum": ["click", "hover"], "description": "hover: fire while the pointer is over the layer (needs `to` or `overlay`)."},
+                    "trigger": {"type": "string", "enum": ["click", "hover", "press", "focus"], "description": "hover, press or focus: hold the link while the pointer is over, down on, or keyboard focus is on the layer (needs `to` or `overlay`)."},
                     "transition": {"type": "string", "enum": ["glide", "smart"], "description": "smart: tween same-named layers between screens (needs `to`)."},
                 }, "required": ["nodeId"]}},
                 "pageId": page_id(),

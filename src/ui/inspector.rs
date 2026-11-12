@@ -7,7 +7,7 @@ use crate::editor::vector_ops::BoolOp;
 use crate::editor::{AppRequest, Editor};
 use crate::geom::v2;
 use crate::model::{
-    Align, AutoLayout, BlendMode, Cap, Color, Constraint, Direction, ImageMode, Join, Node, NodeId,
+    Align, AutoLayout, BlendMode, Cap, Color, Constraint, Direction, ImageMode, Join, LinkTrigger, Node, NodeId,
     NodeKind, Paint, Sizing, Stop, StrokeAlign, TextAlign,
 };
 use crate::theme;
@@ -551,21 +551,26 @@ fn prototype_tab(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId]) {
                 n.link_action = None;
                 // Without a frame link there is nothing to fire early or to tween.
                 if v.is_none() {
-                    n.link_hover = false;
+                    n.set_link_trigger(LinkTrigger::Click);
                     n.link_smart = false;
                 }
             });
         }
     });
-    // A hover trigger and a smart transition belong to a frame link or an overlay.
+    // A hover, press or focus trigger and a smart transition belong to a frame link or an overlay.
     let opens = first.link.is_some() || matches!(first.link_action, Some(crate::model::LinkAction::Overlay { .. }));
     if !opens {
         return;
     }
-    let triggers = [(false, "On click"), (true, "While hovering")];
+    let triggers = [
+        (LinkTrigger::Click, "On click"),
+        (LinkTrigger::Hover, "While hovering"),
+        (LinkTrigger::Press, "While pressed"),
+        (LinkTrigger::Focus, "While focused"),
+    ];
     row(ui, "Trigger", |ui| {
-        if let Some(v) = combo(ui, "link-trigger", first.link_hover, &triggers, 140.0) {
-            apply(ed, "link trigger", ids, |n| n.link_hover = v);
+        if let Some(v) = combo(ui, "link-trigger", first.link_trigger(), &triggers, 140.0) {
+            apply(ed, "link trigger", ids, |n| n.set_link_trigger(v));
         }
     });
     if first.link.is_none() {

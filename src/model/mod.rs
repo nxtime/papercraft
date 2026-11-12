@@ -13,7 +13,7 @@ pub mod type_style;
 pub use a11y::A11y;
 pub use comment::{Comment, Reply};
 pub use document::{Document, VarState};
-pub use link::LinkAction;
+pub use link::{LinkAction, LinkTrigger};
 pub use type_style::TypeStyle;
 pub use node::{
     Binding, BoolOp, CodeLink, PropDef, PropOption, Color, FillRule, Head, Node, NodeId, NodeKind, PathPoint, Route, Shadow,
