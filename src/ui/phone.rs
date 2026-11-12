@@ -19,6 +19,12 @@ const MARGIN: f32 = 12.0;
 const CLOSE_BELOW: f32 = 0.6;
 const HALF_SHARE: f32 = 0.5;
 
+/// Whether this build can run local programs: agent CLIs, the updater, the plugin cache. A
+/// phone (the Android app) and a browser tab cannot, so their settings leave those out.
+pub const fn has_local_tools() -> bool {
+    cfg!(not(any(target_arch = "wasm32", target_os = "android")))
+}
+
 pub fn is_phone(width: f32) -> bool {
     width < MAX_W
 }
@@ -80,6 +86,9 @@ pub struct PhoneState {
     /// A long-press on a layer: where to show its menu, which layer, and the document stamp it
     /// was opened at (any edit closes it).
     pub menu: Option<(egui::Pos2, NodeId, u64)>,
+    /// The chat page's thumbnail of the canvas, with the document stamp it shows.
+    pub(super) minimap: Option<(u64, egui::TextureHandle)>,
+    pub(super) minimap_at: f64,
     /// Rects of the chrome drawn last frame, by name, for tests.
     pub rects: Vec<(&'static str, Rect)>,
 }
@@ -136,6 +145,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> Rect {
     super::overlays(ui, ed, st, canvas, false);
     if st.phone.tab == Tab::Canvas {
         tool_strip(ui.ctx(), ed, canvas);
+    } else if st.phone.tab == Tab::Chat {
+        super::phone_chat::show(ui.ctx(), ed, st, canvas);
     } else {
         sheet(ui.ctx(), ed, st, screen, canvas);
     }
@@ -220,10 +231,11 @@ fn tab_bar(ui: &mut Ui, st: &mut UiState) {
 
 /// The tools in a row that scrolls sideways: the desktop palette is wider than a phone.
 fn tool_strip(ctx: &egui::Context, ed: &mut Editor, canvas: Rect) {
-    let width = canvas.width() - 2.0 * MARGIN;
+    let width = (canvas.width() - 2.0 * MARGIN).max(kit::TOUCH_H);
     egui::Area::new("phone-tools".into())
         .order(egui::Order::Middle)
         .fixed_pos(pos2(canvas.left() + MARGIN, canvas.bottom() - MARGIN - kit::TOUCH_H - 8.0))
+        .constrain_to(canvas)
         .show(ctx, |ui| {
             let p = theme::pal(ui);
             egui::Frame::popup(ui.style())
@@ -232,6 +244,8 @@ fn tool_strip(ctx: &egui::Context, ed: &mut Editor, canvas: Rect) {
                 .inner_margin(4.0)
                 .stroke(egui::Stroke::NONE)
                 .show(ui, |ui| {
+                    // The frame adds its margin and the strip scrolls, so cap the outer width.
+                    ui.set_max_width(width - 8.0);
                     ui.set_width(width - 8.0);
                     egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -290,10 +304,6 @@ fn sheet(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, screen: Rect, c
             if content.height() < 1.0 {
                 return;
             }
-            if st.phone.tab == Tab::Chat {
-                chat_tab(ui.ctx(), ed, st, content);
-                return;
-            }
             let mut body = ui.new_child(egui::UiBuilder::new().max_rect(content).layout(Layout::top_down(Align::Min)));
             body.set_clip_rect(content.intersect(rect));
             theme::figma_fields(&mut body);
@@ -313,28 +323,6 @@ fn sheet(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, screen: Rect, c
         });
 }
 
-/// The chat column is laid out at its desktop minimum width; on a narrower screen it is drawn
-/// scaled down to fit rather than cut off.
-fn chat_tab(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, content: Rect) {
-    let column = st.chat.column_width();
-    let scale = (content.width() / column).min(1.0);
-    let local = vec2(column.max(content.width()), content.height() / scale);
-    let frame = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 8));
-    let fill = theme::pal_from_ctx(ctx).sidebar;
-    let area = egui::Area::new("phone-chat".into())
-        .order(egui::Order::Middle)
-        .fixed_pos(content.min)
-        .constrain(false)
-        .show(ctx, |ui| {
-            ui.set_clip_rect(Rect::from_min_size(content.min, local));
-            ui.set_min_size(local);
-            ui.set_max_size(local);
-            super::chat::panel(ui, ed, st, frame, false, fill);
-        });
-    let to_screen = egui::emath::TSTransform::new(content.min.to_vec2() * (1.0 - scale), scale);
-    ctx.set_transform_layer(area.response.layer_id, to_screen);
-}
-
 /// The menu a long-press on a layer opens, at the finger.
 fn context_menu(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
     let Some((at, id, stamp)) = st.phone.menu else { return };
@@ -343,7 +331,16 @@ fn context_menu(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState) {
         return;
     }
     let p = theme::pal_from_ctx(ctx);
-    let area = egui::Area::new("phone-menu".into())
+    // Kept inside the screen here, not by the area: a constrained area registers its taps where
+    // it was asked to open, a frame before it is moved.
+    let area_id = egui::Id::new("phone-menu");
+    let size = ctx.memory(|m| m.area_rect(area_id)).map_or(egui::Vec2::ZERO, |r| r.size());
+    let bounds = ctx.content_rect();
+    let at = pos2(
+        at.x.min(bounds.right() - size.x).max(bounds.left()),
+        at.y.min(bounds.bottom() - size.y).max(bounds.top()),
+    );
+    let area = egui::Area::new(area_id)
         .order(egui::Order::Foreground)
         .fixed_pos(at)
         .constrain(true)

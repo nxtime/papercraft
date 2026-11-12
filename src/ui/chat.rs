@@ -1914,7 +1914,12 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, frame: egui::Frame,
     let margin = frame.inner_margin;
     let r = egui::Panel::left("chat")
         .resizable(false)
-        .exact_size(st.chat.column_width().clamp(COLUMN_MIN, COLUMN_MAX))
+        .exact_size(if super::kit::compact(ui.ctx()) {
+            // A phone gives the column the whole page, not the desktop minimum.
+            ui.available_width()
+        } else {
+            st.chat.column_width().clamp(COLUMN_MIN, COLUMN_MAX)
+        })
         .frame(frame)
         .show(ui, |ui| {
             let content = ui.max_rect();
@@ -1929,6 +1934,9 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, frame: egui::Frame,
             }
         });
     let gap = if floating { super::PANEL_GAP } else { 0.0 };
+    if super::kit::compact(ui.ctx()) {
+        return;
+    }
     let grip = super::panel_handle::show(ui.ctx(), "chat-grip".into(), r.response.rect, super::panel_handle::Side::Left, gap);
     let w = if grip.reset {
         COLUMN_DEFAULT
