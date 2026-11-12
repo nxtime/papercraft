@@ -63,7 +63,8 @@ fn icons_place_as_vector_layers_that_follow_a_variable() {
     )
     .unwrap();
     let ids = r["createdNodeIds"].as_array().unwrap();
-    assert_eq!(ids.len(), 2, "{r}");
+    // The missing icon still leaves its placeholder frame.
+    assert_eq!(ids.len(), 3, "{r}");
     assert!(
         r.to_string().contains("not found"),
         "the missing icon is reported: {r}"
