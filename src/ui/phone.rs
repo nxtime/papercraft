@@ -29,6 +29,14 @@ pub fn is_phone(width: f32) -> bool {
     width < MAX_W
 }
 
+/// Whether a press at `p` belongs to the canvas, not a sheet, bar or popup drawn over it. Asks
+/// about `p` itself: when a finger lands, egui's pointer is still where the last touch was.
+pub fn canvas_takes(ctx: &egui::Context, canvas: Rect, p: egui::Pos2) -> bool {
+    canvas.contains(p)
+        && !ctx.is_pointer_over_egui()
+        && ctx.layer_id_at(p).is_none_or(|layer| layer.order == egui::Order::Background)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Tab {
     #[default]
@@ -374,6 +382,25 @@ mod tests {
         assert_eq!(settle(480.0, avail), Some(Detent::Full));
         assert_eq!(settle(150.0, avail), None, "dragged down past the close point");
         assert_eq!(settle(190.0, avail), Some(Detent::Half), "short of it, it springs back");
+    }
+
+    #[test]
+    fn a_tap_on_a_sheet_over_the_canvas_is_not_the_canvas() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 800.0));
+        let input = || egui::RawInput { screen_rect: Some(canvas), ..Default::default() };
+        // egui counts an area as visible from the pass after it first shows, as in the app.
+        for _ in 0..2 {
+            ctx.run_ui(input(), |ui| {
+                egui::Area::new("sheet".into()).fixed_pos(pos2(0.0, 400.0)).show(ui.ctx(), |ui| {
+                    ui.allocate_exact_size(vec2(400.0, 400.0), Sense::hover());
+                });
+            }).textures_delta.clear();
+        }
+        assert!(!canvas_takes(&ctx, canvas, pos2(100.0, 500.0)), "under the sheet");
+        assert!(canvas_takes(&ctx, canvas, pos2(100.0, 200.0)), "open canvas");
+        assert!(!canvas_takes(&ctx, canvas, pos2(100.0, 900.0)), "outside the canvas");
     }
 
     #[test]
