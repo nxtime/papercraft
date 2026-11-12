@@ -139,6 +139,8 @@ pub struct ChatPrefs {
     pub auto: bool,
     /// The canvas follows the layer agents work on (chat and outside agents alike), page included.
     pub follow_agents: bool,
+    /// The owner's PaperCraft server (`wss://...`), whose agents a phone borrows; empty: off.
+    pub relay_url: String,
 }
 
 impl Default for ChatPrefs {
@@ -166,6 +168,7 @@ impl Default for ChatPrefs {
             provider_limits: BTreeMap::new(),
             auto: false,
             follow_agents: true,
+            relay_url: String::new(),
         }
     }
 }
@@ -905,6 +908,15 @@ mod native {
             note(ui, &format!("{KEY_ENV} from the environment is used for api.anthropic.com when no key is stored."));
         }
 
+        if !local_agents() {
+            ui.add_space(SECTION_GAP - 8.0);
+            card(ui, |ui| {
+                field_row(ui, "Your PaperCraft server", |ui| {
+                    ed.save |= text_field(ui, &mut prefs.relay_url, "wss://\u{2026}").changed();
+                    note(ui, "Its agents (Claude Code, OpenCode) join the chat. Leave empty to use only your API keys.");
+                });
+            });
+        }
         ui.add_space(SECTION_GAP - 8.0);
         section(ui, "Defaults for new chats", "Each chat can still pick its own.", |_| {});
         card(ui, |ui| defaults_card(ui, prefs, &mut ed));
@@ -1667,6 +1679,7 @@ mod tests {
             provider_limits: BTreeMap::new(),
             auto: true,
             follow_agents: false,
+            relay_url: "wss://example.com".into(),
         };
         assert_eq!(ChatPrefs::from_json(&prefs.to_json()), prefs);
         assert_eq!(ChatPrefs::from_json(&ChatPrefs::default().to_json()), ChatPrefs::default());

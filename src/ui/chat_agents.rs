@@ -103,9 +103,13 @@ fn matches_query(q: &str, parts: &[&str]) -> bool {
 pub fn group_agents(d: &Detect, prefs: &ChatPrefs, query: &str) -> Groups {
     let q = query.trim().to_lowercase();
     let mut g = Groups::default();
-    // A phone or a browser tab cannot start programs: only API endpoints are offered there.
+    // A phone or a browser tab cannot start programs: there only API endpoints and the agents the
+    // owner's server announced (the ready ones) are offered.
     let local = crate::ui::phone::has_local_tools();
-    for def in agents::AGENTS.iter().filter(|_| local) {
+    for def in agents::AGENTS {
+        if !local && !d.agent_ready(def.id) {
+            continue;
+        }
         let hidden = prefs.agents.get(def.id).is_some_and(|a| a.hidden);
         if hidden || !matches_query(&q, &[def.name, def.id]) {
             continue;
@@ -114,7 +118,8 @@ pub fn group_agents(d: &Detect, prefs: &ChatPrefs, query: &str) -> Groups {
         match d.agent_state(def.id) {
             AgentState::Ready { path, version } => {
                 let npx = matches!(def.kind, AgentKind::Npx { .. });
-                (row.status, row.version, row.sub) = (Status::Ready, short_version(&version), if npx { "Runs via npx".into() } else { tidy(&path) });
+                let sub = if !local { "Runs on your server".into() } else if npx { "Runs via npx".into() } else { tidy(&path) };
+                (row.status, row.version, row.sub) = (Status::Ready, short_version(&version), sub);
                 g.detected.push(row);
             }
             AgentState::NeedsEnable => {

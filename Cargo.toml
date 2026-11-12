@@ -128,6 +128,9 @@ rfd = "0.17"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 webpki-roots = "1"
+# The relay tab client (`relay_tab`): a WebSocket over the same rustls config.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 # Browser build (`src/web.rs`): canvas + WebGPU/WebGL surface, DOM events instead of winit.
 # Process RAM and CPU readings for the performance overlay (`ui::perf`).

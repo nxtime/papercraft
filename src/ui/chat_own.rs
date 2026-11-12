@@ -60,7 +60,15 @@ impl ChatState {
     /// The scan the chat column reads, after the hosted agents or the saved endpoints changed.
     pub(super) fn refresh_detect(&mut self) {
         self.own.ensure();
-        self.detect = Some(chat_hosted::detect_for(&self.hosted.agents, &self.own.store));
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.detect = Some(chat_hosted::detect_for(&self.hosted.agents, &self.own.store));
+        }
+        // A native scan finds the local agents and the keys; the server's join them.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(d) = &mut self.detect {
+            chat_hosted::merge_hosted(d, &self.hosted.agents);
+        }
         self.defaults_for.clear();
     }
 }
