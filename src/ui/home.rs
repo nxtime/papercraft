@@ -555,6 +555,16 @@ fn sidebar_item(
     resp.clicked()
 }
 
+/// Space before a row of `n` cards so a phone's cards sit centred, not against the left edge
+/// with the slack on the right (centred in the safe area). Wider screens keep the grid left-aligned.
+fn row_indent(ui: &Ui, n: usize) -> f32 {
+    if !super::phone::is_phone(ui.ctx().content_rect().width()) {
+        return 0.0;
+    }
+    let row = n as f32 * CARD_W + n.saturating_sub(1) as f32 * 20.0;
+    (ui.ctx().content_rect().center().x - row / 2.0 - ui.cursor().left()).max(0.0)
+}
+
 fn columns(ui: &Ui) -> usize {
     ((ui.available_width() + 20.0) / (CARD_W + 20.0))
         .floor()
@@ -594,6 +604,8 @@ fn recents_grid(ui: &mut Ui, hv: &mut HomeView) {
     let entries = hv.entries.clone();
     for row in entries.chunks(cols) {
         ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(row_indent(ui, row.len()));
             ui.spacing_mut().item_spacing.x = 20.0;
             for e in row {
                 project_card(ui, hv, e);
@@ -802,6 +814,8 @@ fn trash_grid(ui: &mut Ui, hv: &mut HomeView) {
     let entries = hv.trash.clone();
     for row in entries.chunks(cols) {
         ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(row_indent(ui, row.len()));
             ui.spacing_mut().item_spacing.x = 20.0;
             for e in row {
                 ui.vertical(|ui| {
