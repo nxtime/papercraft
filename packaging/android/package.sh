@@ -25,6 +25,8 @@ while [ $# -gt 0 ]; do
 done
 
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK}"
+# Git Bash passes `D:\...` paths through, and the drive colon then splits javac's classpath.
+command -v cygpath >/dev/null && ANDROID_HOME=$(cygpath -u "$ANDROID_HOME")
 API=26; PLATFORM=36; BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)
 NDK=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -n1)
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) host=windows-x86_64; ext=.cmd; exe=.exe; bat=.bat ;; Darwin) host=darwin-x86_64; ext=; exe=; bat= ;; *) host=linux-x86_64; ext=; exe=; bat= ;; esac
