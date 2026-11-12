@@ -30,6 +30,7 @@ pub mod panel_handle;
 pub mod motion;
 pub mod pages;
 pub mod phone;
+mod phone_chat;
 pub mod present;
 pub mod perf;
 pub mod palette;
@@ -146,7 +147,7 @@ pub struct UiState {
     /// `layer_subtree_height` of the rows, so each subtree is measured once; kept while the
     /// document and the folded rows stay the same (`layer_heights_key`).
     pub layer_heights: HashMap<NodeId, f32>,
-    pub layer_heights_key: (u64, usize),
+    pub layer_heights_key: (u64, usize, u32),
     /// Selection seen by the last layers-panel frame, to notice changes made on the canvas.
     pub last_selection: Vec<NodeId>,
     /// A layer the layers panel should scroll into view (and unfold its parents for).
@@ -1409,7 +1410,7 @@ const ICON_MENU_W: f32 = 200.0;
 /// A menu row with a leading icon, hover tint and the pointing-hand cursor.
 pub(super) fn icon_menu_item(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
     let p = theme::pal(ui);
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ICON_MENU_W, 32.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ICON_MENU_W, kit::touch_h(ui.ctx(), 32.0)), egui::Sense::click());
     let hover = motion::hover(ui.ctx(), resp.id.with("menu-item"), &resp);
     if hover > 0.0 {
         ui.painter()
@@ -1773,9 +1774,11 @@ fn layers_body(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 );
             }
             st.layer_rows.clear();
-            if st.layer_heights_key != (ed.doc_stamp, st.collapsed.len()) {
+            // The row height is part of the key: a phone's rows are taller than a desktop's.
+            let key = (ed.doc_stamp, st.collapsed.len(), layer_row_h(ui.ctx()).to_bits());
+            if st.layer_heights_key != key {
                 st.layer_heights.clear();
-                st.layer_heights_key = (ed.doc_stamp, st.collapsed.len());
+                st.layer_heights_key = key;
             }
             // Rows that come into view by scrolling just appear; the pop-in is for a list that
             // was not on screen, or rows that were unfolded.
@@ -1923,8 +1926,13 @@ fn kind_icon(k: &NodeKind) -> Icon {
     }
 }
 
-/// Height of a layer row.
+/// Height of a layer row on a desktop.
 const LAYER_ROW_HEIGHT: f32 = 30.0;
+
+/// Height of a layer row here: a finger needs more than a pointer.
+fn layer_row_h(ctx: &egui::Context) -> f32 {
+    kit::touch_h(ctx, LAYER_ROW_HEIGHT)
+}
 /// Space between layer rows (and between a row and the rows below it).
 const LAYER_ROW_GAP: f32 = 1.0;
 /// Rows this far outside the visible list are still built, so a scroll never shows a gap.
@@ -1936,6 +1944,7 @@ fn layer_subtree_height(
     doc: &crate::model::Document,
     collapsed: &HashSet<NodeId>,
     id: NodeId,
+    row_h: f32,
     memo: &mut HashMap<NodeId, f32>,
 ) -> f32 {
     if let Some(h) = memo.get(&id) {
@@ -1944,10 +1953,10 @@ fn layer_subtree_height(
     let Some(n) = doc.get(id) else {
         return 0.0;
     };
-    let mut h = LAYER_ROW_HEIGHT;
+    let mut h = row_h;
     if !collapsed.contains(&id) {
         for c in &n.children {
-            h += LAYER_ROW_GAP + layer_subtree_height(doc, collapsed, *c, memo);
+            h += LAYER_ROW_GAP + layer_subtree_height(doc, collapsed, *c, row_h, memo);
         }
     }
     memo.insert(id, h);
@@ -1961,7 +1970,7 @@ fn layer_item(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth:
     // the subtree that holds it, so the rest stays virtual.
     let holds_reveal = st.reveal.is_some_and(|t| is_within(&ed.doc, t, id));
     if st.layer_filter.trim().is_empty() && !holds_reveal {
-        let h = layer_subtree_height(&ed.doc, &st.collapsed, id, &mut st.layer_heights);
+        let h = layer_subtree_height(&ed.doc, &st.collapsed, id, layer_row_h(ui.ctx()), &mut st.layer_heights);
         let top = ui.cursor().top();
         let view = ui.clip_rect();
         if top + h < view.top() - LAYER_OFFSCREEN_MARGIN || top > view.bottom() + LAYER_OFFSCREEN_MARGIN {
@@ -2019,7 +2028,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     let selected = ed.selection.contains(&id);
     let width = ui.available_width();
     let (row, resp) =
-        ui.allocate_exact_size(egui::vec2(width, LAYER_ROW_HEIGHT), egui::Sense::click_and_drag());
+        ui.allocate_exact_size(egui::vec2(width, layer_row_h(ui.ctx())), egui::Sense::click_and_drag());
     st.layer_rows.push((id, row, depth));
     if st.reveal == Some(id) {
         ui.scroll_to_rect(row, None);
@@ -2046,8 +2055,14 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     if !n.children.is_empty() {
         let open = !st.collapsed.contains(&id);
         let r = sq(x, LAYER_ICON_SIZE);
+        // On a phone the tap area is as tall as the row.
+        let hit = if kit::compact(ui.ctx()) {
+            egui::Rect::from_center_size(r.center(), egui::vec2(r.width() + 4.0, row.height()))
+        } else {
+            r.expand(2.0)
+        };
         let cr = ui.interact(
-            r.expand(2.0),
+            hit,
             ui.id().with(("disclose", id)),
             egui::Sense::click(),
         );
@@ -2088,9 +2103,11 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
                 return false;
             }
             let slide = (1.0 - shown) * TRAIL_SLIDE;
-            let r = egui::Rect::from_center_size(egui::pos2(right - 9.0 + slide, cy), egui::vec2(18.0, 18.0));
-            right -= TRAIL_W * shown;
-            let b = ui.interact(r, ui.id().with((tip, id)), egui::Sense::click());
+            let slot = kit::touch_h(ui.ctx(), TRAIL_W);
+            let r = egui::Rect::from_center_size(egui::pos2(right - slot / 2.0 + 1.0 + slide, cy), egui::vec2(18.0, 18.0));
+            right -= slot * shown;
+            let tap = if kit::compact(ui.ctx()) { egui::Rect::from_center_size(r.center(), egui::vec2(slot, row.height())) } else { r };
+            let b = ui.interact(tap, ui.id().with((tip, id)), egui::Sense::click());
             let t = motion::hover(ui.ctx(), ui.id().with(("trail-hover", tip, id)), &b);
             if t > 0.0 {
                 let tint = p.hover;
@@ -2917,7 +2934,7 @@ mod layer_tests {
             parent = rect(&mut ed, Some(parent), true);
         }
         let mut memo = HashMap::new();
-        let h = layer_subtree_height(&ed.doc, &HashSet::new(), top, &mut memo);
+        let h = layer_subtree_height(&ed.doc, &HashSet::new(), top, LAYER_ROW_HEIGHT, &mut memo);
         assert_eq!(memo.len(), 201);
         assert!((h - (201.0 * LAYER_ROW_HEIGHT + 200.0 * LAYER_ROW_GAP)).abs() < 0.01);
     }
@@ -2950,7 +2967,7 @@ mod layer_tests {
         let mut expected = tops[&roots[0]];
         for r in &roots {
             assert!((tops[r] - expected).abs() < 0.6, "root {r:?} at {} not {expected}", tops[r]);
-            expected += layer_subtree_height(&ed.doc, &st.collapsed, *r, &mut HashMap::new()) + LAYER_ROW_GAP;
+            expected += layer_subtree_height(&ed.doc, &st.collapsed, *r, LAYER_ROW_HEIGHT, &mut HashMap::new()) + LAYER_ROW_GAP;
         }
     }
 }

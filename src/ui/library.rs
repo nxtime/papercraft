@@ -304,7 +304,7 @@ const MAX_PREVIEW_SCALE: f32 = 2.0;
 const PREVIEW_MARGIN_PX: f32 = 28.0;
 
 /// Rasterises a document (anti-aliased, transparent) to fit a tile.
-fn preview_image(doc: &Document) -> Option<egui::ColorImage> {
+pub(super) fn preview_image(doc: &Document) -> Option<egui::ColorImage> {
     let (pw, ph) = TILE_PX;
     let svg = crate::io::svg::export(doc, None, None)?;
     let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;

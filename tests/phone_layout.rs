@@ -71,7 +71,10 @@ fn everything_drawn_stays_inside_the_screen_for_every_tab() {
                 "{name} of the {tab:?} tab leaves the screen: {r:?}"
             );
         }
-        if tab != Tab::Canvas {
+        if tab == Tab::Chat {
+            let page = rig.rect("chat-page").expect("chat is a page, not a sheet");
+            assert!(page.bottom() <= rig.rect("tab-bar").unwrap().top() + 0.5, "the page rests on the tab bar");
+        } else if tab != Tab::Canvas {
             let sheet = rig.rect("sheet").expect("a sheet for the open tab");
             assert!(sheet.bottom() <= rig.rect("tab-bar").unwrap().top() + 0.5, "the sheet rests on the tab bar");
         }
