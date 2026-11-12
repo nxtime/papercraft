@@ -332,7 +332,7 @@ pub enum Halt {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).read_timeout(READ_TIMEOUT).build().map_err(|e| format!("http client: {e}"))
+    crate::net::client_builder().connect_timeout(CONNECT_TIMEOUT).read_timeout(READ_TIMEOUT).build().map_err(|e| format!("http client: {e}"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

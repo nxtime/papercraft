@@ -14,6 +14,8 @@ pub mod design_system;
 #[cfg(target_os = "android")]
 pub mod dialogs;
 pub mod editor;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod file_keys;
 pub mod geom;
 pub mod gestures;
 pub mod handoffs;
@@ -34,6 +36,8 @@ pub mod lottie;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod mcp;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod net;
 pub mod merge;
 pub mod model;
 #[cfg(not(target_arch = "wasm32"))]

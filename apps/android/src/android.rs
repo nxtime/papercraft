@@ -115,6 +115,7 @@ fn android_main(android: AndroidApp) {
         return;
     };
     use_private_storage(&data);
+    papercraft::file_keys::install(&data.join("keys"));
     let event_loop = match EventLoop::<UserEvent>::with_user_event().with_android_app(android.clone()).build() {
         Ok(event_loop) => event_loop,
         Err(error) => {

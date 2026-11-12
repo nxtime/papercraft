@@ -281,7 +281,8 @@ impl Detect {
         [preferred, BackendKind::ClaudeCode, BackendKind::Codex, BackendKind::Anthropic, BackendKind::Acp]
             .into_iter()
             .find(|k| self.has(*k))
-            .unwrap_or(preferred)
+            // Where no program can start, an API endpoint is the only kind that can ever run.
+            .unwrap_or(if crate::ui::phone::has_local_tools() { preferred } else { BackendKind::Anthropic })
     }
 }
 

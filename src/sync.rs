@@ -736,8 +736,11 @@ pub(crate) mod net {
         url: &str,
         body: Option<Vec<u8>>,
     ) -> Result<(u16, Vec<u8>), String> {
-        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-        let client = CLIENT.get_or_init(reqwest::Client::new);
+        static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+        let client = CLIENT
+            .get_or_init(|| crate::net::client_builder().build().map_err(|e| format!("http client: {e}")))
+            .as_ref()
+            .map_err(Clone::clone)?;
         let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
         let mut req = client.request(method, url).timeout(Duration::from_secs(60));
         if let Some(b) = body {
