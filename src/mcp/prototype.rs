@@ -4,12 +4,12 @@ use super::exec::{page_arg, resolve, text, Args};
 use super::ToolResult;
 use crate::editor::Editor;
 use crate::model::link::valid_url;
-use crate::model::{LinkAction, NodeId};
+use crate::model::{LinkAction, LinkTrigger, NodeId};
 use serde_json::json;
 
 /// One layer's new click behaviour: a frame to go to, or another action, or neither (cleared).
-/// Layer's page, id, frame link, other action, fires on hover, tweens matching layers.
-type Change = (usize, NodeId, Option<NodeId>, Option<LinkAction>, bool, bool);
+/// Layer's page, id, frame link, other action, trigger, tweens matching layers.
+type Change = (usize, NodeId, Option<NodeId>, Option<LinkAction>, LinkTrigger, bool);
 
 /// A frame on the page of the link's layer; links never cross pages.
 fn target_frame(ed: &Editor, key: &str, page: usize) -> Result<NodeId, String> {
@@ -39,30 +39,32 @@ fn parse_link(ed: &Editor, l: &Args, default_page: usize) -> Result<Change, Stri
         (.., Some(other)) => return Err(format!("`action` must be \"back\" or \"close\", not `{other}`")),
         _ => (None, None),
     };
-    let hover = match l.str("trigger") {
-        None | Some("click") => false,
-        Some("hover") => true,
-        Some(other) => return Err(format!("`trigger` must be \"click\" or \"hover\", not `{other}`")),
+    let trigger = match l.str("trigger") {
+        None | Some("click") => LinkTrigger::Click,
+        Some("hover") => LinkTrigger::Hover,
+        Some("press") => LinkTrigger::Press,
+        Some("focus") => LinkTrigger::Focus,
+        Some(other) => return Err(format!("`trigger` must be \"click\", \"hover\", \"press\" or \"focus\", not `{other}`")),
     };
     let smart = match l.str("transition") {
         None | Some("glide") => false,
         Some("smart") => true,
         Some(other) => return Err(format!("`transition` must be \"glide\" or \"smart\", not `{other}`")),
     };
-    // Hover links open a frame or an overlay; an address or back/close on hover would fire by accident.
-    if hover && !(link.is_some() || matches!(act, Some(LinkAction::Overlay { .. }))) {
-        return Err("`trigger: hover` needs `to` or `overlay`".into());
+    // These links open a frame or an overlay; an address or back/close would fire by accident.
+    if trigger != LinkTrigger::Click && !(link.is_some() || matches!(act, Some(LinkAction::Overlay { .. }))) {
+        return Err("`trigger` hover, press and focus need `to` or `overlay`".into());
     }
     if smart && link.is_none() {
         return Err("`transition: smart` needs `to`".into());
     }
-    Ok((p, from, link, act, hover, smart))
+    Ok((p, from, link, act, trigger, smart))
 }
 
 /// Sets, per layer, one of: `to` (go to a frame), `overlay` (open a frame as an overlay), `url`
 /// (https, http, mailto or tel), `action` ("back" or "close"). A layer with none of them loses
-/// its link. With `to` or `overlay`, `trigger: "hover"` fires it while the pointer is over the
-/// layer; with `to`, `transition: "smart"` tweens same-named layers. Every link is checked before any is applied.
+/// its link. With `to` or `overlay`, `trigger` "hover", "press" or "focus" holds it while the pointer is over
+/// the layer, down on it, or the layer has keyboard focus; with `to`, `transition: "smart"` tweens same-named layers. Every link is checked before any is applied.
 pub(super) fn set_prototype_links(ed: &mut Editor, a: &Args) -> ToolResult {
     let page = page_arg(ed, a)?;
     let mut set = Vec::new();
@@ -71,13 +73,13 @@ pub(super) fn set_prototype_links(ed: &mut Editor, a: &Args) -> ToolResult {
         set.push(parse_link(ed, &l, page)?);
     }
     let n = set.len();
-    for (p, from, link, act, hover, smart) in set {
+    for (p, from, link, act, trigger, smart) in set {
         ed.with_page(p, |ed| {
             ed.edit("Prototype link", |tx| {
                 if let Some(node) = tx.node_mut(from) {
                     node.link = link;
                     node.link_action = act;
-                    node.link_hover = hover;
+                    node.set_link_trigger(trigger);
                     node.link_smart = smart;
                 }
             })

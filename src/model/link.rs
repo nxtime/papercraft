@@ -21,6 +21,32 @@ pub enum LinkAction {
     Close,
 }
 
+/// What makes a layer's link fire. All but `Click` hold only while the state lasts, then undo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkTrigger {
+    Click,
+    Hover,
+    Press,
+    Focus,
+}
+
+impl super::Node {
+    pub fn link_trigger(&self) -> LinkTrigger {
+        match (self.link_hover, self.link_press, self.link_focus) {
+            (true, ..) => LinkTrigger::Hover,
+            (_, true, _) => LinkTrigger::Press,
+            (.., true) => LinkTrigger::Focus,
+            _ => LinkTrigger::Click,
+        }
+    }
+
+    pub fn set_link_trigger(&mut self, t: LinkTrigger) {
+        self.link_hover = t == LinkTrigger::Hover;
+        self.link_press = t == LinkTrigger::Press;
+        self.link_focus = t == LinkTrigger::Focus;
+    }
+}
+
 /// Checks a link address and returns it trimmed. Only `https`, `http`, `mailto` and `tel` pass:
 /// anything else (`file:`, `javascript:`, custom schemes) would let a shared design run
 /// something on the viewer's machine.

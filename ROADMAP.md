@@ -47,7 +47,7 @@ Agents can already build a design system through the tools; people cannot yet ma
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 23 | Prototyping links and flows | **done** | Prototype tab in the inspector; Present mode follows links with a camera glide. While-hovering links (reverted on leave) and smart transitions (layers with the same name tween position, size, opacity and fill) are in; pressed states for components todo. |
+| 23 | Prototyping links and flows | **done** | Prototype tab in the inspector; Present mode follows links with a camera glide. While-hovering links (reverted on leave) and smart transitions (layers with the same name tween position, size, opacity and fill) are in; pressed and focus states are in too (see row 56). |
 | 24 | Responsive constraints and breakpoint preview | partial | Constraints exist in the editor; `export_site` merges frames named `Home @mobile` or `Home @768` into one page with media queries. View > Breakpoint Preview shows the selected screen at 375 / 768 / 1280 or a variant's width from a copy of the document (desktop app; not on the web build). **Target: end of January 2027 (in the browser too).** |
 | 25 | Shadows, blur and effects | **done** | Drop shadow, layer blur and background blur are inspector effects (`filter: blur()` and `backdrop-filter: blur()` in CSS, Tailwind and SVG; PDF export drops the blurs). Rendered through offscreen layers (`src/render/layers.rs`). |
 | 26 | Margin and grid layout | partial | Wrapped-line cross alignment, per-line fill/align, and `layout_grid` track layout (`src/layout.rs`) implemented; `write_html` honours CSS margin (shorthand, per side, `auto`; block siblings collapse, flex margins add). **Target: end of March 2027.** |
@@ -116,7 +116,7 @@ Ideas that fit PaperCraft and are not built yet, with the same kind of target da
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 56 | Pressed and focus states in prototypes | todo | The part of row 23 still missing: components react to press and keyboard focus in Present mode. **Target: mid-December 2026.** |
+| 56 | Pressed and focus states in prototypes | **done** | Links can hold while the pointer is down (`trigger: "press"`) or the layer has keyboard focus (`"focus"`), like hover links; Tab and Shift+Tab move focus through linked layers in Present mode, Enter or Space follows the focused click link. |
 | 57 | Works offline in the browser | **done** | A service worker (`web/sw.js`) keeps the app starting without a connection; designs are already kept in the browser's store and the shared-project sync catches up when the relay returns (last writer wins, as before). The toolbar shows an Offline chip meanwhile. |
 | 58 | Threaded comments on the canvas | **done** | Threads on a layer's Feedback notes: replies with author and time, `@mentions` highlighted, resolve and reopen, Open/Resolved/All filter; agents reply and resolve over MCP (`add_feedback commentId`, `resolve_feedback reopen`). Not yet: a click-to-place pin on a free canvas point, an author setting (until row 54), mention notifications. |
 | 59 | Image crop, masks and adjustments | todo | Crop and reposition an image inside its frame, mask with any shape, and adjust exposure, contrast and saturation without changing the file. **Target: end of February 2027.** |

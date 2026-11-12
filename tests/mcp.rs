@@ -198,7 +198,7 @@ fn import_html_opens_a_zip_with_its_css_and_images() {
 
 #[test]
 fn prototype_links_set_each_kind_and_refuse_bad_ones() {
-    use papercraft::model::LinkAction;
+    use papercraft::model::{LinkAction, LinkTrigger};
     let mut h = host();
     let mut frame = |name: &str| call(&mut h, "create_artboard", json!({"name": name, "styles": {"width": "100px", "height": "100px"}}))["id"].clone();
     let (home, modal, button) = (frame("Home"), frame("Modal"), frame("Button"));
@@ -250,6 +250,11 @@ fn prototype_links_set_each_kind_and_refuse_bad_ones() {
     assert_eq!(flags(&mut h), (true, true));
     set(&mut h, json!({"nodeId": button, "overlay": modal, "trigger": "hover"})).unwrap();
     assert_eq!(flags(&mut h), (true, false), "a new link starts from the defaults");
+    for (name, want) in [("press", LinkTrigger::Press), ("focus", LinkTrigger::Focus), ("click", LinkTrigger::Click)] {
+        set(&mut h, json!({"nodeId": button, "to": home, "trigger": name})).unwrap();
+        assert_eq!(h.ed.doc.get(num(&button)).unwrap().link_trigger(), want, "{name}");
+    }
+    assert!(set(&mut h, json!({"nodeId": button, "action": "close", "trigger": "focus"})).is_err());
     for bad in [
         json!({"nodeId": button, "action": "back", "trigger": "hover"}),
         json!({"nodeId": button, "url": "https://a.dev", "trigger": "hover"}),

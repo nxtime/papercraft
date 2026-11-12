@@ -492,6 +492,12 @@ pub struct Node {
     /// of on click. Only frame jumps and overlays can be hover links.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub link_hover: bool,
+    /// Like `link_hover`, but the link holds while the pointer is down on the layer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub link_press: bool,
+    /// Like `link_hover`, but the link holds while the layer has keyboard focus (Tab).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub link_focus: bool,
     /// A frame jump tweens layers that share a name between the two frames instead of gliding.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub link_smart: bool,
@@ -655,6 +661,8 @@ impl Node {
             link: None,
             link_action: None,
             link_hover: false,
+            link_press: false,
+            link_focus: false,
             link_smart: false,
             bindings: BTreeMap::new(),
             component_key: None,

@@ -40,7 +40,10 @@ const PROJECT_STEPS: &[fn(Value) -> Value] = &[|v| v, |v| v, |v| v];
 /// v10: boolean groups (`boolean` layers); an older app would not read them, or would flatten the operands on save.
 /// v11: threaded comments (replies, mentions, pins at a point, timestamps); an older app would
 /// drop them on save.
-pub const PAGE_VERSION: u32 = 11;
+/// v12: prototype links can hold while pressed or focused (`link_press`, `link_focus`); an older
+/// app would turn them into plain click links on save.
+pub const PAGE_VERSION: u32 = 12;
+const PAGE_V11: u32 = 11;
 const PAGE_V10: u32 = 10;
 const PAGE_V9: u32 = 9;
 const PAGE_V8: u32 = 8;
@@ -55,6 +58,10 @@ const PAGE_V4: u32 = 4;
 /// Whether a page holds something an older app would drop on save: a named font or a link action.
 fn needs_v4(nodes: &[Node]) -> bool {
     nodes.iter().any(|n| n.text_style.font.is_some() || n.link_action.is_some())
+}
+
+fn needs_v12(nodes: &[Node]) -> bool {
+    nodes.iter().any(|n| n.link_press || n.link_focus)
 }
 
 fn needs_v11(nodes: &[Node]) -> bool {
@@ -85,8 +92,10 @@ fn needs_v6(doc: &Document) -> bool {
 
 /// The version a page is written as: the oldest one that can hold everything in it.
 fn page_version(doc: &Document, nodes: &[Node]) -> u32 {
-    if needs_v11(nodes) {
+    if needs_v12(nodes) {
         PAGE_VERSION
+    } else if needs_v11(nodes) {
+        PAGE_V11
     } else if needs_v10(nodes) {
         PAGE_V10
     } else if needs_v9(nodes) {
@@ -242,7 +251,7 @@ struct PageFile {
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
-const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v];
+const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v, |v| v];
 /// Formats accepted as older versions of a page.
 const PAGE_ALIASES: &[&str] = &[LEGACY_FORMAT];
 
@@ -331,7 +340,7 @@ fn is_current_page(s: &str) -> bool {
         version: Option<u32>,
     }
     serde_json::from_str::<Head>(s)
-        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | PAGE_V10 | PAGE_V9 | PAGE_V8 | PAGE_V7 | PAGE_V6 | PAGE_V5 | PAGE_V4 | PAGE_BASE_VERSION)))
+        .is_ok_and(|h| h.format.as_deref() == Some(PAGE_FORMAT) && matches!(h.version, Some(PAGE_VERSION | PAGE_V11 | PAGE_V10 | PAGE_V9 | PAGE_V8 | PAGE_V7 | PAGE_V6 | PAGE_V5 | PAGE_V4 | PAGE_BASE_VERSION)))
 }
 
 fn page_from_file(mut f: PageFile) -> Result<(PageData, PageModes), FormatError> {
@@ -583,6 +592,21 @@ mod tests {
     }
 
     #[test]
+    fn press_and_focus_links_make_a_v12_page_and_roundtrip() {
+        let v10 = r#"{"format":"paper-rs-page","version":10,"id":"a","name":"P","next_id":2,"root":[1],"nodes":[
+            {"id":1,"name":"T","type":"rect","rect":{"x":0,"y":0,"w":5,"h":5},"link":1,"link_hover":true}]}"#;
+        let mut p = page_from_json(v10).unwrap();
+        let n = p.doc.get(NodeId(1)).unwrap();
+        assert!(!n.link_press && !n.link_focus, "an older page has neither");
+        assert!(page_to_json(&p).contains("\"version\":7"), "hover alone stays v7");
+        p.doc.nodes.get_mut(&NodeId(1)).unwrap().set_link_trigger(crate::model::LinkTrigger::Focus);
+        let json = page_to_json(&p);
+        assert!(json.contains("\"version\":12"));
+        let back = page_from_json(&json).unwrap();
+        assert_eq!(back.doc.get(NodeId(1)).unwrap().link_trigger(), crate::model::LinkTrigger::Focus);
+    }
+
+    #[test]
     fn blur_makes_a_v8_page_and_roundtrips() {
         let v7 = r#"{"format":"paper-rs-page","version":7,"id":"a","name":"P","next_id":2,"root":[1],"nodes":[
             {"id":1,"name":"T","type":"rect","rect":{"x":0,"y":0,"w":5,"h":5}}]}"#;
@@ -613,7 +637,7 @@ mod tests {
         let back = page_from_json(&json).unwrap();
         assert_eq!(back.doc.get(NodeId(1)).unwrap().style.rotation, 30.0);
         assert!(json.contains("\"version\":9"));
-        let too_new = json.replace("\"version\":9", "\"version\":12");
+        let too_new = json.replace("\"version\":9", "\"version\":13");
         assert!(matches!(page_from_json(&too_new), Err(FormatError::TooNew { .. })));
     }
 
@@ -630,7 +654,7 @@ mod tests {
         let n = back.doc.get(NodeId(1)).unwrap();
         assert!(matches!(n.kind, crate::model::NodeKind::Boolean { op: crate::model::BoolOp::Subtract, .. }));
         assert_eq!(n.children, vec![NodeId(2), NodeId(3)]);
-        let too_new = json.replace("\"version\":10", "\"version\":12");
+        let too_new = json.replace("\"version\":10", "\"version\":13");
         assert!(matches!(page_from_json(&too_new), Err(FormatError::TooNew { .. })));
     }
 
@@ -647,7 +671,7 @@ mod tests {
         assert!(json.contains("\"version\":11"));
         let back = page_from_json(&json).unwrap();
         assert_eq!(back.doc.get(NodeId(1)).unwrap().comments[0].replies[0].mentions, vec!["user"]);
-        let too_new = json.replace("\"version\":11", "\"version\":12");
+        let too_new = json.replace("\"version\":11", "\"version\":13");
         assert!(matches!(page_from_json(&too_new), Err(FormatError::TooNew { .. })));
     }
 
