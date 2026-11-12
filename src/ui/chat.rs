@@ -1009,6 +1009,10 @@ impl ChatState {
         use crate::chat::events::TurnConfig;
         use crate::chat::endpoint::ApiFormat;
         use crate::chat::{anthropic, claude_code, codex, openai};
+        // A phone cannot start an agent: the ones the owner's server runs take the turn.
+        if !crate::ui::phone::has_local_tools() && self.chat.as_ref().is_some_and(|c| c.backend.kind != BackendKind::Anthropic) {
+            return self.send_hosted(ctx, prompt);
+        }
         let prompt = prompt.trim();
         if prompt.is_empty() {
             return Ok(());
@@ -1236,6 +1240,7 @@ impl ChatState {
                 match rx.try_recv() {
                     Ok(mut d) => {
                         self.seen_models.append(&mut d.catalogs);
+                        chat_hosted::merge_hosted(&mut d, &self.hosted.agents);
                         self.detect = Some(d);
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {

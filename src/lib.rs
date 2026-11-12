@@ -38,6 +38,8 @@ pub mod macos;
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod net;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod relay_tab;
 pub mod merge;
 pub mod model;
 #[cfg(not(target_arch = "wasm32"))]

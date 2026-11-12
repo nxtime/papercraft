@@ -91,6 +91,27 @@ pub(super) fn detect_for(agents: &[AgentInfo], own: &crate::chat::own::OwnStore)
     }
 }
 
+/// The path the server's agents carry in a scan: nothing local to run.
+const SERVER: &str = "server";
+
+/// Adds the server's agents to a scan (a phone finds none of its own), dropping the ones an
+/// earlier hello added.
+pub(super) fn merge_hosted(d: &mut super::Detect, agents: &[AgentInfo]) {
+    let on_server = |p: &str| p == SERVER;
+    if d.claude.as_ref().is_some_and(|(p, _)| on_server(&p.to_string_lossy())) {
+        d.claude = None;
+    }
+    d.agents.retain(|s| !matches!(&s.state, AgentState::Ready { path, .. } if on_server(path)));
+    if agents.iter().any(|a| a.id == CLAUDE) {
+        d.claude = Some((PathBuf::from(SERVER), String::new()));
+    }
+    let ready = AgentState::Ready { path: SERVER.into(), version: String::new() };
+    for a in agents.iter().filter(|a| a.id != CLAUDE) {
+        d.agents.retain(|s| s.id != a.id);
+        d.agents.push(AgentStatus { id: a.id.clone(), state: ready.clone() });
+    }
+}
+
 impl ChatState {
     /// The relay's hello: which agents it runs.
     pub fn set_hosted_agents(&mut self, agents: Vec<AgentInfo>) {
@@ -229,6 +250,18 @@ mod tests {
         let d = detect_for(&infos(), &Default::default());
         assert!(d.has_backend(&backend_for(CLAUDE)) && d.has_backend(&backend_for(OPENCODE)));
         assert!(!detect_for(&[], &Default::default()).any());
+    }
+
+    #[test]
+    fn merging_adds_the_hosted_agents_to_a_scan_and_replaces_an_earlier_hello() {
+        let mut d = super::super::Detect { agents: vec![AgentStatus { id: "pi".into(), state: AgentState::NotFound }], ..Default::default() };
+        merge_hosted(&mut d, &infos());
+        assert!(d.has_backend(&backend_for(CLAUDE)) && d.has_backend(&backend_for(OPENCODE)));
+        assert_eq!(d.agents.len(), 2, "the scanned agent stays");
+        merge_hosted(&mut d, &infos()[1..]);
+        assert!(d.claude.is_none() && d.agent_ready(OPENCODE));
+        merge_hosted(&mut d, &[]);
+        assert!(!d.any() && d.agents.len() == 1);
     }
 
     #[test]

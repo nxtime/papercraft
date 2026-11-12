@@ -10,6 +10,9 @@ pub fn client_builder() -> reqwest::ClientBuilder {
 }
 
 #[cfg(target_os = "android")]
+pub use android::tls as tls_config;
+
+#[cfg(target_os = "android")]
 mod android {
     use std::sync::Arc;
 

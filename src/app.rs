@@ -112,6 +112,16 @@ pub struct App {
         crate::mcp::server::Running,
         crate::mcp::server::Dispatch,
     )>,
+    /// The phone's connection to the owner's server, the address it was made for, and a typed
+    /// address waiting to settle (so half-typed hosts are never dialled).
+    #[cfg(target_os = "android")]
+    relay: Option<crate::relay_tab::RelayTab>,
+    #[cfg(target_os = "android")]
+    relay_url: String,
+    #[cfg(target_os = "android")]
+    relay_settle: Option<(String, Instant)>,
+    #[cfg(target_os = "android")]
+    proxy: Option<winit::event_loop::EventLoopProxy<UserEvent>>,
     /// Groups the agent's editing calls into reviewable runs.
     runs: crate::runs::Tracker,
     /// Tool calls waiting for the person's drag to end, and since when.
@@ -137,7 +147,14 @@ pub enum UserEvent {
     Menu(muda::MenuId),
     /// MCP tool calls are waiting in `App::mcp`.
     Mcp,
+    /// The relay client has tool calls, chat events or a connection change for the app (phone).
+    #[cfg(target_os = "android")]
+    Relay,
 }
+
+/// A typed server address is dialled once it has stayed unchanged this long.
+#[cfg(target_os = "android")]
+const RELAY_SETTLE: Duration = Duration::from_millis(1500);
 
 /// How often the keyboard buffer is read while something has the keyboard: the platform's text
 /// events do not wake the loop on their own.
@@ -182,6 +199,14 @@ impl App {
             #[cfg(target_os = "macos")]
             menu: None,
             mcp: None,
+            #[cfg(target_os = "android")]
+            relay: None,
+            #[cfg(target_os = "android")]
+            relay_url: String::new(),
+            #[cfg(target_os = "android")]
+            relay_settle: None,
+            #[cfg(target_os = "android")]
+            proxy: None,
             runs: Default::default(),
             held: Vec::new(),
             held_since: None,
@@ -1591,6 +1616,8 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::Mcp => self.run_mcp_calls(),
+            #[cfg(target_os = "android")]
+            UserEvent::Relay => self.pump_relay(),
         }
     }
 
@@ -1610,6 +1637,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         self.tick_sync();
+        #[cfg(target_os = "android")]
+        self.pump_relay();
         if !self.held.is_empty() || self.pauses.has_waiting() {
             self.run_mcp_calls();
         }
@@ -1736,18 +1765,90 @@ impl App {
         }
     }
 
+    /// Keeps the phone's connection to the owner's server matching the setting, moves chat frames
+    /// between it and the chat, and runs the tool calls it brought.
+    #[cfg(target_os = "android")]
+    fn pump_relay(&mut self) {
+        use crate::relay_tab::Inbound;
+        let want = self.st.settings.chat.relay_url.trim().to_owned();
+        if want == self.relay_url {
+            self.relay_settle = None;
+        } else {
+            let now = Instant::now();
+            let at = match &self.relay_settle {
+                Some((w, at)) if *w == want => *at,
+                _ => {
+                    let at = now + RELAY_SETTLE;
+                    self.relay_settle = Some((want.clone(), at));
+                    at
+                }
+            };
+            if now >= at {
+                self.relay_settle = None;
+                self.restart_relay(want);
+            } else {
+                self.next_repaint = Some(self.next_repaint.map_or(at, |r| r.min(at)));
+            }
+        }
+        let Some(relay) = &self.relay else { return };
+        let mut changed = false;
+        while let Ok(m) = relay.inbound.try_recv() {
+            match m {
+                Inbound::Agents(agents) => self.st.chat.set_hosted_agents(agents),
+                Inbound::Chat(chat, event) => self.st.chat.hosted_event(&chat, event),
+                Inbound::Down => self.st.chat.hosted_lost(),
+            }
+            changed = true;
+        }
+        for frame in self.st.chat.take_hosted_frames() {
+            if relay.connected() {
+                relay.send_chat(&frame);
+            } else {
+                self.st.chat.hosted_lost();
+            }
+            changed = true;
+        }
+        if changed && let Some(g) = &self.gfx {
+            g.window.request_redraw();
+        }
+        self.run_mcp_calls();
+    }
+
+    #[cfg(target_os = "android")]
+    fn restart_relay(&mut self, url: String) {
+        if self.relay.take().is_some() {
+            self.st.chat.set_hosted_agents(Vec::new());
+        }
+        self.relay_url = url;
+        let (Some(base), Some(proxy), Some(dir)) = (crate::relay_tab::base_url(&self.relay_url), self.proxy.clone(), crate::project::config_dir()) else { return };
+        let token = crate::relay_tab::token_in(&dir);
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = proxy.send_event(UserEvent::Relay);
+        });
+        self.relay = Some(crate::relay_tab::RelayTab::start(&base, &token, wake));
+    }
+
     /// Run the MCP tool calls that arrived since the last wake-up, then repaint.
     fn run_mcp_calls(&mut self) {
-        let Some((rx, _, _)) = &self.mcp else {
+        let mut calls = std::mem::take(&mut self.held);
+        let mut served = false;
+        if let Some((rx, _, _)) = &self.mcp {
+            calls.extend(rx.try_iter());
+            served = true;
+        }
+        #[cfg(target_os = "android")]
+        if let Some(relay) = &self.relay {
+            calls.extend(relay.calls.try_iter());
+            served = true;
+        }
+        if !served {
             // No server to answer for: fail held calls rather than leave their callers waiting.
-            for c in std::mem::take(&mut self.held) {
+            for c in calls {
                 let _ = c.reply.send(Err("PaperCraft's MCP server is not running".into()));
             }
             self.pauses.fail_all("PaperCraft's MCP server is not running");
             return;
-        };
-        let mut calls = std::mem::take(&mut self.held);
-        calls.extend(rx.try_iter());
+        }
         let runs = &mut self.runs;
         let calls = self.pauses.admit(calls, Instant::now(), |c| runs.label(c));
         if self.pauses.has_waiting() {
@@ -1960,6 +2061,8 @@ pub fn run_in(event_loop: EventLoop<UserEvent>, start: Start, host: Option<Box<d
     #[cfg(not(target_os = "android"))]
     let _running = crate::cli::hold_app_lock(&store.root);
     event_loop.set_control_flow(ControlFlow::Wait);
+    #[cfg(target_os = "android")]
+    let proxy = event_loop.create_proxy();
     #[cfg(target_os = "macos")]
     {
         let proxy = event_loop.create_proxy();
@@ -1968,6 +2071,10 @@ pub fn run_in(event_loop: EventLoop<UserEvent>, start: Start, host: Option<Box<d
         }));
     }
     let mut app = App::new(start, store);
+    #[cfg(target_os = "android")]
+    {
+        app.proxy = Some(proxy);
+    }
     if let Some(host) = host {
         if let Some(clipboard) = host.clipboard() {
             app.ed.clipboard_io = Some(clipboard);
