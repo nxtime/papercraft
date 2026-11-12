@@ -2,6 +2,7 @@
 
 use crate::editor::{AppRequest, Button, Editor, InputEvent, Key, Modifiers};
 use crate::geom::{V2, v2};
+pub use crate::host::Host;
 use crate::io::{file, png};
 use crate::project::Store;
 use crate::render::frame::{self, Painter};
@@ -19,10 +20,14 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, Wind
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, NamedKey};
 use winit::window::{Window, WindowId};
+#[cfg(target_os = "android")]
+use crate::dialogs as rfd;
 
 struct Gfx {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
+    instance: wgpu::Instance,
+    /// `None` while Android has taken the window away (the app is in the background).
+    surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -81,7 +86,7 @@ fn hold_for_gesture(busy: bool, since: &mut Option<Instant>, now: Instant) -> bo
 pub struct App {
     gfx: Option<Gfx>,
     /// The undecorated window edge under the pointer (Linux), which a press resizes.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
     resize_edge: Option<winit::window::ResizeDirection>,
     pub ed: Editor,
     session: Session,
@@ -117,6 +122,12 @@ pub struct App {
     /// Claims and what each agent last saw; shared with delegate threads, which release their
     /// helper's claims when it ends.
     swarm: std::sync::Arc<std::sync::Mutex<crate::mcp::swarm::Swarm>>,
+    /// The mobile shell around the app; `None` on the desktop.
+    host: Option<Box<dyn Host>>,
+    /// A text field or a text layer had the keyboard in the last frame.
+    typing: bool,
+    /// The last keyboard request and its field, kept while that field holds focus.
+    last_ime: Option<(egui::Id, egui::output::IMEOutput)>,
 }
 
 /// Events delivered to the winit loop from other sources.
@@ -127,6 +138,10 @@ pub enum UserEvent {
     /// MCP tool calls are waiting in `App::mcp`.
     Mcp,
 }
+
+/// How often the keyboard buffer is read while something has the keyboard: the platform's text
+/// events do not wake the loop on their own.
+const IME_POLL: Duration = Duration::from_millis(50);
 
 /// What to show at startup.
 pub enum Start {
@@ -150,7 +165,7 @@ impl App {
         let library = crate::library::Library::load(&crate::library::Library::path_in(&store.root));
         let mut app = App {
             gfx: None,
-            #[cfg(all(unix, not(target_os = "macos")))]
+            #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
             resize_edge: None,
             ed: Editor::default(),
             session: Session::new(store),
@@ -172,13 +187,20 @@ impl App {
             held_since: None,
             pauses: Default::default(),
             swarm: Default::default(),
+            host: None,
+            typing: false,
+            last_ime: None,
         };
         app.st.library.library = library;
         app.st.perf.prefs = crate::ui::perf::PerfPrefs::load();
         crate::ui::canvas_prefs::CanvasPrefs::load().apply(&mut app.ed, &mut app.st);
         app.st.menu_bar_hidden = crate::ui::menu_toggle::load_hidden();
-        app.ed.clipboard_io = crate::io::clipboard::System::new()
-            .map(|c| Box::new(c) as Box<dyn crate::io::clipboard::Provider>);
+        // On Android the host hands over the system clipboard in `run_in`.
+        #[cfg(not(target_os = "android"))]
+        {
+            app.ed.clipboard_io = crate::io::clipboard::System::new()
+                .map(|c| Box::new(c) as Box<dyn crate::io::clipboard::Provider>);
+        }
         match start {
             Start::Home => app.show_home(),
             Start::Project(dir) => {
@@ -834,9 +856,15 @@ impl App {
             self.st.chat.gpu = self.offscreen();
         }
         let Some(g) = self.gfx.as_mut() else { return };
+        // Android took the window away: nothing to draw until `resumed` brings it back.
+        let Some(surface) = g.surface.as_ref() else { return };
         let work = Instant::now();
         self.last_redraw = Some(work);
-        let input = g.egui.take_egui_input(&g.window);
+        let mut input = g.egui.take_egui_input(&g.window);
+        if let Some(host) = self.host.as_mut() {
+            let steps = host.frame_input(&mut input, self.ctx.pixels_per_point(), self.typing);
+            apply_keyboard(steps, &mut input, &mut self.ed, self.ctx.egui_wants_keyboard_input());
+        }
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
         self.canvas = l.canvas;
         let repaint_delay = l
@@ -844,12 +872,35 @@ impl App {
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .map_or(Duration::MAX, |v| v.repaint_delay);
-        let platform = std::mem::take(&mut l.output.platform_output);
+        let mut platform = std::mem::take(&mut l.output.platform_output);
+        if let Some(host) = self.host.as_mut() {
+            let focused = self.ctx.memory(egui::Memory::focused);
+            crate::host::keep_keyboard(focused, &mut platform.ime, &mut self.last_ime);
+            // A text layer being edited has no egui field to ask for the keyboard.
+            if platform.ime.is_none() && self.ed.text_edit.is_some() {
+                platform.ime = Some(egui::output::IMEOutput {
+                    purpose: egui::IMEPurpose::Normal,
+                    rect: l.canvas,
+                    cursor_rect: l.canvas,
+                    should_interrupt_composition: false,
+                });
+            }
+            self.typing = platform.ime.is_some();
+            // winit has no clipboard or browser on Android: copy and open go through the activity.
+            for command in std::mem::take(&mut platform.commands) {
+                match command {
+                    egui::OutputCommand::CopyText(text) => host.copy_text(&text),
+                    egui::OutputCommand::OpenUrl(open) => host.open_url(&open.url),
+                    // shortcut: a copied image is dropped; a ClipData would need a content URI.
+                    egui::OutputCommand::CopyImage(_) => {}
+                }
+            }
+        }
         g.egui.handle_platform_output(&g.window, platform);
 
         // The wait for a drawable (vsync back-pressure) is not work: leave it out of the timing.
         let layout_ms = work.elapsed().as_secs_f32() * 1000.0;
-        let frame = match g.surface.get_current_texture() {
+        let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Occluded => {
@@ -863,7 +914,7 @@ impl App {
             }
             other => {
                 log::warn!("surface unavailable: {other:?}");
-                g.surface.configure(&g.device, &g.config);
+                surface.configure(&g.device, &g.config);
                 g.painter
                     .skip_frame(&g.device, &g.queue, &mut l.output.textures_delta);
                 g.window.request_redraw();
@@ -945,6 +996,7 @@ impl App {
         } else {
             repaint_delay
         };
+        let repaint_delay = if self.typing { repaint_delay.min(IME_POLL) } else { repaint_delay };
         // A repaint due within a frame is drawn now and paced by vsync: a timer that short wakes
         // late and off the display's beat (84 FPS on a 120 Hz screen).
         if repaint_delay <= FRAME_SLACK || pending || animating || !self.ed.requests.is_empty() {
@@ -1071,7 +1123,21 @@ fn app_icon() -> Option<winit::window::Icon> {
 
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.gfx.is_some() {
+        if let Some(g) = self.gfx.as_mut() {
+            // Android gives the app a new window surface each time it comes back to the front.
+            if g.surface.is_none() {
+                match g.instance.create_surface(g.window.clone()) {
+                    Ok(surface) => {
+                        let size = g.window.inner_size();
+                        g.config.width = size.width.max(1);
+                        g.config.height = size.height.max(1);
+                        surface.configure(&g.device, &g.config);
+                        g.surface = Some(surface);
+                        g.window.request_redraw();
+                    }
+                    Err(e) => log::error!("cannot recreate the surface: {e}"),
+                }
+            }
             return;
         }
         let icon = app_icon();
@@ -1105,10 +1171,12 @@ impl ApplicationHandler<UserEvent> for App {
         };
         // Linux: no native frame either; the toolbar carries the window buttons and the window
         // edges resize (`edge_resize`).
-        #[cfg(all(unix, not(target_os = "macos")))]
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
         let attrs = attrs.with_decorations(false);
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        self.st.custom_titlebar = cfg!(any(windows, all(unix, not(target_os = "macos"))));
+        self.st.custom_titlebar = cfg!(any(windows, all(unix, not(any(target_os = "macos", target_os = "android")))));
+        // The soft keyboard on Android opens only when a text field asks for it.
+        #[cfg(not(target_os = "android"))]
         window.set_ime_allowed(true);
         #[cfg(target_os = "macos")]
         {
@@ -1172,7 +1240,8 @@ impl ApplicationHandler<UserEvent> for App {
         self.st.perf.display_hz = display_hz(&window);
         self.gfx = Some(Gfx {
             window,
-            surface,
+            instance,
+            surface: Some(surface),
             device,
             queue,
             config,
@@ -1182,6 +1251,15 @@ impl ApplicationHandler<UserEvent> for App {
         });
     }
 
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        // Android destroys the window's surface when the app leaves the front; keep the device and
+        // the window, drop the surface, and make a new one in `resumed`.
+        #[cfg(target_os = "android")]
+        if let Some(g) = self.gfx.as_mut() {
+            g.surface = None;
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(g) = self.gfx.as_mut() else { return };
         let resp = g.egui.on_window_event(&g.window, &event);
@@ -1189,7 +1267,7 @@ impl ApplicationHandler<UserEvent> for App {
             log::trace!("event {event:?} -> egui repaint {}", resp.repaint);
         }
         let scale = g.window.scale_factor();
-        #[cfg(all(unix, not(target_os = "macos")))]
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
         if self.st.custom_titlebar && edge_resize(&g.window, &event, &mut self.resize_edge) {
             return;
         }
@@ -1201,7 +1279,9 @@ impl ApplicationHandler<UserEvent> for App {
                 let g = self.gfx.as_mut().unwrap();
                 g.config.width = s.width.max(1);
                 g.config.height = s.height.max(1);
-                g.surface.configure(&g.device, &g.config);
+                if let Some(surface) = &g.surface {
+                    surface.configure(&g.device, &g.config);
+                }
                 #[cfg(target_os = "macos")]
                 {
                     crate::macos::hide_traffic_lights(&g.window);
@@ -1221,7 +1301,9 @@ impl ApplicationHandler<UserEvent> for App {
                 let s = g.window.inner_size();
                 g.config.width = s.width.max(1);
                 g.config.height = s.height.max(1);
-                g.surface.configure(&g.device, &g.config);
+                if let Some(surface) = &g.surface {
+                    surface.configure(&g.device, &g.config);
+                }
                 redraw = true;
             }
             WindowEvent::ThemeChanged(_) => {
@@ -1813,6 +1895,7 @@ impl crate::mcp::exec::Host for App {
 }
 
 /// Start the MCP server unless `PAPERCRAFT_MCP=0`. Calls wake the event loop through `proxy`.
+#[cfg(not(target_os = "android"))]
 fn start_mcp(
     proxy: winit::event_loop::EventLoopProxy<UserEvent>,
 ) -> Option<(
@@ -1846,14 +1929,9 @@ fn prefer_x11(kernel_release: &str, display: Option<&std::ffi::OsStr>) -> bool {
         && display.is_some_and(|value| !value.is_empty())
 }
 
+/// Runs the desktop app: builds the event loop here and starts.
+#[cfg(not(target_os = "android"))]
 pub fn run(start: Start) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    crate::chat::path::init();
-    let store = Store::open(Store::default_root())
-        .map_err(|e| format!("cannot create the projects folder: {e}"))?;
-    // Tells papercraft-cli the app is up (or starting), so it waits for the server instead of
-    // writing the projects offline. Released by the OS when the process ends.
-    let _running = crate::cli::hold_app_lock(&store.root);
     let mut builder = EventLoop::<UserEvent>::with_user_event();
     #[cfg(target_os = "linux")]
     {
@@ -1867,6 +1945,20 @@ pub fn run(start: Start) -> Result<(), String> {
     let event_loop = builder
         .build()
         .map_err(|e| format!("cannot open a window: {e}"))?;
+    run_in(event_loop, start, None)
+}
+
+/// Runs the app on an event loop the caller built. The Android shell builds its own (winit needs
+/// the activity handed to it) and passes a [`Host`]; the desktop passes none.
+pub fn run_in(event_loop: EventLoop<UserEvent>, start: Start, host: Option<Box<dyn Host>>) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::chat::path::init();
+    let store = Store::open(Store::default_root())
+        .map_err(|e| format!("cannot create the projects folder: {e}"))?;
+    // Tells papercraft-cli the app is up (or starting), so it waits for the server instead of
+    // writing the projects offline. Released by the OS when the process ends.
+    #[cfg(not(target_os = "android"))]
+    let _running = crate::cli::hold_app_lock(&store.root);
     event_loop.set_control_flow(ControlFlow::Wait);
     #[cfg(target_os = "macos")]
     {
@@ -1876,19 +1968,55 @@ pub fn run(start: Start) -> Result<(), String> {
         }));
     }
     let mut app = App::new(start, store);
-    app.mcp = start_mcp(event_loop.create_proxy());
-    app.st.agent_endpoint = app.mcp.as_ref().map(|(_, r, _)| r.url()).unwrap_or_default();
-    if let Some(dir) = std::env::current_exe().ok().as_deref().and_then(std::path::Path::parent) {
-        crate::update::remove_replaced(dir);
+    if let Some(host) = host {
+        if let Some(clipboard) = host.clipboard() {
+            app.ed.clipboard_io = Some(clipboard);
+        }
+        app.host = Some(host);
     }
-    if !cfg!(debug_assertions) && ui::update::auto_enabled() {
-        app.st.updater.check_quietly();
+    // The phone has no agents on its network port and no installer to update.
+    #[cfg(not(target_os = "android"))]
+    {
+        app.mcp = start_mcp(event_loop.create_proxy());
+        app.st.agent_endpoint = app.mcp.as_ref().map(|(_, r, _)| r.url()).unwrap_or_default();
+        if let Some(dir) = std::env::current_exe().ok().as_deref().and_then(std::path::Path::parent) {
+            crate::update::remove_replaced(dir);
+        }
+        if !cfg!(debug_assertions) && ui::update::auto_enabled() {
+            app.st.updater.check_quietly();
+        }
     }
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "android"))]
     match app.st.updater.restart.take() {
         Some(ui::update::Restart::Relaunch) => crate::update::relaunch(None),
         Some(ui::update::Restart::Install(msi)) => crate::update::relaunch(Some(&msi)),
         None => Ok(()),
+    }
+    #[cfg(target_os = "android")]
+    Ok(())
+}
+
+/// The soft keyboard's steps as input: to egui while a field has the keyboard, else to the text
+/// layer being edited.
+fn apply_keyboard(steps: Vec<crate::ime::ImeStep>, input: &mut egui::RawInput, ed: &mut Editor, egui_wants: bool) {
+    use crate::ime::ImeStep;
+    if egui_wants {
+        input.events.extend(crate::host::egui_events(&steps));
+        return;
+    }
+    for step in steps {
+        match step {
+            ImeStep::Commit(text) => {
+                ed.preedit = None;
+                ed.handle(InputEvent::Text(text));
+            }
+            ImeStep::Preedit(text) => ed.preedit = (!text.is_empty() && ed.text_edit.is_some()).then_some(text),
+            ImeStep::Enter => {
+                ed.handle(InputEvent::KeyDown { key: Key::Enter, repeat: false });
+                ed.handle(InputEvent::KeyUp { key: Key::Enter });
+            }
+        }
     }
 }
 
@@ -1959,7 +2087,7 @@ mod tests {
 
 /// An undecorated window has no resize border (Linux): the pointer within a few pixels of an
 /// edge shows a resize cursor and a press resizes. True when the event was consumed.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
 fn edge_resize(window: &Window, event: &WindowEvent, edge: &mut Option<winit::window::ResizeDirection>) -> bool {
     use winit::window::{CursorIcon, ResizeDirection as D};
     const BORDER: f64 = 6.0;
