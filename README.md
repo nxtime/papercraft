@@ -228,6 +228,17 @@ papercraft --export-pdf out.pdf PROJECT_DIR --frames
 papercraft --import board.excalidraw                       # new project, prints its folder
 ```
 
+### Android (sideload APK)
+
+An Android app (arm64) is built from the same code: `apps/android` is a native library that runs the app on a `GameActivity` window, and the phone layout is picked by width. It needs the Android SDK (`platforms;android-36`, build-tools, an NDK) with `ANDROID_HOME` set, a JDK (`javac`, `keytool`), python, and `rustup target add aarch64-linux-android`.
+
+```sh
+packaging/android/package.sh                              # dist/release/PaperCraft-<version>.apk, debug-key signed
+packaging/android/package.sh --abi all                    # arm64-v8a and x86_64 (emulator)
+```
+
+Install it with `adb install -r dist/release/PaperCraft-<version>.apk`. Projects live in the app's private folder and work offline; syncing the shared library through the relay is not built into the app yet. Details are in [specs/android-app/spec.md](specs/android-app/spec.md).
+
 ### Tests
 
 ```sh
@@ -316,6 +327,8 @@ src/ui/              home, panels, inspector, palette, Variables, Assets, Librar
 src/lottie/          icon motion
 src/web/             browser build
 src/bin/             papercraft-cli, papercraft-mcp, papercraft-relay
+apps/android/        the Android app (cdylib around src/host.rs and src/ime.rs)
+packaging/           macOS, Windows and Android (APK) packaging
 skills/              agent skills
 specs/               feature specs (agent runs, design libraries, offline CLI, ...)
 analysis/            behaviour studies and design notes

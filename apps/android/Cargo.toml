@@ -1,0 +1,37 @@
+[package]
+name = "papercraft-android"
+version = "0.11.1"
+edition = "2024"
+rust-version = "1.95"
+description = "PaperCraft on Android: a GameActivity shell around the shared app"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "papercraft_android"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+# Its own workspace and lockfile (seeded from the root one): the Android-only dependencies below
+# stay out of the desktop and web builds' Cargo.lock.
+[workspace]
+
+# `unsafe_code` is `deny`, not `forbid`: Android's loader needs the one `#[unsafe(no_mangle)]
+# android_main` symbol, and JNI needs raw VM pointers; both are allowed on those functions alone.
+[lints.rust]
+unsafe_code = "deny"
+
+[dependencies]
+papercraft = { path = "../.." }
+log = "0.4"
+
+# Android only (owner approval 2026-11-11). winit gets the GameActivity backend (the Java half is
+# packaging/android/java, built by package.sh); egui is the version papercraft already uses.
+[target.'cfg(target_os = "android")'.dependencies]
+egui = "0.36"
+winit = { version = "0.30", features = ["android-game-activity"] }
+# Routes `log` to logcat, so `adb logcat -s PaperCraft` shows the app's own errors.
+android_logger = { version = "0.15", default-features = false }
+# Clipboard, opening links and the soft keyboard through the Android APIs; the version
+# android-activity already links.
+jni = { version = "0.22", default-features = false }

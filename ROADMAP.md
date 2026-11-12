@@ -129,5 +129,5 @@ Ideas that fit PaperCraft and are not built yet, with the same kind of target da
 | 66 | Design branches | todo | Branch a page, explore, then review the difference and merge it back with the version-compare view. **Target: end of April 2027.** |
 | 67 | The app in more languages | todo | The interface itself translated, starting with Portuguese and Spanish. **Target: end of April 2027.** |
 | 68 | Screen readers in the app | todo | The panels and canvas layers exposed to screen readers through AccessKit, with full keyboard use. **Target: end of May 2027.** |
-| 69 | Native phone apps | todo | iOS and Android apps around the browser build, with offline designs and share-sheet import. **Target: end of June 2027.** |
+| 69 | Native phone apps | partial | Android is built as a sideload APK (`packaging/android/package.sh`, [spec](specs/android-app/spec.md)): the native app on a GameActivity window, the phone layout, offline projects in the app folder, soft keyboard, clipboard and links. Not yet: syncing the shared library through the relay, https, importing files from the phone's storage, share-sheet import, the Play Store. iOS comes later. **Target: end of June 2027.** |
 
