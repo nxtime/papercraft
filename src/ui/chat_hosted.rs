@@ -197,7 +197,8 @@ pub(super) fn picker(ui: &mut Ui, st: &mut UiState) {
         super::chat_own::chips(ui, st);
         if let Some(b) = st.chat.chat.as_ref().map(|c| &c.backend).filter(|b| b.kind == BackendKind::Acp) {
             let name = b.model.as_deref().map_or_else(|| "Default".into(), |m| super::acp_model_name(b.agent.as_deref(), m, &st.settings.chat));
-            let label: String = format!("Model: {name}").chars().take(MODEL_CHARS).collect();
+            let auto = st.chat.chat.as_ref().filter(|_| b.model.as_deref() == Some(crate::chat::models::FREE_AUTO)).and_then(|c| st.chat.active_model(&c.id));
+            let label = model_chip_label(&name, auto, &st.settings.chat, b.agent.as_deref());
             chip = Some(kit::chip(ui, &label, false).on_hover_text("Pick a model, or type the id of your own"));
         }
     });
@@ -205,6 +206,15 @@ pub(super) fn picker(ui: &mut Ui, st: &mut UiState) {
         model_menu(&chip, st);
     }
     super::chat_own::form(ui.ctx(), st);
+}
+
+/// "Model: Free (auto) · <model>" once the server has said which free model answered.
+fn model_chip_label(name: &str, active: Option<&str>, prefs: &crate::ui::settings::ChatPrefs, agent: Option<&str>) -> String {
+    let full = match active {
+        Some(a) => format!("Model: {name} \u{b7} {}", super::acp_model_name(agent, a, prefs)),
+        None => format!("Model: {name}"),
+    };
+    full.chars().take(MODEL_CHARS).collect()
 }
 
 /// The model list of the desktop agent panel, in a menu under the model chip.

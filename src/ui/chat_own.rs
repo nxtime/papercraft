@@ -263,7 +263,7 @@ fn preset(fmt: ApiFormat, now: &Endpoint) -> Endpoint {
 fn field(ui: &mut egui::Ui, label: &str, text: &mut String, hint: &str, secret: bool) {
     let p = theme::pal(ui);
     ui.label(RichText::new(label).size(theme::SECONDARY).color(p.secondary));
-    ui.add(egui::TextEdit::singleline(text).hint_text(hint).password(secret).desired_width(f32::INFINITY));
+    theme::lit(ui, |ui| ui.add(egui::TextEdit::singleline(text).hint_text(hint).password(secret).desired_width(f32::INFINITY).margin(theme::INPUT_MARGIN).min_size(kit::input_min(ui.ctx()))));
 }
 
 #[cfg(test)]

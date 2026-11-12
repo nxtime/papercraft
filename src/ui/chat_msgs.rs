@@ -192,6 +192,20 @@ pub fn usage_line(u: &Usage) -> String {
     parts.join(" \u{b7} ")
 }
 
+/// Longest model id shown after the usage numbers.
+const USAGE_MODEL_CHARS: usize = 28;
+
+/// `line` followed by the model that answered, cut short so the line never overflows.
+pub fn with_model(line: String, model: Option<&str>) -> String {
+    let Some(m) = model.filter(|m| !m.is_empty()) else { return line };
+    let short: String = if m.chars().count() > USAGE_MODEL_CHARS {
+        m.chars().take(USAGE_MODEL_CHARS - 1).chain(['\u{2026}']).collect()
+    } else {
+        m.into()
+    };
+    format!("{line} \u{b7} {short}")
+}
+
 /// Verb for a card header: the design verb, else the bare tool name.
 pub fn tool_verb(name: &str) -> String {
     match crate::ui::agent_verb(name) {
@@ -1410,7 +1424,7 @@ pub fn list(ui: &mut Ui, chat: &Chat, v: &View, acts: &mut Acts) {
             if let Some(m) = reply.iter().rev().find(|m| m.usage.is_some()) {
                 let mut u = m.usage.clone().unwrap_or_default();
                 u.cost_usd = turn_cost(m, claude_code, &mut session_total);
-                ui.label(RichText::new(usage_line(&u)).size(theme::SECONDARY).color(theme::pal(ui).tertiary));
+                ui.label(RichText::new(with_model(usage_line(&u), m.model.as_deref())).size(theme::SECONDARY).color(theme::pal(ui).tertiary));
             }
             for r in runs.iter().filter(|r| r.state != RunState::Running) {
                 run_card(ui, r, acts);
@@ -1592,6 +1606,14 @@ mod tests {
         let long = "Motorista: permissions (location, camera, notifications), vehicle, 3-card tour, and a long tail";
         let q = call("q", "ask_user", json!({"questions": [{"question": "What goes into each first-access wizard?", "options": [{"label": long}, {"label": "No"}]}]}));
         assert!(drawn_width(|ui| question_card(ui, &q, true, None, &mut Acts::default())) <= 400.0);
+    }
+
+    #[test]
+    fn the_model_follows_the_usage_and_long_ids_are_cut() {
+        assert_eq!(with_model("1 in".into(), Some("big-pickle")), "1 in \u{b7} big-pickle");
+        assert_eq!(with_model("1 in".into(), None), "1 in");
+        let long = with_model("1 in".into(), Some(&"m".repeat(60)));
+        assert!(long.chars().count() <= 4 + 3 + USAGE_MODEL_CHARS && long.ends_with('\u{2026}'));
     }
 
     #[test]
