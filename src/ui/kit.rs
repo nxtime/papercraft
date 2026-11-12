@@ -57,7 +57,7 @@ fn galley_width(ui: &Ui, text: &str, font: FontId) -> f32 {
 
 /// A rounded button of the design system. `icon` goes before the label.
 pub fn button(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: &str) -> Response {
-    paint_button(ui, kind, icon, label, false, BUTTON_H)
+    paint_button(ui, kind, icon, label, false, touch_h(ui.ctx(), BUTTON_H))
 }
 
 /// Like [`button`], as tall as a segmented control (for bars).
@@ -68,6 +68,24 @@ pub fn button_compact(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: 
 /// Smallest touch target (px): [`button_touch`] and the Present-mode bar use it.
 pub const TOUCH_H: f32 = 44.0;
 
+/// Smallest touch target in a phone-width window, in points: 44 dp at the phone's 1.25 scale.
+pub const TOUCH_MIN: f32 = 36.0;
+
+/// Whether the screen is phone-wide, so controls grow to a finger and rows stack.
+pub fn compact(ctx: &egui::Context) -> bool {
+    super::phone::is_phone(ctx.content_rect().width())
+}
+
+/// `h`, or [`TOUCH_MIN`] when that is taller and the screen is phone-wide.
+pub fn touch_h(ctx: &egui::Context, h: f32) -> f32 {
+    if compact(ctx) { h.max(TOUCH_MIN) } else { h }
+}
+
+/// The least size of a text input: a finger-tall row on a phone, whatever fits its text elsewhere.
+pub fn input_min(ctx: &egui::Context) -> egui::Vec2 {
+    if compact(ctx) { vec2(0.0, TOUCH_MIN) } else { egui::Vec2::ZERO }
+}
+
 /// Like [`button`], as tall as a touch target (for bars used on a phone or tablet).
 pub fn button_touch(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: &str) -> Response {
     paint_button(ui, kind, icon, label, false, TOUCH_H)
@@ -75,7 +93,7 @@ pub fn button_touch(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: &s
 
 /// Like [`button`], stretched over the available width, label centred.
 pub fn button_wide(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, label: &str) -> Response {
-    paint_button(ui, kind, icon, label, true, BUTTON_H)
+    paint_button(ui, kind, icon, label, true, touch_h(ui.ctx(), BUTTON_H))
 }
 
 fn paint_button(
@@ -184,7 +202,7 @@ fn chip_painted_lead(ui: &mut Ui, label: &str, ink: Option<Color32>, selected: b
     let p = theme::pal(ui);
     let font = theme::semibold(theme::SECONDARY);
     let w = galley_width(ui, label, font.clone()) + 20.0 + lead;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, CHIP_H), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, touch_h(ui.ctx(), CHIP_H)), Sense::click());
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("chip"), &resp);
     let fill = theme::blend(p.field, p.hover.gamma_multiply(hover));
     if selected {
@@ -281,7 +299,8 @@ pub fn section_header(ui: &mut Ui, title: &str, action: Option<(Icon, &str)>) ->
     clicked
 }
 
-/// A settings row: title and description on the left, the control on the right.
+/// A settings row: title and description on the left, the control on the right. On a phone-wide
+/// screen the control goes under the text instead, left-aligned and wrapping.
 pub fn setting_row<R>(
     ui: &mut Ui,
     title: &str,
@@ -289,18 +308,27 @@ pub fn setting_row<R>(
     control: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let p = theme::pal(ui);
-    ui.horizontal(|ui| {
+    let stack = compact(ui.ctx());
+    let text = |ui: &mut Ui| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new(title).font(theme::semibold(theme::BODY)));
             if !desc.is_empty() {
-                ui.label(
-                    RichText::new(desc)
-                        .size(theme::SECONDARY)
-                        .color(p.secondary),
-                );
+                ui.add(egui::Label::new(RichText::new(desc).size(theme::SECONDARY).color(p.secondary)).wrap());
             }
         });
+    };
+    if stack {
+        return ui
+            .vertical(|ui| {
+                text(ui);
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(control).inner
+            })
+            .inner;
+    }
+    ui.horizontal(|ui| {
+        text(ui);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control)
             .inner
     })
@@ -330,6 +358,7 @@ pub fn icon_field(ui: &mut Ui, icon: Icon, text: &mut String, hint: &str) -> Res
         egui::TextEdit::singleline(text)
             .hint_text(hint)
             .desired_width(f32::INFINITY)
+            .min_size(input_min(ui.ctx()))
             .margin(margin),
     ));
     let at = Rect::from_center_size(
@@ -407,7 +436,8 @@ pub fn card_frame(ui: &Ui) -> egui::Frame {
 /// The close button of a dialog: an animated cross.
 pub fn close_button(ui: &mut Ui) -> Response {
     let p = theme::pal(ui);
-    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
+    let side = touch_h(ui.ctx(), 30.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click());
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("close"), &resp);
     ui.painter()
         .rect_filled(rect, theme::radius_lg(), p.hover.gamma_multiply(hover));
@@ -426,13 +456,14 @@ pub fn close_button(ui: &mut Ui) -> Response {
 
 /// A pill toggle switch.
 pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
-    craft_ui::controls::toggle(ui, &control_style(ui), on)
+    let draw = |ui: &mut Ui, on: &mut bool| craft_ui::controls::toggle(ui, &control_style(ui), on);
+    if compact(ui.ctx()) { finger_sized(ui, on, draw) } else { draw(ui, on) }
 }
 
 /// A sidebar-style navigation row: icon, label, optional selected state. Returns whether it was clicked.
 pub fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool) -> bool {
     let p = theme::pal(ui);
-    let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
+    let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), touch_h(ui.ctx(), 38.0)), Sense::click());
     let hover = crate::ui::motion::hover(ui.ctx(), resp.id.with("nav"), &resp);
     if selected {
         theme::fill_selected(ui, row, theme::radius_lg(), p.field);
@@ -495,7 +526,23 @@ pub fn lottie_button(ui: &mut Ui, name: &str, tip: &str, size: f32) -> Response 
 
 /// A rounded checkbox with a label.
 pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
-    craft_ui::controls::checkbox(ui, &control_style(ui), on, label)
+    let draw = |ui: &mut Ui, on: &mut bool| craft_ui::controls::checkbox(ui, &control_style(ui), on, label);
+    if compact(ui.ctx()) { finger_sized(ui, on, draw) } else { draw(ui, on) }
+}
+
+/// Draws a 24 px control in a row [`TOUCH_MIN`] tall whose whole area flips `on`: the shared
+/// controls come at one size, a finger needs more.
+fn finger_sized(ui: &mut Ui, on: &mut bool, draw: impl FnOnce(&mut Ui, &mut bool) -> Response) -> Response {
+    let shown = ui.scope(|ui| {
+        ui.set_min_height(TOUCH_MIN);
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| draw(ui, on)).inner
+    });
+    let mut tap = ui.interact(shown.response.rect, shown.response.id.with("tap"), Sense::click());
+    if tap.clicked() {
+        *on = !*on;
+        tap.mark_changed();
+    }
+    tap
 }
 
 /// The shared controls' style from the theme (`craft_ui::controls`).
@@ -512,7 +559,7 @@ pub fn control_style(ui: &Ui) -> craft_ui::controls::ControlStyle {
         selected: p.field,
         radius: theme::radius_md(),
         box_radius: theme::ru(6),
-        field_height: theme::FIELD_H,
+        field_height: touch_h(ui.ctx(), theme::FIELD_H),
         font: FontId::proportional(theme::BODY),
         font_strong: theme::semibold(theme::BODY),
         menu_max: vec2(320.0, 420.0),
@@ -665,14 +712,16 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, Option<&str>)], selected: usize) -
         .collect();
     let inset = 2.0;
     let total = widths.iter().sum::<f32>() + 2.0 * inset;
-    let (outer, _) = ui.allocate_exact_size(vec2(total, SEGMENTED_H), Sense::hover());
+    // Cells are two insets shorter than the pill; on a phone they must still be a finger tall.
+    let seg_h = if compact(ui.ctx()) { TOUCH_MIN + 2.0 * inset } else { SEGMENTED_H };
+    let (outer, _) = ui.allocate_exact_size(vec2(total, seg_h), Sense::hover());
     theme::fill_control(ui, outer, PILL, p.field);
     let mut x = outer.left() + inset;
     let mut picked = None;
     for (i, ((label, off), w)) in items.iter().zip(&widths).enumerate() {
         let rect = Rect::from_min_size(
             egui::pos2(x, outer.top() + inset),
-            vec2(*w, SEGMENTED_H - 2.0 * inset),
+            vec2(*w, seg_h - 2.0 * inset),
         );
         x += w;
         let sense = if off.is_some() { Sense::hover() } else { Sense::click() };

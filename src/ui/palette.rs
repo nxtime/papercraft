@@ -423,6 +423,7 @@ pub fn draw(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, canvas: egui
                                         .hint_text("Search actions, tools, pages, layers…")
                                         .font(egui::FontId::proportional(15.0))
                                         .frame(egui::Frame::NONE)
+                                        .min_size(egui::vec2(0.0, super::kit::touch_h(ui.ctx(), 18.0)))
                                         .desired_width(ui.available_width() - 44.0),
                                 );
                                 super::kit::key_cap(ui, "Esc");

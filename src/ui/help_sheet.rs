@@ -57,20 +57,31 @@ pub fn show(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
 
 fn header(ui: &mut Ui, st: &mut UiState) {
     let p = theme::pal(ui);
-    ui.horizontal(|ui| {
+    let title = |ui: &mut Ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.label(RichText::new("Keyboard shortcuts").font(theme::semibold(20.0)));
+        ui.add(egui::Label::new(RichText::new("Press ? anytime to open this sheet.").color(p.secondary)).wrap());
+    };
+    let done = |ui: &mut Ui, st: &mut UiState| {
+        if kit::button(ui, kit::ButtonKind::Secondary, None, "Done")
+            .on_hover_text("Close (Esc)")
+            .clicked()
+        {
+            st.show_help = false;
+        }
+    };
+    if kit::compact(ui.ctx()) {
+        // Beside the title the button would cover it: a phone sheet is narrower than both.
         ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(RichText::new("Keyboard shortcuts").font(theme::semibold(20.0)));
-            ui.label(RichText::new("Press ? anytime to open this sheet.").color(p.secondary));
+            title(ui);
+            ui.add_space(8.0);
+            done(ui, st);
         });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if kit::button(ui, kit::ButtonKind::Secondary, None, "Done")
-                .on_hover_text("Close (Esc)")
-                .clicked()
-            {
-                st.show_help = false;
-            }
-        });
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.vertical(title);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| done(ui, st));
     });
 }
 

@@ -323,7 +323,8 @@ pub fn draw(ui: &mut Ui, hv: &mut HomeView, custom_titlebar: bool, translucent: 
                     // right edge. On a phone the row of its own keeps it one line tall.
                     let rtl = egui::Layout::right_to_left(egui::Align::Center);
                     if phone {
-                        ui.horizontal(|ui| ui.with_layout(rtl, actions));
+                        // Three buttons are wider than a phone: they wrap instead of running off the left edge.
+                        ui.horizontal_wrapped(actions);
                     } else {
                         ui.with_layout(rtl, actions);
                     }
@@ -680,7 +681,9 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
             }
         } else {
             ui.horizontal(|ui| {
-                let name = card_title(ui, &e.manifest.name, egui::Sense::click());
+                // A phone renames from the menu; a title tap target would be 16 tall.
+                let sense = if super::kit::compact(ui.ctx()) { egui::Sense::hover() } else { egui::Sense::click() };
+                let name = card_title(ui, &e.manifest.name, sense);
                 if name.double_clicked() {
                     hv.renaming = Some((e.dir.clone(), e.manifest.name.clone()));
                 }
@@ -724,7 +727,7 @@ const CARD_ICON: f32 = 20.0;
 /// A card's truncated title, leaving room for its icon button: a truncated label takes all the
 /// width it is given and would push the button past the card.
 fn card_title(ui: &mut Ui, name: &str, sense: egui::Sense) -> egui::Response {
-    let room = ui.available_width() - CARD_ICON - ui.spacing().item_spacing.x;
+    let room = ui.available_width() - super::kit::touch_h(ui.ctx(), CARD_ICON) - ui.spacing().item_spacing.x;
     ui.scope(|ui| {
         ui.set_max_width(room.max(0.0));
         ui.add(
