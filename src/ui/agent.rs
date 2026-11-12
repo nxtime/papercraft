@@ -23,6 +23,16 @@ impl LinkState {
     }
 }
 
+impl LinkState {
+    /// What to tell the person while the server cannot be reached; None when it is or is about to be.
+    pub fn offline_hint(self) -> Option<&'static str> {
+        (self == LinkState::Offline).then_some(OFFLINE_HINT)
+    }
+}
+
+const OFFLINE_HINT: &str =
+    "No connection to the server. Edits are kept on this device and sync when it returns.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentAction {
     /// Replace the token (the old link stops working) and reconnect.
@@ -67,8 +77,12 @@ impl AgentUi {
         });
     }
 
-    /// A status dot for the toolbar; nothing while offline.
+    /// A status dot for the toolbar; an "Offline" chip while the server cannot be reached.
     pub fn dot(&self, ui: &mut egui::Ui) {
+        if let Some(hint) = self.state.offline_hint() {
+            super::kit::chip_ink(ui, "Offline", None).on_hover_text(hint);
+            return;
+        }
         let color = match self.state {
             LinkState::Offline => return,
             LinkState::Connecting => CONNECTING_DOT,
@@ -150,6 +164,13 @@ impl AgentUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_lost_connection_says_edits_wait_for_it() {
+        assert!(LinkState::Offline.offline_hint().is_some_and(|h| h.contains("sync")));
+        assert!(LinkState::Connecting.offline_hint().is_none());
+        assert!(LinkState::Connected.offline_hint().is_none());
+    }
 
     #[test]
     fn snippets_carry_the_url() {

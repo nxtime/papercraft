@@ -41,6 +41,14 @@ Never reuse a tag: the node caches images by tag and the pod would keep running 
 rebuild of the same commit needs a new suffix (for example `-r2`). The agent CLIs are pinned by the
 `CLAUDE_CODE` and `OPENCODE` build args in the Dockerfile; change them on purpose, not by rebuilding.
 
+## Offline
+
+`web/sw.js` caches the app shell and the glue and wasm of the current build so the site starts
+without a connection. It never touches `/oauth2/`, `/p/`, `/s/`, `/library`, redirects or other
+origins. A deploy needs nothing extra: the page reads `pkg/build.txt` online, loads the new glue
+and wasm under the new stamp, and the worker drops the old ones. Edits made offline stay in the
+browser's store and the sync uploads them when the relay answers again.
+
 ## Credentials
 
 Make the Secret once. It is optional in the manifest, so the pod also starts without it, but the

@@ -23,6 +23,8 @@
 <div id="safe-area"></div>
 <canvas id="papercraft"></canvas>
 <script type="module">
+  // Lets the app start offline; a failure only means no offline start.
+  navigator.serviceWorker?.register("./sw.js").catch((e) => console.warn("service worker:", e));
   // The glue and the wasm must come from the same build: a browser that kept an older
   // papercraft.js fails to link the new wasm. pkg/build.txt names the build, so each deploy
   // loads both under new URLs.
