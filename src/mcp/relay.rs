@@ -458,15 +458,23 @@ async fn serve_static(State(relay): State<Arc<Relay>>, uri: Uri) -> Response {
     }
 }
 
-fn router(relay: Arc<Relay>, store: Option<Arc<super::store::Store>>) -> axum::Router {
+fn router(
+    relay: Arc<Relay>,
+    store: Option<Arc<super::store::Store>>,
+    join: Option<Arc<super::relay_join::Join>>,
+) -> axum::Router {
     let app = axum::Router::new()
         .route("/tab/{token}", any(tab_socket))
         .route("/s/{token}/mcp", any(mcp_endpoint))
         .fallback(serve_static)
         .layer(axum::middleware::from_fn(super::server::fix_accept))
         .with_state(relay);
-    match store {
+    let app = match store {
         Some(store) => app.merge(super::store::router(store)),
+        None => app,
+    };
+    match join {
+        Some(join) => app.merge(super::relay_join::router(join)),
         None => app,
     }
 }
@@ -531,6 +539,11 @@ pub fn spawn_full(
     agents: Option<AgentsConfig>,
 ) -> Result<Running, String> {
     let agents = agents.map(Agents::new).transpose()?;
+    // The join page needs the data folder (for the invites) and every Logto variable.
+    let join = match (&data, super::relay_join::JoinConfig::from_env()) {
+        (Some(d), Some(cfg)) => Some(super::relay_join::Join::new(cfg, d.dir.clone())?),
+        _ => None,
+    };
     let listener = std::net::TcpListener::bind(listen)
         .map_err(|e| format!("cannot listen on {listen}: {e}"))?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -563,7 +576,7 @@ pub fn spawn_full(
                     port,
                 });
                 if let Err(e) =
-                    axum::serve(listener, router(relay, data.map(super::store::Store::new)))
+                    axum::serve(listener, router(relay, data.map(super::store::Store::new), join))
                         .with_graceful_shutdown(thread_ct.cancelled_owned())
                         .await
                 {
