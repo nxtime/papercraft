@@ -6,6 +6,7 @@
 
 use papercraft::mcp::relay;
 use papercraft::mcp::relay_agents::AgentsConfig;
+use papercraft::mcp::relay_invite as invite;
 use papercraft::mcp::store::Data;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -16,6 +17,8 @@ papercraft-relay — MCP relay for a PaperCraft tab in a browser
 
 USAGE:
   papercraft-relay [--listen 0.0.0.0:8787] [--static <dir>] [--allow-origin <origin>] [--data <dir>] [--library] [--agents claude,opencode]
+  papercraft-relay invite --data <dir> [--hours 72] [--role editor] [--uses 0]
+  papercraft-relay invite --data <dir> --revoke-all
 
 OPTIONS:
   --listen <addr>       address to serve on (default: $PAPERCRAFT_RELAY_LISTEN or 0.0.0.0:8787)
@@ -30,6 +33,14 @@ OPTIONS:
                         Credentials come from the environment: CLAUDE_CODE_OAUTH_TOKEN or
                         ANTHROPIC_API_KEY for claude, opencode's own provider setup (off by default)
   --help                print this text
+
+invite prints /join/<token>, a link where a person creates their own Logto account and joins the
+team organization with --role (--uses 0 = unlimited until it expires). Invites are kept in
+<dir>/invites.json as hashes. The serving relay offers /join/ when --data is given and these are set:
+  PAPERCRAFT_JOIN_LOGTO_ENDPOINT  Logto base URL, e.g. http://logto-app.logto.svc.cluster.local:3001
+  PAPERCRAFT_JOIN_CLIENT_ID, PAPERCRAFT_JOIN_CLIENT_SECRET  a machine-to-machine app with Management API access
+  PAPERCRAFT_JOIN_ORG             the organization id
+  PAPERCRAFT_JOIN_RESOURCE        Management API resource (default https://default.logto.app/api)
 
 The tab picks a 32..64 hex character token and shows the agent URL
   http://<host>:<port>/s/<token>/mcp
@@ -78,8 +89,46 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
+/// `papercraft-relay invite ...`: make or revoke join links without starting the server.
+fn invite(args: &[String]) -> Result<(), String> {
+    let (mut dir, mut hours, mut role, mut uses, mut revoke) =
+        (None, 72u64, "editor".to_string(), 0u32, false);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let mut value = || it.next().ok_or_else(|| format!("{arg} needs a value"));
+        match arg.as_str() {
+            "--data" => dir = Some(PathBuf::from(value()?)),
+            "--hours" => hours = value()?.parse().map_err(|_| "--hours needs a number")?,
+            "--role" => role = value()?.clone(),
+            "--uses" => uses = value()?.parse().map_err(|_| "--uses needs a number")?,
+            "--revoke-all" => revoke = true,
+            other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
+        }
+    }
+    let dir = dir.ok_or("invite needs --data <dir>")?;
+    if revoke {
+        let n = invite::revoke_all(&dir)?;
+        println!("papercraft-relay: revoked {n} invite(s)");
+    } else {
+        println!("/join/{}", invite::create(&dir, hours, &role, uses)?);
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().is_some_and(|a| a == "invite")
+        && !argv.iter().any(|a| a == "--help" || a == "-h")
+    {
+        return match invite(&argv[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("papercraft-relay: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         print!("{USAGE}");
         return ExitCode::SUCCESS;
@@ -108,7 +157,10 @@ fn main() -> ExitCode {
                 if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
                     && let Err(e) = std::fs::create_dir_all(&home)
                 {
-                    eprintln!("papercraft-relay: cannot create HOME {}: {e}", home.display());
+                    eprintln!(
+                        "papercraft-relay: cannot create HOME {}: {e}",
+                        home.display()
+                    );
                     return ExitCode::FAILURE;
                 }
                 Some(a)

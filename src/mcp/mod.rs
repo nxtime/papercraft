@@ -56,6 +56,10 @@ pub mod swarm;
 pub mod relay;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod relay_agents;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod relay_invite;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod relay_join;
 pub mod relay_proto;
 pub mod core_tools;
 #[cfg(not(target_arch = "wasm32"))]
