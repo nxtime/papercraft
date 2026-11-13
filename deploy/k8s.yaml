@@ -69,7 +69,7 @@ spec:
             - {name: HOME, value: /data/agent-home}
             # The team invite page (/join/<token>): a Logto machine app allowed to create users, and the team
             # organization, from Secret papercraft-join. Optional: without it the page is off.
-            - {name: PAPERCRAFT_JOIN_LOGTO_ENDPOINT, value: "http://logto-app.logto.svc.cluster.local:3001"}
+            - {name: PAPERCRAFT_JOIN_LOGTO_ENDPOINT, value: "https://auth.marcospaulo.dev.br"}
             - {name: PAPERCRAFT_JOIN_CLIENT_ID, valueFrom: {secretKeyRef: {name: papercraft-join, key: client-id, optional: true}}}
             - {name: PAPERCRAFT_JOIN_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: papercraft-join, key: client-secret, optional: true}}}
             - {name: PAPERCRAFT_JOIN_ORG, valueFrom: {secretKeyRef: {name: papercraft-join, key: org, optional: true}}}
